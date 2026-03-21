@@ -7,7 +7,6 @@ source "$SCRIPT_DIR/app-meta.sh"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/linux-soundboard}"
 INSTALL_BINARY="$INSTALL_ROOT/$APP_BINARY"
-INSTALL_ICON="$INSTALL_ROOT/$APP_ID.png"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 DESKTOP_DIR="$XDG_DATA_HOME/applications"
 ICON_THEME_DIR="$XDG_DATA_HOME/icons/hicolor"
@@ -34,7 +33,6 @@ else
 fi
 
 install -Dm755 "$BINARY_SOURCE" "$INSTALL_BINARY"
-install -Dm644 "$ICON_SOURCE_ROOT/512x512/apps/$APP_ID.png" "$INSTALL_ICON"
 
 while IFS= read -r icon_path; do
     size_dir="$(basename "$(dirname "$(dirname "$icon_path")")")"
@@ -50,7 +48,7 @@ Type=Application
 Name=$APP_NAME
 Comment=$APP_COMMENT
 Exec=$INSTALL_BINARY
-Icon=$INSTALL_ICON
+Icon=$APP_ID
 Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;
@@ -68,7 +66,6 @@ fi
 
 echo "Installed $APP_NAME:"
 echo "  Binary:   $INSTALL_BINARY"
-echo "  Icon:     $INSTALL_ICON"
 echo "  Launcher: $desktop_file"
 echo
 echo "Your desktop environment may need a few seconds to refresh the app list."

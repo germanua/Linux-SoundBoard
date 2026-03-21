@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/app-meta.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src-tauri/Cargo.toml"
+ICON_SOURCE="$REPO_ROOT/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src-tauri/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/src-tauri/target/release/$APP_BINARY"
 DIST_ROOT="$REPO_ROOT/dist"
@@ -20,6 +21,7 @@ bundle_dir="$DIST_ROOT/$bundle_name"
 archive_path="$DIST_ROOT/$bundle_name.tar.gz"
 
 if [[ "${1:-}" != "--skip-build" ]]; then
+    "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
     cargo build --release --manifest-path "$MANIFEST_PATH"
 fi
 
