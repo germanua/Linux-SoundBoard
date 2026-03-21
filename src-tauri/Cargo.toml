@@ -1,0 +1,48 @@
+[package]
+name = "linux-soundboard"
+version = "1.0.0"
+description = "A Linux soundboard with PipeWire virtual mic support"
+authors = ["you"]
+edition = "2021"
+license-file = "../LICENSE"
+
+[lib]
+name = "linux_soundboard_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+glib-build-tools = "0.20"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_14"] }
+libadwaita = { version = "0.7", features = ["v1_6"] }
+glib = "0.20"
+gio = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+walkdir = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+rayon = "1.8"
+rodio = { version = "0.18", features = ["symphonia-mp3", "symphonia-wav", "symphonia-vorbis", "symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
+symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "aac", "isomp4"] }
+# For direct PulseAudio sink playback (virtual mic output)
+libpulse-binding = "2"
+libpulse-simple-binding = "2"
+# EBU R128 loudness measurement for auto-gain normalization
+ebur128 = "0.1"
+parking_lot = "0.12"
+thiserror = "1"
+log = "0.4"
+env_logger = "0.11"
+x11rb = { version = "0.12", features = ["xkb", "resource_manager"] }
+
+# PipeWire bindings (optional, may need system libpipewire-dev)
+# pipewire = { version = "0.8", optional = true }
+
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "unwind"

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/com/linuxsoundboard">
+    <file>icons/16x16/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/24x24/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/32x32/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/48x48/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/64x64/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/128x128/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/256x256/apps/com.linuxsoundboard.app.png</file>
+    <file>icons/512x512/apps/com.linuxsoundboard.app.png</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-add-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-check-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-drop-zone-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-keyboard-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-list-end-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-next-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-pause-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-play-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-play-once-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-previous-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-refresh-cw-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-refresh-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-remove-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-repeat-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-settings-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-stop-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-headphone-off-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-headphones-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-mic-off-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-mic-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/places/lsb-folder-open-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/places/lsb-folder-symbolic.svg</file>
+  </gresource>
+</gresources>
