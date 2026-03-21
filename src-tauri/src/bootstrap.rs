@@ -9,13 +9,16 @@ use libadwaita as adw;
 use log::info;
 
 use crate::app_meta::{
-    APP_ID, BACKEND_ENV_VAR, HOTKEY_POLL_INTERVAL_MS, STARTUP_VIRTUAL_MIC_DELAY_MS, X11_BACKEND,
+    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, HOTKEY_POLL_INTERVAL_MS,
+    STARTUP_VIRTUAL_MIC_DELAY_MS, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
 
 pub fn run() {
     configure_preferred_backend();
+    glib::set_prgname(Some(APP_BINARY));
+    glib::set_application_name(APP_TITLE);
 
     env_logger::init();
     info!("Starting Linux Soundboard (GTK4)");
