@@ -135,10 +135,6 @@ The executable will be located at `src-tauri/target/release/linux-soundboard`.
 - **Global Hotkeys**: X11/XKB backend (may work under XWayland)
 - **Config**: JSON-based storage at `~/.config/linux-soundboard/`
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 ## 📄 License
 
 This project is licensed under the PolyForm Noncommercial 1.0.0 license.
