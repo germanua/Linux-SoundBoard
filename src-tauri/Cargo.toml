@@ -15,8 +15,8 @@ crate-type = ["rlib"]
 glib-build-tools = "0.20"
 
 [dependencies]
-gtk4 = { version = "0.9", features = ["v4_14"] }
-libadwaita = { version = "0.7", features = ["v1_6"] }
+gtk4 = { version = "0.9", features = ["v4_10"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
 glib = "0.20"
 gio = "0.20"
 serde = { version = "1", features = ["derive"] }

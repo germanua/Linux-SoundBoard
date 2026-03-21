@@ -25,25 +25,60 @@ A high-performance, native Linux soundboard application built with **Rust**, **G
 
 ## 🛠️ Requirements
 
-- **Linux** with **PipeWire** (or PulseAudio)
-- **libadwaita** and **gtk4** libraries
-- **pactl** (for virtual mic management)
-- **Rust 1.85+** via `rustup` (`cargo` from Ubuntu/Debian packages is too old for this repo)
+- **Runtime**
+  - GTK4 + Libadwaita
+  - PulseAudio client libraries
+  - `pactl` (used to create the virtual sink/source)
+  - PipeWire recommended: `pipewire` + `pipewire-pulse` + `wireplumber`
+- **Build from source**
+  - Rust **1.85+** via `rustup`
+  - GCC/Clang toolchain + `pkg-config`
+  - GTK4 / Libadwaita / GLib / PulseAudio development packages
+
+## ✅ Ubuntu/Debian Support
+
+- **Recommended for source builds:** Ubuntu **24.04+** or Debian **13+**
+- **Not recommended for source builds:** Ubuntu 22.04 / Debian 12, because their GTK4 / Libadwaita packages are too old for the current UI API usage
+- **Do not use** Ubuntu/Debian's `apt install cargo rustc` toolchain for this repo; use `rustup`
 
 ## 📥 Installation
 
-### From Source
+### Ubuntu/Debian: Run a Prebuilt Binary
 
-Install Rust with `rustup` and ensure you have the development headers for GTK4/Libadwaita installed.
+If you distribute a release archive produced by `packaging/linux/package-release.sh`, users should install the runtime packages first:
+
+```bash
+sudo apt update
+sudo apt install \
+  libgtk-4-1 \
+  libadwaita-1-0 \
+  libpulse0 \
+  pulseaudio-utils \
+  pipewire \
+  pipewire-pulse \
+  wireplumber
+```
+
+Then extract the archive and run:
+
+```bash
+./install-user.sh
+```
+
+That installs the binary into `~/.local/opt/linux-soundboard/` and creates a desktop launcher.
+
+### Ubuntu/Debian: Build From Source
+
+Install Rust with `rustup` first:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 rustup update stable
-cargo --version # should be 1.85+ for this repo
+cargo --version
 ```
 
-If you use Ubuntu's `apt install cargo rustc`, you may see this error:
+If you use Ubuntu's `apt install cargo rustc`, you may hit this:
 
 ```text
 lock file version 4 requires `-Znext-lockfile-bump`
@@ -52,22 +87,32 @@ lock file version 4 requires `-Znext-lockfile-bump`
 That means the distro Rust toolchain is too old. Use the `rustup` toolchain above instead.
 
 ```bash
-# Ubuntu/Debian
-sudo apt install libgtk-4-dev libadwaita-1-dev libpulse-dev libpipewire-0.3-dev
+sudo apt update
+sudo apt install \
+  build-essential \
+  pkg-config \
+  curl \
+  libglib2.0-dev \
+  libgtk-4-dev \
+  libadwaita-1-dev \
+  libpulse-dev \
+  pulseaudio-utils \
+  pipewire \
+  pipewire-pulse \
+  wireplumber
 
-# Fedora
-sudo dnf install gtk4-devel libadwaita-devel libpulse-devel pipewire-devel
-
-# Arch Linux
-sudo pacman -S gtk4 libadwaita libpulse pipewire
-
-# Build the project
 git clone https://github.com/germanua/linux-soundboard.git
 cd linux-soundboard/src-tauri
 cargo build --release
 ```
 
 The executable will be located at `src-tauri/target/release/linux-soundboard`.
+
+### Notes
+
+- `libpipewire-0.3-dev` is **not** required for the current codebase.
+- Global hotkeys use an **X11 backend** and may only work under X11 or XWayland.
+- For best binary compatibility, build release artifacts on the **oldest distro you want to support**. A binary built on a newer distro can fail on older Ubuntu/Debian releases because of newer `glibc` requirements.
 
 ## 🚀 Usage
 

@@ -80,7 +80,7 @@ pub fn get_setup_instructions() -> String {
 
 ### Ubuntu/Debian:
 ```bash
-sudo apt install pipewire pipewire-audio-client-libraries wireplumber
+sudo apt install pipewire pipewire-pulse wireplumber pulseaudio-utils
 systemctl --user enable pipewire pipewire-pulse wireplumber
 systemctl --user start pipewire pipewire-pulse wireplumber
 ```
