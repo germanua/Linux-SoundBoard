@@ -48,6 +48,7 @@ Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;
 StartupNotify=true
+StartupWMClass=$APP_BINARY
 EOF
 
 while IFS= read -r icon_path; do
