@@ -28,12 +28,28 @@ A high-performance, native Linux soundboard application built with **Rust**, **G
 - **Linux** with **PipeWire** (or PulseAudio)
 - **libadwaita** and **gtk4** libraries
 - **pactl** (for virtual mic management)
+- **Rust 1.85+** via `rustup` (`cargo` from Ubuntu/Debian packages is too old for this repo)
 
 ## 📥 Installation
 
 ### From Source
 
-Ensure you have the Rust toolchain and development headers for GTK4/Libadwaita installed.
+Install Rust with `rustup` and ensure you have the development headers for GTK4/Libadwaita installed.
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustup update stable
+cargo --version # should be 1.85+ for this repo
+```
+
+If you use Ubuntu's `apt install cargo rustc`, you may see this error:
+
+```text
+lock file version 4 requires `-Znext-lockfile-bump`
+```
+
+That means the distro Rust toolchain is too old. Use the `rustup` toolchain above instead.
 
 ```bash
 # Ubuntu/Debian
