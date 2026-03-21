@@ -1,6 +1,6 @@
 pkgbase = linux-soundboard-git
 	pkgdesc = Native Linux soundboard with GTK4/libadwaita and virtual microphone support
-	pkgver = 1.0.0.r3.g0f519b1
+	pkgver = 1.0.0.r4.gf1d87b2
 	pkgrel = 1
 	url = https://github.com/germanua/Linux-SoundBoard
 	arch = x86_64
