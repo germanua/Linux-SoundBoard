@@ -182,6 +182,11 @@ impl SoundList {
         self.inner.filtered_sounds()
     }
 
+    /// Return the currently active tab id.
+    pub fn active_tab_id(&self) -> String {
+        self.inner.active_tab_id.lock().unwrap().clone()
+    }
+
     /// Replace store contents with the filtered sound list.
     fn reload_store(&self, sounds: &[Sound]) {
         self.inner.reload_store(sounds);

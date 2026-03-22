@@ -33,15 +33,28 @@ pub fn run() {
 }
 
 fn configure_preferred_backend() {
-    if std::env::var(BACKEND_ENV_VAR).is_err()
-        && std::env::var("WAYLAND_DISPLAY").is_ok()
-        && std::env::var("DISPLAY").is_ok()
-    {
-        info!(
-            "Wayland and X11 displays detected; forcing GTK onto X11 via {}={}",
-            BACKEND_ENV_VAR, X11_BACKEND
+    if std::env::var("WAYLAND_DISPLAY").is_ok() && std::env::var("DISPLAY").is_ok() {
+        let keep_wayland = matches!(
+            std::env::var("LSB_PREFER_WAYLAND_GTK").ok().as_deref(),
+            Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
         );
-        std::env::set_var(BACKEND_ENV_VAR, X11_BACKEND);
+        if keep_wayland {
+            info!(
+                "Keeping GTK backend unchanged because LSB_PREFER_WAYLAND_GTK is enabled"
+            );
+            return;
+        }
+
+        let previous = std::env::var(BACKEND_ENV_VAR).ok();
+        if previous.as_deref() != Some(X11_BACKEND) {
+            info!(
+                "Wayland and X11 displays detected; forcing GTK onto X11 via {}={} (previous: {:?})",
+                BACKEND_ENV_VAR,
+                X11_BACKEND,
+                previous
+            );
+            std::env::set_var(BACKEND_ENV_VAR, X11_BACKEND);
+        }
     }
 }
 

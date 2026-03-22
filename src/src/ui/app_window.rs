@@ -1,5 +1,6 @@
 //! Main application window — layout scaffold and hotkey dispatch.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use glib;
@@ -7,7 +8,7 @@ use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation, Paned};
 use libadwaita as adw;
 
-use crate::app_meta::{APP_ICON_NAME, APP_TITLE};
+use crate::app_meta::{APP_ICON_NAME, APP_TITLE, GENERAL_TAB_ID};
 use crate::app_state::AppState;
 use crate::audio::scanner;
 use crate::commands;
@@ -213,11 +214,16 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     drop_overlay.add_overlay(&drop_zone);
     set_drop_state(&drop_zone, &drop_title, &drop_subtitle, DropState::Hidden);
 
+    // Track hover state across both drop targets so the overlay reliably hides.
+    let drag_hover_count = Arc::new(AtomicUsize::new(0));
+
     {
         let dz = drop_zone.clone();
         let title = drop_title.clone();
         let subtitle = drop_subtitle.clone();
+        let hover = Arc::clone(&drag_hover_count);
         drop_target_files.connect_enter(move |_, _, _| {
+            hover.fetch_add(1, Ordering::SeqCst);
             set_drop_state(&dz, &title, &subtitle, DropState::Ready);
             gtk4::gdk::DragAction::COPY
         });
@@ -226,7 +232,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         let dz = drop_zone.clone();
         let title = drop_title.clone();
         let subtitle = drop_subtitle.clone();
+        let hover = Arc::clone(&drag_hover_count);
         drop_target_text.connect_enter(move |_, _, _| {
+            hover.fetch_add(1, Ordering::SeqCst);
             set_drop_state(&dz, &title, &subtitle, DropState::Ready);
             gtk4::gdk::DragAction::COPY
         });
@@ -235,16 +243,26 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         let dz = drop_zone.clone();
         let title = drop_title.clone();
         let subtitle = drop_subtitle.clone();
+        let hover = Arc::clone(&drag_hover_count);
         drop_target_files.connect_leave(move |_| {
-            set_drop_state(&dz, &title, &subtitle, DropState::Hidden);
+            let previous = hover.fetch_sub(1, Ordering::SeqCst);
+            if previous <= 1 {
+                hover.store(0, Ordering::SeqCst);
+                set_drop_state(&dz, &title, &subtitle, DropState::Hidden);
+            }
         });
     }
     {
         let dz = drop_zone.clone();
         let title = drop_title.clone();
         let subtitle = drop_subtitle.clone();
+        let hover = Arc::clone(&drag_hover_count);
         drop_target_text.connect_leave(move |_| {
-            set_drop_state(&dz, &title, &subtitle, DropState::Hidden);
+            let previous = hover.fetch_sub(1, Ordering::SeqCst);
+            if previous <= 1 {
+                hover.store(0, Ordering::SeqCst);
+                set_drop_state(&dz, &title, &subtitle, DropState::Hidden);
+            }
         });
     }
 
@@ -254,7 +272,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     let dz_drop_files = drop_zone.clone();
     let title_drop_files = drop_title.clone();
     let subtitle_drop_files = drop_subtitle.clone();
+    let hover_drop_files = Arc::clone(&drag_hover_count);
     drop_target_files.connect_drop(move |_, value, _, _| {
+        hover_drop_files.store(0, Ordering::SeqCst);
         set_drop_state(
             &dz_drop_files,
             &title_drop_files,
@@ -295,7 +315,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     let dz_drop_text = drop_zone.clone();
     let title_drop_text = drop_title.clone();
     let subtitle_drop_text = drop_subtitle.clone();
+    let hover_drop_text = Arc::clone(&drag_hover_count);
     drop_target_text.connect_drop(move |_, value, _, _| {
+        hover_drop_text.store(0, Ordering::SeqCst);
         set_drop_state(
             &dz_drop_text,
             &title_drop_text,
@@ -403,7 +425,14 @@ fn handle_drop_import(
         return true;
     }
 
-    match commands::import_files_as_links(valid_paths, Arc::clone(&state.config)) {
+    let active_tab = sound_list.active_tab_id();
+    let tab_id_opt = if active_tab == GENERAL_TAB_ID {
+        None
+    } else {
+        Some(active_tab)
+    };
+
+    match commands::import_files_to_tab(valid_paths, tab_id_opt, Arc::clone(&state.config)) {
         Ok(new_sounds) => {
             let imported_count = new_sounds.len();
             if imported_count > 0 {

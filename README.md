@@ -57,7 +57,7 @@ Play sounds directly into your microphone stream for Discord, OBS, Zoom, and any
   - **LUFS Normalization (Auto-Gain)**: Keep all your sounds at the same volume level automatically.
   - **Static & Dynamic Modes**: Choose between pre-scanned normalization or real-time dynamic lookahead.
   - **Independent Volume Control**: Separate sliders for your local speakers and the virtual microphone.
-- ⌨️ **Global Hotkeys**: Bind sounds and controls (Play/Pause, Stop All, Next/Prev) through the app's X11 hotkey backend.
+- ⌨️ **Global Hotkeys**: Bind sounds and controls (Play/Pause, Stop All, Next/Prev) through the X11/XWayland backend, with an optional desktop-portal backend.
 - 📁 **Organized Library**:
   - **Sound Tabs**: Categorize your sounds into custom tabs.
   - **Folder Sync**: Auto-scan directories for new audio files.
@@ -211,12 +211,12 @@ cargo build --release
 
 #### Package names by distribution
 
-| Distribution | Packages |
-|-------------|----------|
-| **Arch** | `gtk4 libadwaita libpulse pipewire pipewire-pulse wireplumber` |
-| **Ubuntu/Debian** | `libgtk-4-dev libadwaita-1-dev libpulse-dev pipewire pipewire-pulse wireplumber` |
-| **Fedora** | `gtk4-devel libadwaita-devel pulseaudio-libs-devel pipewire pipewire-pulseaudio wireplumber` |
-| **openSUSE** | `gtk4-devel libadwaita-devel libpulse-devel pipewire pipewire-pulseaudio wireplumber` |
+| Distribution      | Packages                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| **Arch**          | `gtk4 libadwaita libpulse pipewire pipewire-pulse wireplumber`                               |
+| **Ubuntu/Debian** | `libgtk-4-dev libadwaita-1-dev libpulse-dev pipewire pipewire-pulse wireplumber`             |
+| **Fedora**        | `gtk4-devel libadwaita-devel pulseaudio-libs-devel pipewire pipewire-pulseaudio wireplumber` |
+| **openSUSE**      | `gtk4-devel libadwaita-devel libpulse-devel pipewire pipewire-pulseaudio wireplumber`        |
 
 </details>
 
@@ -232,6 +232,7 @@ cargo build --release
 ```
 
 Artifacts are written to `dist/`:
+
 - `dist/linux-soundboard-x86_64.AppImage`
 - `dist/linux-soundboard-<version>-x86_64.AppImage`
 
@@ -245,6 +246,7 @@ Artifacts are written to `dist/`:
 ```
 
 Users install via:
+
 ```bash
 ./install-user.sh
 ```
@@ -272,19 +274,32 @@ Users install via:
 
 ## 🏗️ Architecture
 
-| Component | Technology |
-|-----------|-----------|
-| **UI Framework** | GTK4 + Libadwaita (Native Rust bindings) |
-| **Audio Engine** | Rodio + Symphonia (MP3, WAV, OGG, FLAC, AAC) |
-| **Audio Routing** | PulseAudio/PipeWire via `pactl` |
-| **Global Hotkeys** | X11/XInput2 + XKB (X11 and XWayland) |
-| **Configuration** | JSON at `~/.config/linux-soundboard/` |
+| Component          | Technology                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| **UI Framework**   | GTK4 + Libadwaita (Native Rust bindings)                                                |
+| **Audio Engine**   | Rodio + Symphonia (MP3, WAV, OGG, FLAC, AAC)                                            |
+| **Audio Routing**  | PulseAudio (`libpulse`) + PipeWire integration via `pactl`/PipeWire Pulse compatibility |
+| **Global Hotkeys** | X11/XInput2 backend (default) + optional XDG Desktop Portal backend                     |
+| **Configuration**  | JSON at `~/.config/linux-soundboard/`                                                   |
+
+### Core Libraries
+
+- **Rust crates**: `gtk4`, `libadwaita`, `glib`, `gio`, `serde`, `serde_json`, `rodio`, `symphonia`, `libpulse-binding`, `libpulse-simple-binding`, `ebur128`, `rayon`, `ashpd`, `tokio`, `x11`.
+- **System stack**: GTK4 + Libadwaita, PulseAudio compatibility layer, PipeWire + WirePlumber.
+
+### Global Hotkeys and Display Server Support
+
+- **X11 session**: fully supported (global hotkeys available).
+- **Wayland session with XWayland (`DISPLAY` available)**: supported via X11 backend.
+- **Pure Wayland without XWayland**: default global hotkeys are unavailable.
+- **Portal backend (experimental/opt-in)**: enable with `LSB_ENABLE_PORTAL_HOTKEYS=1` to allow the app to try XDG desktop global shortcuts when X11 backend is unavailable.
+- When both `WAYLAND_DISPLAY` and `DISPLAY` are present, the app prefers GTK on X11 by default. Set `LSB_PREFER_WAYLAND_GTK=1` to keep GTK on Wayland.
 
 ---
 
 ## ⚠️ Known Limitations
 
-- Global hotkeys require **X11 or XWayland** — native Wayland not yet supported
+- Global hotkeys are fully supported on **X11/XWayland**; native Wayland support depends on portal availability and compositor support
 - AppImage requires **FUSE** (install `libfuse2` if needed)
 - Ubuntu 22.04 / Debian 12: GTK4/Libadwaita too old for source builds — use AppImage
 
