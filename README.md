@@ -1,10 +1,52 @@
-# Linux Soundboard
+<p align="center">
+  <img src="FULLLOGO.png" alt="Linux Soundboard" width="400">
+</p>
 
-A high-performance, native Linux soundboard application built with **Rust**, **GTK4**, and **Libadwaita**. Designed for seamless integration with **PipeWire** and **PulseAudio**, it allows you to play sounds directly into your microphone stream for apps like Discord, OBS, and Zoom.
+<p align="center">
+  <strong>A high-performance, native Linux soundboard built with Rust, GTK4, and Libadwaita</strong>
+</p>
 
-![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Linux-orange.svg)
-![Language](https://img.shields.io/badge/language-Rust-red.svg)
+<p align="center">
+  <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest">
+    <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github&color=blue" alt="Latest Release">
+  </a>
+  <a href="https://aur.archlinux.org/packages/linux-soundboard-git">
+    <img src="https://img.shields.io/aur/version/linux-soundboard-git?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR Version">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-green?style=for-the-badge" alt="License">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://img.shields.io/badge/platform-Linux-orange?style=flat-square">
+    <img src="https://img.shields.io/badge/platform-Linux-orange?style=flat-square" alt="Platform">
+  </a>
+  <a href="https://img.shields.io/badge/rust-1.85+-red?style=flat-square&logo=rust">
+    <img src="https://img.shields.io/badge/rust-1.85+-red?style=flat-square&logo=rust" alt="Rust">
+  </a>
+  <a href="https://img.shields.io/badge/GTK-4-green?style=flat-square&logo=gnome">
+    <img src="https://img.shields.io/badge/GTK-4-green?style=flat-square&logo=gnome" alt="GTK4">
+  </a>
+  <a href="https://github.com/germanua/Linux-SoundBoard/stargazers">
+    <img src="https://img.shields.io/github/stars/germanua/Linux-SoundBoard?style=flat-square&logo=github" alt="Stars">
+  </a>
+</p>
+
+---
+
+Play sounds directly into your microphone stream for Discord, OBS, Zoom, and any other application. Features a virtual microphone that seamlessly mixes your voice with soundboard audio.
+
+## 📦 Quick Install
+
+| Distribution         | Command                                                                                                                     |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Arch Linux (AUR)** | `yay -S linux-soundboard-git`                                                                                               |
+| **Ubuntu/Debian**    | [Download AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage) |
+| **Fedora/openSUSE**  | [Download AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage) |
+| **Other**            | [Build from source](#-build-from-source)                                                                                    |
+
+---
 
 ## ✨ Features
 
@@ -23,168 +65,241 @@ A high-performance, native Linux soundboard application built with **Rust**, **G
 - 🎨 **Modern UI**: Follows the Libadwaita design language with support for system dark/light themes.
 - 📊 **Diagnostics**: Built-in memory monitoring and audio status tracking.
 
-## 🛠️ Requirements
-
-- **Runtime for AppImage**
-  - `pactl` (used to create the virtual sink/source)
-  - PipeWire audio stack: `pipewire` + `pipewire-pulse` + `wireplumber`
-- **Runtime for native binaries**
-  - GTK4 + Libadwaita
-  - PulseAudio client libraries
-  - `pactl`
-  - PipeWire recommended: `pipewire` + `pipewire-pulse` + `wireplumber`
-- **Build from source**
-  - Rust **1.85+** via `rustup`
-  - GCC/Clang toolchain + `pkg-config`
-  - GTK4 / Libadwaita / GLib / PulseAudio development packages
-
-## ✅ Ubuntu/Debian Support
-
-- **Recommended for source builds:** Ubuntu **24.04+** or Debian **13+**
-- **Not recommended for source builds:** Ubuntu 22.04 / Debian 12, because their GTK4 / Libadwaita packages are too old for the current UI API usage
-- **Do not use** Ubuntu/Debian's `apt install cargo rustc` toolchain for this repo; use `rustup`
+---
 
 ## 📥 Installation
 
-### Ubuntu/Debian: AppImage (Recommended)
+### <img src="https://www.archlinux.org/static/logos/archlinux-logo-dark-90dpi.ebdee92a15b3.png" height="20"> Arch Linux (AUR)
 
-Download the latest AppImage from GitHub Releases:
+The easiest way to install on Arch-based distributions (Arch, Manjaro, EndeavourOS, etc.):
 
-- https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
+```bash
+# Using yay
+yay -S linux-soundboard-git
 
-Install the small set of system packages the app still relies on for audio routing:
+# Using paru
+paru -S linux-soundboard-git
+
+# Manual AUR installation
+git clone https://aur.archlinux.org/linux-soundboard-git.git
+cd linux-soundboard-git
+makepkg -si
+```
+
+The `-git` package automatically pulls the latest version from GitHub.
+
+---
+
+### <img src="https://assets.ubuntu.com/v1/29985a98-ubuntu-logo32.png" height="20"> Ubuntu / Debian
+
+**Recommended: AppImage** (Ubuntu 24.04+, Debian 13+)
+
+```bash
+# Download the AppImage
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
+
+# Make it executable
+chmod +x linux-soundboard-x86_64.AppImage
+
+# Run it
+./linux-soundboard-x86_64.AppImage
+```
+
+**Install required audio dependencies:**
 
 ```bash
 sudo apt update
-sudo apt install \
-  pulseaudio-utils \
-  pipewire \
-  pipewire-pulse \
-  wireplumber
+sudo apt install pulseaudio-utils pipewire pipewire-pulse wireplumber
 ```
 
-Then make the AppImage executable and launch it:
+> **Note:** If you get a FUSE error, install `libfuse2` or `libfuse2t64` and try again.
+
+---
+
+### <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Fedora_logo.svg/32px-Fedora_logo.svg.png" height="20"> Fedora
+
+**Option 1: AppImage**
 
 ```bash
+# Download the AppImage
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
 chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-Notes:
+**Option 2: Build from source**
 
-- The AppImage already bundles GTK4, Libadwaita, and most other desktop libraries.
-- `pulseaudio-utils` is required because the app calls `pactl` to create the virtual mic.
-- If the AppImage complains about missing FUSE support, install your distro's `libfuse2` or `libfuse2t64` package and try again.
-- For best compatibility, publish AppImages built on the oldest distro you want to support. The current local build here targets `GLIBC_2.39`, so Ubuntu 24.04+ is the safe baseline.
+```bash
+# Install dependencies
+sudo dnf install gcc pkg-config gtk4-devel libadwaita-devel pulseaudio-libs-devel \
+                 pipewire pipewire-pulseaudio wireplumber
 
-### Maintainers: Build the AppImage
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# Clone and build
+git clone https://github.com/germanua/Linux-SoundBoard.git
+cd Linux-SoundBoard/src
+cargo build --release
+
+# Run
+./target/release/linux-soundboard
+```
+
+---
+
+### <img src="https://en.opensuse.org/images/4/44/Button-colour.png" height="20"> openSUSE
+
+**Option 1: AppImage**
+
+```bash
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
+chmod +x linux-soundboard-x86_64.AppImage
+./linux-soundboard-x86_64.AppImage
+```
+
+**Option 2: Build from source**
+
+```bash
+# Install dependencies
+sudo zypper install gcc pkg-config gtk4-devel libadwaita-devel libpulse-devel \
+                    pipewire pipewire-pulseaudio wireplumber
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# Clone and build
+git clone https://github.com/germanua/Linux-SoundBoard.git
+cd Linux-SoundBoard/src
+cargo build --release
+```
+
+---
+
+### 🔧 Build from Source
+
+<details>
+<summary><strong>General build instructions for any distribution</strong></summary>
+
+#### Requirements
+
+- **Rust 1.85+** (via [rustup](https://rustup.rs/))
+- **GTK4** and **Libadwaita** development libraries
+- **PulseAudio** development libraries
+- **PipeWire** with PulseAudio compatibility layer (recommended)
+
+#### Build steps
+
+```bash
+# 1. Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+
+# 2. Clone the repository
+git clone https://github.com/germanua/Linux-SoundBoard.git
+cd Linux-SoundBoard
+
+# 3. Build the application
+cd src
+cargo build --release
+
+# 4. Run
+./target/release/linux-soundboard
+```
+
+#### Package names by distribution
+
+| Distribution | Packages |
+|-------------|----------|
+| **Arch** | `gtk4 libadwaita libpulse pipewire pipewire-pulse wireplumber` |
+| **Ubuntu/Debian** | `libgtk-4-dev libadwaita-1-dev libpulse-dev pipewire pipewire-pulse wireplumber` |
+| **Fedora** | `gtk4-devel libadwaita-devel pulseaudio-libs-devel pipewire pipewire-pulseaudio wireplumber` |
+| **openSUSE** | `gtk4-devel libadwaita-devel libpulse-devel pipewire pipewire-pulseaudio wireplumber` |
+
+</details>
+
+---
+
+### 📦 Maintainers: Build Packages
+
+<details>
+<summary><strong>Build AppImage</strong></summary>
 
 ```bash
 ./packaging/linux/package-appimage.sh
 ```
 
 Artifacts are written to `dist/`:
-
 - `dist/linux-soundboard-x86_64.AppImage`
 - `dist/linux-soundboard-<version>-x86_64.AppImage`
 
-### Ubuntu/Debian: Alternative Tarball Install
+</details>
 
-If you ship the archive produced by `packaging/linux/package-release.sh`, users still need the native runtime packages first:
+<details>
+<summary><strong>Build Tarball</strong></summary>
 
 ```bash
-sudo apt update
-sudo apt install \
-  libgtk-4-1 \
-  libadwaita-1-0 \
-  libpulse0 \
-  pulseaudio-utils \
-  pipewire \
-  pipewire-pulse \
-  wireplumber
+./packaging/linux/package-release.sh
 ```
 
-Then extract the archive and run:
-
+Users install via:
 ```bash
 ./install-user.sh
 ```
 
-That installs the binary into `~/.local/opt/linux-soundboard/` and creates a desktop launcher.
-
-### Ubuntu/Debian: Build From Source
-
-Install Rust with `rustup` first:
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source "$HOME/.cargo/env"
-rustup update stable
-cargo --version
-```
-
-If you use Ubuntu's `apt install cargo rustc`, you may hit this:
-
-```text
-lock file version 4 requires `-Znext-lockfile-bump`
-```
-
-That means the distro Rust toolchain is too old. Use the `rustup` toolchain above instead.
-
-```bash
-sudo apt update
-sudo apt install \
-  build-essential \
-  pkg-config \
-  curl \
-  libglib2.0-dev \
-  libgtk-4-dev \
-  libadwaita-1-dev \
-  libpulse-dev \
-  pulseaudio-utils \
-  pipewire \
-  pipewire-pulse \
-  wireplumber
-
-git clone https://github.com/germanua/linux-soundboard.git
-cd linux-soundboard/src
-cargo build --release
-```
-
-The executable will be located at `src/target/release/linux-soundboard`.
-
-### Notes
-
-- `libpipewire-0.3-dev` is **not** required for the current codebase.
-- Global hotkeys use an **X11/XWayland backend** and do not support native Wayland sessions yet.
-- For best binary compatibility, build release artifacts on the **oldest distro you want to support**. A binary or AppImage built on a newer distro can fail on older Ubuntu/Debian releases because of newer `glibc` requirements.
+</details>
 
 ## 🚀 Usage
 
-1. **Launch the App**: On first run, it will attempt to initialize the virtual microphone.
-2. **Add Sounds**:
-   - Go to **Settings** → **Add Folder** to scan a directory.
-   - Or **Drag & Drop** files directly into a tab.
-3. **Configure Virtual Mic**:
-   - In **Discord/OBS**, select `Linux_Soundboard_Mic` as your input device.
-   - Toggle **Mic Passthrough** in the app settings to include your voice.
-4. **Set Hotkeys**:
-   - Click the edit icon on a sound to assign a global hotkey.
-   - Full numpad bindings are supported, including `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, and `NumpadEnter`.
-   - Configure control hotkeys (Stop All, etc.) in the Settings panel.
+1. **Launch the App** — On first run, it will initialize the virtual microphone automatically.
+
+2. **Add Sounds**
+   - Go to **Settings** → **Add Folder** to scan a directory
+   - Or **drag & drop** files directly into a tab
+
+3. **Configure Virtual Mic**
+   - In **Discord/OBS/Zoom**, select `Linux_Soundboard_Mic` as your input device
+   - Toggle **Mic Passthrough** in the app to mix your voice with sounds
+
+4. **Set Hotkeys**
+   - Click the edit icon on a sound to assign a global hotkey
+   - Full numpad support: `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, `NumpadEnter`
+   - Configure control hotkeys (Stop All, Play/Pause, Next/Prev) in Settings
+
+---
 
 ## 🏗️ Architecture
 
-- **UI**: GTK4 + Libadwaita (Native Rust bindings)
-- **Audio Engine**: Rodio + Symphonia (Support for MP3, WAV, OGG, FLAC, AAC)
-- **Audio Routing**: PulseAudio/PipeWire via `pactl` module loading
-- **Global Hotkeys**: X11/XInput2 + XKB backend (works on X11 and XWayland)
-- **Config**: JSON-based storage at `~/.config/linux-soundboard/`
+| Component | Technology |
+|-----------|-----------|
+| **UI Framework** | GTK4 + Libadwaita (Native Rust bindings) |
+| **Audio Engine** | Rodio + Symphonia (MP3, WAV, OGG, FLAC, AAC) |
+| **Audio Routing** | PulseAudio/PipeWire via `pactl` |
+| **Global Hotkeys** | X11/XInput2 + XKB (X11 and XWayland) |
+| **Configuration** | JSON at `~/.config/linux-soundboard/` |
+
+---
+
+## ⚠️ Known Limitations
+
+- Global hotkeys require **X11 or XWayland** — native Wayland not yet supported
+- AppImage requires **FUSE** (install `libfuse2` if needed)
+- Ubuntu 22.04 / Debian 12: GTK4/Libadwaita too old for source builds — use AppImage
+
+---
 
 ## 📄 License
 
-This project is licensed under the PolyForm Noncommercial 1.0.0 license.
+This project is licensed under the **PolyForm Noncommercial 1.0.0** license.
 
-That means people may use, modify, and share the software only for noncommercial purposes under the license terms. Commercial use requires a separate license from the copyright holder.
+You may use, modify, and share the software for **noncommercial purposes** only. Commercial use requires a separate license from the copyright holder.
 
-See the [LICENSE](LICENSE) file for the full terms.
+See the [LICENSE](LICENSE) file for full terms.
+
+---
+
+<p align="center">
+  <sub>Made with ❤️ for the Linux community</sub>
+</p>
