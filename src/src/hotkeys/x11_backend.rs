@@ -84,6 +84,12 @@ impl HotkeyBackend for X11Backend {
 
     fn register(&self, sound_id: &str, hotkey: &str) -> Result<(), String> {
         let spec = parse_hotkey_spec(hotkey)?;
+        debug!(
+            "X11 register request: id='{}' key='{}' modifiers={:?}",
+            sound_id,
+            spec.key.token(),
+            spec.modifiers
+        );
 
         let mut bindings = self.bindings.lock().unwrap();
         for (id, existing) in bindings.iter() {

@@ -17,7 +17,9 @@ impl HotkeyManager {
         match Self::select_backend() {
             Ok(backend) => {
                 info!("Selected hotkey backend: {}", backend.name());
+                info!("Prebound hotkeys to register: {}", sounds.len());
                 for (id, hk) in sounds {
+                    info!("Registering hotkey binding: id='{}' hotkey='{}'", id, hk);
                     if let Err(e) = backend.register(id, hk) {
                         warn!("Failed to register hotkey '{}' for '{}': {}", hk, id, e);
                     }
@@ -67,13 +69,17 @@ impl HotkeyManager {
 
         match X11Backend::new() {
             Ok(backend) => return Ok(Box::new(backend) as Box<dyn HotkeyBackend>),
-            Err(err) => errors.push(format!("x11: {err}")),
+            Err(err) => {
+                warn!("X11 backend unavailable: {}", err);
+                errors.push(format!("x11: {err}"));
+            }
         }
 
         if portal_opt_in_enabled() {
             match PortalBackend::new() {
                 Ok(backend) => Ok(Box::new(backend) as Box<dyn HotkeyBackend>),
                 Err(portal_err) => {
+                    warn!("Portal backend unavailable: {}", portal_err);
                     errors.push(format!("portal: {portal_err}"));
                     Err(format!("no backend available ({})", errors.join("; ")))
                 }
