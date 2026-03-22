@@ -62,6 +62,20 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         }
     }
 
+    {
+        let hotkey_message = {
+            let hotkeys = state.hotkeys.lock().unwrap();
+            hotkeys.availability_message()
+        };
+        if let Some(reason) = hotkey_message {
+            let banner = adw::Banner::new(&format!("Global hotkeys unavailable — {}", reason));
+            banner.set_button_label(Some("Dismiss"));
+            banner.set_revealed(true);
+            banner.connect_button_clicked(|b| b.set_revealed(false));
+            root_box.append(&banner);
+        }
+    }
+
     // ── Transport bar ─────────────────────────────────────────────────
     let transport = TransportBar::new(Arc::clone(&state));
     root_box.append(transport.widget());

@@ -6,10 +6,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/app-meta.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
-MANIFEST_PATH="$REPO_ROOT/src-tauri/Cargo.toml"
+MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
 ICON_SOURCE="$REPO_ROOT/icon.png"
-ICON_SOURCE_ROOT="$REPO_ROOT/src-tauri/resources/icons"
-BINARY_SOURCE="$REPO_ROOT/src-tauri/target/release/$APP_BINARY"
+ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
+BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
 DIST_ROOT="$REPO_ROOT/dist"
 
 version="$(
@@ -60,8 +60,11 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 tar -C "$DIST_ROOT" -czf "$archive_path" "$bundle_name"
 
+"$SCRIPT_DIR/package-appimage.sh" --skip-build
+
 echo "Created release bundle:"
 echo "  Directory: $bundle_dir"
 echo "  Archive:   $archive_path"
+echo "  AppImage:  $DIST_ROOT/${APP_BINARY}-$(uname -m).AppImage"
 echo
 echo "Users can extract the archive and run ./install-user.sh to install the desktop launcher and icon."

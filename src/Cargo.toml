@@ -36,7 +36,7 @@ parking_lot = "0.12"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-x11rb = { version = "0.12", features = ["xkb", "resource_manager"] }
+evdev = "0.13"
 
 # PipeWire bindings (optional, may need system libpipewire-dev)
 # pipewire = { version = "0.8", optional = true }

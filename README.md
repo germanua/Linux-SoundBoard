@@ -25,10 +25,13 @@ A high-performance, native Linux soundboard application built with **Rust**, **G
 
 ## 🛠️ Requirements
 
-- **Runtime**
+- **Runtime for AppImage**
+  - `pactl` (used to create the virtual sink/source)
+  - PipeWire audio stack: `pipewire` + `pipewire-pulse` + `wireplumber`
+- **Runtime for native binaries**
   - GTK4 + Libadwaita
   - PulseAudio client libraries
-  - `pactl` (used to create the virtual sink/source)
+  - `pactl`
   - PipeWire recommended: `pipewire` + `pipewire-pulse` + `wireplumber`
 - **Build from source**
   - Rust **1.85+** via `rustup`
@@ -43,9 +46,51 @@ A high-performance, native Linux soundboard application built with **Rust**, **G
 
 ## 📥 Installation
 
-### Ubuntu/Debian: Run a Prebuilt Binary
+### Ubuntu/Debian: AppImage (Recommended)
 
-If you distribute a release archive produced by `packaging/linux/package-release.sh`, users should install the runtime packages first:
+Download the latest AppImage from GitHub Releases:
+
+- https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
+
+Install the small set of system packages the app still relies on for audio routing:
+
+```bash
+sudo apt update
+sudo apt install \
+  pulseaudio-utils \
+  pipewire \
+  pipewire-pulse \
+  wireplumber
+```
+
+Then make the AppImage executable and launch it:
+
+```bash
+chmod +x linux-soundboard-x86_64.AppImage
+./linux-soundboard-x86_64.AppImage
+```
+
+Notes:
+
+- The AppImage already bundles GTK4, Libadwaita, and most other desktop libraries.
+- `pulseaudio-utils` is required because the app calls `pactl` to create the virtual mic.
+- If the AppImage complains about missing FUSE support, install your distro's `libfuse2` or `libfuse2t64` package and try again.
+- For best compatibility, publish AppImages built on the oldest distro you want to support. The current local build here targets `GLIBC_2.39`, so Ubuntu 24.04+ is the safe baseline.
+
+### Maintainers: Build the AppImage
+
+```bash
+./packaging/linux/package-appimage.sh
+```
+
+Artifacts are written to `dist/`:
+
+- `dist/linux-soundboard-x86_64.AppImage`
+- `dist/linux-soundboard-<version>-x86_64.AppImage`
+
+### Ubuntu/Debian: Alternative Tarball Install
+
+If you ship the archive produced by `packaging/linux/package-release.sh`, users still need the native runtime packages first:
 
 ```bash
 sudo apt update
@@ -102,17 +147,17 @@ sudo apt install \
   wireplumber
 
 git clone https://github.com/germanua/linux-soundboard.git
-cd linux-soundboard/src-tauri
+cd linux-soundboard/src
 cargo build --release
 ```
 
-The executable will be located at `src-tauri/target/release/linux-soundboard`.
+The executable will be located at `src/target/release/linux-soundboard`.
 
 ### Notes
 
 - `libpipewire-0.3-dev` is **not** required for the current codebase.
-- Global hotkeys use an **X11 backend** and may only work under X11 or XWayland.
-- For best binary compatibility, build release artifacts on the **oldest distro you want to support**. A binary built on a newer distro can fail on older Ubuntu/Debian releases because of newer `glibc` requirements.
+- Global hotkeys use an **X11/XWayland backend** and do not support native Wayland sessions yet.
+- For best binary compatibility, build release artifacts on the **oldest distro you want to support**. A binary or AppImage built on a newer distro can fail on older Ubuntu/Debian releases because of newer `glibc` requirements.
 
 ## 🚀 Usage
 
@@ -125,6 +170,7 @@ The executable will be located at `src-tauri/target/release/linux-soundboard`.
    - Toggle **Mic Passthrough** in the app settings to include your voice.
 4. **Set Hotkeys**:
    - Click the edit icon on a sound to assign a global hotkey.
+   - Full numpad bindings are supported, including `NumpadAdd`, `NumpadSubtract`, `NumpadMultiply`, `NumpadDivide`, `NumpadDecimal`, and `NumpadEnter`.
    - Configure control hotkeys (Stop All, etc.) in the Settings panel.
 
 ## 🏗️ Architecture
@@ -132,7 +178,7 @@ The executable will be located at `src-tauri/target/release/linux-soundboard`.
 - **UI**: GTK4 + Libadwaita (Native Rust bindings)
 - **Audio Engine**: Rodio + Symphonia (Support for MP3, WAV, OGG, FLAC, AAC)
 - **Audio Routing**: PulseAudio/PipeWire via `pactl` module loading
-- **Global Hotkeys**: X11/XKB backend (may work under XWayland)
+- **Global Hotkeys**: X11/XInput2 + XKB backend (works on X11 and XWayland)
 - **Config**: JSON-based storage at `~/.config/linux-soundboard/`
 
 ## 📄 License

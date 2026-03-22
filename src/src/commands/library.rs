@@ -258,6 +258,14 @@ pub fn import_files_as_links(
     paths: Vec<String>,
     config: Arc<Mutex<Config>>,
 ) -> Result<Vec<Sound>, String> {
+    import_files_to_tab(paths, None, config)
+}
+
+pub fn import_files_to_tab(
+    paths: Vec<String>,
+    tab_id: Option<String>,
+    config: Arc<Mutex<Config>>,
+) -> Result<Vec<Sound>, String> {
     let existing_paths: HashSet<String> = {
         let cfg = config.lock().unwrap();
         cfg.sounds.iter().map(|s| s.path.clone()).collect()
@@ -290,9 +298,17 @@ pub fn import_files_as_links(
     }
 
     let mut cfg = config.lock().unwrap();
+    let mut sound_ids = Vec::new();
     for sound in &new_sounds {
         cfg.add_sound(sound.clone());
+        sound_ids.push(sound.id.clone());
     }
+
+    // If a specific tab is provided, add sounds to it
+    if let Some(tab_id) = tab_id {
+        cfg.add_sounds_to_tab(&tab_id, sound_ids);
+    }
+
     cfg.save().map_err(|e| e.to_string())?;
 
     Ok(new_sounds)

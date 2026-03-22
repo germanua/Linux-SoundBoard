@@ -3,10 +3,11 @@
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+use gtk4::gdk::prelude::DisplayExtManual;
 use gtk4::prelude::*;
 use gtk4::{Application, Window};
 use libadwaita as adw;
-use log::info;
+use log::{info, warn};
 
 use crate::app_meta::{
     APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, HOTKEY_POLL_INTERVAL_MS,
@@ -16,11 +17,11 @@ use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
 
 pub fn run() {
+    env_logger::init();
     configure_preferred_backend();
     glib::set_prgname(Some(APP_BINARY));
     glib::set_application_name(APP_TITLE);
 
-    env_logger::init();
     info!("Starting Linux Soundboard (GTK4)");
 
     adw::init().expect("Failed to initialize libadwaita");
@@ -36,12 +37,22 @@ fn configure_preferred_backend() {
         && std::env::var("WAYLAND_DISPLAY").is_ok()
         && std::env::var("DISPLAY").is_ok()
     {
+        info!(
+            "Wayland and X11 displays detected; forcing GTK onto X11 via {}={}",
+            BACKEND_ENV_VAR, X11_BACKEND
+        );
         std::env::set_var(BACKEND_ENV_VAR, X11_BACKEND);
     }
 }
 
 fn build_activate_handler() -> impl Fn(&Application) + 'static {
     move |app| {
+        if let Some(display) = gtk4::gdk::Display::default() {
+            info!("GTK display backend: {:?}", display.backend());
+        } else {
+            warn!("GTK display backend is unavailable during activation");
+        }
+
         let config = load_config();
         crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
 
@@ -54,8 +65,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
         let hotkey_receiver = Arc::new(Mutex::new(hotkey_receiver));
 
         let hotkey_manager =
-            crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys)
-                .expect("Failed to init hotkeys");
+            crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
 
         let player = initialize_player(&config);
         crate::diagnostics::memory::log_memory_snapshot("startup:player_initialized");

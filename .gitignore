@@ -5,8 +5,8 @@ node_modules/
 dist/
 target/
 
-# Tauri
-src-tauri/target/
+# Build artifacts
+src/target/
 
 # IDE
 .vscode/

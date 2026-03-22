@@ -7,7 +7,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/app-meta.sh"
 
 SOURCE_ICON="${1:-$REPO_ROOT/icon.png}"
-ICON_ROOT="$REPO_ROOT/src-tauri/resources/icons"
+ICON_ROOT="$REPO_ROOT/src/resources/icons"
 SIZES=(16 24 32 48 64 128 256 512)
 
 if [[ ! -f "$SOURCE_ICON" ]]; then

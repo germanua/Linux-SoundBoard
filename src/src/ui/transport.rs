@@ -165,14 +165,15 @@ impl TransportBar {
         let local_vol_icon = icons::image(icons::HEADPHONES);
         local_vol_icon.add_css_class("transport-volume-icon");
         local_vol_icon.set_tooltip_text(Some("Headphones Volume"));
-        let local_vol_adj = Adjustment::new(local_vol_value, 0.0, 100.0, 1.0, 10.0, 0.0);
+        let local_vol_adj = Adjustment::new(local_vol_value, 0.0, 100.0, 1.0, 0.0, 0.0);
         let local_vol = Scale::builder()
             .adjustment(&local_vol_adj)
             .orientation(Orientation::Horizontal)
             .draw_value(false)
-            .width_request(64)
+            .width_request(100)
             .build();
         local_vol.add_css_class("volume-slider");
+
         let local_vol_label = Label::builder()
             .label(format!("{}", local_vol_value as u8))
             .css_classes(vec!["volume-readout", "monospace"])
@@ -207,14 +208,15 @@ impl TransportBar {
         let mic_vol_icon = icons::image(icons::MICROPHONE);
         mic_vol_icon.add_css_class("transport-volume-icon");
         mic_vol_icon.set_tooltip_text(Some("Microphone Volume"));
-        let mic_vol_adj = Adjustment::new(mic_vol_value, 0.0, 100.0, 1.0, 10.0, 0.0);
+        let mic_vol_adj = Adjustment::new(mic_vol_value, 0.0, 100.0, 1.0, 0.0, 0.0);
         let mic_vol = Scale::builder()
             .adjustment(&mic_vol_adj)
             .orientation(Orientation::Horizontal)
             .draw_value(false)
-            .width_request(64)
+            .width_request(100)
             .build();
         mic_vol.add_css_class("volume-slider");
+
         let mic_vol_label = Label::builder()
             .label(format!("{}", mic_vol_value as u8))
             .css_classes(vec!["volume-readout", "monospace"])

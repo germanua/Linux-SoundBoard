@@ -129,12 +129,12 @@ pub fn canonicalize_hotkey_string(hk: &str) -> Result<String, String> {
 }
 
 pub fn normalize_capture_key(key_name: &str, keycode: u32) -> Option<HotkeyCode> {
-    if is_disallowed_symbol_key_name(key_name) {
-        return None;
-    }
-
     if let Some(code) = HotkeyCode::from_capture_keycode(keycode) {
         return Some(code);
+    }
+
+    if is_disallowed_symbol_key_name(key_name) {
+        return None;
     }
 
     let normalized = normalize_key_name(key_name);
@@ -430,6 +430,10 @@ mod tests {
             canonicalize_hotkey_string("Shift+NumpadPage_Down").unwrap(),
             "Shift+Numpad3"
         );
+        assert_eq!(
+            canonicalize_hotkey_string("Ctrl+KP_Subtract").unwrap(),
+            "Ctrl+NumpadSubtract"
+        );
     }
 
     #[test]
@@ -451,5 +455,29 @@ mod tests {
     #[test]
     fn rejects_unsupported_symbol_capture_keys() {
         assert!(normalize_capture_key("slash", 0).is_none());
+    }
+
+    #[test]
+    fn accepts_numpad_operator_capture_keys_by_keycode() {
+        assert_eq!(
+            normalize_capture_key("minus", 82).unwrap().token(),
+            "NumpadSubtract"
+        );
+        assert_eq!(
+            normalize_capture_key("plus", 86).unwrap().token(),
+            "NumpadAdd"
+        );
+    }
+
+    #[test]
+    fn accepts_numpad_operator_capture_keys_by_name() {
+        assert_eq!(
+            normalize_capture_key("KP_Multiply", 0).unwrap().token(),
+            "NumpadMultiply"
+        );
+        assert_eq!(
+            normalize_capture_key("KP_Divide", 0).unwrap().token(),
+            "NumpadDivide"
+        );
     }
 }

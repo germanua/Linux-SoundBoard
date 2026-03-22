@@ -755,9 +755,24 @@ fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
         .icon_name(icons::name(icons::KEYBOARD))
         .build();
 
+    let description = {
+        let hotkeys = state.hotkeys.lock().unwrap();
+        hotkeys
+            .availability_message()
+            .map(|reason| {
+                format!(
+                    "These global hotkeys require X11/XWayland. Currently unavailable: {}",
+                    reason
+                )
+            })
+            .unwrap_or_else(|| {
+                "These X11/XWayland hotkeys work from anywhere on your desktop".to_string()
+            })
+    };
+
     let group = adw::PreferencesGroup::builder()
         .title("Global Control Hotkeys")
-        .description("These X11 hotkeys work from anywhere on your desktop")
+        .description(&description)
         .build();
 
     for meta in ControlHotkeyAction::all() {
@@ -816,6 +831,7 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                 let state3 = Arc::clone(&state2);
                 let lbl2 = lbl.clone();
                 let clear3 = clear2.clone();
+                let error_window = win.clone();
                 crate::ui::dialogs::show_hotkey_capture(&win, current.as_deref(), move |result| {
                     match result {
                         Some(hk) => {
@@ -829,7 +845,14 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                                     lbl2.set_text(&hk);
                                     clear3.set_sensitive(true);
                                 }
-                                Err(e) => log::warn!("Set control hotkey failed: {e}"),
+                                Err(e) => {
+                                    log::warn!("Set control hotkey failed: {e}");
+                                    crate::ui::dialogs::show_error(
+                                        &error_window,
+                                        "Failed to Set Control Hotkey",
+                                        &e,
+                                    );
+                                }
                             }
                         }
                         None => {
@@ -843,7 +866,14 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                                     lbl2.set_text("Not set");
                                     clear3.set_sensitive(false);
                                 }
-                                Err(e) => log::warn!("Clear control hotkey failed: {e}"),
+                                Err(e) => {
+                                    log::warn!("Clear control hotkey failed: {e}");
+                                    crate::ui::dialogs::show_error(
+                                        &error_window,
+                                        "Failed to Clear Control Hotkey",
+                                        &e,
+                                    );
+                                }
                             }
                         }
                     }
@@ -867,7 +897,12 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                     lbl.set_text("Not set");
                     btn.set_sensitive(false);
                 }
-                Err(e) => log::warn!("Clear control hotkey failed: {e}"),
+                Err(e) => {
+                    log::warn!("Clear control hotkey failed: {e}");
+                    if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
+                        crate::ui::dialogs::show_error(&win, "Failed to Clear Control Hotkey", &e);
+                    }
+                }
             }
         });
     }

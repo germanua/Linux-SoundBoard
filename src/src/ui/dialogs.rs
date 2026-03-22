@@ -3,12 +3,88 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use gtk4::gdk::prelude::DisplayExtManual;
 use gtk4::prelude::WidgetExt;
 use gtk4::{self, Box as GtkBox, EventControllerKey, Label, Orientation, Window};
 use libadwaita as adw;
 use libadwaita::prelude::*;
+use log::debug;
 
 use crate::hotkeys::{normalize_capture_key, HotkeyModifier, HotkeySpec};
+
+fn push_capture_candidate(candidates: &mut Vec<String>, candidate: &str) {
+    if candidate.is_empty() || candidates.iter().any(|existing| existing == candidate) {
+        return;
+    }
+    candidates.push(candidate.to_string());
+}
+
+fn resolve_capture_key(key_name: &str, keycode: u32) -> Option<crate::hotkeys::HotkeyCode> {
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return normalize_capture_key(key_name, keycode);
+    };
+
+    let mut preferred_candidates = Vec::new();
+    let mut fallback_candidates = Vec::new();
+
+    if let Some(mapped_keys) = display.map_keycode(keycode) {
+        for (_, mapped_keyval) in mapped_keys {
+            if let Some(mapped_name) = mapped_keyval.name() {
+                let mapped_name = mapped_name.to_string();
+                if mapped_name.starts_with("KP_") {
+                    push_capture_candidate(&mut preferred_candidates, &mapped_name);
+                } else {
+                    push_capture_candidate(&mut fallback_candidates, &mapped_name);
+                }
+            }
+        }
+    }
+
+    if key_name.starts_with("KP_") {
+        push_capture_candidate(&mut preferred_candidates, key_name);
+    } else {
+        push_capture_candidate(&mut fallback_candidates, key_name);
+    }
+
+    preferred_candidates.extend(fallback_candidates);
+
+    for candidate in &preferred_candidates {
+        if let Some(code) = normalize_capture_key(candidate, keycode) {
+            debug!(
+                "Captured key '{}' (hardware code {}, backend {:?}) -> '{}' via candidate '{}'",
+                key_name,
+                keycode,
+                display.backend(),
+                code.token(),
+                candidate
+            );
+            return Some(code);
+        }
+    }
+
+    if display.backend().is_x11() {
+        let fallback = normalize_capture_key(key_name, keycode);
+        if let Some(code) = fallback {
+            debug!(
+                "Captured key '{}' (hardware code {}, backend {:?}) -> '{}' via X11 fallback",
+                key_name,
+                keycode,
+                display.backend(),
+                code.token()
+            );
+        }
+        return fallback;
+    }
+
+    debug!(
+        "Unable to resolve captured key '{}' (hardware code {}, backend {:?}); candidates: {:?}",
+        key_name,
+        keycode,
+        display.backend(),
+        preferred_candidates
+    );
+    None
+}
 
 /// Show a simple error message dialog.
 #[allow(dead_code)]
@@ -229,8 +305,9 @@ where
             return glib::Propagation::Stop;
         }
 
-        let Some(key_token) = normalize_capture_key(&key_name, keycode) else {
-            status_for_key.set_text("Unsupported key. Use A-Z, 0-9, F-keys, arrows, or numpad.");
+        let Some(key_token) = resolve_capture_key(&key_name, keycode) else {
+            status_for_key
+                .set_text("Unsupported key. Use A-Z, 0-9, F-keys, arrows, or numpad keys.");
             return glib::Propagation::Stop;
         };
 

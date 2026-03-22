@@ -99,6 +99,7 @@ impl SoundList {
 
         inner.configure_columns();
         inner.connect_activate();
+        inner.setup_drag_drop();
 
         let sl = Self { inner };
         sl.reload_store(&all_sounds);
@@ -310,6 +311,92 @@ impl SoundListInner {
                 },
             );
         });
+    }
+
+    fn setup_drag_drop(self: &Arc<Self>) {
+        // Setup drop target for files
+        let drop_target_files = gtk4::DropTarget::new(
+            gtk4::gdk::FileList::static_type(),
+            gtk4::gdk::DragAction::COPY,
+        );
+
+        let drop_target_text =
+            gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::COPY);
+
+        // Handle file drops
+        {
+            let inner = Arc::clone(self);
+            drop_target_files.connect_drop(move |_, value, _, _| {
+                log::info!("File drop detected in sound list");
+                let Ok(file_list) = value.get::<gtk4::gdk::FileList>() else {
+                    log::warn!("Failed to get file list from drop");
+                    return false;
+                };
+
+                let dropped_paths = file_list
+                    .files()
+                    .into_iter()
+                    .filter_map(|file| file.path().map(|path| path.to_string_lossy().to_string()))
+                    .collect::<Vec<_>>();
+
+                log::info!("Dropped {} files: {:?}", dropped_paths.len(), dropped_paths);
+                inner.handle_dropped_files(dropped_paths)
+            });
+        }
+
+        // Handle text/URI drops
+        {
+            let inner = Arc::clone(self);
+            drop_target_text.connect_drop(move |_, value, _, _| {
+                log::info!("Text/URI drop detected in sound list");
+                let Ok(uri_list) = value.get::<String>() else {
+                    log::warn!("Failed to get URI list from drop");
+                    return false;
+                };
+
+                log::info!("Dropped URI list: {}", uri_list);
+                let dropped_paths = parse_uri_list(&uri_list);
+                log::info!("Parsed {} paths from URI list", dropped_paths.len());
+                inner.handle_dropped_files(dropped_paths)
+            });
+        }
+
+        self.scroll.add_controller(drop_target_files);
+        self.scroll.add_controller(drop_target_text);
+        log::info!("Drag & drop handlers installed on sound list");
+    }
+
+    fn handle_dropped_files(&self, paths: Vec<String>) -> bool {
+        if paths.is_empty() {
+            log::warn!("No paths to import");
+            return false;
+        }
+
+        // Get the current active tab
+        let tab_id = self.active_tab_id.lock().unwrap().clone();
+        log::info!("Importing to tab: {}", tab_id);
+
+        let tab_id_opt = if tab_id == crate::app_meta::GENERAL_TAB_ID {
+            None
+        } else {
+            Some(tab_id.clone())
+        };
+
+        // Import files to the current tab
+        match commands::import_files_to_tab(paths, tab_id_opt, Arc::clone(&self.state.config)) {
+            Ok(new_sounds) => {
+                log::info!("Successfully imported {} sounds", new_sounds.len());
+                if !new_sounds.is_empty() {
+                    self.refresh_from_state_inner();
+                    self.emit_library_changed();
+                }
+                true
+            }
+            Err(e) => {
+                log::warn!("Drop import failed: {e}");
+                false
+            }
+        }
     }
 
     fn build_index_column(self: &Arc<Self>) -> ColumnViewColumn {
@@ -739,6 +826,7 @@ impl SoundListInner {
                 let inner_confirm = Arc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
+                let error_window = win.clone();
                 crate::ui::dialogs::show_hotkey_capture(
                     &win,
                     sound.hotkey.as_deref(),
@@ -749,7 +837,14 @@ impl SoundListInner {
                         Arc::clone(&state_confirm.hotkeys),
                     ) {
                         Ok(_) => inner_confirm.refresh_from_state_inner(),
-                        Err(e) => log::warn!("Set hotkey failed: {e}"),
+                        Err(e) => {
+                            log::warn!("Set hotkey failed: {e}");
+                            crate::ui::dialogs::show_error(
+                                &error_window,
+                                "Failed to Set Hotkey",
+                                &e,
+                            );
+                        }
                     },
                 );
             });
@@ -986,4 +1081,49 @@ impl SoundListInner {
             cb();
         }
     }
+}
+
+fn parse_uri_list(uri_list: &str) -> Vec<String> {
+    uri_list
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+
+            // Handle file:// URIs
+            if let Some(path) = line.strip_prefix("file://") {
+                // Simple URL decode for common cases
+                let decoded = percent_decode(path);
+                return Some(decoded);
+            }
+
+            // Return as-is if not a file:// URI
+            Some(line.to_string())
+        })
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push('%');
+            result.push_str(&hex);
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }

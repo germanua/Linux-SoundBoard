@@ -15,8 +15,8 @@ if [[ $# -ge 1 ]]; then
     BINARY_SOURCE="$(realpath "$1")"
 elif [[ -x "$SCRIPT_DIR/$APP_BINARY" ]]; then
     BINARY_SOURCE="$SCRIPT_DIR/$APP_BINARY"
-elif [[ -x "$SCRIPT_DIR/../../src-tauri/target/release/$APP_BINARY" ]]; then
-    BINARY_SOURCE="$(realpath "$SCRIPT_DIR/../../src-tauri/target/release/$APP_BINARY")"
+elif [[ -x "$SCRIPT_DIR/../../src/target/release/$APP_BINARY" ]]; then
+    BINARY_SOURCE="$(realpath "$SCRIPT_DIR/../../src/target/release/$APP_BINARY")"
 else
     echo "Could not find a built $APP_BINARY binary." >&2
     echo "Pass the path to the release binary as the first argument, or run this after packaging." >&2
@@ -25,8 +25,8 @@ fi
 
 if [[ -d "$SCRIPT_DIR/icons" ]]; then
     ICON_SOURCE_ROOT="$SCRIPT_DIR/icons"
-elif [[ -d "$SCRIPT_DIR/../../src-tauri/resources/icons" ]]; then
-    ICON_SOURCE_ROOT="$(realpath "$SCRIPT_DIR/../../src-tauri/resources/icons")"
+elif [[ -d "$SCRIPT_DIR/../../src/resources/icons" ]]; then
+    ICON_SOURCE_ROOT="$(realpath "$SCRIPT_DIR/../../src/resources/icons")"
 else
     echo "Could not find the bundled icon set." >&2
     exit 1

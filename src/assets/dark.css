@@ -1,27 +1,19 @@
-/* Light theme custom styles */
-@define-color accent_bg_color #A88D52;
-@define-color accent_fg_color #332B1F;
-@define-color accent_color #A88D52;
+/* Dark theme custom styles */
+@define-color accent_bg_color #948979;
+@define-color accent_fg_color #DFD0B8;
+@define-color accent_color #948979;
 
 window,
 .main-window {
-  background-color: #f7f4ef;
-  color: #332b1f;
+  background-color: #222831;
+  color: #dfd0b8;
 }
 
-/* Global text color */
+/* Global text color — ensure all labels/buttons inherit the warm tone */
 label,
 button,
 entry {
-  color: #332b1f;
-}
-
-.sound-row-playing {
-  background-color: rgba(168, 141, 82, 0.15);
-}
-
-.sound-row-selected {
-  background-color: rgba(168, 141, 82, 0.25);
+  color: #dfd0b8;
 }
 
 .sound-cell {
@@ -30,11 +22,11 @@ entry {
 }
 
 .sound-cell-playing {
-  background-color: rgba(168, 141, 82, 0.15);
+  background-color: rgba(148, 137, 121, 0.15);
 }
 
 .sound-cell-active {
-  background-color: rgba(168, 141, 82, 0.2);
+  background-color: rgba(148, 137, 121, 0.2);
 }
 
 .sound-cell-first {
@@ -43,32 +35,50 @@ entry {
 }
 
 .sound-cell-first.sound-cell-playing {
-  border-left-color: rgba(168, 141, 82, 0.65);
+  border-left-color: rgba(148, 137, 121, 0.65);
 }
 
 .sound-cell-first.sound-cell-active {
-  border-left-color: #a88d52;
+  border-left-color: #948979;
+}
+
+.sound-row-selected {
+  background-color: rgba(148, 137, 121, 0.25);
 }
 
 .transport-bar {
-  background-color: #f3ede3;
+  background: #393e46;
+  background-color: #393e46;
   background-image: none;
-  border-bottom: 2px solid rgba(168, 141, 82, 0.45);
+  box-shadow: none;
+  border-image: none;
+  border-bottom: 2px solid rgba(148, 137, 121, 0.5);
   padding: 3px 6px;
   min-height: 40px;
-  color: #332b1f;
+  color: #dfd0b8;
+}
+
+/* Override Adwaita toolbar styling that bleeds through */
+.transport-bar.toolbar,
+.transport-bar > .toolbar,
+box.toolbar.transport-bar {
+  background: #393e46;
+  background-color: #393e46;
+  background-image: none;
+  box-shadow: none;
 }
 
 headerbar,
 headerbar:backdrop,
 .titlebar {
-  background-color: #f3ede3;
+  background: #393e46;
+  background-color: #393e46;
   background-image: none;
   box-shadow: none;
 }
 
 .transport-bar label {
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 .transport-cluster {
@@ -88,7 +98,7 @@ headerbar:backdrop,
 }
 
 .transport-bar button {
-  color: #332b1f;
+  color: #dfd0b8;
   border-radius: 10px;
   background-image: none;
 }
@@ -108,7 +118,7 @@ headerbar:backdrop,
 
 /* Symbolic icon coloring in transport bar */
 .transport-bar button image {
-  color: #332b1f;
+  color: #dfd0b8;
   -gtk-icon-size: 16px;
 }
 
@@ -129,27 +139,27 @@ headerbar:backdrop,
 }
 
 .transport-bar button:hover image {
-  color: #000000;
+  color: #ffffff;
 }
 
 .btn-active image {
-  color: #a88d52;
+  color: #948979;
 }
 
 .tabs-sidebar {
-  background-color: #f0ede8;
-  border-right: 1px solid rgba(168, 141, 82, 0.2);
+  background-color: #2d3139;
+  border-right: 1px solid rgba(148, 137, 121, 0.2);
   min-width: 180px;
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 .tabs-sidebar label {
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 /* Column view text */
 columnview {
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 columnview row > cell {
@@ -160,7 +170,7 @@ columnview row > cell {
 }
 
 columnview row > cell label {
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 .tab-row {
@@ -170,12 +180,12 @@ columnview row > cell label {
 }
 
 .tab-row:hover {
-  background-color: rgba(168, 141, 82, 0.15);
+  background-color: rgba(148, 137, 121, 0.15);
 }
 
 .tab-row.active {
-  background-color: rgba(168, 141, 82, 0.25);
-  border-left: 3px solid #a88d52;
+  background-color: rgba(148, 137, 121, 0.25);
+  border-left: 3px solid #948979;
 }
 
 /* Appearance options selection in Settings */
@@ -194,34 +204,34 @@ row.appearance-choice-row {
 }
 
 .appearance-choice-selected {
-  background-color: rgba(168, 141, 82, 0.16);
-  border-left-color: #a88d52;
+  background-color: rgba(148, 137, 121, 0.16);
+  border-left-color: #948979;
 }
 
 /* Navigation sidebar selection override */
 .navigation-sidebar row:selected {
-  background-color: rgba(168, 141, 82, 0.2);
-  border-left: 4px solid #a88d52;
+  background-color: rgba(148, 137, 121, 0.2);
+  border-left: 4px solid #948979;
 }
 
 .navigation-sidebar row:hover:not(:selected) {
-  background-color: rgba(168, 141, 82, 0.1);
+  background-color: rgba(148, 137, 121, 0.1);
 }
 
 /* Hotkey badge — pill style */
 .hotkey-badge {
   font-family: monospace;
   font-size: 10px;
-  background-color: rgba(168, 141, 82, 0.08);
-  border: 1px solid rgba(168, 141, 82, 0.28);
+  background-color: rgba(148, 137, 121, 0.1);
+  border: 1px solid rgba(148, 137, 121, 0.3);
   border-radius: 4px;
   padding: 1px 5px;
-  color: rgba(51, 43, 31, 0.82);
+  color: rgba(223, 208, 184, 0.85);
 }
 
 .setup-banner {
-  background-color: rgba(220, 120, 0, 0.15);
-  border-bottom: 1px solid rgba(220, 120, 0, 0.4);
+  background-color: rgba(220, 120, 0, 0.2);
+  border-bottom: 1px solid rgba(220, 120, 0, 0.5);
   padding: 8px 16px;
 }
 
@@ -230,11 +240,11 @@ row.appearance-choice-row {
   0%,
   100% {
     opacity: 1;
-    color: #a88d52;
+    color: #948979;
   }
   50% {
     opacity: 0.4;
-    color: #332b1f;
+    color: #dfd0b8;
   }
 }
 
@@ -261,13 +271,13 @@ row.appearance-choice-row {
   min-width: 8px;
   min-height: 8px;
   border-radius: 50%;
-  color: #a88d52;
+  color: #948979;
   animation: playing-dot-pulse 1.5s ease-in-out infinite;
 }
 
 /* Row styling for sound list */
 columnview row:nth-child(even) > cell {
-  background-color: rgba(168, 141, 82, 0.03);
+  background-color: rgba(148, 137, 121, 0.03);
 }
 
 columnview header button,
@@ -278,19 +288,19 @@ columnview header button:checked {
   background-image: none;
   border: none;
   box-shadow: none;
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 /* Active transport buttons — background tint + border glow */
 .btn-active {
-  background-color: rgba(168, 141, 82, 0.25);
-  border: 1px solid rgba(168, 141, 82, 0.44);
+  background-color: rgba(148, 137, 121, 0.25);
+  border: 1px solid rgba(148, 137, 121, 0.44);
 }
 
 /* Settings button active glow */
 .btn-settings-active {
-  background-color: rgba(168, 141, 82, 0.25);
-  border: 1px solid rgba(168, 141, 82, 0.5);
+  background-color: rgba(148, 137, 121, 0.25);
+  border: 1px solid rgba(148, 137, 121, 0.5);
 }
 
 /* Refresh button spinning indicator */
@@ -303,16 +313,16 @@ scrollbar slider {
   min-width: 8px;
   min-height: 8px;
   border-radius: 4px;
-  background-color: rgba(168, 141, 82, 0.4);
+  background-color: rgba(148, 137, 121, 0.4);
 }
 
 scrollbar slider:hover {
-  background-color: rgba(168, 141, 82, 0.7);
+  background-color: rgba(148, 137, 121, 0.7);
 }
 
 /* Transport button hover */
 .transport-bar button:hover {
-  background-color: rgba(168, 141, 82, 0.12);
+  background-color: rgba(148, 137, 121, 0.12);
   border-radius: 8px;
 }
 
@@ -325,20 +335,20 @@ scrollbar slider:hover {
 
 /* Scrub bar (transport Scale widget) */
 .transport-bar scale trough {
-  background-color: rgba(247, 244, 239, 0.7);
-  border: 1px solid rgba(168, 141, 82, 0.3);
+  background-color: rgba(34, 40, 49, 0.7);
+  border: 1px solid rgba(148, 137, 121, 0.3);
   border-radius: 4px;
   min-height: 6px;
 }
 
 .transport-bar scale trough highlight {
-  background: linear-gradient(90deg, #a88d52, #332b1f);
+  background: linear-gradient(90deg, #948979, #dfd0b8);
   border-radius: 4px;
 }
 
 .transport-bar scale slider {
-  background-color: #332b1f;
-  border: 2px solid #a88d52;
+  background-color: #dfd0b8;
+  border: 2px solid #948979;
   border-radius: 50%;
   min-width: 14px;
   min-height: 14px;
@@ -346,29 +356,34 @@ scrollbar slider:hover {
 
 /* Volume sliders (smaller) */
 scale.volume-slider trough {
-  background-color: rgba(247, 244, 239, 0.5);
-  border: 1px solid rgba(168, 141, 82, 0.25);
-  border-radius: 3px;
-  min-height: 4px;
+  background-color: rgba(34, 40, 49, 0.7);
+  border: 1px solid rgba(148, 137, 121, 0.4);
+  border-radius: 4px;
+  min-height: 6px;
+  /* Disable clicking on trough to prevent auto-scroll */
+  pointer-events: none;
 }
 
 scale.volume-slider trough highlight {
-  background-color: #a88d52;
-  border-radius: 3px;
+  background-color: #948979;
+  border-radius: 4px;
 }
 
 scale.volume-slider slider {
-  background-color: #332b1f;
-  border: 1px solid #a88d52;
+  background-color: #dfd0b8;
+  border: 2px solid #948979;
   border-radius: 50%;
-  min-width: 14px;
-  min-height: 14px;
+  min-width: 16px;
+  min-height: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  /* Re-enable pointer events on slider handle only */
+  pointer-events: auto;
 }
 
 .transport-volume-icon {
-  color: #332b1f;
+  color: #dfd0b8;
   -gtk-icon-size: 14px;
-  opacity: 0.88;
+  opacity: 0.9;
 }
 
 .volume-readout-wrap {
@@ -379,8 +394,8 @@ scale.volume-slider slider {
   min-width: 38px;
   font-family: monospace;
   font-size: 11px;
-  color: #332b1f;
-  opacity: 0.88;
+  color: #dfd0b8;
+  opacity: 0.9;
 }
 
 entry.volume-input {
@@ -388,24 +403,24 @@ entry.volume-input {
   min-height: 24px;
   padding: 0 4px;
   border-radius: 7px;
-  border: 1px solid rgba(168, 141, 82, 0.35);
-  background-color: rgba(247, 244, 239, 0.65);
+  border: 1px solid rgba(148, 137, 121, 0.35);
+  background-color: rgba(34, 40, 49, 0.45);
   font-family: monospace;
   font-size: 11px;
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 /* Sound row hover */
 columnview row:hover > cell {
-  background-color: rgba(168, 141, 82, 0.08);
+  background-color: rgba(148, 137, 121, 0.08);
 }
 
 /* Hotkey capture zone */
 .hotkey-capture-zone {
-  border: 2px solid rgba(168, 141, 82, 0.5);
+  border: 2px solid rgba(148, 137, 121, 0.5);
   border-radius: 8px;
   padding: 16px;
-  background-color: rgba(247, 244, 239, 0.5);
+  background-color: rgba(34, 40, 49, 0.5);
 }
 
 @keyframes hotkey-recording-pulse {
@@ -420,39 +435,39 @@ columnview row:hover > cell {
 
 .hotkey-recording {
   animation: hotkey-recording-pulse 1s ease-in-out infinite;
-  color: #a88d52;
+  color: #948979;
 }
 
 /* Add-to-tab mode header in transport bar */
 .add-to-tab-header {
-  color: #a88d52;
+  color: #948979;
   font-weight: bold;
 }
 
 .drop-zone-overlay {
-  background-color: rgba(168, 141, 82, 0.15);
-  border: 3px dashed rgba(168, 141, 82, 0.6);
+  background-color: rgba(148, 137, 121, 0.15);
+  border: 3px dashed rgba(148, 137, 121, 0.6);
   border-radius: 16px;
   margin: 16px;
   padding: 18px 20px;
 }
 
 .drop-zone-ready {
-  background-color: rgba(168, 141, 82, 0.15);
+  background-color: rgba(148, 137, 121, 0.15);
 }
 
 .drop-zone-importing {
-  background-color: rgba(168, 141, 82, 0.22);
+  background-color: rgba(148, 137, 121, 0.22);
 }
 
 .drop-zone-rejected {
-  background-color: rgba(196, 90, 90, 0.16);
+  background-color: rgba(196, 90, 90, 0.18);
   border-color: rgba(196, 90, 90, 0.75);
 }
 
 .drop-zone-icon {
   margin-bottom: 4px;
-  color: #332b1f;
+  color: #dfd0b8;
   -gtk-icon-size: 28px;
 }
 
@@ -462,7 +477,7 @@ columnview row:hover > cell {
   background-color: transparent;
   border-radius: 0;
   padding: 0;
-  color: rgba(51, 43, 31, 0.55);
+  color: rgba(223, 208, 184, 0.65);
 }
 
 /* Monospace label */
@@ -476,13 +491,13 @@ columnview row:hover > cell {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.1px;
-  color: rgba(51, 43, 31, 0.72);
+  color: rgba(223, 208, 184, 0.78);
 }
 
 .sound-duration {
   font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", monospace;
   font-size: 11px;
-  color: rgba(51, 43, 31, 0.84);
+  color: rgba(223, 208, 184, 0.86);
 }
 
 .sound-name {
@@ -495,13 +510,13 @@ columnview row:hover > cell {
   min-height: 16px;
   border-radius: 50%;
   margin: 0 2px;
-  border: 1px solid rgba(168, 141, 82, 0.3);
+  border: 1px solid rgba(148, 137, 121, 0.3);
 }
 
 /* Volume controls pill container */
 .volume-group {
-  background-color: rgba(168, 141, 82, 0.08);
-  border: 1px solid rgba(168, 141, 82, 0.18);
+  background-color: transparent;
+  border: 1px solid rgba(148, 137, 121, 0.2);
   border-radius: 10px;
   padding: 2px 7px;
   margin: 0;
@@ -509,8 +524,8 @@ columnview row:hover > cell {
 
 /* Content area background differentiation */
 columnview {
-  color: #332b1f;
-  background-color: #f0ede8;
+  color: #dfd0b8;
+  background-color: #262c36;
 }
 
 columnview header button {
@@ -547,11 +562,11 @@ columnview header button {
 
 /* Card mode row backgrounds - more visible alternation */
 .list-style-card columnview row:nth-child(even) > cell {
-  background-color: rgba(168, 141, 82, 0.06);
+  background-color: rgba(148, 137, 121, 0.06);
 }
 
 .list-style-card columnview row:nth-child(odd) > cell {
-  background-color: rgba(247, 244, 239, 0.5);
+  background-color: rgba(34, 40, 49, 0.3);
 }
 
 /* Card mode row backgrounds - disable zebra striping */
@@ -562,32 +577,32 @@ columnview.list-style-card row:nth-child(odd) > cell {
 
 /* Card mode hover - stronger effect */
 .list-style-card columnview row:hover > cell {
-  background-color: rgba(168, 141, 82, 0.15);
+  background-color: rgba(148, 137, 121, 0.15);
 }
 
 /* Card mode playing state - consistent color across all cells */
 .list-style-card .sound-cell-playing {
-  background-color: rgba(168, 141, 82, 0.18);
+  background-color: rgba(148, 137, 121, 0.18);
 }
 
 .list-style-card .sound-cell-first.sound-cell-playing {
-  border-left-color: #a88d52;
+  border-left-color: #948979;
 }
 
 /* Card mode active/selected - stronger accent */
 .list-style-card .sound-cell-active {
-  background-color: rgba(168, 141, 82, 0.25);
+  background-color: rgba(148, 137, 121, 0.25);
 }
 
 .list-style-card .sound-cell-first.sound-cell-active {
-  border-left-color: #332b1f;
+  border-left-color: #dfd0b8;
 }
 
 /* Card mode playing dot - larger with glow simulation */
 .list-style-card .playing-dot {
   min-width: 10px;
   min-height: 10px;
-  color: #332b1f;
+  color: #dfd0b8;
 }
 
 /* Card mode sound name - bolder */
@@ -599,12 +614,12 @@ columnview.list-style-card row:nth-child(odd) > cell {
 /* Card mode hotkey badge - more subtle */
 .list-style-card .hotkey-badge {
   background-color: transparent;
-  border: 1px solid rgba(168, 141, 82, 0.25);
-  color: rgba(51, 43, 31, 0.7);
+  border: 1px solid rgba(148, 137, 121, 0.25);
+  color: rgba(223, 208, 184, 0.7);
 }
 
 /* Card mode index number - more visible */
 .list-style-card .sound-index {
   font-size: 12px;
-  color: rgba(168, 141, 82, 0.6);
+  color: rgba(148, 137, 121, 0.6);
 }
