@@ -185,6 +185,25 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 rm -rf "$APPDIR/usr/lib32"
 
+# Remove unnecessary libraries to reduce AppImage size
+echo "Removing unnecessary libraries..."
+
+# Remove libraries not needed for a soundboard app (image/video codecs)
+rm -f "$APPDIR/usr/lib"/libopenraw* 2>/dev/null || true      # RAW image support
+rm -f "$APPDIR/usr/lib"/libglycin* 2>/dev/null || true       # Image loader
+rm -f "$APPDIR/usr/lib"/libdav1d* 2>/dev/null || true        # AV1 video codec
+rm -f "$APPDIR/usr/lib"/libavif* 2>/dev/null || true         # AVIF images
+rm -f "$APPDIR/usr/lib"/libheif* 2>/dev/null || true         # HEIF images
+rm -f "$APPDIR/usr/lib"/libjxl* 2>/dev/null || true          # JPEG XL
+rm -f "$APPDIR/usr/lib"/libde265* 2>/dev/null || true        # HEVC decoder
+rm -f "$APPDIR/usr/lib"/libx265* 2>/dev/null || true         # HEVC encoder
+rm -f "$APPDIR/usr/lib"/libkvazaar* 2>/dev/null || true      # HEVC encoder
+rm -f "$APPDIR/usr/lib"/libSvtAv1* 2>/dev/null || true       # AV1 encoder
+rm -f "$APPDIR/usr/lib"/libaom* 2>/dev/null || true          # AV1 codec
+rm -f "$APPDIR/usr/lib"/librav1e* 2>/dev/null || true        # AV1 encoder
+
+echo "Library cleanup complete"
+
 (
     cd "$DIST_ROOT"
     export PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
