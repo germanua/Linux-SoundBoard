@@ -1,0 +1,71 @@
+app-id: com.linuxsoundboard.app
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: linux-soundboard
+
+finish-args:
+  # Display server access
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  
+  # Audio access (PulseAudio/PipeWire)
+  - --socket=pulseaudio
+  - --device=all
+  
+  # File system access for sound files
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-download:ro
+  - --filesystem=xdg-documents:ro
+  - --filesystem=home:ro
+  
+  # Desktop integration
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.GlobalShortcuts
+  - --talk-name=org.gtk.vfs.*
+  
+  # Theme access
+  - --filesystem=xdg-run/gvfsd
+  - --talk-name=org.freedesktop.Flatpak
+
+modules:
+  - name: linux-soundboard
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/linux-soundboard/cargo
+    build-commands:
+      # Generate icons
+      - bash packaging/linux/generate-icons.sh icon.png
+      
+      # Build application
+      - cargo --offline fetch --manifest-path src/Cargo.toml --verbose
+      - cargo --offline build --release --manifest-path src/Cargo.toml --verbose
+      
+      # Install binary
+      - install -Dm755 src/target/release/linux-soundboard /app/bin/linux-soundboard
+      
+      # Install desktop file
+      - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.desktop /app/share/applications/com.linuxsoundboard.app.desktop
+      
+      # Install icons
+      - |
+        for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+          install -Dm644 src/resources/icons/$size/apps/com.linuxsoundboard.app.png \
+            /app/share/icons/hicolor/$size/apps/com.linuxsoundboard.app.png
+        done
+      
+      # Install metainfo
+      - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml /app/share/metainfo/com.linuxsoundboard.app.metainfo.xml
+    
+    sources:
+      - type: dir
+        path: ../..
+      
+      # Cargo dependencies (generated with flatpak-cargo-generator.py)
+      - cargo-sources.json

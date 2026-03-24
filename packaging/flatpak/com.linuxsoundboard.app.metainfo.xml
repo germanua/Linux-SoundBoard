@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.linuxsoundboard.app</id>
+  <name>Linux Soundboard</name>
+  <summary>Native Linux soundboard with virtual microphone support</summary>
+  
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>PolyForm-Noncommercial-1.0.0</project_license>
+  
+  <developer_name>germanua</developer_name>
+  
+  <launchable type="desktop-id">com.linuxsoundboard.app.desktop</launchable>
+  
+  <description>
+    <p>
+      A high-performance, native Linux soundboard built with Rust, GTK4, and Libadwaita.
+      Play sounds directly into your microphone stream for Discord, OBS, Zoom, and any other application.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Virtual microphone that seamlessly mixes your voice with soundboard audio</li>
+      <li>LUFS normalization for consistent volume levels</li>
+      <li>Global hotkeys (works on X11, XWayland, and Wayland with portal support)</li>
+      <li>Modern GTK4/Libadwaita UI with dark mode support</li>
+      <li>Organized sound library with tabs and folder sync</li>
+      <li>Drag and drop support for easy sound import</li>
+      <li>PipeWire and PulseAudio integration</li>
+    </ul>
+  </description>
+  
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window with sound library</caption>
+      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/screenshots/main.png</image>
+    </screenshot>
+  </screenshots>
+  
+  <url type="homepage">https://github.com/germanua/Linux-SoundBoard</url>
+  <url type="bugtracker">https://github.com/germanua/Linux-SoundBoard/issues</url>
+  <url type="vcs-browser">https://github.com/germanua/Linux-SoundBoard</url>
+  
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+  
+  <keywords>
+    <keyword>soundboard</keyword>
+    <keyword>audio</keyword>
+    <keyword>pipewire</keyword>
+    <keyword>microphone</keyword>
+    <keyword>virtual mic</keyword>
+  </keywords>
+  
+  <releases>
+    <release version="1.1.0" date="2026-03-24">
+      <description>
+        <p>Major packaging and compatibility update:</p>
+        <ul>
+          <li>Native Wayland support with X11 fallback</li>
+          <li>Distribution-specific packages (DEB, RPM, Flatpak)</li>
+          <li>Improved AppImage compatibility</li>
+          <li>Better virtual microphone creation on modern distributions</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-03-22">
+      <description>
+        <p>Initial release</p>
+      </description>
+    </release>
+  </releases>
+  
+  <content_rating type="oars-1.1" />
+  
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+</component>

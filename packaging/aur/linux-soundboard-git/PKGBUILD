@@ -3,7 +3,7 @@
 pkgname=linux-soundboard-git
 _pkgname=linux-soundboard
 pkgver=1.0.0.r14.ge9109be
-pkgrel=1
+pkgrel=2
 pkgdesc="Native Linux soundboard with GTK4/libadwaita and virtual microphone support"
 arch=('x86_64')
 url="https://github.com/germanua/Linux-SoundBoard"
@@ -14,17 +14,23 @@ depends=(
   'libpulse'
   'libx11'
   'libxi'
+  'libxtst'
+  'libxkbcommon'
   'hicolor-icon-theme'
 )
 makedepends=(
   'cargo'
   'git'
   'imagemagick'
+  'clang'
+  'pkgconf'
 )
 optdepends=(
   'pipewire-pulse: PipeWire-backed PulseAudio server for virtual microphone routing'
   'pulseaudio: PulseAudio server for virtual microphone routing'
   'wireplumber: recommended PipeWire session manager'
+  'xorg-xwayland: required for X11 hotkeys in Wayland sessions'
+  'xdg-desktop-portal: required for Wayland global shortcut portal fallback'
 )
 provides=('linux-soundboard')
 conflicts=('linux-soundboard')

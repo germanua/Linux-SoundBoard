@@ -1,0 +1,40 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export CARGO_HOME = $(CURDIR)/debian/cargo
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	cargo clean --manifest-path src/Cargo.toml || true
+	rm -rf $(CARGO_HOME)
+
+override_dh_auto_configure:
+	mkdir -p $(CARGO_HOME)
+	bash packaging/linux/generate-icons.sh icon.png
+
+override_dh_auto_build:
+	cargo build --release --manifest-path src/Cargo.toml
+
+override_dh_auto_test:
+	# Skip tests for now (require display server)
+	true
+
+override_dh_auto_install:
+	install -Dm755 src/target/release/linux-soundboard \
+		debian/linux-soundboard/usr/bin/linux-soundboard
+	
+	# Install desktop file
+	install -Dm644 packaging/debian/linux-soundboard.desktop \
+		debian/linux-soundboard/usr/share/applications/com.linuxsoundboard.app.desktop
+	
+	# Install icons
+	for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do \
+		install -Dm644 src/resources/icons/$$size/apps/com.linuxsoundboard.app.png \
+			debian/linux-soundboard/usr/share/icons/hicolor/$$size/apps/com.linuxsoundboard.app.png; \
+	done
+	
+	# Install metainfo
+	install -Dm644 dist/com.linuxsoundboard.app.metainfo.xml \
+		debian/linux-soundboard/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml

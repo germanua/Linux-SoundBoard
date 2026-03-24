@@ -39,11 +39,12 @@ Play sounds directly into your microphone stream for Discord, OBS, Zoom, and any
 
 ## 📦 Quick Install
 
-| Distribution         | Command                                                                                                                     |
+| Distribution         | Recommended Method                                                                                                          |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | **Arch Linux (AUR)** | `yay -S linux-soundboard-git`                                                                                               |
-| **Ubuntu/Debian**    | [Download AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage) |
-| **Fedora/openSUSE**  | [Download AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage) |
+| **Ubuntu/Debian**    | [Download DEB](https://github.com/germanua/Linux-SoundBoard/releases/latest) or [Flatpak](#-flatpak-universal)             |
+| **Fedora**           | [Download RPM](https://github.com/germanua/Linux-SoundBoard/releases/latest) or [Flatpak](#-flatpak-universal)             |
+| **Any Distribution** | [Flatpak](#-flatpak-universal) or [AppImage](#-appimage-portable)                                                          |
 | **Other**            | [Build from source](#-build-from-source)                                                                                    |
 
 ---
@@ -92,7 +93,19 @@ The `-git` package automatically pulls the latest version from GitHub.
 
 ### <img src="https://assets.ubuntu.com/v1/29985a98-ubuntu-logo32.png" height="20"> Ubuntu / Debian
 
-**Recommended: AppImage** (Ubuntu 24.04+, Debian 13+)
+**Option 1: DEB Package (Recommended)**
+
+```bash
+# Download the DEB package
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard_1.1.0-1_amd64.deb
+
+# Install with dependencies
+sudo apt install ./linux-soundboard_1.1.0-1_amd64.deb
+```
+
+Dependencies are automatically installed: `pipewire`, `pipewire-pulse`, `wireplumber`, `pulseaudio-utils`
+
+**Option 2: AppImage (Portable)**
 
 ```bash
 # Download the AppImage
@@ -112,13 +125,32 @@ sudo apt update
 sudo apt install pulseaudio-utils pipewire pipewire-pulse wireplumber
 ```
 
-> **Note:** If you get a FUSE error, install `libfuse2` or `libfuse2t64` and try again.
+> **Note:** If you get a FUSE error with AppImage, install `libfuse2`:
+> ```bash
+> sudo apt install libfuse2
+> ```
+
+**Option 3: Flatpak**
+
+See [Flatpak section](#-flatpak-universal) below.
 
 ---
 
 ### <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/Fedora_logo.svg/32px-Fedora_logo.svg.png" height="20"> Fedora
 
-**Option 1: AppImage**
+**Option 1: RPM Package (Recommended)**
+
+```bash
+# Download the RPM package
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.0-1.fc40.x86_64.rpm
+
+# Install with dependencies
+sudo dnf install ./linux-soundboard-1.1.0-1.fc40.x86_64.rpm
+```
+
+Dependencies are automatically installed: `pipewire`, `pipewire-pulseaudio`, `wireplumber`, `pulseaudio-utils`
+
+**Option 2: AppImage (Portable)**
 
 ```bash
 # Download the AppImage
@@ -127,7 +159,16 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-**Option 2: Build from source**
+> **Note:** If you get a FUSE error with AppImage, install `fuse-libs`:
+> ```bash
+> sudo dnf install fuse-libs
+> ```
+
+**Option 3: Flatpak**
+
+See [Flatpak section](#-flatpak-universal) below.
+
+**Option 4: Build from source**
 
 ```bash
 # Install dependencies
@@ -149,6 +190,69 @@ cargo build --release
 
 ---
 
+### 📦 Flatpak (Universal)
+
+**Works on all distributions with Flatpak support**
+
+```bash
+# Install from Flathub (coming soon)
+flatpak install flathub com.linuxsoundboard.app
+
+# Or download the bundle
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.0.flatpak
+flatpak install linux-soundboard-1.1.0.flatpak
+
+# Run
+flatpak run com.linuxsoundboard.app
+```
+
+**Benefits:**
+- Sandboxed environment
+- Automatic dependency management
+- Works on any distribution with Flatpak
+- Native Wayland support
+
+---
+
+### 💿 AppImage (Portable)
+
+**Universal package that works on most distributions**
+
+```bash
+# Download
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
+
+# Make executable and run
+chmod +x linux-soundboard-x86_64.AppImage
+./linux-soundboard-x86_64.AppImage
+```
+
+**Requirements:**
+- FUSE2 library (install `libfuse2` on Ubuntu/Debian or `fuse-libs` on Fedora)
+- PipeWire and WirePlumber for virtual microphone
+
+**Features:**
+- ✅ Native Wayland support (with X11 fallback)
+- ✅ Bundled `pactl` for virtual microphone
+- ✅ Automatic dependency checking with helpful error messages
+- ✅ No installation required
+
+**Troubleshooting:**
+
+If you get a FUSE error:
+```bash
+# Ubuntu/Debian
+sudo apt install libfuse2
+
+# Fedora
+sudo dnf install fuse-libs
+
+# Arch
+sudo pacman -S fuse2
+```
+
+---
+
 ### <img src="https://en.opensuse.org/images/4/44/Button-colour.png" height="20"> openSUSE
 
 **Option 1: AppImage**
@@ -159,7 +263,11 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-**Option 2: Build from source**
+**Option 2: Flatpak**
+
+See [Flatpak section](#-flatpak-universal) above.
+
+**Option 3: Build from source**
 
 ```bash
 # Install dependencies
@@ -236,6 +344,52 @@ Artifacts are written to `dist/`:
 - `dist/linux-soundboard-x86_64.AppImage`
 - `dist/linux-soundboard-<version>-x86_64.AppImage`
 
+**New in v1.1.0:**
+- ✅ Native Wayland support with X11 fallback
+- ✅ Bundled `pactl` for virtual microphone
+- ✅ Automatic dependency checking
+
+</details>
+
+<details>
+<summary><strong>Build DEB Package</strong></summary>
+
+```bash
+./packaging/debian/package-deb.sh
+```
+
+Requires: `dpkg-dev`, `debhelper`
+
+Output: `dist/linux-soundboard_1.1.0-1_amd64.deb`
+
+</details>
+
+<details>
+<summary><strong>Build RPM Package</strong></summary>
+
+```bash
+./packaging/rpm/package-rpm.sh
+```
+
+Requires: `rpm-build`, `rpmbuild`
+
+Output: `dist/linux-soundboard-1.1.0-1.fc40.x86_64.rpm`
+
+</details>
+
+<details>
+<summary><strong>Build Flatpak</strong></summary>
+
+```bash
+./packaging/flatpak/package-flatpak.sh
+```
+
+Requires: `flatpak-builder`, GNOME SDK 47
+
+Output: `dist/linux-soundboard-1.1.0.flatpak`
+
+See `packaging/flatpak/FLATHUB_SUBMISSION.md` for Flathub submission instructions.
+
 </details>
 
 <details>
@@ -291,17 +445,27 @@ Users install via:
 
 - **X11 session**: fully supported (global hotkeys available).
 - **Wayland session with XWayland (`DISPLAY` available)**: supported via X11 backend.
-- **Pure Wayland without XWayland**: default global hotkeys are unavailable.
-- **Portal backend (experimental/opt-in)**: enable with `LSB_ENABLE_PORTAL_HOTKEYS=1` to allow the app to try XDG desktop global shortcuts when X11 backend is unavailable.
-- When both `WAYLAND_DISPLAY` and `DISPLAY` are present, the app prefers GTK on X11 by default. Set `LSB_PREFER_WAYLAND_GTK=1` to keep GTK on Wayland.
+- **Pure Wayland without XWayland**: use Portal backend for global shortcuts.
+- **Portal backend**: enable with `LSB_ENABLE_PORTAL_HOTKEYS=1` to use XDG desktop global shortcuts on Wayland.
+- **AppImage/Flatpak**: Native Wayland support enabled by default with automatic X11 fallback.
+- When both `WAYLAND_DISPLAY` and `DISPLAY` are present, the app auto-detects the best backend. Set `LSB_FORCE_X11=1` to force X11 mode.
 
 ---
 
 ## ⚠️ Known Limitations
 
 - Global hotkeys are fully supported on **X11/XWayland**; native Wayland support depends on portal availability and compositor support
-- AppImage requires **FUSE** (install `libfuse2` if needed)
-- Ubuntu 22.04 / Debian 12: GTK4/Libadwaita too old for source builds — use AppImage
+- Ubuntu 22.04 / Debian 12: GTK4/Libadwaita too old for source builds — use DEB package, AppImage, or Flatpak
+
+---
+
+## 📋 What's New in v1.1.0
+
+- ✅ **Native Wayland Support**: AppImage and all packages now support Wayland with automatic X11 fallback
+- ✅ **Distribution Packages**: Official DEB (Ubuntu/Debian) and RPM (Fedora) packages
+- ✅ **Flatpak Support**: Universal package with Flathub submission ready
+- ✅ **Improved AppImage**: Bundled `pactl`, automatic dependency checking, better compatibility
+- ✅ **Better Error Messages**: Helpful installation instructions when dependencies are missing
 
 ---
 

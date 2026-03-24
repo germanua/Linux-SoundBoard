@@ -123,6 +123,24 @@ if grep -q 'find /usr/lib\* -name libgiognutls.so' "$GTK_PLUGIN_BIN"; then
     sed -i 's|find /usr/lib\\* -name libgiognutls.so|find /usr/lib -name libgiognutls.so|' "$GTK_PLUGIN_BIN"
 fi
 
+# Patch GTK plugin to support Wayland (remove forced X11 backend)
+echo "Patching GTK plugin for Wayland support..."
+if grep -q 'export GDK_BACKEND=x11' "$GTK_PLUGIN_BIN"; then
+    sed -i 's/export GDK_BACKEND=x11.*/# Wayland support: let GTK auto-detect or use LSB_PREFER_WAYLAND_GTK/' "$GTK_PLUGIN_BIN"
+    # Add smart backend detection after the comment
+    sed -i '/# Wayland support: let GTK auto-detect/a \
+\
+# Smart display backend detection (Wayland preferred, X11 fallback)\
+if [ -z "$GDK_BACKEND" ]; then\
+    if [ -n "$WAYLAND_DISPLAY" ] \&\& [ -z "$LSB_FORCE_X11" ]; then\
+        export GDK_BACKEND=wayland\
+    elif [ -n "$DISPLAY" ]; then\
+        export GDK_BACKEND=x11\
+    fi\
+fi' "$GTK_PLUGIN_BIN"
+    echo "✓ Wayland support enabled in GTK plugin"
+fi
+
 rm -rf "$APPDIR"
 rm -f "$versioned_path" "$stable_path"
 mkdir -p \
@@ -185,6 +203,24 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 rm -rf "$APPDIR/usr/lib32"
 
+# Bundle pactl binary for virtual microphone support
+echo "Bundling pactl for virtual microphone support..."
+if command -v pactl >/dev/null 2>&1; then
+    PACTL_PATH="$(command -v pactl)"
+    cp "$PACTL_PATH" "$APPDIR/usr/bin/pactl"
+    chmod +x "$APPDIR/usr/bin/pactl"
+    
+    # Bundle pactl dependencies if not already bundled
+    ldd "$PACTL_PATH" | grep "=> /" | awk '{print $3}' | while read lib; do
+        if [ -f "$lib" ] && [ ! -f "$APPDIR/usr/lib/$(basename "$lib")" ]; then
+            cp "$lib" "$APPDIR/usr/lib/" 2>/dev/null || true
+        fi
+    done
+    echo "✓ pactl bundled successfully"
+else
+    echo "⚠ WARNING: pactl not found on build system. Virtual mic may not work."
+fi
+
 # Remove unnecessary libraries to reduce AppImage size
 echo "Removing unnecessary libraries..."
 
@@ -203,6 +239,22 @@ rm -f "$APPDIR/usr/lib"/libaom* 2>/dev/null || true          # AV1 codec
 rm -f "$APPDIR/usr/lib"/librav1e* 2>/dev/null || true        # AV1 encoder
 
 echo "Library cleanup complete"
+
+# Add preflight dependency checker
+echo "Adding preflight dependency checker..."
+install -Dm755 "$SCRIPT_DIR/appimage-preflight-check.sh" "$APPDIR/usr/bin/appimage-preflight-check"
+
+# Modify AppRun to call preflight checker
+if [ -f "$APPDIR/AppRun" ]; then
+    # Insert preflight check before the final exec line
+    sed -i '/^exec "$this_dir"\/AppRun.wrapped/i \
+# Run preflight checks (can be skipped with SKIP_PREFLIGHT_CHECK=1)\
+if [ -z "$SKIP_PREFLIGHT_CHECK" ]; then\
+    "$this_dir"/usr/bin/appimage-preflight-check || exit 1\
+fi\
+' "$APPDIR/AppRun"
+    echo "✓ Preflight checker integrated into AppRun"
+fi
 
 (
     cd "$DIST_ROOT"

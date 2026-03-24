@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+          body: |
+            ## Linux Soundboard ${{ steps.get_version.outputs.version }}
+            
+            ### Installation
+            
+            Choose the package format for your distribution:
+            
+            - **Ubuntu/Debian**: Download the `.deb` package
+            - **Fedora/RHEL**: Download the `.rpm` package
+            - **Any Distribution**: Download the `.flatpak` or `.AppImage`
+            - **Arch Linux**: Use AUR: `yay -S linux-soundboard-git`
+            
+            ### What's New
+            
+            See [CHANGELOG.md](https://github.com/germanua/Linux-SoundBoard/blob/main/CHANGELOG.md) for details.
+            
+            ### Checksums
+            
+            SHA256 checksums will be added below after all artifacts are uploaded.
+
+  build-appimage:
+    name: Build AppImage
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libpulse-dev \
+            pulseaudio-utils imagemagick libfuse2
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Build AppImage
+        run: ./packaging/linux/package-appimage.sh
+      
+      - name: Upload AppImage (versioned)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./dist/linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
+          asset_name: linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
+          asset_content_type: application/octet-stream
+      
+      - name: Upload AppImage (stable)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./dist/linux-soundboard-x86_64.AppImage
+          asset_name: linux-soundboard-x86_64.AppImage
+          asset_content_type: application/octet-stream
+
+  build-deb:
+    name: Build DEB Package
+    runs-on: ubuntu-24.04
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev debhelper libgtk-4-dev libadwaita-1-dev \
+            libpulse-dev libx11-dev libxi-dev pkg-config imagemagick cargo rustc
+      
+      - name: Build DEB package
+        run: ./packaging/debian/package-deb.sh
+      
+      - name: Get DEB filename
+        id: get_deb
+        run: echo "filename=$(ls dist/*.deb | head -n 1 | xargs basename)" >> $GITHUB_OUTPUT
+      
+      - name: Upload DEB
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./dist/${{ steps.get_deb.outputs.filename }}
+          asset_name: ${{ steps.get_deb.outputs.filename }}
+          asset_content_type: application/vnd.debian.binary-package
+
+  build-rpm:
+    name: Build RPM Package
+    runs-on: ubuntu-latest
+    container: fedora:40
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build dependencies
+        run: |
+          dnf install -y rpm-build cargo rust gtk4-devel libadwaita-devel \
+            pulseaudio-libs-devel libX11-devel libXi-devel pkgconfig ImageMagick git
+      
+      - name: Build RPM package
+        run: ./packaging/rpm/package-rpm.sh
+      
+      - name: Get RPM filename
+        id: get_rpm
+        run: echo "filename=$(ls dist/*.rpm | head -n 1 | xargs basename)" >> $GITHUB_OUTPUT
+      
+      - name: Upload RPM
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./dist/${{ steps.get_rpm.outputs.filename }}
+          asset_name: ${{ steps.get_rpm.outputs.filename }}
+          asset_content_type: application/x-rpm
+
+  build-flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Flatpak and flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder python3
+      
+      - name: Add Flathub repository
+        run: |
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+      
+      - name: Install GNOME SDK 47
+        run: |
+          sudo flatpak install -y flathub org.gnome.Platform//47 org.gnome.Sdk//47 \
+            org.freedesktop.Sdk.Extension.rust-stable//23.08
+      
+      - name: Build Flatpak
+        run: |
+          cd packaging/flatpak
+          ./package-flatpak.sh
+      
+      - name: Upload Flatpak
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./dist/linux-soundboard-${{ needs.create-release.outputs.version }}.flatpak
+          asset_name: linux-soundboard-${{ needs.create-release.outputs.version }}.flatpak
+          asset_content_type: application/octet-stream
+
+  generate-checksums:
+    name: Generate Checksums
+    runs-on: ubuntu-latest
+    needs: [create-release, build-appimage, build-deb, build-rpm, build-flatpak]
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          find . -type f -exec sha256sum {} \; > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+      
+      - name: Upload checksums
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./SHA256SUMS.txt
+          asset_name: SHA256SUMS.txt
+          asset_content_type: text/plain
