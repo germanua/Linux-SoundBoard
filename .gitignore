@@ -7,6 +7,11 @@ target/
 
 # Build artifacts
 src/target/
+*.AppImage
+*.deb
+*.rpm
+*.flatpak
+*.tar.gz
 
 # IDE
 .vscode/
@@ -14,6 +19,7 @@ src/target/
 *.swp
 *.swo
 *~
+.history/
 
 # OS
 .DS_Store
@@ -33,7 +39,21 @@ pids
 *.pid
 *.seed
 *.pid.lock
-.history
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# RPM build directories
+rpmbuild/
+
+# Flatpak build directories
+flatpak-build/
+flatpak-repo/
+.flatpak-builder/
+
+# Documentation (internal)
 PLAN.md
 LOG OF RAM
 .github/instructions/

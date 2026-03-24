@@ -40,7 +40,7 @@ hotkeys, and modern GTK4/Libadwaita UI with PipeWire/PulseAudio integration.
 %setup -q
 
 %build
-bash packaging/linux/generate-icons.sh icon.png
+bash packaging/linux/generate-icons.sh assets/icons/icon.png
 cargo build --release --manifest-path src/Cargo.toml
 
 %install

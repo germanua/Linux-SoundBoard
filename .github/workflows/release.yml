@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   create-release:
-    name: Create Release
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -22,35 +22,52 @@ jobs:
         id: get_version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
       
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          cat > release_notes.md << 'EOF'
+          ## Linux Soundboard $VERSION
+          
+          ### Installation
+          
+          Choose the package format for your distribution:
+          
+          - **Ubuntu/Debian**: Download `linux-soundboard_$VERSION-1_amd64.deb`
+          - **Fedora/RHEL**: Download `linux-soundboard-$VERSION-1.fc*.x86_64.rpm`
+          - **Any Distribution**: Download `linux-soundboard-$VERSION.flatpak` or `linux-soundboard-x86_64.AppImage`
+          - **Arch Linux**: Use AUR: `yay -S linux-soundboard-git`
+          
+          ### What's New
+          
+          See [CHANGELOG.md](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/CHANGELOG.md) for full details.
+          
+          ### Quick Start
+          
+          1. Install using your preferred method above
+          2. Launch the application
+          3. Select `Linux_Soundboard_Mic` as input in Discord/OBS/Zoom
+          
+          ### Documentation
+          
+          - [Troubleshooting Guide](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/TROUBLESHOOTING.md)
+          - [Contributing Guide](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/CONTRIBUTING.md)
+          
+          ### Checksums
+          
+          See `SHA256SUMS.txt` for file verification.
+          EOF
+          sed -i "s/\$VERSION/$VERSION/g" release_notes.md
+      
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          body_path: release_notes.md
           draft: false
           prerelease: false
-          body: |
-            ## Linux Soundboard ${{ steps.get_version.outputs.version }}
-            
-            ### Installation
-            
-            Choose the package format for your distribution:
-            
-            - **Ubuntu/Debian**: Download the `.deb` package
-            - **Fedora/RHEL**: Download the `.rpm` package
-            - **Any Distribution**: Download the `.flatpak` or `.AppImage`
-            - **Arch Linux**: Use AUR: `yay -S linux-soundboard-git`
-            
-            ### What's New
-            
-            See [CHANGELOG.md](https://github.com/germanua/Linux-SoundBoard/blob/main/CHANGELOG.md) for details.
-            
-            ### Checksums
-            
-            SHA256 checksums will be added below after all artifacts are uploaded.
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-appimage:
     name: Build AppImage
@@ -63,7 +80,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libadwaita-1-dev libpulse-dev \
-            pulseaudio-utils imagemagick libfuse2
+            pulseaudio-utils imagemagick libfuse2 libx11-dev libxi-dev pkg-config \
+            libasound2-dev
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -71,25 +89,14 @@ jobs:
       - name: Build AppImage
         run: ./packaging/linux/package-appimage.sh
       
-      - name: Upload AppImage (versioned)
-        uses: actions/upload-release-asset@v1
+      - name: Upload AppImage artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/linux-soundboard-x86_64.AppImage
+            dist/linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
-          asset_name: linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
-          asset_content_type: application/octet-stream
-      
-      - name: Upload AppImage (stable)
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/linux-soundboard-x86_64.AppImage
-          asset_name: linux-soundboard-x86_64.AppImage
-          asset_content_type: application/octet-stream
 
   build-deb:
     name: Build DEB Package
@@ -102,24 +109,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y dpkg-dev debhelper libgtk-4-dev libadwaita-1-dev \
-            libpulse-dev libx11-dev libxi-dev pkg-config imagemagick cargo rustc
+            libpulse-dev libx11-dev libxi-dev pkg-config imagemagick cargo rustc \
+            libasound2-dev
       
       - name: Build DEB package
         run: ./packaging/debian/package-deb.sh
       
-      - name: Get DEB filename
-        id: get_deb
-        run: echo "filename=$(ls dist/*.deb | head -n 1 | xargs basename)" >> $GITHUB_OUTPUT
-      
-      - name: Upload DEB
-        uses: actions/upload-release-asset@v1
+      - name: Upload DEB artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/${{ steps.get_deb.outputs.filename }}
-          asset_name: ${{ steps.get_deb.outputs.filename }}
-          asset_content_type: application/vnd.debian.binary-package
 
   build-rpm:
     name: Build RPM Package
@@ -132,24 +133,18 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y rpm-build cargo rust gtk4-devel libadwaita-devel \
-            pulseaudio-libs-devel libX11-devel libXi-devel pkgconfig ImageMagick git
+            pulseaudio-libs-devel libX11-devel libXi-devel pkgconfig ImageMagick \
+            git alsa-lib-devel gcc gcc-c++ clang
       
       - name: Build RPM package
         run: ./packaging/rpm/package-rpm.sh
       
-      - name: Get RPM filename
-        id: get_rpm
-        run: echo "filename=$(ls dist/*.rpm | head -n 1 | xargs basename)" >> $GITHUB_OUTPUT
-      
-      - name: Upload RPM
-        uses: actions/upload-release-asset@v1
+      - name: Upload RPM artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/${{ steps.get_rpm.outputs.filename }}
-          asset_name: ${{ steps.get_rpm.outputs.filename }}
-          asset_content_type: application/x-rpm
 
   build-flatpak:
     name: Build Flatpak
@@ -177,38 +172,54 @@ jobs:
           cd packaging/flatpak
           ./package-flatpak.sh
       
-      - name: Upload Flatpak
-        uses: actions/upload-release-asset@v1
+      - name: Upload Flatpak artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.flatpak
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./dist/linux-soundboard-${{ needs.create-release.outputs.version }}.flatpak
-          asset_name: linux-soundboard-${{ needs.create-release.outputs.version }}.flatpak
-          asset_content_type: application/octet-stream
 
   generate-checksums:
     name: Generate Checksums
     runs-on: ubuntu-latest
     needs: [create-release, build-appimage, build-deb, build-rpm, build-flatpak]
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      
+      - name: Download release assets
+        uses: robinraju/release-downloader@v1.8
         with:
-          path: artifacts
+          tag: ${{ github.ref_name }}
+          fileName: "*"
+          out-file-path: "downloads"
       
       - name: Generate SHA256 checksums
         run: |
-          cd artifacts
-          find . -type f -exec sha256sum {} \; > ../SHA256SUMS.txt
+          cd downloads
+          sha256sum * > ../SHA256SUMS.txt
           cat ../SHA256SUMS.txt
       
       - name: Upload checksums
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          files: SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-latest-tag:
+    name: Update Latest Tag
+    runs-on: ubuntu-latest
+    needs: [build-appimage, build-deb, build-rpm, build-flatpak]
+    steps:
+      - uses: actions/checkout@v4
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./SHA256SUMS.txt
-          asset_name: SHA256SUMS.txt
-          asset_content_type: text/plain
+          fetch-depth: 0
+      
+      - name: Update latest tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f latest
+          git push -f origin latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

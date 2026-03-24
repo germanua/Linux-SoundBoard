@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/app-meta.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
-ICON_SOURCE="$REPO_ROOT/icon.png"
+ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
 DIST_ROOT="$REPO_ROOT/dist"
