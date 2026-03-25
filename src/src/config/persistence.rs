@@ -1,5 +1,6 @@
 //! Config persistence and sanitization helpers.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -152,5 +153,20 @@ impl Config {
         } else {
             false
         }
+    }
+
+    pub fn remove_sounds_from_tab(&mut self, tab_id: &str, sound_ids: &[String]) -> bool {
+        let Some(tab) = self.get_tab_mut(tab_id) else {
+            return false;
+        };
+
+        if sound_ids.is_empty() {
+            return true;
+        }
+
+        let remove_set: HashSet<&str> = sound_ids.iter().map(String::as_str).collect();
+        tab.sound_ids
+            .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
+        true
     }
 }

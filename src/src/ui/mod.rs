@@ -6,6 +6,7 @@ pub mod icons;
 pub mod menu;
 pub mod settings;
 pub mod sound_list;
+mod tab_dnd;
 pub mod tabs_sidebar;
 pub mod theme;
 pub mod transport;

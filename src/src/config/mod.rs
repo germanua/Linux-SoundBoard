@@ -97,4 +97,37 @@ mod tests {
             assert_eq!(meta.action.binding_id(), meta.binding_id);
         }
     }
+
+    #[test]
+    fn remove_sounds_from_tab_batch_removes_present_and_ignores_missing() {
+        let mut cfg = Config::default();
+        let mut tab = SoundTab::new("Custom".to_string(), 1);
+        tab.id = "custom-a".to_string();
+        tab.sound_ids = vec![
+            "sound-1".to_string(),
+            "sound-2".to_string(),
+            "sound-3".to_string(),
+        ];
+        cfg.tabs.push(tab);
+
+        let removed = cfg.remove_sounds_from_tab(
+            "custom-a",
+            &[
+                "sound-2".to_string(),
+                "missing-id".to_string(),
+                "sound-2".to_string(),
+            ],
+        );
+
+        assert!(removed);
+        let tab = cfg.get_tab("custom-a").unwrap();
+        assert_eq!(tab.sound_ids, vec!["sound-1", "sound-3"]);
+    }
+
+    #[test]
+    fn remove_sounds_from_tab_batch_fails_when_tab_missing() {
+        let mut cfg = Config::default();
+        let removed = cfg.remove_sounds_from_tab("missing-tab", &["sound-1".to_string()]);
+        assert!(!removed);
+    }
 }

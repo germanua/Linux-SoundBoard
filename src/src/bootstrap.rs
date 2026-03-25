@@ -39,9 +39,7 @@ fn configure_preferred_backend() {
             Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
         );
         if keep_wayland {
-            info!(
-                "Keeping GTK backend unchanged because LSB_PREFER_WAYLAND_GTK is enabled"
-            );
+            info!("Keeping GTK backend unchanged because LSB_PREFER_WAYLAND_GTK is enabled");
             return;
         }
 

@@ -101,6 +101,14 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
+    // Refresh list after tab membership drag/drop operations from the sidebar.
+    {
+        let sl = sound_list.clone();
+        tabs.connect_tab_membership_changed(move || {
+            sl.refresh_from_state();
+        });
+    }
+
     // Connect search entry → filter sound list by name
     {
         let sl_search = sound_list.clone();
@@ -151,7 +159,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     // Connect toast notifications via mpsc channel (ToastOverlay isn't Send)
     {
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
+        let toast_tx_tabs = toast_tx.clone();
         transport.set_toast_sender(toast_tx);
+        tabs.set_toast_sender(toast_tx_tabs);
         let toast_poll = toast_overlay.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             while let Ok(msg) = toast_rx.try_recv() {

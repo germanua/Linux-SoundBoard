@@ -188,6 +188,11 @@ columnview row > cell label {
   border-left: 3px solid #948979;
 }
 
+.tab-row-drop-hover {
+  background-color: rgba(148, 137, 121, 0.22);
+  border: 1px solid rgba(148, 137, 121, 0.58);
+}
+
 /* Appearance options selection in Settings */
 .appearance-choice-row {
   border-left: 3px solid transparent;
@@ -622,4 +627,16 @@ columnview.list-style-card row:nth-child(odd) > cell {
 .list-style-card .sound-index {
   font-size: 12px;
   color: rgba(148, 137, 121, 0.6);
+}
+
+/* Drag icon label */
+.drag-icon-label {
+  background-color: rgba(148, 137, 121, 0.95);
+  color: #1a1614;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(148, 137, 121, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }

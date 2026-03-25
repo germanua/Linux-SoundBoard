@@ -158,20 +158,30 @@ impl HotkeyBackend for X11Backend {
                     continue;
                 }
 
-                if cookie.evtype == xinput2::XI_RawKeyPress || cookie.evtype == xinput2::XI_RawKeyRelease {
+                if cookie.evtype == xinput2::XI_RawKeyPress
+                    || cookie.evtype == xinput2::XI_RawKeyRelease
+                {
                     let raw = &*(cookie.data as *const xinput2::XIRawEvent);
                     let is_press = cookie.evtype == xinput2::XI_RawKeyPress;
                     let keycode = raw.detail as u32;
 
                     if let Some(key_name) = X11Backend::keycode_to_name(display, keycode) {
                         match key_name.as_str() {
-                            "Control_L" | "Control_R" => update_modifier(&mut active_mods, HotkeyModifier::Ctrl, is_press),
-                            "Alt_L" | "Alt_R" => update_modifier(&mut active_mods, HotkeyModifier::Alt, is_press),
-                            "Shift_L" | "Shift_R" => update_modifier(&mut active_mods, HotkeyModifier::Shift, is_press),
+                            "Control_L" | "Control_R" => {
+                                update_modifier(&mut active_mods, HotkeyModifier::Ctrl, is_press)
+                            }
+                            "Alt_L" | "Alt_R" => {
+                                update_modifier(&mut active_mods, HotkeyModifier::Alt, is_press)
+                            }
+                            "Shift_L" | "Shift_R" => {
+                                update_modifier(&mut active_mods, HotkeyModifier::Shift, is_press)
+                            }
                             "Super_L" | "Super_R" | "Meta_L" | "Meta_R" => {
                                 update_modifier(&mut active_mods, HotkeyModifier::Super, is_press)
                             }
-                            "ISO_Level3_Shift" => update_modifier(&mut active_mods, HotkeyModifier::AltGr, is_press),
+                            "ISO_Level3_Shift" => {
+                                update_modifier(&mut active_mods, HotkeyModifier::AltGr, is_press)
+                            }
                             _ if is_press => {
                                 if let Some(code) = normalize_capture_key(&key_name, keycode) {
                                     let snapshot: Vec<(String, Binding)> = bindings
@@ -183,7 +193,10 @@ impl HotkeyBackend for X11Backend {
 
                                     for (id, binding) in snapshot {
                                         if binding.key == code
-                                            && X11Backend::modifiers_match(&binding.modifiers, &active_mods)
+                                            && X11Backend::modifiers_match(
+                                                &binding.modifiers,
+                                                &active_mods,
+                                            )
                                         {
                                             debug!("X11 hotkey triggered: {}", id);
                                             let _ = sender.send(id);

@@ -18,7 +18,9 @@ fn portal_modifier(modifier: HotkeyModifier) -> Result<&'static str, String> {
         HotkeyModifier::Alt => Ok("ALT"),
         HotkeyModifier::Shift => Ok("SHIFT"),
         HotkeyModifier::Super => Ok("LOGO"),
-        HotkeyModifier::AltGr => Err("AltGr is not supported by portal trigger mapping".to_string()),
+        HotkeyModifier::AltGr => {
+            Err("AltGr is not supported by portal trigger mapping".to_string())
+        }
     }
 }
 

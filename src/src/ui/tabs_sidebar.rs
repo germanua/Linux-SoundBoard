@@ -1,6 +1,7 @@
 //! Tabs sidebar — GtkListBox showing General + user tabs.
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use gtk4::prelude::*;
@@ -16,9 +17,45 @@ use crate::commands;
 use super::dialogs;
 use super::icons;
 use super::menu;
+use super::tab_dnd;
 
 /// Callback type for tab selection.
 pub type TabSelectedCallback = Box<dyn Fn(String) + 'static>;
+pub type TabMembershipChangedCallback = Box<dyn Fn() + 'static>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarDropIntent {
+    Noop,
+    AddToTarget,
+    RemoveFromSource,
+    MoveBetweenCustomTabs,
+}
+
+fn resolve_sidebar_drop_intent(source_tab_id: &str, target_tab_id: &str) -> SidebarDropIntent {
+    if source_tab_id == target_tab_id {
+        return SidebarDropIntent::Noop;
+    }
+
+    let source_is_general = source_tab_id == GENERAL_TAB_ID;
+    let target_is_general = target_tab_id == GENERAL_TAB_ID;
+    match (source_is_general, target_is_general) {
+        (true, true) => SidebarDropIntent::Noop,
+        (true, false) => SidebarDropIntent::AddToTarget,
+        (false, true) => SidebarDropIntent::RemoveFromSource,
+        (false, false) => SidebarDropIntent::MoveBetweenCustomTabs,
+    }
+}
+
+fn drag_action_for_intent(intent: SidebarDropIntent) -> gtk4::gdk::DragAction {
+    match intent {
+        // Keep the cursor visually valid over any real tab row.
+        // Same-tab drops are still rejected in the drop handler.
+        SidebarDropIntent::Noop => gtk4::gdk::DragAction::COPY,
+        SidebarDropIntent::AddToTarget
+        | SidebarDropIntent::RemoveFromSource
+        | SidebarDropIntent::MoveBetweenCustomTabs => gtk4::gdk::DragAction::COPY,
+    }
+}
 
 /// The tabs sidebar widget.
 pub struct TabsSidebar {
@@ -30,7 +67,9 @@ struct TabsInner {
     list_box: ListBox,
     state: Arc<AppState>,
     on_tab_selected: RefCell<Option<TabSelectedCallback>>,
+    on_tab_membership_changed: RefCell<Option<TabMembershipChangedCallback>>,
     active_tab_id: Mutex<String>,
+    toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
 }
 
 // Safety: TabsInner is only used on the GTK main thread.
@@ -83,7 +122,9 @@ impl TabsSidebar {
             list_box: list_box.clone(),
             state,
             on_tab_selected: RefCell::new(None),
+            on_tab_membership_changed: RefCell::new(None),
             active_tab_id: Mutex::new(GENERAL_TAB_ID.to_string()),
+            toast_sender: Mutex::new(None),
         });
 
         {
@@ -107,6 +148,7 @@ impl TabsSidebar {
         }
 
         inner.reload_tabs_and_emit(None);
+        inner.attach_sidebar_drop_target(&list_box);
 
         Self { inner }
     }
@@ -121,6 +163,11 @@ impl TabsSidebar {
         *self.inner.on_tab_selected.borrow_mut() = Some(Box::new(f));
     }
 
+    /// Register callback fired when tab membership changes via drag & drop.
+    pub fn connect_tab_membership_changed<F: Fn() + Send + 'static>(&self, f: F) {
+        *self.inner.on_tab_membership_changed.borrow_mut() = Some(Box::new(f));
+    }
+
     /// Reload the tab list from config, keeping the current selection.
     #[allow(dead_code)]
     pub fn reload_tabs(&self) {
@@ -131,6 +178,11 @@ impl TabsSidebar {
     #[allow(dead_code)]
     pub fn reload_tabs_select(&self, tab_id: &str) {
         self.inner.reload_tabs_and_emit(Some(tab_id));
+    }
+
+    /// Set the toast sender for notifications
+    pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
+        *self.inner.toast_sender.lock().unwrap() = Some(sender);
     }
 }
 
@@ -285,6 +337,293 @@ impl TabsInner {
         });
 
         row.add_controller(gesture);
+    }
+
+    fn clear_hovered_drop_row(hovered_row: &Rc<RefCell<Option<ListBoxRow>>>) {
+        if let Some(row) = hovered_row.borrow_mut().take() {
+            row.remove_css_class("tab-row-drop-hover");
+        }
+    }
+
+    fn update_hovered_drop_row(
+        list_box: &ListBox,
+        hovered_row: &Rc<RefCell<Option<ListBoxRow>>>,
+        y: f64,
+    ) -> Option<ListBoxRow> {
+        let next_row = list_box.row_at_y(y as i32);
+        let next_id = next_row.as_ref().map(|row| row.widget_name().to_string());
+        let current_id = hovered_row
+            .borrow()
+            .as_ref()
+            .map(|row| row.widget_name().to_string());
+
+        if next_id == current_id {
+            return next_row;
+        }
+
+        Self::clear_hovered_drop_row(hovered_row);
+        if let Some(row) = &next_row {
+            row.add_css_class("tab-row-drop-hover");
+        }
+        *hovered_row.borrow_mut() = next_row.clone();
+        next_row
+    }
+
+    fn action_for_hovered_row(&self, hovered_row: Option<&ListBoxRow>) -> gtk4::gdk::DragAction {
+        let Some(row) = hovered_row else {
+            return gtk4::gdk::DragAction::empty();
+        };
+
+        let target_tab_id = row.widget_name().to_string();
+        if target_tab_id.trim().is_empty() {
+            return gtk4::gdk::DragAction::empty();
+        }
+
+        let source_tab_id = self.active_tab_id.lock().unwrap().clone();
+        let intent = resolve_sidebar_drop_intent(&source_tab_id, &target_tab_id);
+        drag_action_for_intent(intent)
+    }
+
+    fn tab_display_name(&self, tab_id: &str) -> String {
+        if tab_id == GENERAL_TAB_ID {
+            return "General".to_string();
+        }
+
+        let cfg = self.state.config.lock().unwrap();
+        cfg.tabs
+            .iter()
+            .find(|tab| tab.id == tab_id)
+            .map(|tab| tab.name.clone())
+            .unwrap_or_else(|| tab_id.to_string())
+    }
+
+    fn send_drop_toast(
+        &self,
+        intent: SidebarDropIntent,
+        source_tab_id: &str,
+        target_tab_id: &str,
+        count: usize,
+    ) {
+        if count == 0 {
+            return;
+        }
+
+        let message = match intent {
+            SidebarDropIntent::Noop => return,
+            SidebarDropIntent::AddToTarget => {
+                let target_name = self.tab_display_name(target_tab_id);
+                if count == 1 {
+                    format!("1 sound added to {target_name}")
+                } else {
+                    format!("{count} sounds added to {target_name}")
+                }
+            }
+            SidebarDropIntent::RemoveFromSource => {
+                let source_name = self.tab_display_name(source_tab_id);
+                if count == 1 {
+                    format!("1 sound removed from {source_name}")
+                } else {
+                    format!("{count} sounds removed from {source_name}")
+                }
+            }
+            SidebarDropIntent::MoveBetweenCustomTabs => {
+                let target_name = self.tab_display_name(target_tab_id);
+                if count == 1 {
+                    format!("1 sound moved to {target_name}")
+                } else {
+                    format!("{count} sounds moved to {target_name}")
+                }
+            }
+        };
+
+        if let Some(tx) = &*self.toast_sender.lock().unwrap() {
+            let _ = tx.send(message);
+        }
+    }
+
+    fn attach_sidebar_drop_target(self: &Arc<Self>, list_box: &ListBox) {
+        let drop_formats = gtk4::gdk::ContentFormats::builder()
+            .add_type(glib::Bytes::static_type())
+            .add_mime_type(tab_dnd::SOUND_TAB_DND_MIME)
+            .build();
+        let drop_target =
+            gtk4::DropTargetAsync::new(Some(drop_formats), gtk4::gdk::DragAction::COPY);
+        drop_target.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+        let hovered_row = Rc::new(RefCell::new(None::<ListBoxRow>));
+
+        drop_target.connect_accept(|_, drop| {
+            let formats = drop.formats();
+            let accepts = formats.contain_mime_type(tab_dnd::SOUND_TAB_DND_MIME)
+                || formats.contains_type(glib::Bytes::static_type());
+            log::debug!(
+                "Sidebar drop accept: formats={} mime={} bytes_type={} accepted={}",
+                formats,
+                tab_dnd::SOUND_TAB_DND_MIME,
+                formats.contains_type(glib::Bytes::static_type()),
+                accepts
+            );
+            accepts
+        });
+
+        {
+            let inner = Arc::clone(self);
+            let list_box = list_box.clone();
+            let hovered_row = Rc::clone(&hovered_row);
+            drop_target.connect_drag_enter(move |_, drop, _, y| {
+                let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
+                let action = inner.action_for_hovered_row(hovered.as_ref());
+                let hovered_id = hovered
+                    .as_ref()
+                    .map(|row| row.widget_name().to_string())
+                    .unwrap_or_else(|| "<none>".to_string());
+                drop.status(action, action);
+                log::debug!(
+                    "Sidebar drop enter: y={y:.1} target={} action={:?} source_selected={:?}",
+                    hovered_id,
+                    action,
+                    drop.drag().map(|drag| drag.selected_action())
+                );
+                action
+            });
+        }
+
+        {
+            let inner = Arc::clone(self);
+            let list_box = list_box.clone();
+            let hovered_row = Rc::clone(&hovered_row);
+            drop_target.connect_drag_motion(move |_, drop, _, y| {
+                let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
+                let action = inner.action_for_hovered_row(hovered.as_ref());
+                let hovered_id = hovered
+                    .as_ref()
+                    .map(|row| row.widget_name().to_string())
+                    .unwrap_or_else(|| "<none>".to_string());
+                drop.status(action, action);
+                log::debug!(
+                    "Sidebar drop motion: y={y:.1} target={} action={:?} source_selected={:?}",
+                    hovered_id,
+                    action,
+                    drop.drag().map(|drag| drag.selected_action())
+                );
+                action
+            });
+        }
+
+        {
+            let hovered_row = Rc::clone(&hovered_row);
+            drop_target.connect_drag_leave(move |_, _| {
+                Self::clear_hovered_drop_row(&hovered_row);
+            });
+        }
+
+        {
+            let inner = Arc::clone(self);
+            let list_box = list_box.clone();
+            let hovered_row = Rc::clone(&hovered_row);
+            drop_target.connect_drop(move |_, drop, _, y| {
+                let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
+                Self::clear_hovered_drop_row(&hovered_row);
+
+                let Some(target_row) = hovered else {
+                    log::debug!("Tab drop ignored: pointer not over a tab row");
+                    return false;
+                };
+
+                let target_tab_id = target_row.widget_name().to_string();
+                if target_tab_id.trim().is_empty() {
+                    log::warn!("Tab drop ignored: missing target tab ID");
+                    return false;
+                }
+
+                let drop_for_read = drop.clone();
+                let drop_for_finish = drop.clone();
+                let inner = Arc::clone(&inner);
+                let target_tab_id_for_read = target_tab_id.clone();
+                drop_for_read.read_value_async(
+                    glib::Bytes::static_type(),
+                    glib::Priority::DEFAULT,
+                    None::<&gio::Cancellable>,
+                    move |result| match result {
+                        Ok(value) => {
+                            let Ok(bytes) = value.get::<glib::Bytes>() else {
+                                log::warn!("Tab drop failed: could not extract bytes from drop");
+                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                return;
+                            };
+
+                            let Some(payload) = tab_dnd::decode_drag_payload(&bytes) else {
+                                log::warn!("Tab drop failed: could not decode payload");
+                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                return;
+                            };
+
+                            let intent = resolve_sidebar_drop_intent(
+                                &payload.source_tab_id,
+                                &target_tab_id_for_read,
+                            );
+                            if intent == SidebarDropIntent::Noop {
+                                log::info!(
+                                    "Tab drop ignored as no-op (source={}, target={})",
+                                    payload.source_tab_id,
+                                    target_tab_id_for_read
+                                );
+                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                return;
+                            }
+
+                            match commands::apply_sound_tab_drop(
+                                payload.source_tab_id.clone(),
+                                target_tab_id_for_read.clone(),
+                                payload.sound_ids.clone(),
+                                Arc::clone(&inner.state.config),
+                            ) {
+                                Ok(changed) => {
+                                    if !changed {
+                                        log::info!(
+                                            "Tab drop produced no membership changes (source={}, target={}, sounds={})",
+                                            payload.source_tab_id,
+                                            target_tab_id_for_read,
+                                            payload.sound_ids.len()
+                                        );
+                                        drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                        return;
+                                    }
+
+                                    inner.reload_tabs_and_emit(None);
+                                    inner.emit_tab_membership_changed();
+                                    inner.send_drop_toast(
+                                        intent,
+                                        &payload.source_tab_id,
+                                        &target_tab_id_for_read,
+                                        payload.sound_ids.len(),
+                                    );
+                                    drop_for_finish.finish(drag_action_for_intent(intent));
+                                }
+                                Err(e) => {
+                                    log::warn!("Tab drop failed: {e}");
+                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Tab drop failed while reading payload: {e}");
+                            drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                        }
+                    },
+                );
+
+                true
+            });
+        }
+
+        list_box.add_controller(drop_target);
+    }
+
+    fn emit_tab_membership_changed(&self) {
+        if let Some(ref cb) = *self.on_tab_membership_changed.borrow() {
+            cb();
+        }
     }
 
     fn show_tab_context_menu(

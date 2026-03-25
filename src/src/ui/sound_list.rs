@@ -9,8 +9,8 @@ use gio::prelude::*;
 use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, ColumnView, ColumnViewColumn, GestureClick, Label, MultiSelection, Orientation,
-    ScrolledWindow, SignalListItemFactory, Widget,
+    Box as GtkBox, ColumnView, ColumnViewColumn, DragSource, GestureClick, Label, MultiSelection,
+    Orientation, ScrolledWindow, SignalListItemFactory, Widget,
 };
 
 use crate::app_meta::GENERAL_TAB_ID;
@@ -19,6 +19,7 @@ use crate::commands;
 use crate::config::{ListStyle, Sound};
 
 use super::menu;
+use super::tab_dnd::{self, SoundTabDragPayload};
 
 const SOUND_CONTEXT_NAMESPACE: &str = "sound-ctx";
 
@@ -61,6 +62,8 @@ impl SoundList {
         col_view.set_vexpand(true);
         col_view.set_hexpand(true);
         col_view.set_reorderable(false);
+        // Prefer predictable row dragging over rectangle selection.
+        col_view.set_enable_rubberband(false);
         col_view.add_css_class("data-table");
 
         // Apply list style class based on config
@@ -422,6 +425,7 @@ impl SoundListInner {
                     .build();
                 cell.append(&label);
                 inner.install_context_menu(&cell);
+                inner.install_drag_source(&cell);
                 item.downcast_ref::<gtk4::ListItem>()
                     .unwrap()
                     .set_child(Some(&cell));
@@ -494,6 +498,7 @@ impl SoundListInner {
                 hbox.append(&label);
                 hbox.append(&warn);
                 inner.install_context_menu(&hbox);
+                inner.install_drag_source(&hbox);
 
                 item.downcast_ref::<gtk4::ListItem>()
                     .unwrap()
@@ -565,6 +570,7 @@ impl SoundListInner {
                     .build();
                 cell.append(&label);
                 inner.install_context_menu(&cell);
+                inner.install_drag_source(&cell);
                 item.downcast_ref::<gtk4::ListItem>()
                     .unwrap()
                     .set_child(Some(&cell));
@@ -625,6 +631,7 @@ impl SoundListInner {
                 let label = Label::builder().xalign(0.0).hexpand(true).build();
                 cell.append(&label);
                 inner.install_context_menu(&cell);
+                inner.install_drag_source(&cell);
                 item.downcast_ref::<gtk4::ListItem>()
                     .unwrap()
                     .set_child(Some(&cell));
@@ -699,6 +706,110 @@ impl SoundListInner {
         });
 
         widget.as_ref().add_controller(gesture);
+    }
+
+    fn install_drag_source(self: &Arc<Self>, widget: &impl IsA<gtk4::Widget>) {
+        let drag_source = DragSource::new();
+        drag_source.set_actions(gtk4::gdk::DragAction::COPY);
+        drag_source.set_button(gtk4::gdk::BUTTON_PRIMARY);
+        drag_source.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        drag_source.set_propagation_limit(gtk4::PropagationLimit::SameNative);
+        // Don't claim the event sequence exclusively so that single-clicks still
+        // reach the ColumnView's MultiSelection gesture for normal row selection.
+        drag_source.set_exclusive(false);
+
+        let inner = Arc::clone(self);
+        drag_source.connect_prepare(move |source, _, _| {
+            let _ = source.set_state(gtk4::EventSequenceState::Claimed);
+            let Some(widget) = source.widget() else {
+                return None;
+            };
+
+            let sound_id = widget.widget_name().to_string();
+            if sound_id.trim().is_empty() {
+                return None;
+            }
+            log::info!("Drag prepare: sound_id={}", sound_id);
+
+            let selected_ids = inner.selected_sound_ids();
+            let sound_ids = if selected_ids.iter().any(|id| id == &sound_id) {
+                selected_ids
+            } else {
+                vec![sound_id]
+            };
+            log::info!(
+                "Drag prepare: dragging {} sound(s): {:?}",
+                sound_ids.len(),
+                sound_ids
+            );
+
+            let payload = SoundTabDragPayload {
+                source_tab_id: inner.active_tab_id.lock().unwrap().clone(),
+                sound_ids: sound_ids.clone(),
+            }
+            .normalized();
+
+            if payload.is_none() {
+                log::warn!("Drag prepare: payload normalization failed");
+                return None;
+            }
+            let payload = payload?;
+            log::info!("Drag prepare: payload created successfully");
+
+            // Create drag icon showing sound count
+            let count = sound_ids.len();
+            let icon_text = if count == 1 {
+                "1 sound".to_string()
+            } else {
+                format!("{} sounds", count)
+            };
+            let drag_label = gtk4::Label::new(Some(&icon_text));
+            drag_label.add_css_class("drag-icon-label");
+            let paintable = gtk4::WidgetPaintable::new(Some(&drag_label));
+            source.set_icon(Some(&paintable), 0, 0);
+
+            let bytes = tab_dnd::encode_drag_payload(&payload)?;
+            let providers = [
+                gtk4::gdk::ContentProvider::for_value(&bytes.to_value()),
+                gtk4::gdk::ContentProvider::for_bytes(tab_dnd::SOUND_TAB_DND_MIME, &bytes),
+            ];
+            Some(gtk4::gdk::ContentProvider::new_union(&providers))
+        });
+
+        drag_source.connect_drag_begin(move |_, drag| {
+            drag.set_actions(gtk4::gdk::DragAction::COPY);
+            log::debug!(
+                "Sound drag begin: actions={:?} selected={:?} formats={}",
+                drag.actions(),
+                drag.selected_action(),
+                drag.formats()
+            );
+
+            drag.connect_selected_action_notify(|drag| {
+                log::debug!(
+                    "Sound drag selected-action changed: {:?}",
+                    drag.selected_action()
+                );
+            });
+            drag.connect_drop_performed(|drag| {
+                log::debug!(
+                    "Sound drag drop-performed: selected={:?}",
+                    drag.selected_action()
+                );
+            });
+            drag.connect_dnd_finished(|drag| {
+                log::debug!("Sound drag finished: selected={:?}", drag.selected_action());
+            });
+            drag.connect_cancel(|drag, reason| {
+                log::debug!(
+                    "Sound drag cancelled: reason={:?} selected={:?}",
+                    reason,
+                    drag.selected_action()
+                );
+            });
+        });
+
+        widget.as_ref().add_controller(drag_source);
     }
 
     fn show_context_menu_for_sound_id(

@@ -1,4 +1,5 @@
 use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+use ashpd::WindowIdentifier;
 use futures_util::StreamExt;
 use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
@@ -8,7 +9,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc as tokio_mpsc;
-use ashpd::WindowIdentifier;
 
 use super::backend_runtime::HotkeyBackend;
 use super::{canonical_hotkey_to_portal_trigger, canonicalize_hotkey_string};
@@ -132,7 +132,9 @@ fn shortcut_id_for(sound_id: &str) -> String {
     )
 }
 
-fn snapshot_bindings(bindings: &Arc<Mutex<HashMap<String, PortalBinding>>>) -> Vec<(String, String, String)> {
+fn snapshot_bindings(
+    bindings: &Arc<Mutex<HashMap<String, PortalBinding>>>,
+) -> Vec<(String, String, String)> {
     bindings
         .lock()
         .unwrap()
