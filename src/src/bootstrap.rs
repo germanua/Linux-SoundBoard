@@ -26,8 +26,9 @@ pub fn run() {
 
     info!("Starting Linux Soundboard (GTK4)");
 
-    adw::init().expect("Failed to initialize libadwaita");
+    gtk4::init().expect("Failed to initialize GTK4");
     normalize_legacy_dark_theme_setting();
+    adw::init().expect("Failed to initialize libadwaita");
     Window::set_default_icon_name(APP_ID);
 
     let app = Application::builder().application_id(APP_ID).build();
