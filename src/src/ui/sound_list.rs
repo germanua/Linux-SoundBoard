@@ -87,6 +87,8 @@ impl SoundList {
             if let Ok(cfg) = state.config.lock() {
                 if cfg.settings.list_style == ListStyle::Card {
                     col_view.add_css_class("list-style-card");
+                } else {
+                    col_view.add_css_class("list-style-compact");
                 }
             } else {
                 log::warn!("Config lock poisoned in SoundList::new");

@@ -691,21 +691,21 @@ columnview header button {
 
 /* Card mode header - match cell padding */
 columnview.list-style-card header button {
-  padding: 12px 14px;
+  padding: 10px 12px;
 }
 
 /* Card mode container */
 columnview.list-style-card row > cell {
-  padding: 16px 12px;
+  padding: 10px 8px;
 }
 
 .list-style-card .sound-cell {
-  padding: 16px 14px;
+  padding: 10px 16px;
 }
 
 .list-style-card .sound-cell-first {
   border-left: 4px solid transparent;
-  padding-left: 14px;
+  padding-left: 16px;
 }
 
 /* Card mode row backgrounds - more visible alternation */

@@ -133,7 +133,7 @@ fn build_general_page(
                             let Some(folder_rows3) = folder_rows_weak2.upgrade() else {
                                 return;
                             };
-                            rebuild_sound_folder_rows(
+                            schedule_rebuild_sound_folder_rows(
                                 &folders_group3,
                                 &add_folder_row3,
                                 Arc::clone(&state3),
@@ -672,7 +672,7 @@ fn build_general_page(
 
         let card_row = adw::ActionRow::builder()
             .title("Card")
-            .subtitle("Spacious layout with visual polish")
+            .subtitle("Balanced layout with about 1.6x the space of compact")
             .activatable(true)
             .build();
         card_row.add_css_class("appearance-choice-row");
@@ -784,7 +784,7 @@ fn build_sound_folder_row(
             let Some(folder_rows2) = folder_rows2.upgrade() else {
                 return;
             };
-            rebuild_sound_folder_rows(
+            schedule_rebuild_sound_folder_rows(
                 &folders_group2,
                 &add_folder_row2,
                 Arc::clone(&state2),
@@ -799,6 +799,26 @@ fn build_sound_folder_row(
 
     row.add_suffix(&remove_btn);
     row
+}
+
+fn schedule_rebuild_sound_folder_rows(
+    folders_group: &adw::PreferencesGroup,
+    add_folder_row: &adw::ActionRow,
+    state: Arc<AppState>,
+    folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
+    on_library_changed: Option<Rc<dyn Fn() + 'static>>,
+) {
+    let folders_group = folders_group.clone();
+    let add_folder_row = add_folder_row.clone();
+    gtk4::glib::idle_add_local_once(move || {
+        rebuild_sound_folder_rows(
+            &folders_group,
+            &add_folder_row,
+            state,
+            folder_rows,
+            on_library_changed,
+        );
+    });
 }
 
 fn rebuild_sound_folder_rows(

@@ -27,11 +27,23 @@ pub fn run() {
     info!("Starting Linux Soundboard (GTK4)");
 
     adw::init().expect("Failed to initialize libadwaita");
+    normalize_legacy_dark_theme_setting();
     Window::set_default_icon_name(APP_ID);
 
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_activate_handler());
     app.run();
+}
+
+fn normalize_legacy_dark_theme_setting() {
+    if let Some(settings) = gtk4::Settings::default() {
+        if settings.is_gtk_application_prefer_dark_theme() {
+            info!(
+                "Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager"
+            );
+            settings.set_gtk_application_prefer_dark_theme(false);
+        }
+    }
 }
 
 fn configure_preferred_backend() {
@@ -64,6 +76,8 @@ fn configure_preferred_backend() {
 
 fn build_activate_handler() -> impl Fn(&Application) + 'static {
     move |app| {
+        normalize_legacy_dark_theme_setting();
+
         if let Some(display) = gtk4::gdk::Display::default() {
             info!("GTK display backend: {:?}", display.backend());
         } else {
