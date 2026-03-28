@@ -46,8 +46,7 @@ impl SwhkdProcesses {
     pub fn spawn_swhks() -> Result<Child, String> {
         info!("Spawning swhks process");
 
-        let swhks_path = which::which("swhks")
-            .map_err(|_| missing_swhkd_message("swhks"))?;
+        let swhks_path = which::which("swhks").map_err(|_| missing_swhkd_message("swhks"))?;
 
         Command::new(swhks_path)
             .spawn()
@@ -58,8 +57,7 @@ impl SwhkdProcesses {
     pub fn spawn_swhkd() -> Result<Child, String> {
         info!("Spawning swhkd process");
 
-        let swhkd_path = which::which("swhkd")
-            .map_err(|_| missing_swhkd_message("swhkd"))?;
+        let swhkd_path = which::which("swhkd").map_err(|_| missing_swhkd_message("swhkd"))?;
 
         // Check if swhkd has setuid bit
         if !Self::has_setuid_bit(&swhkd_path) {

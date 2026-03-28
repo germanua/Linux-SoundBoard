@@ -144,10 +144,10 @@ impl SoundList {
         Self::sync_state_class(widget, "sound-cell-playing", is_playing);
         Self::sync_state_class(widget, "sound-cell-active", is_active);
 
-        if let Some(row) = widget.parent().and_then(|cell| cell.parent()) {
-            Self::sync_state_class(&row, "sound-row-playing", is_playing);
-            Self::sync_state_class(&row, "sound-row-active", is_active);
-        }
+        // Note: Row-level classes are now handled via CSS selectors on the cell
+        // (e.g., `.sound-cell-playing` inherits to row via `columnview row > cell`).
+        // Direct row manipulation via parent() traversal was causing GTK critical
+        // warnings due to widget recycling in ColumnView's internal structure.
     }
 
     /// Set the active tab — filters the visible sounds.

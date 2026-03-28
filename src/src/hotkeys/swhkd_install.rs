@@ -15,7 +15,8 @@ fn detect_distro_family_from_os_release(os_release: &str) -> DistroFamily {
             ids.push(value.trim_matches('"').to_ascii_lowercase());
         } else if let Some(value) = line.strip_prefix("ID_LIKE=") {
             ids.extend(
-                value.trim_matches('"')
+                value
+                    .trim_matches('"')
                     .split_whitespace()
                     .map(|entry| entry.to_ascii_lowercase()),
             );
@@ -34,10 +35,12 @@ fn detect_distro_family_from_os_release(os_release: &str) -> DistroFamily {
         )
     }) {
         DistroFamily::Debian
-    } else if ids
-        .iter()
-        .any(|id| matches!(id.as_str(), "fedora" | "rhel" | "centos" | "rocky" | "almalinux"))
-    {
+    } else if ids.iter().any(|id| {
+        matches!(
+            id.as_str(),
+            "fedora" | "rhel" | "centos" | "rocky" | "almalinux"
+        )
+    }) {
         DistroFamily::Fedora
     } else {
         DistroFamily::Other

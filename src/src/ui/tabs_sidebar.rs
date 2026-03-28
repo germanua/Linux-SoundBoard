@@ -72,10 +72,6 @@ struct TabsInner {
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
 }
 
-// Safety: TabsInner is only used on the GTK main thread.
-unsafe impl Send for TabsInner {}
-unsafe impl Sync for TabsInner {}
-
 impl TabsSidebar {
     pub fn new(state: Arc<AppState>) -> Self {
         let vbox = GtkBox::new(Orientation::Vertical, 0);
@@ -153,7 +149,7 @@ impl TabsSidebar {
             });
         }
 
-        inner.reload_tabs_and_emit(None);
+        inner.reload_tabs_now(None);
         inner.attach_sidebar_drop_target(&list_box);
 
         Self { inner }
@@ -165,12 +161,12 @@ impl TabsSidebar {
     }
 
     /// Register a callback fired when the user selects a tab.
-    pub fn connect_tab_selected<F: Fn(String) + Send + 'static>(&self, f: F) {
+    pub fn connect_tab_selected<F: Fn(String) + 'static>(&self, f: F) {
         *self.inner.on_tab_selected.borrow_mut() = Some(Box::new(f));
     }
 
     /// Register callback fired when tab membership changes via drag & drop.
-    pub fn connect_tab_membership_changed<F: Fn() + Send + 'static>(&self, f: F) {
+    pub fn connect_tab_membership_changed<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_tab_membership_changed.borrow_mut() = Some(Box::new(f));
     }
 
@@ -199,6 +195,16 @@ impl TabsSidebar {
 }
 
 impl TabsInner {
+    fn queue_reload_tabs_and_emit(self: &Arc<Self>, select_id: Option<String>) {
+        let inner_weak = Arc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            let Some(inner) = inner_weak.upgrade() else {
+                return;
+            };
+            inner.reload_tabs_now(select_id.as_deref());
+        });
+    }
+
     fn show_new_tab_dialog(self: &Arc<Self>, button: &Button) {
         let Some(win) = button
             .root()
@@ -221,7 +227,7 @@ impl TabsInner {
                 match commands::create_tab(name, Arc::clone(&inner.state.config)) {
                     Ok(tab) => {
                         *inner.active_tab_id.lock().unwrap() = tab.id.clone();
-                        inner.reload_tabs_and_emit(Some(&tab.id));
+                        inner.queue_reload_tabs_and_emit(Some(tab.id));
                     }
                     Err(e) => log::warn!("Failed to create tab: {e}"),
                 }
@@ -230,8 +236,20 @@ impl TabsInner {
     }
 
     fn reload_tabs_and_emit(self: &Arc<Self>, select_id: Option<&str>) {
-        while let Some(child) = self.list_box.first_child() {
-            self.list_box.remove(&child);
+        let inner_weak = Arc::downgrade(self);
+        let select_id = select_id.map(str::to_string);
+        glib::idle_add_local_once(move || {
+            let Some(inner) = inner_weak.upgrade() else {
+                return;
+            };
+            inner.reload_tabs_now(select_id.as_deref());
+        });
+    }
+
+    fn reload_tabs_now(self: &Arc<Self>, select_id: Option<&str>) {
+        self.list_box.select_row(None::<&ListBoxRow>);
+        while let Some(row) = self.list_box.row_at_index(0) {
+            self.list_box.remove(&row);
         }
 
         let (tabs, active_id, total_sounds) = {
@@ -270,16 +288,13 @@ impl TabsInner {
     }
 
     fn select_row_by_id(&self, tab_id: &str) -> bool {
-        let mut child = self.list_box.first_child();
-        while let Some(widget) = child {
-            let next = widget.next_sibling();
-            if let Ok(row) = widget.clone().downcast::<ListBoxRow>() {
-                if row.widget_name() == tab_id {
-                    self.list_box.select_row(Some(&row));
-                    return true;
-                }
+        let mut index = 0;
+        while let Some(row) = self.list_box.row_at_index(index) {
+            if row.widget_name() == tab_id {
+                self.list_box.select_row(Some(&row));
+                return true;
             }
-            child = next;
+            index += 1;
         }
         false
     }
@@ -619,15 +634,26 @@ impl TabsInner {
                                             return;
                                         }
 
-                                        inner.reload_tabs_and_emit(None);
-                                        inner.emit_tab_membership_changed();
-                                        inner.send_drop_toast(
-                                            intent,
-                                            &payload.source_tab_id,
-                                            &target_tab_id_for_read,
-                                            payload.sound_ids.len(),
-                                        );
-                                        drop_for_finish.finish(drag_action_for_intent(intent));
+                                        let finish_action = drag_action_for_intent(intent);
+                                        drop_for_finish.finish(finish_action);
+
+                                        let inner_weak_refresh = Arc::downgrade(&inner);
+                                        let source_tab_id = payload.source_tab_id.clone();
+                                        let target_tab_id = target_tab_id_for_read.clone();
+                                        let moved_count = payload.sound_ids.len();
+                                        glib::idle_add_local_once(move || {
+                                            let Some(inner) = inner_weak_refresh.upgrade() else {
+                                                return;
+                                            };
+                                            inner.reload_tabs_and_emit(None);
+                                            inner.emit_tab_membership_changed();
+                                            inner.send_drop_toast(
+                                                intent,
+                                                &source_tab_id,
+                                                &target_tab_id,
+                                                moved_count,
+                                            );
+                                        });
                                     }
                                     Err(e) => {
                                         log::warn!("Tab drop failed: {e}");
@@ -704,7 +730,7 @@ impl TabsInner {
                             new_name,
                             Arc::clone(&inner_confirm.state.config),
                         ) {
-                            Ok(_) => inner_confirm.reload_tabs_and_emit(Some(&tab_id)),
+                            Ok(_) => inner_confirm.queue_reload_tabs_and_emit(Some(tab_id.clone())),
                             Err(e) => log::warn!("Rename tab failed: {e}"),
                         }
                     },
@@ -737,7 +763,8 @@ impl TabsInner {
                         Ok(_) => {
                             *inner_confirm.active_tab_id.lock().unwrap() =
                                 GENERAL_TAB_ID.to_string();
-                            inner_confirm.reload_tabs_and_emit(Some(GENERAL_TAB_ID));
+                            inner_confirm
+                                .queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
                         }
                         Err(e) => log::warn!("Delete tab failed: {e}"),
                     }
