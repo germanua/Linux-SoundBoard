@@ -9,7 +9,7 @@ pub fn config_dir_name() -> &'static str {
 }
 
 pub fn default_allow_multiple_playbacks() -> bool {
-    true
+    false
 }
 
 pub fn default_auto_gain_target() -> f64 {
@@ -26,4 +26,14 @@ pub fn default_auto_gain_attack_ms() -> u32 {
 
 pub fn default_auto_gain_release_ms() -> u32 {
     150
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_allow_multiple_playbacks;
+
+    #[test]
+    fn multiple_playbacks_are_disabled_by_default() {
+        assert!(!default_allow_multiple_playbacks());
+    }
 }

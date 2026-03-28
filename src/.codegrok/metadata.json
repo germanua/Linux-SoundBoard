@@ -1,0 +1,14 @@
+{
+  "codebase_path": "/home/flinux/opencode/LinuxSoundBoardv1/src",
+  "embedding_model": "coderankembed",
+  "collection_name": "codebase",
+  "indexed_at": "2026-03-26T17:34:32.174551",
+  "stats": {
+    "total_files": 0,
+    "total_symbols": 0,
+    "total_chunks": 0,
+    "parse_errors": 0,
+    "indexing_time": 0.06131744384765625
+  },
+  "file_mtimes": {}
+}

@@ -150,7 +150,7 @@ pub fn create_tab(name: String, config: Arc<Mutex<Config>>) -> Result<SoundTab, 
     if trimmed_name.is_empty() {
         return Err("Tab name cannot be empty".to_string());
     }
-    with_saved_config_result(&config, |cfg| cfg.create_tab(trimmed_name))
+    with_saved_config_result(&config, |cfg| Ok(cfg.create_tab(trimmed_name)))
 }
 
 pub fn rename_tab(id: String, name: String, config: Arc<Mutex<Config>>) -> Result<(), String> {
@@ -234,7 +234,7 @@ pub fn apply_sound_tab_drop(
         target_tab_id,
         sound_ids.len()
     );
-    with_saved_config_checked(&config, |cfg| {
+    with_saved_config_result(&config, |cfg| {
         apply_sound_tab_drop_to_config(cfg, &source_tab_id, &target_tab_id, &sound_ids)
     })
 }

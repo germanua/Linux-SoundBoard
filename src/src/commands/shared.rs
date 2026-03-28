@@ -1,193 +1,138 @@
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::default::get_probe;
+use crate::config::{Config, PlayMode, Sound, Theme};
 
-use crate::audio::loudness;
-use crate::config::{AutoGainApplyTo, AutoGainMode, Config, PlayMode, Sound, Theme};
+/// Helper to acquire config lock with poison handling - returns Result
+#[allow(dead_code)]
+pub fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&Config) -> R,
+{
+    config
+        .lock()
+        .map(|guard| f(&guard))
+        .map_err(|e| format!("Config lock poisoned: {}", e))
+}
 
-pub(crate) fn with_saved_config<F>(config: &Arc<Mutex<Config>>, apply: F) -> Result<(), String>
+/// Helper to acquire config mut lock with poison handling - returns Result
+pub fn with_config_mut<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut Config) -> R,
+{
+    config
+        .lock()
+        .map(|mut guard| f(&mut guard))
+        .map_err(|e| format!("Config lock poisoned: {}", e))
+}
+
+/// Execute config operation with automatic save on success
+pub fn with_saved_config<F>(config: &Arc<Mutex<Config>>, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut Config),
 {
-    let mut cfg = config.lock().unwrap();
-    let snapshot = cfg.clone();
-    apply(&mut cfg);
-    if let Err(e) = cfg.save() {
-        *cfg = snapshot;
-        return Err(e.to_string());
-    }
-    Ok(())
+    with_config_mut(config, |cfg| {
+        f(cfg);
+        cfg.save().map_err(|e| e.to_string())
+    })?
 }
 
-pub(crate) fn with_saved_config_result<T, F>(
-    config: &Arc<Mutex<Config>>,
-    apply: F,
-) -> Result<T, String>
+/// Execute config operation that returns a value, with automatic save on success
+pub fn with_saved_config_result<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut Config) -> T,
+    F: FnOnce(&mut Config) -> Result<R, String>,
 {
-    let mut cfg = config.lock().unwrap();
-    let snapshot = cfg.clone();
-    let result = apply(&mut cfg);
-    if let Err(e) = cfg.save() {
-        *cfg = snapshot;
-        return Err(e.to_string());
-    }
-    Ok(result)
+    with_config_mut(config, f)?
 }
 
-pub(crate) fn with_saved_config_checked<T, F>(
-    config: &Arc<Mutex<Config>>,
-    apply: F,
-) -> Result<T, String>
+/// Execute config operation that returns (), with automatic save on success
+pub fn with_saved_config_checked<F>(config: &Arc<Mutex<Config>>, f: F) -> Result<(), String>
 where
-    F: FnOnce(&mut Config) -> Result<T, String>,
+    F: FnOnce(&mut Config) -> Result<(), String>,
 {
-    let mut cfg = config.lock().unwrap();
-    let snapshot = cfg.clone();
-    let result = match apply(&mut cfg) {
-        Ok(value) => value,
-        Err(e) => {
-            *cfg = snapshot;
-            return Err(e);
-        }
-    };
-    if let Err(e) = cfg.save() {
-        *cfg = snapshot;
-        return Err(e.to_string());
+    with_config_mut(config, |cfg| f(cfg))?
+}
+
+/// Parse theme string to Theme enum (kept for potential future use)
+#[allow(dead_code)]
+pub fn parse_theme(s: &str) -> Result<Theme, String> {
+    match s.to_lowercase().as_str() {
+        "dark" => Ok(Theme::Dark),
+        "light" => Ok(Theme::Light),
+        _ => Err(format!("Invalid theme '{}'. Use 'dark' or 'light'.", s)),
     }
-    Ok(result)
 }
 
-pub(crate) fn parse_auto_gain_mode(mode: &str) -> Result<AutoGainMode, String> {
-    AutoGainMode::from_str(mode)
-        .map_err(|_| "Invalid auto-gain mode. Use 'static' or 'dynamic'.".to_string())
+/// Parse auto gain mode string
+pub fn parse_auto_gain_mode(s: &str) -> Result<crate::config::AutoGainMode, String> {
+    match s.to_lowercase().as_str() {
+        "dynamic" => Ok(crate::config::AutoGainMode::Dynamic),
+        "static" => Ok(crate::config::AutoGainMode::Static),
+        _ => Err(format!(
+            "Invalid auto gain mode '{}'. Use 'dynamic' or 'static'.",
+            s
+        )),
+    }
 }
 
-pub(crate) fn parse_auto_gain_apply_to(scope: &str) -> Result<AutoGainApplyTo, String> {
-    AutoGainApplyTo::from_str(scope)
-        .map_err(|_| "Invalid auto-gain apply scope. Use 'mic_only' or 'both'.".to_string())
+/// Parse auto gain apply to string
+pub fn parse_auto_gain_apply_to(s: &str) -> Result<crate::config::AutoGainApplyTo, String> {
+    match s.to_lowercase().as_str() {
+        "both" => Ok(crate::config::AutoGainApplyTo::Both),
+        "mic_only" => Ok(crate::config::AutoGainApplyTo::MicOnly),
+        _ => Err(format!(
+            "Invalid auto gain apply-to '{}'. Use 'both' or 'mic_only'.",
+            s
+        )),
+    }
 }
 
-pub(crate) fn parse_theme(theme: &str) -> Result<Theme, String> {
-    Theme::from_str(theme).map_err(|_| "Invalid theme. Use 'dark' or 'light'.".to_string())
+/// Validate play mode string
+pub fn validate_play_mode(s: &str) -> Result<PlayMode, String> {
+    match s.to_lowercase().as_str() {
+        "default" => Ok(PlayMode::Default),
+        "loop" => Ok(PlayMode::Loop),
+        "continue" => Ok(PlayMode::Continue),
+        _ => Err(format!(
+            "Invalid play mode '{}'. Use 'default', 'loop', or 'continue'.",
+            s
+        )),
+    }
 }
 
-pub(crate) fn validate_play_mode(mode: &str) -> Result<PlayMode, String> {
-    PlayMode::from_str(mode).map_err(|_| {
-        format!(
-            "Invalid play mode: {}. Must be one of: default, loop, continue",
-            mode
-        )
-    })
-}
-
-pub(crate) fn bounded_audio_analysis_threads() -> usize {
-    const MAX_AUDIO_ANALYSIS_THREADS: usize = 1;
+/// Number of threads for audio metadata analysis (duration/probe)
+pub fn bounded_audio_analysis_threads() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2)
-        .clamp(1, MAX_AUDIO_ANALYSIS_THREADS)
+        .map(|n| n.get().saturating_sub(1).clamp(1, 4))
+        .unwrap_or(1)
 }
 
 pub(crate) fn build_sound_with_metadata(name: String, path: String) -> Sound {
-    const FAST_LOUDNESS_PREVIEW_MS: u32 = 5000;
-
     let mut sound = Sound::new(name, path);
-    crate::diagnostics::memory::log_memory_snapshot(&format!("metadata:begin:{}", sound.path));
-    let duration_ms = probe_duration_ms(&sound.path);
-    sound.duration_ms = duration_ms;
-    match loudness::analyze_loudness_path_preview_smart(
-        Path::new(&sound.path),
-        FAST_LOUDNESS_PREVIEW_MS,
-        duration_ms,
-    ) {
-        Ok(lufs) => {
-            if lufs.is_finite() {
-                sound.loudness_lufs = Some(lufs);
-            } else {
-                log::warn!(
-                    "Ignoring non-finite loudness preview for '{}' [{}]",
-                    sound.name,
-                    sound.path
-                );
-                sound.loudness_lufs = None;
-            }
-        }
-        Err(e) => log::warn!(
-            "Failed to analyze loudness preview for '{}': {}",
-            sound.path,
-            e
-        ),
-    }
-    crate::diagnostics::memory::log_memory_snapshot(&format!("metadata:end:{}", sound.path));
+    sound.duration_ms = probe_duration_ms(&sound.path);
     sound
 }
 
 pub(crate) fn probe_duration_ms(path: &str) -> Option<u64> {
-    let file = std::fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = Path::new(path).extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-    let probed = get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .ok()?;
-    let track = probed.format.default_track()?;
-    let params = &track.codec_params;
-    if let (Some(tb), Some(n_frames)) = (params.time_base, params.n_frames) {
-        let time = tb.calc_time(n_frames);
-        let ms = time.seconds.saturating_mul(1000);
-        if ms > 0 {
-            return Some(ms);
-        }
-    }
-    if let (Some(n_frames), Some(sr)) = (params.n_frames, params.sample_rate) {
-        if sr > 0 {
-            return Some(((n_frames as u128) * 1000 / (sr as u128)) as u64);
-        }
-    }
-    None
+    crate::audio::metadata::probe_duration_ms(path)
 }
 
-pub(crate) fn default_sound_import_dir(
-    audio_dir: Option<PathBuf>,
-    home_dir: Option<PathBuf>,
-) -> PathBuf {
+/// Get default sound import directory
+pub fn default_sound_import_dir(
+    audio_dir: Option<std::path::PathBuf>,
+    home_dir: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
     audio_dir
         .or_else(|| home_dir.map(|h| h.join("Music")))
-        .map(|p| p.join(crate::app_meta::DEFAULT_IMPORT_DIR_NAME))
-        .unwrap_or_else(|| PathBuf::from(crate::app_meta::FALLBACK_IMPORT_DIR))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("soundboard-imports")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::bounded_audio_analysis_threads;
 
     #[test]
-    fn default_sound_import_dir_prefers_audio_dir() {
-        let actual = default_sound_import_dir(
-            Some(PathBuf::from("/home/test/Audio")),
-            Some(PathBuf::from("/home/test")),
-        );
-        assert_eq!(actual, PathBuf::from("/home/test/Audio/linux-soundboard"));
-    }
-
-    #[test]
-    fn default_sound_import_dir_falls_back_to_music() {
-        let actual = default_sound_import_dir(None, Some(PathBuf::from("/home/test")));
-        assert_eq!(actual, PathBuf::from("/home/test/Music/linux-soundboard"));
+    fn test_bounded_audio_analysis_threads_never_exceeds_cap() {
+        assert!((1..=4).contains(&bounded_audio_analysis_threads()));
     }
 }

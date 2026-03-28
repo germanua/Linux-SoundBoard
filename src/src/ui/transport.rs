@@ -8,26 +8,77 @@ use std::time::Duration;
 use glib::timeout_add_local;
 use gtk4::prelude::*;
 use gtk4::{
-    Adjustment, Box as GtkBox, Button, Entry, EventControllerFocus, EventControllerKey, Label,
-    Orientation, Scale, SearchEntry, ToggleButton, Widget,
+    gdk, Adjustment, Align, Box as GtkBox, Button, Entry, EventControllerFocus, EventControllerKey,
+    Label, Orientation, Scale, SearchEntry, ToggleButton, Widget,
 };
+use libadwaita as adw;
+use libadwaita::prelude::*;
 
 use crate::app_state::AppState;
 use crate::commands;
-use crate::config::{PlayMode, Sound};
+use crate::config::PlayMode;
 
 use super::icons;
+use super::sound_list::NavigationSound;
 
-type SoundListProvider = Box<dyn Fn() -> Vec<Sound> + Send + Sync>;
+type SoundListProvider = Box<dyn Fn() -> Vec<NavigationSound> + Send + Sync>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;
+const TRANSPORT_BUTTON_SIZE: i32 = 31;
+
+fn weak_library_changed_callback(
+    callback: &RefCell<Option<LibraryChangedCallback>>,
+) -> Option<Rc<dyn Fn() + 'static>> {
+    let weak = Rc::downgrade(callback.borrow().as_ref()?);
+    Some(Rc::new(move || {
+        if let Some(callback) = weak.upgrade() {
+            callback();
+        }
+    }))
+}
+
+fn weak_list_style_changed_callback(
+    callback: &RefCell<Option<ListStyleChangedCallback>>,
+) -> Option<Rc<dyn Fn(String) + 'static>> {
+    let weak = Rc::downgrade(callback.borrow().as_ref()?);
+    Some(Rc::new(move |style| {
+        if let Some(callback) = weak.upgrade() {
+            callback(style);
+        }
+    }))
+}
+
+fn apply_transport_button_size(button: &impl IsA<Widget>) {
+    button.set_size_request(TRANSPORT_BUTTON_SIZE, TRANSPORT_BUTTON_SIZE);
+    button.set_valign(Align::Center);
+}
 
 /// Which sound is currently the "active track" in the transport bar.
+///
+/// MEMORY OPTIMIZATION: Store only the fields we actually use (id, duration_ms)
+/// instead of cloning the entire Sound struct which contains many unused fields
+/// (path, source_path, hotkey, volume, enabled, loudness_lufs).
 #[derive(Clone)]
 struct ActiveTrack {
-    sound: Sound,
+    /// Sound ID - used for pause/resume and seek operations
+    sound_id: String,
+    /// Duration in milliseconds - used for scrub bar position calculation
+    sound_duration_ms: Option<u64>,
     #[allow(dead_code)]
     play_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrubInput {
+    Pointer,
+    Keyboard,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ScrubInteraction {
+    active: bool,
+    input: Option<ScrubInput>,
+    preview_position_ms: Option<u64>,
 }
 
 /// The transport bar widget bundle.
@@ -59,12 +110,16 @@ struct TransportInner {
     search_entry: SearchEntry,
     settings_btn: Button,
     active_track: RefCell<Option<ActiveTrack>>,
+    scrub_interaction: RefCell<ScrubInteraction>,
+    scrub_commit_timeout: RefCell<Option<glib::SourceId>>,
+    scrub_timer_id: RefCell<Option<glib::SourceId>>,
     last_track_sound_id: RefCell<Option<String>>,
     state: Arc<AppState>,
     sound_list_provider: Mutex<Option<SoundListProvider>>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     on_library_changed: RefCell<Option<LibraryChangedCallback>>,
     on_list_style_changed: RefCell<Option<ListStyleChangedCallback>>,
+    settings_dialog: RefCell<Option<glib::WeakRef<adw::PreferencesDialog>>>,
 }
 
 impl TransportBar {
@@ -84,22 +139,26 @@ impl TransportBar {
         play_btn.set_sensitive(false);
         play_btn.add_css_class("transport-btn");
         play_btn.add_css_class("transport-playback-btn");
+        apply_transport_button_size(&play_btn);
         update_play_pause_button(&play_btn, false);
 
         let stop_btn = icons::button(icons::STOP, "Stop All");
         stop_btn.set_sensitive(false);
         stop_btn.add_css_class("transport-btn");
         stop_btn.add_css_class("transport-playback-btn");
+        apply_transport_button_size(&stop_btn);
 
         let prev_btn = icons::button(icons::PREVIOUS, "Previous Sound");
         prev_btn.set_sensitive(false);
         prev_btn.add_css_class("transport-btn");
         prev_btn.add_css_class("transport-playback-btn");
+        apply_transport_button_size(&prev_btn);
 
         let next_btn = icons::button(icons::NEXT, "Next Sound");
         next_btn.set_sensitive(false);
         next_btn.add_css_class("transport-btn");
         next_btn.add_css_class("transport-playback-btn");
+        apply_transport_button_size(&next_btn);
 
         playback_group.append(&play_btn);
         playback_group.append(&stop_btn);
@@ -120,6 +179,9 @@ impl TransportBar {
             .sensitive(false)
             .build();
         scrub.set_range(0.0, 1.0);
+        scrub.set_height_request(18);
+        scrub.set_valign(Align::Center);
+        timeline_group.set_valign(Align::Center);
 
         let time_label = Label::builder()
             .label("0:00")
@@ -266,6 +328,7 @@ impl TransportBar {
         headphones_btn.set_active(!local_mute);
         headphones_btn.add_css_class("transport-btn");
         headphones_btn.add_css_class("transport-icon-btn");
+        apply_transport_button_size(&headphones_btn);
         if !local_mute {
             headphones_btn.add_css_class("btn-active");
         }
@@ -282,6 +345,7 @@ impl TransportBar {
         mic_btn.set_active(mic_passthrough);
         mic_btn.add_css_class("transport-btn");
         mic_btn.add_css_class("transport-icon-btn");
+        apply_transport_button_size(&mic_btn);
         if mic_passthrough {
             mic_btn.add_css_class("btn-active");
         }
@@ -295,6 +359,7 @@ impl TransportBar {
         playmode_btn.add_css_class("transport-btn");
         playmode_btn.add_css_class("transport-icon-btn");
         playmode_btn.add_css_class("transport-playmode-btn");
+        apply_transport_button_size(&playmode_btn);
         update_play_mode_button(&playmode_btn, play_mode);
         utility_group.append(&playmode_btn);
 
@@ -302,18 +367,22 @@ impl TransportBar {
         refresh_btn.add_css_class("transport-btn");
         refresh_btn.add_css_class("transport-icon-btn");
         refresh_btn.add_css_class("transport-refresh-btn");
+        apply_transport_button_size(&refresh_btn);
         utility_group.append(&refresh_btn);
 
         let search_entry = SearchEntry::builder()
             .placeholder_text("Search sounds…")
-            .width_request(130)
+            .width_request(112)
             .build();
+        search_entry.set_size_request(112, TRANSPORT_BUTTON_SIZE);
+        search_entry.set_valign(Align::Center);
         search_entry.add_css_class("transport-search");
         utility_group.append(&search_entry);
 
         let settings_btn = icons::button(icons::SETTINGS, "Settings");
         settings_btn.add_css_class("transport-btn");
         settings_btn.add_css_class("transport-icon-btn");
+        apply_transport_button_size(&settings_btn);
         utility_group.append(&settings_btn);
 
         hbox.append(&utility_group);
@@ -341,23 +410,31 @@ impl TransportBar {
             search_entry: search_entry.clone(),
             settings_btn: settings_btn.clone(),
             active_track: RefCell::new(None),
+            scrub_interaction: RefCell::new(ScrubInteraction::default()),
+            scrub_commit_timeout: RefCell::new(None),
+            scrub_timer_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
             state,
             sound_list_provider: Mutex::new(None),
             toast_sender: Mutex::new(None),
             on_library_changed: RefCell::new(None),
             on_list_style_changed: RefCell::new(None),
+            settings_dialog: RefCell::new(None),
         });
 
         let tb = Self { inner };
         tb.connect_signals();
 
         {
-            let inner_poll = Rc::clone(&tb.inner);
-            timeout_add_local(Duration::from_millis(150), move || {
+            let inner_weak = Rc::downgrade(&tb.inner);
+            let timer_id = timeout_add_local(Duration::from_millis(150), move || {
+                let Some(inner_poll) = inner_weak.upgrade() else {
+                    return glib::ControlFlow::Break;
+                };
                 inner_poll.update_scrub();
                 glib::ControlFlow::Continue
             });
+            *tb.inner.scrub_timer_id.borrow_mut() = Some(timer_id);
         }
 
         tb
@@ -377,7 +454,10 @@ impl TransportBar {
     }
 
     /// Store a closure that returns the currently filtered sound list.
-    pub fn set_sound_list_provider<F: Fn() -> Vec<Sound> + Send + Sync + 'static>(&self, f: F) {
+    pub fn set_sound_list_provider<F: Fn() -> Vec<NavigationSound> + Send + Sync + 'static>(
+        &self,
+        f: F,
+    ) {
         *self.inner.sound_list_provider.lock().unwrap() = Some(Box::new(f));
     }
 
@@ -388,15 +468,15 @@ impl TransportBar {
             let positions = commands::get_playback_positions(Arc::clone(&self.inner.state.player));
             let is_paused = positions
                 .iter()
-                .any(|position| position.sound_id == track.sound.id && position.paused);
+                .any(|position| position.sound_id == track.sound_id && position.paused);
             if is_paused {
                 commands::resume_sound(
-                    track.sound.id.clone(),
+                    track.sound_id.clone(),
                     Arc::clone(&self.inner.state.player),
                 );
                 update_play_pause_button(&self.inner.play_btn, true);
             } else {
-                commands::pause_sound(track.sound.id.clone(), Arc::clone(&self.inner.state.player));
+                commands::pause_sound(track.sound_id.clone(), Arc::clone(&self.inner.state.player));
                 update_play_pause_button(&self.inner.play_btn, false);
             }
         }
@@ -459,38 +539,66 @@ impl TransportBar {
         *self.inner.on_list_style_changed.borrow_mut() = Some(Rc::new(f));
     }
 
+    pub fn cleanup(&self) {
+        if let Some(timeout_id) = self.inner.scrub_commit_timeout.borrow_mut().take() {
+            timeout_id.remove();
+        }
+        if let Some(timer_id) = self.inner.scrub_timer_id.borrow_mut().take() {
+            timer_id.remove();
+        }
+        *self.inner.sound_list_provider.lock().unwrap() = None;
+        *self.inner.toast_sender.lock().unwrap() = None;
+        *self.inner.on_library_changed.borrow_mut() = None;
+        *self.inner.on_list_style_changed.borrow_mut() = None;
+    }
+
     fn connect_signals(&self) {
-        let inner = Rc::clone(&self.inner);
+        let inner_weak = Rc::downgrade(&self.inner);
 
         {
-            let state = Arc::clone(&inner.state);
-            inner.stop_btn.connect_clicked(move |_| {
-                commands::stop_all(Arc::clone(&state.player));
+            let inner_weak = inner_weak.clone();
+            self.inner.stop_btn.connect_clicked(move |_| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                commands::stop_all(Arc::clone(&inner.state.player));
             });
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let inner_toggle = Rc::clone(&inner);
-            inner.play_btn.connect_clicked(move |btn| {
+            let inner_weak = inner_weak.clone();
+            self.inner.play_btn.connect_clicked(move |btn| {
+                let Some(inner_toggle) = inner_weak.upgrade() else {
+                    return;
+                };
                 let should_resume = btn.is_active();
                 update_play_pause_button(btn, should_resume);
-                if let Some(track) = inner_toggle.active_track.borrow().as_ref() {
+                let active_track = inner_toggle.active_track.borrow().clone();
+                if let Some(track) = active_track.as_ref() {
                     if should_resume {
-                        commands::resume_sound(track.sound.id.clone(), Arc::clone(&state.player));
+                        commands::resume_sound(
+                            track.sound_id.clone(),
+                            Arc::clone(&inner_toggle.state.player),
+                        );
                     } else {
-                        commands::pause_sound(track.sound.id.clone(), Arc::clone(&state.player));
+                        commands::pause_sound(
+                            track.sound_id.clone(),
+                            Arc::clone(&inner_toggle.state.player),
+                        );
                     }
                 }
             });
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let local_adj = inner.local_vol.adjustment();
-            let local_label = inner.local_vol_label.clone();
-            let local_entry = inner.local_vol_entry.clone();
+            let inner_weak = inner_weak.clone();
+            let local_adj = self.inner.local_vol.adjustment();
+            let local_label = self.inner.local_vol_label.clone();
+            let local_entry = self.inner.local_vol_entry.clone();
             local_adj.connect_value_changed(move |adj| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let volume = adj.value().round().clamp(0.0, 100.0) as u8;
                 local_label.set_label(&format!("{volume}"));
                 if !gtk4::prelude::WidgetExt::is_visible(&local_entry) {
@@ -498,18 +606,21 @@ impl TransportBar {
                 }
                 let _ = commands::set_local_volume(
                     volume,
-                    Arc::clone(&state.config),
-                    Arc::clone(&state.player),
+                    Arc::clone(&inner.state.config),
+                    Arc::clone(&inner.state.player),
                 );
             });
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let mic_adj = inner.mic_vol.adjustment();
-            let mic_label = inner.mic_vol_label.clone();
-            let mic_entry = inner.mic_vol_entry.clone();
+            let inner_weak = inner_weak.clone();
+            let mic_adj = self.inner.mic_vol.adjustment();
+            let mic_label = self.inner.mic_vol_label.clone();
+            let mic_entry = self.inner.mic_vol_entry.clone();
             mic_adj.connect_value_changed(move |adj| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let volume = adj.value().round().clamp(0.0, 100.0) as u8;
                 mic_label.set_label(&format!("{volume}"));
                 if !gtk4::prelude::WidgetExt::is_visible(&mic_entry) {
@@ -517,29 +628,32 @@ impl TransportBar {
                 }
                 let _ = commands::set_mic_volume(
                     volume,
-                    Arc::clone(&state.config),
-                    Arc::clone(&state.player),
+                    Arc::clone(&inner.state.config),
+                    Arc::clone(&inner.state.player),
                 );
             });
         }
 
         install_volume_editor(
-            &inner.local_vol.adjustment(),
-            &inner.local_vol_label,
-            &inner.local_vol_entry,
+            &self.inner.local_vol.adjustment(),
+            &self.inner.local_vol_label,
+            &self.inner.local_vol_entry,
         );
         install_volume_editor(
-            &inner.mic_vol.adjustment(),
-            &inner.mic_vol_label,
-            &inner.mic_vol_entry,
+            &self.inner.mic_vol.adjustment(),
+            &self.inner.mic_vol_label,
+            &self.inner.mic_vol_entry,
         );
 
         {
-            let state = Arc::clone(&inner.state);
-            inner.headphones_btn.connect_toggled(move |btn| {
+            let inner_weak = inner_weak.clone();
+            self.inner.headphones_btn.connect_toggled(move |btn| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 match commands::toggle_local_mute(
-                    Arc::clone(&state.config),
-                    Arc::clone(&state.player),
+                    Arc::clone(&inner.state.config),
+                    Arc::clone(&inner.state.player),
                 ) {
                     Ok(muted) => {
                         if muted {
@@ -556,9 +670,12 @@ impl TransportBar {
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            inner.mic_btn.connect_toggled(move |btn| {
-                match commands::toggle_mic_passthrough(Arc::clone(&state.config)) {
+            let inner_weak = inner_weak.clone();
+            self.inner.mic_btn.connect_toggled(move |btn| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                match commands::toggle_mic_passthrough(Arc::clone(&inner.state.config)) {
                     Ok(enabled) => {
                         if enabled {
                             btn.add_css_class("btn-active");
@@ -574,30 +691,88 @@ impl TransportBar {
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let inner_seek = Rc::clone(&inner);
-            inner.scrub.connect_change_value(move |_, _, value| {
-                if let Some(track) = inner_seek.active_track.borrow().as_ref() {
-                    if let Some(duration_ms) = track.sound.duration_ms {
-                        let position_ms = (value * duration_ms as f64) as u64;
-                        let _ = commands::seek_sound(
-                            track.sound.id.clone(),
-                            position_ms,
-                            Arc::clone(&state.player),
-                        );
+            let inner_weak = inner_weak.clone();
+            self.inner
+                .scrub
+                .connect_change_value(move |_, scroll_type, value| {
+                    let Some(inner_seek) = inner_weak.upgrade() else {
+                        return glib::Propagation::Proceed;
+                    };
+                    // Only track preview during actual user interaction (not programmatic updates)
+                    if scroll_type == gtk4::ScrollType::Jump {
+                        // User is dragging the slider
+                        inner_seek.begin_scrub_interaction(ScrubInput::Pointer);
+
+                        if let Some(position_ms) = inner_seek.record_scrub_preview(value) {
+                            inner_seek
+                                .time_label
+                                .set_text(&format_duration(position_ms));
+                        }
+
+                        // Cancel any pending commit timeout
+                        if let Some(timeout_id) =
+                            inner_seek.scrub_commit_timeout.borrow_mut().take()
+                        {
+                            timeout_id.remove();
+                        }
+
+                        // Schedule a new commit timeout (fires 100ms after last drag movement)
+                        let inner_weak_commit = Rc::downgrade(&inner_seek);
+                        let timeout_id =
+                            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                                let Some(inner_commit) = inner_weak_commit.upgrade() else {
+                                    return;
+                                };
+                                inner_commit.commit_scrub_seek_on_release();
+                                *inner_commit.scrub_commit_timeout.borrow_mut() = None;
+                            });
+                        *inner_seek.scrub_commit_timeout.borrow_mut() = Some(timeout_id);
                     }
-                }
-                glib::Propagation::Proceed
-            });
+                    glib::Propagation::Proceed
+                });
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let inner_refresh = Rc::clone(&inner);
-            inner.refresh_btn.connect_clicked(move |btn| {
+            let inner_weak_pressed = inner_weak.clone();
+            let key = EventControllerKey::new();
+            key.connect_key_pressed(move |_, keyval, _, _| {
+                let Some(inner_key) = inner_weak_pressed.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                if keyval.name().as_deref() == Some("Escape") {
+                    inner_key.cancel_scrub_interaction();
+                    return glib::Propagation::Stop;
+                }
+
+                if is_seek_key(keyval) {
+                    inner_key.begin_scrub_interaction(ScrubInput::Keyboard);
+                }
+
+                glib::Propagation::Proceed
+            });
+
+            let inner_weak_release = inner_weak.clone();
+            key.connect_key_released(move |_, keyval, _, _| {
+                let Some(inner_key_release) = inner_weak_release.upgrade() else {
+                    return;
+                };
+                if is_seek_key(keyval) {
+                    inner_key_release.commit_scrub_seek_on_release();
+                }
+            });
+
+            self.inner.scrub.add_controller(key);
+        }
+
+        {
+            let inner_weak = inner_weak.clone();
+            self.inner.refresh_btn.connect_clicked(move |btn| {
+                let Some(inner_refresh) = inner_weak.upgrade() else {
+                    return;
+                };
                 btn.add_css_class("spinning");
-                let state_refresh = Arc::clone(&state);
-                let inner_refresh_done = Rc::clone(&inner_refresh);
+                let state_refresh = Arc::clone(&inner_refresh.state);
+                let inner_weak_done = Rc::downgrade(&inner_refresh);
                 let btn_done = btn.clone();
                 glib::MainContext::default().spawn_local(async move {
                     match commands::refresh_sounds(
@@ -605,13 +780,16 @@ impl TransportBar {
                         Arc::clone(&state_refresh.hotkeys),
                     ) {
                         Ok(_) => {
-                            if let Some(tx) = &*inner_refresh_done.toast_sender.lock().unwrap() {
-                                let _ = tx.send("Sounds refreshed".to_string());
-                            }
-                            if let Some(cb) =
-                                inner_refresh_done.on_library_changed.borrow().as_ref()
-                            {
-                                cb();
+                            if let Some(inner_refresh_done) = inner_weak_done.upgrade() {
+                                if let Some(tx) = &*inner_refresh_done.toast_sender.lock().unwrap()
+                                {
+                                    let _ = tx.send("Sounds refreshed".to_string());
+                                }
+                                if let Some(cb) =
+                                    inner_refresh_done.on_library_changed.borrow().as_ref()
+                                {
+                                    cb();
+                                }
                             }
                         }
                         Err(e) => log::warn!("Refresh failed: {e}"),
@@ -622,54 +800,87 @@ impl TransportBar {
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            let inner_settings = Rc::clone(&inner);
-            inner.settings_btn.connect_clicked(move |btn| {
+            let inner_weak = inner_weak.clone();
+            self.inner.settings_btn.connect_clicked(move |btn| {
+                let Some(inner_settings) = inner_weak.upgrade() else {
+                    return;
+                };
                 if let Some(win) = btn
                     .root()
                     .and_then(|root| root.downcast::<gtk4::Window>().ok())
                 {
-                    let on_library_changed =
-                        inner_settings.on_library_changed.borrow().as_ref().cloned();
-                    let on_list_style_changed = inner_settings
-                        .on_list_style_changed
+                    if let Some(existing_dialog) = inner_settings
+                        .settings_dialog
                         .borrow()
                         .as_ref()
-                        .cloned();
-                    crate::ui::settings::show_settings(
+                        .and_then(|dialog| dialog.upgrade())
+                    {
+                        existing_dialog.present(Some(&win));
+                        crate::diagnostics::memory::log_memory_snapshot("ui:settings:reused");
+                        crate::diagnostics::record_phase("ui:settings_reused", None);
+                        return;
+                    }
+
+                    let on_library_changed =
+                        weak_library_changed_callback(&inner_settings.on_library_changed);
+                    let on_list_style_changed =
+                        weak_list_style_changed_callback(&inner_settings.on_list_style_changed);
+                    let prefs = crate::ui::settings::build_settings_dialog(
                         &win,
-                        Arc::clone(&state),
+                        Arc::clone(&inner_settings.state),
                         on_library_changed,
                         on_list_style_changed,
                     );
+                    let prefs_weak = prefs.downgrade();
+                    *inner_settings.settings_dialog.borrow_mut() = Some(prefs_weak);
+                    let inner_close_weak = inner_weak.clone();
+                    prefs.connect_closed(move |_| {
+                        if let Some(inner_close) = inner_close_weak.upgrade() {
+                            inner_close.settings_dialog.borrow_mut().take();
+                        }
+                        crate::diagnostics::memory::log_memory_snapshot("ui:settings:closed");
+                        crate::diagnostics::record_phase("ui:settings_closed", None);
+                    });
+                    prefs.present(Some(&win));
+                    crate::diagnostics::memory::log_memory_snapshot("ui:settings:opened");
+                    crate::diagnostics::record_phase("ui:settings_opened", None);
                 }
             });
         }
 
         {
-            let state = Arc::clone(&inner.state);
-            inner.playmode_btn.connect_clicked(move |btn| {
-                let current_mode = state.config.lock().unwrap().settings.play_mode;
+            let inner_weak = inner_weak.clone();
+            self.inner.playmode_btn.connect_clicked(move |btn| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                let current_mode = inner.state.config.lock().unwrap().settings.play_mode;
                 let new_mode = current_mode.next();
                 let _ = commands::set_play_mode(
                     new_mode.as_str().to_string(),
-                    Arc::clone(&state.config),
-                    Arc::clone(&state.player),
+                    Arc::clone(&inner.state.config),
+                    Arc::clone(&inner.state.player),
                 );
                 update_play_mode_button(btn, new_mode);
             });
         }
 
         {
-            let inner_prev = Rc::clone(&inner);
-            inner.prev_btn.connect_clicked(move |_| {
+            let inner_weak = inner_weak.clone();
+            self.inner.prev_btn.connect_clicked(move |_| {
+                let Some(inner_prev) = inner_weak.upgrade() else {
+                    return;
+                };
                 inner_prev.play_adjacent_sound(-1);
             });
         }
 
         {
-            let inner_next = Rc::clone(&inner);
-            inner.next_btn.connect_clicked(move |_| {
+            let inner_weak = inner_weak.clone();
+            self.inner.next_btn.connect_clicked(move |_| {
+                let Some(inner_next) = inner_weak.upgrade() else {
+                    return;
+                };
                 inner_next.play_adjacent_sound(1);
             });
         }
@@ -677,6 +888,44 @@ impl TransportBar {
 }
 
 impl TransportInner {
+    fn begin_scrub_interaction(&self, input: ScrubInput) {
+        begin_scrub_interaction_state(&mut self.scrub_interaction.borrow_mut(), input);
+    }
+
+    fn record_scrub_preview(&self, value: f64) -> Option<u64> {
+        let duration_ms = self
+            .active_track
+            .borrow()
+            .as_ref()
+            .and_then(|track| track.sound_duration_ms);
+        record_scrub_preview_state(
+            &mut self.scrub_interaction.borrow_mut(),
+            duration_ms,
+            value,
+            Some(ScrubInput::Pointer),
+        )
+    }
+
+    fn commit_scrub_seek_on_release(&self) {
+        let track = self.active_track.borrow().as_ref().cloned();
+        let current_value = self.scrub.value();
+        let duration_ms = track.as_ref().and_then(|track| track.sound_duration_ms);
+        let position_ms = take_scrub_commit_position(
+            &mut self.scrub_interaction.borrow_mut(),
+            duration_ms,
+            current_value,
+        );
+
+        if let (Some(track), Some(position_ms)) = (track, position_ms) {
+            let _ =
+                commands::seek_sound(track.sound_id, position_ms, Arc::clone(&self.state.player));
+        }
+    }
+
+    fn cancel_scrub_interaction(&self) {
+        clear_scrub_interaction_state(&mut self.scrub_interaction.borrow_mut());
+    }
+
     fn has_navigation_sounds(&self) -> bool {
         let guard = self.sound_list_provider.lock().unwrap();
         match guard.as_ref() {
@@ -700,7 +949,7 @@ impl TransportInner {
             .active_track
             .borrow()
             .as_ref()
-            .map(|track| track.sound.id.clone())
+            .map(|track| track.sound_id.clone())
             .or_else(|| self.last_track_sound_id.borrow().clone());
 
         let current_idx = current_id
@@ -727,6 +976,7 @@ impl TransportInner {
         let positions = commands::get_playback_positions(Arc::clone(&self.state.player));
 
         if positions.is_empty() {
+            self.cancel_scrub_interaction();
             let should_continue = self.last_track_sound_id.borrow().is_some()
                 && self.state.config.lock().unwrap().settings.play_mode == PlayMode::Continue
                 && self.has_navigation_sounds();
@@ -757,25 +1007,32 @@ impl TransportInner {
             self.stop_btn.set_sensitive(true);
             self.play_btn.set_sensitive(true);
             update_play_pause_button(&self.play_btn, !position.paused);
+            let interaction = self.scrub_interaction.borrow().clone();
 
             if let Some(duration_ms) = position.duration_ms {
                 if duration_ms > 0 {
                     self.scrub.set_sensitive(true);
-                    self.scrub.set_value(
-                        (position.position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0),
-                    );
+                    if should_sync_scrub_from_playback(&interaction) {
+                        self.scrub.set_value(
+                            (position.position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0),
+                        );
+                    }
                 }
                 self.dur_label.set_text(&format_duration(duration_ms));
             }
             self.time_label
-                .set_text(&format_duration(position.position_ms));
+                .set_text(&format_duration(displayed_scrub_position_ms(
+                    &interaction,
+                    position.position_ms,
+                )));
 
             let cfg = self.state.config.lock().unwrap();
             if let Some(sound) = cfg.get_sound(&position.sound_id) {
                 self.track_name_label.set_label(&sound.name);
                 self.track_name_label.set_visible(true);
                 *self.active_track.borrow_mut() = Some(ActiveTrack {
-                    sound: sound.clone(),
+                    sound_id: sound.id.clone(),
+                    sound_duration_ms: sound.duration_ms,
                     play_id: position.play_id.clone(),
                 });
                 *self.last_track_sound_id.borrow_mut() = Some(sound.id.clone());
@@ -790,6 +1047,90 @@ impl TransportInner {
             }
         }
     }
+}
+
+fn scrub_position_ms(value: f64, duration_ms: u64) -> u64 {
+    value.clamp(0.0, 1.0).mul_add(duration_ms as f64, 0.0) as u64
+}
+
+fn begin_scrub_interaction_state(interaction: &mut ScrubInteraction, input: ScrubInput) {
+    if !interaction.active {
+        interaction.active = true;
+    }
+    interaction.input = Some(input);
+}
+
+fn record_scrub_preview_state(
+    interaction: &mut ScrubInteraction,
+    duration_ms: Option<u64>,
+    value: f64,
+    default_input: Option<ScrubInput>,
+) -> Option<u64> {
+    if !interaction.active {
+        begin_scrub_interaction_state(interaction, default_input?);
+    }
+
+    let position_ms = scrub_position_ms(value, duration_ms?);
+    interaction.preview_position_ms = Some(position_ms);
+    Some(position_ms)
+}
+
+fn take_scrub_commit_position(
+    interaction: &mut ScrubInteraction,
+    duration_ms: Option<u64>,
+    current_value: f64,
+) -> Option<u64> {
+    if !interaction.active {
+        return None;
+    }
+
+    let position_ms = interaction
+        .preview_position_ms
+        .or_else(|| duration_ms.map(|duration_ms| scrub_position_ms(current_value, duration_ms)));
+
+    interaction.active = false;
+    interaction.input = None;
+    interaction.preview_position_ms = None;
+
+    position_ms
+}
+
+fn clear_scrub_interaction_state(interaction: &mut ScrubInteraction) {
+    interaction.active = false;
+    interaction.input = None;
+    interaction.preview_position_ms = None;
+}
+
+fn displayed_scrub_position_ms(interaction: &ScrubInteraction, playback_position_ms: u64) -> u64 {
+    if interaction.active {
+        interaction
+            .preview_position_ms
+            .unwrap_or(playback_position_ms)
+    } else {
+        playback_position_ms
+    }
+}
+
+fn should_sync_scrub_from_playback(interaction: &ScrubInteraction) -> bool {
+    !interaction.active
+}
+
+fn is_seek_key(keyval: gdk::Key) -> bool {
+    matches!(
+        keyval,
+        gdk::Key::Left
+            | gdk::Key::Right
+            | gdk::Key::KP_Left
+            | gdk::Key::KP_Right
+            | gdk::Key::Page_Up
+            | gdk::Key::Page_Down
+            | gdk::Key::Home
+            | gdk::Key::End
+            | gdk::Key::KP_Page_Up
+            | gdk::Key::KP_Page_Down
+            | gdk::Key::KP_Home
+            | gdk::Key::KP_End
+    )
 }
 
 fn update_play_pause_button(button: &ToggleButton, is_playing: bool) {
@@ -897,5 +1238,192 @@ fn install_volume_editor(adjustment: &Adjustment, label: &Label, entry: &Entry) 
             finish_volume_edit(&label, &entry_for_cb, &adjustment, true);
         });
         entry.add_controller(focus);
+    }
+}
+
+impl Drop for TransportBar {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrub_position_uses_live_duration() {
+        assert_eq!(scrub_position_ms(0.5, 12_000), 6_000);
+    }
+
+    #[test]
+    fn begin_scrub_interaction_marks_pointer_active() {
+        let mut interaction = ScrubInteraction::default();
+
+        begin_scrub_interaction_state(&mut interaction, ScrubInput::Pointer);
+
+        assert_eq!(
+            interaction,
+            ScrubInteraction {
+                active: true,
+                input: Some(ScrubInput::Pointer),
+                preview_position_ms: None,
+            }
+        );
+    }
+
+    #[test]
+    fn record_scrub_preview_stores_preview_position() {
+        let mut interaction = ScrubInteraction::default();
+        begin_scrub_interaction_state(&mut interaction, ScrubInput::Pointer);
+
+        assert_eq!(
+            record_scrub_preview_state(
+                &mut interaction,
+                Some(12_000),
+                0.75,
+                Some(ScrubInput::Pointer)
+            ),
+            Some(9_000)
+        );
+        assert_eq!(interaction.preview_position_ms, Some(9_000));
+    }
+
+    #[test]
+    fn record_scrub_preview_starts_pointer_interaction_when_inactive() {
+        let mut interaction = ScrubInteraction::default();
+
+        assert_eq!(
+            record_scrub_preview_state(
+                &mut interaction,
+                Some(12_000),
+                0.75,
+                Some(ScrubInput::Pointer)
+            ),
+            Some(9_000)
+        );
+        assert_eq!(
+            interaction,
+            ScrubInteraction {
+                active: true,
+                input: Some(ScrubInput::Pointer),
+                preview_position_ms: Some(9_000),
+            }
+        );
+    }
+
+    #[test]
+    fn record_scrub_preview_requires_input_when_inactive() {
+        let mut interaction = ScrubInteraction::default();
+
+        assert_eq!(
+            record_scrub_preview_state(&mut interaction, Some(12_000), 0.75, None),
+            None
+        );
+        assert_eq!(interaction.preview_position_ms, None);
+    }
+
+    #[test]
+    fn commit_scrub_seek_returns_last_preview_and_clears_state() {
+        let mut interaction = ScrubInteraction::default();
+        begin_scrub_interaction_state(&mut interaction, ScrubInput::Pointer);
+        record_scrub_preview_state(
+            &mut interaction,
+            Some(12_000),
+            0.75,
+            Some(ScrubInput::Pointer),
+        );
+
+        assert_eq!(
+            take_scrub_commit_position(&mut interaction, Some(12_000), 0.25),
+            Some(9_000)
+        );
+        assert_eq!(interaction, ScrubInteraction::default());
+    }
+
+    #[test]
+    fn commit_scrub_seek_falls_back_to_current_value() {
+        let mut interaction = ScrubInteraction::default();
+        begin_scrub_interaction_state(&mut interaction, ScrubInput::Keyboard);
+
+        assert_eq!(
+            take_scrub_commit_position(&mut interaction, Some(12_000), 0.25),
+            Some(3_000)
+        );
+        assert_eq!(interaction, ScrubInteraction::default());
+    }
+
+    #[test]
+    fn second_commit_after_clear_returns_none() {
+        let mut interaction = ScrubInteraction::default();
+        begin_scrub_interaction_state(&mut interaction, ScrubInput::Pointer);
+        record_scrub_preview_state(
+            &mut interaction,
+            Some(10_000),
+            0.6,
+            Some(ScrubInput::Pointer),
+        );
+
+        assert_eq!(
+            take_scrub_commit_position(&mut interaction, Some(10_000), 0.1),
+            Some(6_000)
+        );
+        assert_eq!(
+            take_scrub_commit_position(&mut interaction, Some(10_000), 0.1),
+            None
+        );
+    }
+
+    #[test]
+    fn cancel_scrub_interaction_clears_state() {
+        let mut interaction = ScrubInteraction {
+            active: true,
+            input: Some(ScrubInput::Keyboard),
+            preview_position_ms: Some(4_000),
+        };
+
+        clear_scrub_interaction_state(&mut interaction);
+
+        assert_eq!(interaction, ScrubInteraction::default());
+    }
+
+    #[test]
+    fn active_interaction_uses_preview_position_and_blocks_backend_sync() {
+        let interaction = ScrubInteraction {
+            active: true,
+            input: Some(ScrubInput::Pointer),
+            preview_position_ms: Some(4_000),
+        };
+
+        assert_eq!(displayed_scrub_position_ms(&interaction, 2_000), 4_000);
+        assert!(!should_sync_scrub_from_playback(&interaction));
+    }
+
+    #[test]
+    fn inactive_interaction_uses_backend_position_and_allows_sync() {
+        let interaction = ScrubInteraction::default();
+
+        assert_eq!(displayed_scrub_position_ms(&interaction, 2_000), 2_000);
+        assert!(should_sync_scrub_from_playback(&interaction));
+    }
+
+    #[test]
+    fn is_seek_key_accepts_configured_navigation_keys() {
+        assert!(is_seek_key(gdk::Key::Left));
+        assert!(is_seek_key(gdk::Key::Right));
+        assert!(is_seek_key(gdk::Key::KP_Left));
+        assert!(is_seek_key(gdk::Key::KP_Right));
+        assert!(is_seek_key(gdk::Key::Page_Up));
+        assert!(is_seek_key(gdk::Key::Page_Down));
+        assert!(is_seek_key(gdk::Key::Home));
+        assert!(is_seek_key(gdk::Key::End));
+        assert!(!is_seek_key(gdk::Key::Escape));
+        assert!(!is_seek_key(gdk::Key::space));
+    }
+
+    #[test]
+    fn format_duration_formats_minutes_and_seconds() {
+        assert_eq!(format_duration(0), "0:00");
+        assert_eq!(format_duration(61_000), "1:01");
     }
 }

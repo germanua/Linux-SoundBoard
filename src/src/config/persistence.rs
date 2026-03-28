@@ -55,9 +55,20 @@ impl Config {
     }
 
     pub fn remove_sound(&mut self, id: &str) {
-        self.sounds.retain(|s| s.id != id);
+        self.remove_sounds(&[id.to_string()]);
+    }
+
+    pub fn remove_sounds(&mut self, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let remove_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        self.sounds
+            .retain(|sound| !remove_set.contains(sound.id.as_str()));
         for tab in &mut self.tabs {
-            tab.sound_ids.retain(|sound_id| sound_id != id);
+            tab.sound_ids
+                .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
         }
     }
 
@@ -100,6 +111,7 @@ impl Config {
             self.settings.auto_gain_target_lufs = default_auto_gain_target();
         }
         self.settings.auto_gain_target_lufs = self.settings.auto_gain_target_lufs.clamp(-24.0, 0.0);
+        self.settings.allow_multiple_playbacks = false;
     }
 
     pub fn create_tab(&mut self, name: String) -> SoundTab {

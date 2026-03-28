@@ -1,5 +1,7 @@
 //! Main application window — layout scaffold and hotkey dispatch.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -120,7 +122,7 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     // Connect sound list provider for prev/next/continue navigation
     {
         let sl_nav = sound_list.clone();
-        transport.set_sound_list_provider(move || sl_nav.get_filtered_sounds());
+        transport.set_sound_list_provider(move || sl_nav.get_navigation_sounds());
     }
 
     // Event-driven sidebar count refresh when library membership changes.
@@ -157,36 +159,42 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     toast_overlay.set_child(Some(&root_box));
 
     // Connect toast notifications via mpsc channel (ToastOverlay isn't Send)
-    {
+    let toast_timer_id = {
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
         let toast_tx_tabs = toast_tx.clone();
         transport.set_toast_sender(toast_tx);
         tabs.set_toast_sender(toast_tx_tabs);
         let toast_poll = toast_overlay.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            while let Ok(msg) = toast_rx.try_recv() {
-                show_toast(&toast_poll, &msg);
-            }
-            glib::ControlFlow::Continue
-        });
-    }
+        Rc::new(RefCell::new(Some(glib::timeout_add_local(
+            std::time::Duration::from_millis(100),
+            move || {
+                while let Ok(msg) = toast_rx.try_recv() {
+                    show_toast(&toast_poll, &msg);
+                }
+                glib::ControlFlow::Continue
+            },
+        ))))
+    };
 
     // ── 150ms poll: update sound list playing indicators ──────────
-    {
+    let playing_timer_id = {
         let sl_playing = sound_list.clone();
         let state_playing = Arc::clone(&state);
-        glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
-            let positions = commands::get_playback_positions(Arc::clone(&state_playing.player));
-            let active: Vec<&crate::audio::player::PlaybackPosition> =
-                positions.iter().filter(|p| !p.finished).collect();
-            let ids: std::collections::HashSet<String> =
-                active.iter().map(|p| p.sound_id.clone()).collect();
-            let active_id = active.first().map(|p| p.sound_id.clone());
-            sl_playing.set_playing_ids(ids);
-            sl_playing.set_active_sound_id(active_id);
-            glib::ControlFlow::Continue
-        });
-    }
+        Rc::new(RefCell::new(Some(glib::timeout_add_local(
+            std::time::Duration::from_millis(150),
+            move || {
+                let positions = commands::get_playback_positions(Arc::clone(&state_playing.player));
+                let active: Vec<&crate::audio::player::PlaybackPosition> =
+                    positions.iter().filter(|p| !p.finished).collect();
+                let ids: std::collections::HashSet<String> =
+                    active.iter().map(|p| p.sound_id.clone()).collect();
+                let active_id = active.first().map(|p| p.sound_id.clone());
+                sl_playing.set_playing_ids(ids);
+                sl_playing.set_active_sound_id(active_id);
+                glib::ControlFlow::Continue
+            },
+        ))))
+    };
 
     // set_content requires AdwApplicationWindow; use gtk4::Window::set_child instead
     // (set after drop overlay is created below)
@@ -361,40 +369,50 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     window.add_controller(drop_target_text);
     window.set_child(Some(&drop_overlay));
 
-    // ── Startup: validate sound sources ──────────────────────────
-    {
-        let state_validate = Arc::clone(&state);
-        let sl_validate = sound_list.clone();
-        glib::idle_add_local_once(move || {
-            crate::diagnostics::memory::log_memory_snapshot("startup:validate_sources:begin");
-            match commands::validate_all_sources(Arc::clone(&state_validate.config)) {
-                Ok(invalid_ids) => {
-                    if !invalid_ids.is_empty() {
-                        log::info!("{} sounds have missing source files", invalid_ids.len());
-                        sl_validate.set_invalid_ids(invalid_ids.into_iter().collect());
-                    }
-                }
-                Err(e) => log::warn!("Source validation failed: {e}"),
-            }
-            crate::diagnostics::memory::log_memory_snapshot("startup:validate_sources:end");
-        });
-    }
+    // ── Window close handler: cancel timers to prevent leaks ──────────
+    let transport_cleanup = transport.clone();
+    let tabs_cleanup = tabs.clone();
+    let sound_list_cleanup = sound_list.clone();
+    let toast_timer_close = Rc::clone(&toast_timer_id);
+    let playing_timer_close = Rc::clone(&playing_timer_id);
+    window.connect_close_request(move |_| {
+        transport_cleanup.cleanup();
+        tabs_cleanup.cleanup();
+        sound_list_cleanup.cleanup();
+        if let Some(source_id) = toast_timer_close.borrow_mut().take() {
+            source_id.remove();
+        }
+        if let Some(source_id) = playing_timer_close.borrow_mut().take() {
+            source_id.remove();
+        }
+        glib::Propagation::Proceed
+    });
 
-    // ── Startup: background loudness analysis if auto-gain enabled ───
+    // ── Startup: record loudness state without starting backfill ─────
     {
         let state_loudness = Arc::clone(&state);
         glib::idle_add_local_once(move || {
-            let should_analyze = {
-                let cfg = state_loudness.config.lock().unwrap();
-                cfg.settings.auto_gain && cfg.sounds.iter().any(|s| s.loudness_lufs.is_none())
-            };
-            if should_analyze {
-                crate::diagnostics::memory::log_memory_snapshot("startup:loudness_bg:spawn");
-                let cfg_clone = Arc::clone(&state_loudness.config);
-                std::thread::spawn(move || match commands::analyze_all_loudness(cfg_clone) {
-                    Ok(count) => log::info!("Analyzed loudness for {count} sounds"),
-                    Err(e) => log::warn!("Loudness analysis failed: {e}"),
-                });
+            crate::diagnostics::memory::log_memory_snapshot("startup:loudness_bg:check");
+            let phase_recorded = state_loudness
+                .config
+                .lock()
+                .map(|cfg| {
+                    let missing_count = cfg
+                        .sounds
+                        .iter()
+                        .filter(|sound| sound.loudness_lufs.is_none())
+                        .count();
+                    if cfg.settings.auto_gain && missing_count > 0 {
+                        log::info!(
+                            "Skipping automatic startup loudness backfill for {} sounds to keep initial idle memory stable",
+                            missing_count
+                        );
+                    }
+                    crate::diagnostics::record_phase_with_config("startup:loudness_check", &cfg);
+                })
+                .is_ok();
+            if !phase_recorded {
+                crate::diagnostics::record_phase("startup:loudness_check", None);
             }
         });
     }

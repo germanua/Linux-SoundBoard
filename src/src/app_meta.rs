@@ -14,6 +14,7 @@ pub const FALLBACK_IMPORT_DIR: &str = "./sounds";
 pub const GENERAL_TAB_ID: &str = "general";
 
 pub const BACKEND_ENV_VAR: &str = "GDK_BACKEND";
+pub const WAYLAND_BACKEND: &str = "wayland";
 pub const X11_BACKEND: &str = "x11";
 pub const STARTUP_VIRTUAL_MIC_DELAY_MS: u64 = 200;
 pub const HOTKEY_POLL_INTERVAL_MS: u64 = 50;

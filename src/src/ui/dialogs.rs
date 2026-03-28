@@ -10,7 +10,9 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use log::debug;
 
-use crate::hotkeys::{normalize_capture_key, HotkeyModifier, HotkeySpec};
+use crate::hotkeys::{
+    format_hotkey_error, normalize_capture_key, HotkeyCode, HotkeyModifier, HotkeySpec,
+};
 
 fn push_capture_candidate(candidates: &mut Vec<String>, candidate: &str) {
     if candidate.is_empty() || candidates.iter().any(|existing| existing == candidate) {
@@ -19,71 +21,83 @@ fn push_capture_candidate(candidates: &mut Vec<String>, candidate: &str) {
     candidates.push(candidate.to_string());
 }
 
-fn resolve_capture_key(key_name: &str, keycode: u32) -> Option<crate::hotkeys::HotkeyCode> {
-    let Some(display) = gtk4::gdk::Display::default() else {
-        return normalize_capture_key(key_name, keycode);
-    };
-
-    let mut preferred_candidates = Vec::new();
-    let mut fallback_candidates = Vec::new();
-
-    if let Some(mapped_keys) = display.map_keycode(keycode) {
-        for (_, mapped_keyval) in mapped_keys {
-            if let Some(mapped_name) = mapped_keyval.name() {
-                let mapped_name = mapped_name.to_string();
-                if mapped_name.starts_with("KP_") {
-                    push_capture_candidate(&mut preferred_candidates, &mapped_name);
-                } else {
-                    push_capture_candidate(&mut fallback_candidates, &mapped_name);
-                }
-            }
+fn resolve_capture_key_candidates<'a, I>(
+    key_name: &str,
+    keycode: u32,
+    mapped_key_names: I,
+) -> Option<crate::hotkeys::HotkeyCode>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    for candidate in mapped_key_names {
+        if !candidate.starts_with("KP_") {
+            continue;
         }
-    }
 
-    if key_name.starts_with("KP_") {
-        push_capture_candidate(&mut preferred_candidates, key_name);
-    } else {
-        push_capture_candidate(&mut fallback_candidates, key_name);
-    }
-
-    preferred_candidates.extend(fallback_candidates);
-
-    for candidate in &preferred_candidates {
         if let Some(code) = normalize_capture_key(candidate, keycode) {
-            debug!(
-                "Captured key '{}' (hardware code {}, backend {:?}) -> '{}' via candidate '{}'",
-                key_name,
-                keycode,
-                display.backend(),
-                code.token(),
-                candidate
-            );
             return Some(code);
         }
     }
 
-    if display.backend().is_x11() {
-        let fallback = normalize_capture_key(key_name, keycode);
-        if let Some(code) = fallback {
+    normalize_capture_key(key_name, keycode)
+}
+
+fn resolve_capture_key(key_name: &str, keycode: u32) -> Option<crate::hotkeys::HotkeyCode> {
+    let mut keypad_candidates = Vec::new();
+
+    if let Some(display) = gtk4::gdk::Display::default() {
+        if let Some(mapped_keys) = display.map_keycode(keycode) {
+            for (_, mapped_keyval) in mapped_keys {
+                if let Some(mapped_name) = mapped_keyval.name() {
+                    let mapped_name = mapped_name.to_string();
+                    if mapped_name.starts_with("KP_") {
+                        push_capture_candidate(&mut keypad_candidates, &mapped_name);
+                    }
+                }
+            }
+        }
+
+        let resolved = resolve_capture_key_candidates(
+            key_name,
+            keycode,
+            keypad_candidates.iter().map(String::as_str),
+        );
+
+        if let Some(code) = resolved {
             debug!(
-                "Captured key '{}' (hardware code {}, backend {:?}) -> '{}' via X11 fallback",
+                "Captured key '{}' (hardware code {}, backend {:?}) -> '{}'",
                 key_name,
                 keycode,
                 display.backend(),
                 code.token()
             );
+        } else {
+            debug!(
+                "Unable to resolve captured key '{}' (hardware code {}, backend {:?}); keypad candidates: {:?}",
+                key_name,
+                keycode,
+                display.backend(),
+                keypad_candidates
+            );
         }
-        return fallback;
+
+        return resolved;
     }
 
-    debug!(
-        "Unable to resolve captured key '{}' (hardware code {}, backend {:?}); candidates: {:?}",
-        key_name,
-        keycode,
-        display.backend(),
-        preferred_candidates
-    );
-    None
+    resolve_capture_key_candidates(key_name, keycode, std::iter::empty())
+}
+
+fn build_captured_combo<F>(
+    key_token: HotkeyCode,
+    modifiers: Vec<HotkeyModifier>,
+    validate_hotkey: &F,
+) -> Result<String, String>
+where
+    F: Fn(&str) -> Result<(), String>,
+{
+    let combo = HotkeySpec::new(modifiers, key_token).canonical_string();
+    validate_hotkey(&combo)?;
+    Ok(combo)
 }
 
 /// Show a simple error message dialog.
@@ -226,8 +240,13 @@ pub fn show_path_info(parent: &Window, sound_name: &str, path: &str) {
 /// The dialog presents a capture zone that listens for key presses and displays
 /// the captured combination. `on_confirm` receives `Some(combo)` on save or
 /// `None` when the user clears the hotkey.
-pub fn show_hotkey_capture<F>(parent: &Window, current_hotkey: Option<&str>, on_confirm: F)
-where
+pub fn show_hotkey_capture<F, V>(
+    parent: &Window,
+    current_hotkey: Option<&str>,
+    validate_hotkey: V,
+    on_confirm: F,
+) where
+    V: Fn(&str) -> Result<(), String> + 'static,
     F: Fn(Option<String>) + 'static,
 {
     let dialog = adw::AlertDialog::new(Some("Set Hotkey"), None);
@@ -251,6 +270,7 @@ where
     let status_label = Label::builder()
         .label("Click here, then press keys…")
         .css_classes(vec!["hotkey-recording"])
+        .wrap(true)
         .build();
     capture_box.append(&status_label);
 
@@ -307,7 +327,7 @@ where
 
         let Some(key_token) = resolve_capture_key(&key_name, keycode) else {
             status_for_key
-                .set_text("Unsupported key. Use A-Z, 0-9, F-keys, arrows, or numpad keys.");
+                .set_text("Unsupported key. Use standard keys, symbols, function keys, arrows, or numpad keys.");
             return glib::Propagation::Stop;
         };
 
@@ -325,7 +345,13 @@ where
             modifiers.push(HotkeyModifier::Super);
         }
 
-        let combo = HotkeySpec::new(modifiers, key_token).canonical_string();
+        let combo = match build_captured_combo(key_token, modifiers, &validate_hotkey) {
+            Ok(combo) => combo,
+            Err(err) => {
+                status_for_key.set_text(&format_hotkey_error(&err));
+                return glib::Propagation::Stop;
+            }
+        };
         preview_for_key.set_text(&combo);
         status_for_key.set_text("Captured! Press Save or try again.");
         *captured_for_key.borrow_mut() = Some(combo);
@@ -351,4 +377,62 @@ where
     });
 
     dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_captured_combo, resolve_capture_key_candidates};
+    use crate::hotkeys::{format_hotkey_error, HotkeyCode, HotkeyModifier};
+
+    #[test]
+    fn capture_prefers_actual_symbol_key_over_unrelated_mapped_name() {
+        let resolved = resolve_capture_key_candidates("/", 0, ["BackSpace", "slash"]).unwrap();
+        assert_eq!(resolved.token(), "Slash");
+    }
+
+    #[test]
+    fn capture_uses_keypad_mapped_names_when_needed() {
+        assert_eq!(
+            resolve_capture_key_candidates("plus", 0, ["KP_Add"])
+                .unwrap()
+                .token(),
+            "NumpadAdd"
+        );
+        assert_eq!(
+            resolve_capture_key_candidates("slash", 0, ["KP_Divide"])
+                .unwrap()
+                .token(),
+            "NumpadDivide"
+        );
+    }
+
+    #[test]
+    fn capture_rejects_combo_when_validator_fails() {
+        let err = build_captured_combo(
+            HotkeyCode::from_token("NumpadDivide").unwrap(),
+            vec![HotkeyModifier::Ctrl],
+            &|hotkey| {
+                Err(format!(
+                    "UNSUPPORTED_KEY_FOR_BACKEND:swhkd:{hotkey} cannot be represented by swhkd."
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            format_hotkey_error(&err),
+            "This shortcut is not supported by the active hotkey backend. Ctrl+NumpadDivide cannot be represented by swhkd."
+        );
+    }
+
+    #[test]
+    fn capture_accepts_combo_when_validator_passes() {
+        let combo = build_captured_combo(
+            HotkeyCode::from_token("Slash").unwrap(),
+            vec![HotkeyModifier::Ctrl],
+            &|_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(combo, "Ctrl+Slash");
+    }
 }

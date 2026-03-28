@@ -3,6 +3,39 @@ use std::sync::{Arc, Mutex};
 use crate::config::{Config, ControlHotkeyAction};
 use crate::hotkeys::HotkeyManager;
 
+/// Helper to acquire config lock with poison handling
+fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&Config) -> R,
+{
+    config
+        .lock()
+        .map(|guard| f(&guard))
+        .map_err(|e| format!("Config lock poisoned: {}", e))
+}
+
+/// Helper to acquire config mut lock with poison handling
+fn with_config_mut<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut Config) -> R,
+{
+    config
+        .lock()
+        .map(|mut guard| f(&mut guard))
+        .map_err(|e| format!("Config lock poisoned: {}", e))
+}
+
+/// Helper to acquire hotkeys lock with poison handling
+fn with_hotkeys<F, R>(hotkeys: &Arc<Mutex<HotkeyManager>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut HotkeyManager) -> R,
+{
+    hotkeys
+        .lock()
+        .map(|mut guard| f(&mut guard))
+        .map_err(|e| format!("Hotkeys lock poisoned: {}", e))
+}
+
 pub fn set_hotkey(
     id: String,
     hotkey: Option<String>,
@@ -13,20 +46,25 @@ pub fn set_hotkey(
         Some(hk) => Some(crate::hotkeys::canonicalize_hotkey_string(&hk)?),
         None => None,
     };
-    let previous_hotkey = {
-        let config = config.lock().unwrap();
-        config.get_sound(&id).and_then(|s| s.hotkey.clone())
-    };
+
+    let previous_hotkey = with_config(&config, |cfg| {
+        cfg.get_sound(&id).and_then(|s| s.hotkey.clone())
+    })?;
+
     {
-        let manager = hotkeys.lock().unwrap();
-        if let Some(hk) = canonical_new.as_ref() {
-            manager.register_hotkey_blocking(&id, hk)?;
-        } else {
-            manager.unregister_hotkey_blocking(&id)?;
-        }
+        with_hotkeys(&hotkeys, |manager| {
+            if let Some(hk) = canonical_new.as_ref() {
+                manager.register_hotkey_blocking(&id, hk)
+            } else {
+                manager.unregister_hotkey_blocking(&id)
+            }
+        })??;
     }
-    let save_result = {
-        let mut cfg = config.lock().unwrap();
+    if let Ok(status) = hotkeys.lock().map(|manager| manager.status_message()) {
+        crate::diagnostics::set_hotkey_status(&status);
+    }
+
+    let save_result = with_config_mut(&config, |cfg| {
         cfg.set_hotkey(&id, canonical_new.clone());
         if let Err(e) = cfg.save() {
             cfg.set_hotkey(&id, previous_hotkey.clone());
@@ -34,17 +72,13 @@ pub fn set_hotkey(
         } else {
             Ok(())
         }
-    };
+    })?;
+
     if let Err(e) = save_result {
-        let manager = hotkeys.lock().unwrap();
-        match previous_hotkey {
-            Some(prev) => {
-                let _ = manager.register_hotkey_blocking(&id, &prev);
-            }
-            None => {
-                let _ = manager.unregister_hotkey_blocking(&id);
-            }
-        }
+        let _ = with_hotkeys(&hotkeys, |manager| match previous_hotkey {
+            Some(prev) => manager.register_hotkey_blocking(&id, &prev),
+            None => manager.unregister_hotkey_blocking(&id),
+        });
         return Err(e);
     }
     Ok(())
@@ -64,22 +98,24 @@ pub fn set_control_hotkey(
         None => None,
     };
 
-    let previous_hotkey = {
-        let cfg = config.lock().unwrap();
+    let previous_hotkey = with_config(&config, |cfg| {
         cfg.settings.control_hotkeys.get_cloned(action)
-    };
+    })?;
 
     {
-        let manager = hotkeys.lock().unwrap();
-        if let Some(hk) = canonical_new.as_ref() {
-            manager.register_hotkey_blocking(binding_id, hk)?;
-        } else {
-            manager.unregister_hotkey_blocking(binding_id)?;
-        }
+        with_hotkeys(&hotkeys, |manager| {
+            if let Some(hk) = canonical_new.as_ref() {
+                manager.register_hotkey_blocking(binding_id, hk)
+            } else {
+                manager.unregister_hotkey_blocking(binding_id)
+            }
+        })??;
+    }
+    if let Ok(status) = hotkeys.lock().map(|manager| manager.status_message()) {
+        crate::diagnostics::set_hotkey_status(&status);
     }
 
-    let save_result = {
-        let mut cfg = config.lock().unwrap();
+    let save_result = with_config_mut(&config, |cfg| {
         cfg.settings
             .control_hotkeys
             .set_action(action, canonical_new.clone());
@@ -91,18 +127,13 @@ pub fn set_control_hotkey(
         } else {
             Ok(())
         }
-    };
+    })?;
 
     if let Err(e) = save_result {
-        let manager = hotkeys.lock().unwrap();
-        match previous_hotkey {
-            Some(prev) => {
-                let _ = manager.register_hotkey_blocking(binding_id, &prev);
-            }
-            None => {
-                let _ = manager.unregister_hotkey_blocking(binding_id);
-            }
-        }
+        let _ = with_hotkeys(&hotkeys, |manager| match previous_hotkey {
+            Some(prev) => manager.register_hotkey_blocking(binding_id, &prev),
+            None => manager.unregister_hotkey_blocking(binding_id),
+        });
         return Err(e);
     }
     Ok(())

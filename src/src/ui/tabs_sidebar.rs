@@ -128,8 +128,11 @@ impl TabsSidebar {
         });
 
         {
-            let inner_sel = Arc::clone(&inner);
+            let inner_weak = Arc::downgrade(&inner);
             list_box.connect_row_selected(move |_, row| {
+                let Some(inner_sel) = inner_weak.upgrade() else {
+                    return;
+                };
                 if let Some(row) = row {
                     let id = row.widget_name().to_string();
                     *inner_sel.active_tab_id.lock().unwrap() = id.clone();
@@ -141,8 +144,11 @@ impl TabsSidebar {
         }
 
         {
-            let inner_btn = Arc::clone(&inner);
+            let inner_weak = Arc::downgrade(&inner);
             new_tab_btn.connect_clicked(move |btn| {
+                let Some(inner_btn) = inner_weak.upgrade() else {
+                    return;
+                };
                 inner_btn.show_new_tab_dialog(btn);
             });
         }
@@ -184,6 +190,12 @@ impl TabsSidebar {
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
         *self.inner.toast_sender.lock().unwrap() = Some(sender);
     }
+
+    pub fn cleanup(&self) {
+        *self.inner.on_tab_selected.borrow_mut() = None;
+        *self.inner.on_tab_membership_changed.borrow_mut() = None;
+        *self.inner.toast_sender.lock().unwrap() = None;
+    }
 }
 
 impl TabsInner {
@@ -195,19 +207,24 @@ impl TabsInner {
             return;
         };
 
-        let inner = Arc::clone(self);
+        let inner_weak = Arc::downgrade(self);
         dialogs::show_input(
             &win,
             "New Tab",
             "Enter a name for the new tab:",
             "",
             "Create",
-            move |name| match commands::create_tab(name, Arc::clone(&inner.state.config)) {
-                Ok(tab) => {
-                    *inner.active_tab_id.lock().unwrap() = tab.id.clone();
-                    inner.reload_tabs_and_emit(Some(&tab.id));
+            move |name| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                match commands::create_tab(name, Arc::clone(&inner.state.config)) {
+                    Ok(tab) => {
+                        *inner.active_tab_id.lock().unwrap() = tab.id.clone();
+                        inner.reload_tabs_and_emit(Some(&tab.id));
+                    }
+                    Err(e) => log::warn!("Failed to create tab: {e}"),
                 }
-                Err(e) => log::warn!("Failed to create tab: {e}"),
             },
         );
     }
@@ -467,10 +484,13 @@ impl TabsInner {
         });
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             let list_box = list_box.clone();
             let hovered_row = Rc::clone(&hovered_row);
             drop_target.connect_drag_enter(move |_, drop, _, y| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return gtk4::gdk::DragAction::empty();
+                };
                 let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
                 let action = inner.action_for_hovered_row(hovered.as_ref());
                 let hovered_id = hovered
@@ -489,10 +509,13 @@ impl TabsInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             let list_box = list_box.clone();
             let hovered_row = Rc::clone(&hovered_row);
             drop_target.connect_drag_motion(move |_, drop, _, y| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return gtk4::gdk::DragAction::empty();
+                };
                 let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
                 let action = inner.action_for_hovered_row(hovered.as_ref());
                 let hovered_id = hovered
@@ -518,10 +541,11 @@ impl TabsInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             let list_box = list_box.clone();
             let hovered_row = Rc::clone(&hovered_row);
             drop_target.connect_drop(move |_, drop, _, y| {
+                let Some(inner) = inner_weak.upgrade() else { return false };
                 let hovered = Self::update_hovered_drop_row(&list_box, &hovered_row, y);
                 Self::clear_hovered_drop_row(&hovered_row);
 
@@ -538,77 +562,83 @@ impl TabsInner {
 
                 let drop_for_read = drop.clone();
                 let drop_for_finish = drop.clone();
-                let inner = Arc::clone(&inner);
+                let inner_weak_async = Arc::downgrade(&inner);
                 let target_tab_id_for_read = target_tab_id.clone();
                 drop_for_read.read_value_async(
                     glib::Bytes::static_type(),
                     glib::Priority::DEFAULT,
                     None::<&gio::Cancellable>,
-                    move |result| match result {
-                        Ok(value) => {
-                            let Ok(bytes) = value.get::<glib::Bytes>() else {
-                                log::warn!("Tab drop failed: could not extract bytes from drop");
-                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                return;
-                            };
-
-                            let Some(payload) = tab_dnd::decode_drag_payload(&bytes) else {
-                                log::warn!("Tab drop failed: could not decode payload");
-                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                return;
-                            };
-
-                            let intent = resolve_sidebar_drop_intent(
-                                &payload.source_tab_id,
-                                &target_tab_id_for_read,
-                            );
-                            if intent == SidebarDropIntent::Noop {
-                                log::info!(
-                                    "Tab drop ignored as no-op (source={}, target={})",
-                                    payload.source_tab_id,
-                                    target_tab_id_for_read
-                                );
-                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                return;
-                            }
-
-                            match commands::apply_sound_tab_drop(
-                                payload.source_tab_id.clone(),
-                                target_tab_id_for_read.clone(),
-                                payload.sound_ids.clone(),
-                                Arc::clone(&inner.state.config),
-                            ) {
-                                Ok(changed) => {
-                                    if !changed {
-                                        log::info!(
-                                            "Tab drop produced no membership changes (source={}, target={}, sounds={})",
-                                            payload.source_tab_id,
-                                            target_tab_id_for_read,
-                                            payload.sound_ids.len()
-                                        );
-                                        drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                        return;
-                                    }
-
-                                    inner.reload_tabs_and_emit(None);
-                                    inner.emit_tab_membership_changed();
-                                    inner.send_drop_toast(
-                                        intent,
-                                        &payload.source_tab_id,
-                                        &target_tab_id_for_read,
-                                        payload.sound_ids.len(),
-                                    );
-                                    drop_for_finish.finish(drag_action_for_intent(intent));
-                                }
-                                Err(e) => {
-                                    log::warn!("Tab drop failed: {e}");
-                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Tab drop failed while reading payload: {e}");
+                    move |result| {
+                        let Some(inner) = inner_weak_async.upgrade() else {
                             drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                            return;
+                        };
+                        match result {
+                            Ok(value) => {
+                                let Ok(bytes) = value.get::<glib::Bytes>() else {
+                                    log::warn!("Tab drop failed: could not extract bytes from drop");
+                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                    return;
+                                };
+
+                                let Some(payload) = tab_dnd::decode_drag_payload(&bytes) else {
+                                    log::warn!("Tab drop failed: could not decode payload");
+                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                    return;
+                                };
+
+                                let intent = resolve_sidebar_drop_intent(
+                                    &payload.source_tab_id,
+                                    &target_tab_id_for_read,
+                                );
+                                if intent == SidebarDropIntent::Noop {
+                                    log::info!(
+                                        "Tab drop ignored as no-op (source={}, target={})",
+                                        payload.source_tab_id,
+                                        target_tab_id_for_read
+                                    );
+                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                    return;
+                                }
+
+                                match commands::apply_sound_tab_drop(
+                                    payload.source_tab_id.clone(),
+                                    target_tab_id_for_read.clone(),
+                                    payload.sound_ids.clone(),
+                                    Arc::clone(&inner.state.config),
+                                ) {
+                                    Ok(changed) => {
+                                        if !changed {
+                                            log::info!(
+                                                "Tab drop produced no membership changes (source={}, target={}, sounds={})",
+                                                payload.source_tab_id,
+                                                target_tab_id_for_read,
+                                                payload.sound_ids.len()
+                                            );
+                                            drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                            return;
+                                        }
+
+                                        inner.reload_tabs_and_emit(None);
+                                        inner.emit_tab_membership_changed();
+                                        inner.send_drop_toast(
+                                            intent,
+                                            &payload.source_tab_id,
+                                            &target_tab_id_for_read,
+                                            payload.sound_ids.len(),
+                                        );
+                                        drop_for_finish.finish(drag_action_for_intent(intent));
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Tab drop failed: {e}");
+                                        drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("Tab drop failed while reading payload: {e}");
+                                drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                            }
                         }
                     },
                 );
@@ -648,13 +678,16 @@ impl TabsInner {
         let action_group = gio::SimpleActionGroup::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             let win = win.clone();
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
             let action = gio::SimpleAction::new("rename", None);
             action.connect_activate(move |_, _| {
-                let inner_confirm = Arc::clone(&inner);
+                let Some(inner_menu) = inner_weak.upgrade() else {
+                    return;
+                };
+                let inner_confirm_weak = Arc::downgrade(&inner_menu);
                 let tab_id = tab_id.clone();
                 dialogs::show_input(
                     &win,
@@ -662,13 +695,18 @@ impl TabsInner {
                     "Enter a new name:",
                     &tab_name,
                     "Rename",
-                    move |new_name| match commands::rename_tab(
-                        tab_id.clone(),
-                        new_name,
-                        Arc::clone(&inner_confirm.state.config),
-                    ) {
-                        Ok(_) => inner_confirm.reload_tabs_and_emit(Some(&tab_id)),
-                        Err(e) => log::warn!("Rename tab failed: {e}"),
+                    move |new_name| {
+                        let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
+                            return;
+                        };
+                        match commands::rename_tab(
+                            tab_id.clone(),
+                            new_name,
+                            Arc::clone(&inner_confirm.state.config),
+                        ) {
+                            Ok(_) => inner_confirm.reload_tabs_and_emit(Some(&tab_id)),
+                            Err(e) => log::warn!("Rename tab failed: {e}"),
+                        }
                     },
                 );
             });
@@ -676,16 +714,22 @@ impl TabsInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             let win = win.clone();
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
             let action = gio::SimpleAction::new("delete", None);
             action.connect_activate(move |_, _| {
-                let inner_confirm = Arc::clone(&inner);
+                let Some(inner_menu) = inner_weak.upgrade() else {
+                    return;
+                };
+                let inner_confirm_weak = Arc::downgrade(&inner_menu);
                 let tab_id = tab_id.clone();
                 let message = format!("Delete tab '{tab_name}'? Sounds will not be removed.");
                 dialogs::show_confirm(&win, "Delete Tab", &message, "Delete", move || {
+                    let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
+                        return;
+                    };
                     match commands::delete_tab(
                         tab_id.clone(),
                         Arc::clone(&inner_confirm.state.config),

@@ -36,9 +36,9 @@ parking_lot = "0.12"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
-futures-util = "0.3"
+nix = { version = "0.29", features = ["signal", "process", "user", "fs"] }
+which = "6"
+chrono = "0.4"
 x11 = { version = "2.21", features = ["xlib", "xinput"] }
 
 # PipeWire bindings (optional, may need system libpipewire-dev)

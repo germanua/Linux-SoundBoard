@@ -528,7 +528,7 @@ impl Default for Settings {
             local_volume: 80,
             local_mute: false,
             mic_volume: 100,
-            allow_multiple_playbacks: true,
+            allow_multiple_playbacks: false,
             mic_passthrough: true,
             mic_source: None,
             skip_delete_confirm: false,
@@ -553,4 +553,14 @@ pub struct Config {
     #[serde(default)]
     pub tabs: Vec<SoundTab>,
     pub settings: Settings,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn settings_default_disables_multiple_playbacks() {
+        assert!(!Settings::default().allow_multiple_playbacks);
+    }
 }

@@ -22,12 +22,24 @@ impl HotkeyModifier {
 
     pub fn from_token(token: &str) -> Option<Self> {
         match token {
-            "Ctrl" | "Control" => Some(Self::Ctrl),
-            "Alt" => Some(Self::Alt),
-            "Shift" => Some(Self::Shift),
-            "Super" | "Win" | "Meta" => Some(Self::Super),
-            "AltGr" | "AltGraph" => Some(Self::AltGr),
+            "Ctrl" | "Control" | "ctrl" | "control" => Some(Self::Ctrl),
+            "Alt" | "alt" | "Mod1" | "mod1" => Some(Self::Alt),
+            "Shift" | "shift" => Some(Self::Shift),
+            "Super" | "Win" | "Meta" | "super" | "win" | "meta" | "Mod4" | "mod4" => {
+                Some(Self::Super)
+            }
+            "AltGr" | "AltGraph" | "altgr" | "altgraph" | "Mod5" | "mod5" => Some(Self::AltGr),
             _ => None,
+        }
+    }
+
+    pub(crate) fn swhkd_token(self) -> &'static str {
+        match self {
+            Self::Ctrl => "ctrl",
+            Self::Alt => "alt",
+            Self::Shift => "shift",
+            Self::Super => "super",
+            Self::AltGr => "altgr",
         }
     }
 
@@ -82,6 +94,81 @@ impl HotkeyCode {
         let canonical = canonicalize_key_token(raw);
         Self::from_token(&canonical).ok_or_else(|| format!("Unsupported key: {raw}"))
     }
+
+    pub(crate) fn swhkd_token(self) -> Option<String> {
+        let token = self.token();
+
+        if let Some(letter) = token.strip_prefix("Key") {
+            return match letter {
+                "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
+                | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" => {
+                    Some(letter.to_ascii_lowercase())
+                }
+                _ => None,
+            };
+        }
+
+        if let Some(digit) = token.strip_prefix("Digit") {
+            return match digit {
+                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
+                    Some(digit.to_string())
+                }
+                _ => None,
+            };
+        }
+
+        if let Some(rest) = token.strip_prefix('F') {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(token.to_ascii_lowercase());
+            }
+        }
+
+        match token {
+            "Escape" => Some("escape".to_string()),
+            "Tab" => Some("tab".to_string()),
+            "Enter" => Some("enter".to_string()),
+            "Space" => Some("space".to_string()),
+            "Backspace" => Some("backspace".to_string()),
+            "Minus" => Some("minus".to_string()),
+            "Equal" => Some("equal".to_string()),
+            "BracketLeft" => Some("bracketleft".to_string()),
+            "BracketRight" => Some("bracketright".to_string()),
+            "Backslash" => Some("backslash".to_string()),
+            "Semicolon" => Some("semicolon".to_string()),
+            "Quote" => Some("apostrophe".to_string()),
+            "Backquote" => Some("grave".to_string()),
+            "Comma" => Some("comma".to_string()),
+            "Period" => Some("period".to_string()),
+            "Slash" => Some("slash".to_string()),
+            "Insert" => Some("insert".to_string()),
+            "Delete" => Some("delete".to_string()),
+            "Home" => Some("home".to_string()),
+            "End" => Some("end".to_string()),
+            "PageUp" => Some("pageup".to_string()),
+            "PageDown" => Some("pagedown".to_string()),
+            "ArrowUp" => Some("up".to_string()),
+            "ArrowLeft" => Some("left".to_string()),
+            "ArrowRight" => Some("right".to_string()),
+            "ArrowDown" => Some("down".to_string()),
+            "Numpad0" => Some("kp0".to_string()),
+            "Numpad1" => Some("kp1".to_string()),
+            "Numpad2" => Some("kp2".to_string()),
+            "Numpad3" => Some("kp3".to_string()),
+            "Numpad4" => Some("kp4".to_string()),
+            "Numpad5" => Some("kp5".to_string()),
+            "Numpad6" => Some("kp6".to_string()),
+            "Numpad7" => Some("kp7".to_string()),
+            "Numpad8" => Some("kp8".to_string()),
+            "Numpad9" => Some("kp9".to_string()),
+            "NumpadDecimal" => Some("kpdot".to_string()),
+            "NumpadMultiply" => Some("kpasterisk".to_string()),
+            "NumpadSubtract" => Some("kpminus".to_string()),
+            "NumpadAdd" => Some("plus".to_string()),
+            "NumpadEnter" => Some("kpenter".to_string()),
+            "NumpadDivide" => None,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,17 +193,42 @@ impl HotkeySpec {
         parts.push(self.key.token().to_string());
         parts.join("+")
     }
+
+    pub(crate) fn swhkd_string(&self) -> Result<String, String> {
+        let mut parts: Vec<String> = self
+            .modifiers
+            .iter()
+            .map(|modifier| modifier.swhkd_token().to_string())
+            .collect();
+
+        let key = self.key.swhkd_token().ok_or_else(|| {
+            format!(
+                "{} cannot be represented by swhkd.",
+                self.canonical_string()
+            )
+        })?;
+        parts.push(key);
+        Ok(parts.join(" + "))
+    }
 }
 
 pub fn parse_hotkey_spec(hk: &str) -> Result<HotkeySpec, String> {
     let mut modifiers = Vec::new();
     let mut key = None;
 
-    for part in hk.split('+') {
+    for raw_part in hk.split('+') {
+        let part = raw_part.trim();
+        if part.is_empty() {
+            return Err("Hotkey contains an empty token".to_string());
+        }
+
         if let Some(modifier) = HotkeyModifier::from_token(part) {
             modifiers.push(modifier);
         } else {
-            key = Some(HotkeyCode::from_user_token(part)?);
+            let next_key = HotkeyCode::from_user_token(part)?;
+            if key.replace(next_key).is_some() {
+                return Err("Hotkey must include only one non-modifier key".to_string());
+            }
         }
     }
 
@@ -133,55 +245,17 @@ pub fn normalize_capture_key(key_name: &str, keycode: u32) -> Option<HotkeyCode>
         return Some(code);
     }
 
-    if is_disallowed_symbol_key_name(key_name) {
-        return None;
-    }
-
     let normalized = normalize_key_name(key_name);
     HotkeyCode::from_token(&normalized)
-}
-
-fn is_disallowed_symbol_key_name(name: &str) -> bool {
-    matches!(
-        name,
-        "apostrophe"
-            | "quotedbl"
-            | "comma"
-            | "period"
-            | "slash"
-            | "backslash"
-            | "semicolon"
-            | "colon"
-            | "minus"
-            | "equal"
-            | "grave"
-            | "asciitilde"
-            | "exclam"
-            | "at"
-            | "numbersign"
-            | "dollar"
-            | "percent"
-            | "asciicircum"
-            | "ampersand"
-            | "asterisk"
-            | "parenleft"
-            | "parenright"
-            | "plus"
-            | "less"
-            | "greater"
-            | "question"
-            | "bar"
-            | "braceleft"
-            | "braceright"
-            | "bracketleft"
-            | "bracketright"
-            | "underscore"
-    )
 }
 
 fn normalize_key_name(name: &str) -> String {
     if let Some(rest) = name.strip_prefix("KP_") {
         return normalize_keypad_name(rest);
+    }
+
+    if let Some(symbol) = normalize_symbol_key_name(name) {
+        return symbol.to_string();
     }
 
     match name {
@@ -202,7 +276,7 @@ fn normalize_key_name(name: &str) -> String {
         other => {
             if other.len() == 1 {
                 let ch = other.chars().next().unwrap();
-                if ch.is_ascii_lowercase() {
+                if ch.is_ascii_alphabetic() {
                     return format!("Key{}", ch.to_ascii_uppercase());
                 }
                 if ch.is_ascii_digit() {
@@ -217,9 +291,49 @@ fn normalize_key_name(name: &str) -> String {
     }
 }
 
+fn normalize_symbol_key_name(name: &str) -> Option<&'static str> {
+    match name {
+        "'" | "\"" | "," | "<" | "." | ">" | "/" | "?" | ";" | ":" | "[" | "{" | "]" | "}"
+        | "\\" | "|" | "-" | "_" | "=" | "+" | "`" | "~" => Some(match name {
+            "'" | "\"" => "Quote",
+            "," | "<" => "Comma",
+            "." | ">" => "Period",
+            "/" | "?" => "Slash",
+            ";" | ":" => "Semicolon",
+            "[" | "{" => "BracketLeft",
+            "]" | "}" => "BracketRight",
+            "\\" | "|" => "Backslash",
+            "-" | "_" => "Minus",
+            "=" | "+" => "Equal",
+            "`" | "~" => "Backquote",
+            _ => unreachable!(),
+        }),
+        _ => match name.to_ascii_lowercase().as_str() {
+            "apostrophe" | "quotedbl" => Some("Quote"),
+            "comma" | "less" => Some("Comma"),
+            "period" | "greater" => Some("Period"),
+            "slash" | "question" => Some("Slash"),
+            "semicolon" | "colon" => Some("Semicolon"),
+            "bracketleft" | "braceleft" => Some("BracketLeft"),
+            "bracketright" | "braceright" => Some("BracketRight"),
+            "backslash" | "bar" => Some("Backslash"),
+            "minus" | "underscore" => Some("Minus"),
+            "equal" | "plus" => Some("Equal"),
+            "grave" | "asciitilde" => Some("Backquote"),
+            _ => None,
+        },
+    }
+}
+
 fn canonicalize_key_token(raw: &str) -> String {
     if let Some(rest) = raw.strip_prefix("KP_") {
         return normalize_keypad_name(rest);
+    }
+
+    if let Some(rest) = raw.strip_prefix('f') {
+        if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+            return format!("F{rest}");
+        }
     }
 
     if let Some(alias) = canonicalize_numpad_alias(raw) {
@@ -261,13 +375,17 @@ fn canonicalize_key_token(raw: &str) -> String {
         "end" => "End".to_string(),
         "pageup" => "PageUp".to_string(),
         "pagedown" => "PageDown".to_string(),
+        "up" => "ArrowUp".to_string(),
+        "down" => "ArrowDown".to_string(),
+        "left" => "ArrowLeft".to_string(),
+        "right" => "ArrowRight".to_string(),
         "minus" => "Minus".to_string(),
         "equal" => "Equal".to_string(),
         "bracketleft" => "BracketLeft".to_string(),
         "bracketright" => "BracketRight".to_string(),
         "backslash" => "Backslash".to_string(),
         "semicolon" => "Semicolon".to_string(),
-        "quote" => "Quote".to_string(),
+        "quote" | "apostrophe" => "Quote".to_string(),
         "backquote" | "grave" => "Backquote".to_string(),
         "comma" => "Comma".to_string(),
         "period" => "Period".to_string(),
@@ -453,8 +571,67 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsupported_symbol_capture_keys() {
-        assert!(normalize_capture_key("slash", 0).is_none());
+    fn normalizes_symbol_capture_keys() {
+        assert_eq!(normalize_capture_key("/", 0).unwrap().token(), "Slash");
+        assert_eq!(normalize_capture_key("?", 0).unwrap().token(), "Slash");
+        assert_eq!(
+            normalize_capture_key("question", 0).unwrap().token(),
+            "Slash"
+        );
+        assert_eq!(normalize_capture_key("'", 0).unwrap().token(), "Quote");
+        assert_eq!(
+            normalize_capture_key("quotedbl", 0).unwrap().token(),
+            "Quote"
+        );
+        assert_eq!(
+            normalize_capture_key("[", 0).unwrap().token(),
+            "BracketLeft"
+        );
+        assert_eq!(
+            normalize_capture_key("braceleft", 0).unwrap().token(),
+            "BracketLeft"
+        );
+        assert_eq!(
+            normalize_capture_key("{", 0).unwrap().token(),
+            "BracketLeft"
+        );
+        assert_eq!(
+            normalize_capture_key("]", 0).unwrap().token(),
+            "BracketRight"
+        );
+        assert_eq!(
+            normalize_capture_key("braceright", 0).unwrap().token(),
+            "BracketRight"
+        );
+        assert_eq!(normalize_capture_key("\\", 0).unwrap().token(), "Backslash");
+        assert_eq!(
+            normalize_capture_key("bar", 0).unwrap().token(),
+            "Backslash"
+        );
+        assert_eq!(normalize_capture_key("|", 0).unwrap().token(), "Backslash");
+        assert_eq!(normalize_capture_key(",", 0).unwrap().token(), "Comma");
+        assert_eq!(normalize_capture_key("<", 0).unwrap().token(), "Comma");
+        assert_eq!(normalize_capture_key(".", 0).unwrap().token(), "Period");
+        assert_eq!(normalize_capture_key(">", 0).unwrap().token(), "Period");
+        assert_eq!(normalize_capture_key(";", 0).unwrap().token(), "Semicolon");
+        assert_eq!(normalize_capture_key(":", 0).unwrap().token(), "Semicolon");
+        assert_eq!(normalize_capture_key("-", 0).unwrap().token(), "Minus");
+        assert_eq!(
+            normalize_capture_key("underscore", 0).unwrap().token(),
+            "Minus"
+        );
+        assert_eq!(normalize_capture_key("=", 0).unwrap().token(), "Equal");
+        assert_eq!(normalize_capture_key("+", 0).unwrap().token(), "Equal");
+        assert_eq!(normalize_capture_key("plus", 0).unwrap().token(), "Equal");
+        assert_eq!(
+            normalize_capture_key("grave", 0).unwrap().token(),
+            "Backquote"
+        );
+        assert_eq!(
+            normalize_capture_key("asciitilde", 0).unwrap().token(),
+            "Backquote"
+        );
+        assert_eq!(normalize_capture_key("~", 0).unwrap().token(), "Backquote");
     }
 
     #[test]
@@ -467,6 +644,14 @@ mod tests {
             normalize_capture_key("plus", 86).unwrap().token(),
             "NumpadAdd"
         );
+        assert_eq!(
+            normalize_capture_key("asterisk", 63).unwrap().token(),
+            "NumpadMultiply"
+        );
+        assert_eq!(
+            normalize_capture_key("slash", 106).unwrap().token(),
+            "NumpadDivide"
+        );
     }
 
     #[test]
@@ -478,6 +663,56 @@ mod tests {
         assert_eq!(
             normalize_capture_key("KP_Divide", 0).unwrap().token(),
             "NumpadDivide"
+        );
+    }
+
+    #[test]
+    fn serializes_to_swhkd_tokens() {
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+Numpad8")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "ctrl + kp8"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Alt+NumpadAdd")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "alt + plus"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Shift+NumpadMultiply")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "shift + kpasterisk"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+Quote")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "ctrl + apostrophe"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+Backquote")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "ctrl + grave"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_swhkd_key() {
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+NumpadDivide")
+                .unwrap()
+                .swhkd_string()
+                .unwrap_err(),
+            "Ctrl+NumpadDivide cannot be represented by swhkd."
         );
     }
 }

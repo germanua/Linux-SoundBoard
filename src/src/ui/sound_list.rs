@@ -1,7 +1,7 @@
 //! Sound list widget — GtkColumnView with gio::ListStore model.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +23,20 @@ use super::tab_dnd::{self, SoundTabDragPayload};
 
 const SOUND_CONTEXT_NAMESPACE: &str = "sound-ctx";
 
+#[derive(Debug, Clone)]
+struct SoundRowData {
+    id: String,
+    name: String,
+    duration_ms: Option<u64>,
+    hotkey: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NavigationSound {
+    pub id: String,
+    pub name: String,
+}
+
 /// Format milliseconds as M:SS string.
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
@@ -42,12 +56,12 @@ struct SoundListInner {
     store: gio::ListStore,
     active_tab_id: Mutex<String>,
     search_query: Mutex<String>,
-    all_sounds: Mutex<Vec<Sound>>,
     playing_ids: Arc<Mutex<HashSet<String>>>,
     invalid_ids: Arc<Mutex<HashSet<String>>>,
     active_sound_id: Arc<Mutex<Option<String>>>,
     state: Arc<AppState>,
     on_library_changed: RefCell<Option<Box<dyn Fn() + 'static>>>,
+    visible_row_indices: RefCell<HashMap<String, u32>>,
 }
 
 // Safety: SoundListInner is only used on the GTK main thread.
@@ -62,15 +76,18 @@ impl SoundList {
         col_view.set_vexpand(true);
         col_view.set_hexpand(true);
         col_view.set_reorderable(false);
-        // Prefer predictable row dragging over rectangle selection.
-        col_view.set_enable_rubberband(false);
+        // Enable rubberband selection (click and drag to select multiple rows).
+        col_view.set_enable_rubberband(true);
         col_view.add_css_class("data-table");
 
         // Apply list style class based on config
         {
-            let cfg = state.config.lock().unwrap();
-            if cfg.settings.list_style == ListStyle::Card {
-                col_view.add_css_class("list-style-card");
+            if let Ok(cfg) = state.config.lock() {
+                if cfg.settings.list_style == ListStyle::Card {
+                    col_view.add_css_class("list-style-card");
+                }
+            } else {
+                log::warn!("Config lock poisoned in SoundList::new");
             }
         }
 
@@ -80,11 +97,6 @@ impl SoundList {
             .hexpand(true)
             .build();
 
-        let all_sounds = {
-            let cfg = state.config.lock().unwrap();
-            cfg.sounds.clone()
-        };
-
         let inner = Arc::new(SoundListInner {
             scroll,
             col_view: col_view.clone(),
@@ -92,12 +104,12 @@ impl SoundList {
             store: store.clone(),
             active_tab_id: Mutex::new(GENERAL_TAB_ID.to_string()),
             search_query: Mutex::new(String::new()),
-            all_sounds: Mutex::new(all_sounds.clone()),
             playing_ids: Arc::new(Mutex::new(HashSet::new())),
             invalid_ids: Arc::new(Mutex::new(HashSet::new())),
             active_sound_id: Arc::new(Mutex::new(None)),
             state,
             on_library_changed: RefCell::new(None),
+            visible_row_indices: RefCell::new(HashMap::new()),
         });
 
         inner.configure_columns();
@@ -105,7 +117,7 @@ impl SoundList {
         inner.setup_drag_drop();
 
         let sl = Self { inner };
-        sl.reload_store(&all_sounds);
+        sl.refresh_from_state();
         sl
     }
 
@@ -116,52 +128,97 @@ impl SoundList {
 
     /// Set the active tab — filters the visible sounds.
     pub fn set_active_tab(&self, tab_id: String) {
-        *self.inner.active_tab_id.lock().unwrap() = tab_id;
+        if let Ok(mut id) = self.inner.active_tab_id.lock() {
+            *id = tab_id;
+        } else {
+            log::warn!("active_tab_id lock poisoned in set_active_tab");
+        }
         self.refresh_from_state();
     }
 
     /// Update which sound IDs are currently playing and refresh the list.
     pub fn set_playing_ids(&self, ids: HashSet<String>) {
-        let changed = {
-            let mut current = self.inner.playing_ids.lock().unwrap();
-            if *current != ids {
-                *current = ids;
-                true
+        let changed_ids = {
+            if let Ok(mut current) = self.inner.playing_ids.lock() {
+                if *current != ids {
+                    let changed_ids = current.symmetric_difference(&ids).cloned().collect();
+                    *current = ids;
+                    Some(changed_ids)
+                } else {
+                    None
+                }
             } else {
-                false
+                log::warn!("playing_ids lock poisoned in set_playing_ids");
+                None
             }
         };
-        if changed {
-            self.refresh_visible_rows();
+        if let Some(changed_ids) = changed_ids {
+            self.inner.rebind_rows_for_ids(&changed_ids);
         }
     }
 
     /// Store which sound IDs have missing source files and refresh the list.
     pub fn set_invalid_ids(&self, ids: HashSet<String>) {
-        *self.inner.invalid_ids.lock().unwrap() = ids;
-        self.refresh_visible_rows();
+        let changed_ids = if let Ok(mut ids_set) = self.inner.invalid_ids.lock() {
+            if *ids_set != ids {
+                let changed_ids = ids_set.symmetric_difference(&ids).cloned().collect();
+                *ids_set = ids;
+                Some(changed_ids)
+            } else {
+                None
+            }
+        } else {
+            log::warn!("invalid_ids lock poisoned in set_invalid_ids");
+            None
+        };
+        if let Some(changed_ids) = changed_ids {
+            self.inner.rebind_rows_for_ids(&changed_ids);
+        }
     }
 
     /// Set the active sound ID (current transport track) and refresh if changed.
     pub fn set_active_sound_id(&self, id: Option<String>) {
-        let changed = {
-            let mut current = self.inner.active_sound_id.lock().unwrap();
-            if *current != id {
-                *current = id;
-                true
+        let changed_ids = {
+            if let Ok(mut current) = self.inner.active_sound_id.lock() {
+                if *current != id {
+                    let mut changed_ids = HashSet::new();
+                    if let Some(previous) = current.clone() {
+                        changed_ids.insert(previous);
+                    }
+                    if let Some(next) = id.as_ref() {
+                        changed_ids.insert(next.clone());
+                    }
+                    *current = id;
+                    Some(changed_ids)
+                } else {
+                    None
+                }
             } else {
-                false
+                log::warn!("active_sound_id lock poisoned in set_active_sound_id");
+                None
             }
         };
-        if changed {
-            self.refresh_visible_rows();
+        if let Some(changed_ids) = changed_ids {
+            self.inner.rebind_rows_for_ids(&changed_ids);
         }
     }
 
     /// Set the search filter query and refresh the displayed list.
     pub fn set_search_filter(&self, query: String) {
-        *self.inner.search_query.lock().unwrap() = query;
-        self.refresh_visible_rows();
+        let changed = if let Ok(mut q) = self.inner.search_query.lock() {
+            if *q != query {
+                *q = query;
+                true
+            } else {
+                false
+            }
+        } else {
+            log::warn!("search_query lock poisoned in set_search_filter");
+            false
+        };
+        if changed {
+            self.refresh_visible_rows();
+        }
     }
 
     /// Reload sounds from AppState config.
@@ -170,39 +227,42 @@ impl SoundList {
     }
 
     /// Append newly imported sounds to the list.
-    pub fn append_sounds(&self, new_sounds: Vec<Sound>) {
-        let sounds = {
-            let mut all = self.inner.all_sounds.lock().unwrap();
-            all.extend(new_sounds);
-            all.clone()
-        };
-        self.reload_store(&sounds);
+    pub fn append_sounds(&self, _new_sounds: Vec<Sound>) {
+        // New sounds are already in Config, just refresh the view
+        self.refresh_from_state();
         self.inner.emit_library_changed();
     }
 
-    /// Return the currently visible (filtered) sounds.
-    pub fn get_filtered_sounds(&self) -> Vec<Sound> {
-        self.inner.filtered_sounds()
+    /// Return the currently visible sounds in lightweight form for transport navigation.
+    pub fn get_navigation_sounds(&self) -> Vec<NavigationSound> {
+        self.inner.filtered_navigation_sounds_from_state()
     }
 
     /// Return the currently active tab id.
     pub fn active_tab_id(&self) -> String {
-        self.inner.active_tab_id.lock().unwrap().clone()
-    }
-
-    /// Replace store contents with the filtered sound list.
-    fn reload_store(&self, sounds: &[Sound]) {
-        self.inner.reload_store(sounds);
+        self.inner
+            .active_tab_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_else(|e| {
+                log::warn!("active_tab_id lock poisoned in active_tab_id: {}", e);
+                crate::app_meta::GENERAL_TAB_ID.to_string()
+            })
     }
 
     fn refresh_visible_rows(&self) {
-        let sounds = self.inner.all_sounds.lock().unwrap().clone();
-        self.reload_store(&sounds);
+        self.inner.reload_store();
     }
 
     /// Register callback fired when sound membership or tab membership changes.
     pub fn connect_library_changed<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_library_changed.borrow_mut() = Some(Box::new(f));
+    }
+
+    pub fn cleanup(&self) {
+        *self.inner.on_library_changed.borrow_mut() = None;
+        self.inner.store.remove_all();
+        self.inner.visible_row_indices.borrow_mut().clear();
     }
 
     /// Set the list style mode ("compact" or "card")
@@ -227,21 +287,48 @@ impl SoundListInner {
     }
 
     fn connect_activate(self: &Arc<Self>) {
-        let inner = Arc::clone(self);
+        let inner_weak = Arc::downgrade(self);
         let store = self.store.clone();
         let invalid_ids = Arc::clone(&self.invalid_ids);
 
         self.col_view.connect_activate(move |cv, pos| {
+            let Some(inner) = inner_weak.upgrade() else {
+                return;
+            };
             let Some(obj) = store
                 .item(pos)
                 .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
             else {
                 return;
             };
-            let sound = obj.borrow::<Sound>().clone();
-            let is_invalid = invalid_ids.lock().unwrap().contains(&sound.id);
+            let sound = obj.borrow::<SoundRowData>().clone();
+            let is_invalid = invalid_ids
+                .lock()
+                .map(|ids| ids.contains(&sound.id))
+                .unwrap_or_else(|e| {
+                    log::warn!("invalid_ids lock poisoned: {}", e);
+                    false
+                });
+            let is_missing_on_demand = if is_invalid {
+                true
+            } else {
+                match commands::validate_single_source(
+                    sound.id.clone(),
+                    Arc::clone(&inner.state.config),
+                ) {
+                    Ok(is_available) => !is_available,
+                    Err(e) => {
+                        log::warn!(
+                            "On-demand source validation failed for '{}': {}",
+                            sound.id,
+                            e
+                        );
+                        false
+                    }
+                }
+            };
 
-            if !is_invalid {
+            if !is_missing_on_demand {
                 if let Err(e) = commands::play_sound(
                     sound.id.clone(),
                     Arc::clone(&inner.state.config),
@@ -252,6 +339,19 @@ impl SoundListInner {
                 return;
             }
 
+            if !is_invalid {
+                if let Ok(mut ids) = invalid_ids.lock() {
+                    ids.insert(sound.id.clone());
+                }
+                let changed_ids = HashSet::from([sound.id.clone()]);
+                inner.rebind_rows_for_ids(&changed_ids);
+            }
+
+            let Some(full_sound) = inner.lookup_sound(&sound.id) else {
+                log::warn!("Sound row '{}' no longer exists in config", sound.id);
+                return;
+            };
+
             let Some(win) = cv
                 .root()
                 .and_then(|root| root.downcast::<gtk4::Window>().ok())
@@ -259,17 +359,17 @@ impl SoundListInner {
                 return;
             };
 
-            let sound_name = sound.name.clone();
-            let sound_path = sound
+            let sound_name = full_sound.name.clone();
+            let sound_path = full_sound
                 .source_path
                 .clone()
-                .unwrap_or_else(|| sound.path.clone());
+                .unwrap_or_else(|| full_sound.path.clone());
             let state_locate = Arc::clone(&inner.state);
             let state_remove = Arc::clone(&inner.state);
             let invalid_locate = Arc::clone(&inner.invalid_ids);
             let invalid_remove = Arc::clone(&inner.invalid_ids);
-            let inner_locate = Arc::clone(&inner);
-            let inner_remove = Arc::clone(&inner);
+            let inner_weak_locate = Arc::downgrade(&inner);
+            let inner_weak_remove = Arc::downgrade(&inner);
             let sound_id_locate = sound.id.clone();
             let sound_id_remove = sound.id.clone();
             let win_locate = win.clone();
@@ -284,7 +384,7 @@ impl SoundListInner {
                         .build();
                     let state = Arc::clone(&state_locate);
                     let invalid_ids = Arc::clone(&invalid_locate);
-                    let inner_refresh = Arc::clone(&inner_locate);
+                    let inner_weak_refresh = inner_weak_locate.clone();
                     let sound_id = sound_id_locate.clone();
                     file_dialog.open(Some(&win_locate), gio::Cancellable::NONE, move |result| {
                         if let Ok(file) = result {
@@ -296,8 +396,12 @@ impl SoundListInner {
                                     Arc::clone(&state.config),
                                 ) {
                                     Ok(_) => {
-                                        invalid_ids.lock().unwrap().remove(&sound_id);
-                                        inner_refresh.refresh_from_state_inner();
+                                        if let Ok(mut ids) = invalid_ids.lock() {
+                                            ids.remove(&sound_id);
+                                        }
+                                        if let Some(inner_refresh) = inner_weak_refresh.upgrade() {
+                                            inner_refresh.refresh_from_state_inner();
+                                        }
                                     }
                                     Err(e) => log::warn!("Update source failed: {e}"),
                                 }
@@ -311,9 +415,13 @@ impl SoundListInner {
                     Arc::clone(&state_remove.hotkeys),
                 ) {
                     Ok(_) => {
-                        invalid_remove.lock().unwrap().remove(&sound_id_remove);
-                        inner_remove.refresh_from_state_inner();
-                        inner_remove.emit_library_changed();
+                        if let Ok(mut ids) = invalid_remove.lock() {
+                            ids.remove(&sound_id_remove);
+                        }
+                        if let Some(inner_remove) = inner_weak_remove.upgrade() {
+                            inner_remove.refresh_from_state_inner();
+                            inner_remove.emit_library_changed();
+                        }
                     }
                     Err(e) => log::warn!("Remove sound failed: {e}"),
                 },
@@ -333,8 +441,11 @@ impl SoundListInner {
 
         // Handle file drops
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             drop_target_files.connect_drop(move |_, value, _, _| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return false;
+                };
                 log::info!("File drop detected in sound list");
                 let Ok(file_list) = value.get::<gtk4::gdk::FileList>() else {
                     log::warn!("Failed to get file list from drop");
@@ -354,8 +465,11 @@ impl SoundListInner {
 
         // Handle text/URI drops
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             drop_target_text.connect_drop(move |_, value, _, _| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return false;
+                };
                 log::info!("Text/URI drop detected in sound list");
                 let Ok(uri_list) = value.get::<String>() else {
                     log::warn!("Failed to get URI list from drop");
@@ -381,7 +495,14 @@ impl SoundListInner {
         }
 
         // Get the current active tab
-        let tab_id = self.active_tab_id.lock().unwrap().clone();
+        let tab_id = self
+            .active_tab_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_else(|e| {
+                log::warn!("active_tab_id lock poisoned: {}", e);
+                crate::app_meta::GENERAL_TAB_ID.to_string()
+            });
         log::info!("Importing to tab: {}", tab_id);
 
         let tab_id_opt = if tab_id == crate::app_meta::GENERAL_TAB_ID {
@@ -411,8 +532,11 @@ impl SoundListInner {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             factory.connect_setup(move |_, item| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let cell = GtkBox::new(Orientation::Horizontal, 0);
                 cell.set_hexpand(true);
                 cell.set_halign(gtk4::Align::Fill);
@@ -443,13 +567,25 @@ impl SoundListInner {
                 else {
                     return;
                 };
-                let sound = obj.borrow::<Sound>();
+                let sound = obj.borrow::<SoundRowData>();
                 let cell = list_item.child().unwrap().downcast::<GtkBox>().unwrap();
                 let label = cell.first_child().unwrap().downcast::<Label>().unwrap();
                 label.set_text(&(list_item.position() + 1).to_string());
                 cell.set_widget_name(&sound.id);
-                let is_playing = playing_ids.lock().unwrap().contains(&sound.id);
-                let is_active = active_sound_id.lock().unwrap().as_deref() == Some(&sound.id);
+                let is_playing = playing_ids
+                    .lock()
+                    .map(|ids| ids.contains(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("playing_ids lock poisoned: {}", e);
+                        false
+                    });
+                let is_active = active_sound_id
+                    .lock()
+                    .map(|id| id.as_deref() == Some(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("active_sound_id lock poisoned: {}", e);
+                        false
+                    });
                 if is_playing {
                     cell.add_css_class("sound-cell-playing");
                 } else {
@@ -472,8 +608,11 @@ impl SoundListInner {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             factory.connect_setup(move |_, item| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let hbox = GtkBox::new(Orientation::Horizontal, 6);
                 hbox.set_hexpand(true);
                 hbox.add_css_class("sound-cell");
@@ -520,14 +659,32 @@ impl SoundListInner {
                     return;
                 };
 
-                let sound = obj.borrow::<Sound>();
+                let sound = obj.borrow::<SoundRowData>();
                 let hbox = list_item.child().unwrap().downcast::<GtkBox>().unwrap();
                 let dot = hbox.first_child().unwrap().downcast::<Label>().unwrap();
                 let label = dot.next_sibling().unwrap().downcast::<Label>().unwrap();
                 let warn = label.next_sibling().unwrap().downcast::<Label>().unwrap();
-                let is_playing = playing_ids.lock().unwrap().contains(&sound.id);
-                let is_invalid = invalid_ids.lock().unwrap().contains(&sound.id);
-                let is_active = active_sound_id.lock().unwrap().as_deref() == Some(&sound.id);
+                let is_playing = playing_ids
+                    .lock()
+                    .map(|ids| ids.contains(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("playing_ids lock poisoned: {}", e);
+                        false
+                    });
+                let is_invalid = invalid_ids
+                    .lock()
+                    .map(|ids| ids.contains(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("invalid_ids lock poisoned: {}", e);
+                        false
+                    });
+                let is_active = active_sound_id
+                    .lock()
+                    .map(|id| id.as_deref() == Some(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("active_sound_id lock poisoned: {}", e);
+                        false
+                    });
 
                 label.set_text(&sound.name);
                 dot.set_visible(is_playing);
@@ -557,8 +714,11 @@ impl SoundListInner {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             factory.connect_setup(move |_, item| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let cell = GtkBox::new(Orientation::Horizontal, 0);
                 cell.set_hexpand(true);
                 cell.set_halign(gtk4::Align::Fill);
@@ -588,7 +748,7 @@ impl SoundListInner {
                 else {
                     return;
                 };
-                let sound = obj.borrow::<Sound>();
+                let sound = obj.borrow::<SoundRowData>();
                 let cell = list_item.child().unwrap().downcast::<GtkBox>().unwrap();
                 let label = cell.first_child().unwrap().downcast::<Label>().unwrap();
                 label.set_text(
@@ -598,8 +758,20 @@ impl SoundListInner {
                         .unwrap_or_else(|| "\u{2014}".to_string()),
                 );
                 cell.set_widget_name(&sound.id);
-                let is_playing = playing_ids.lock().unwrap().contains(&sound.id);
-                let is_active = active_sound_id.lock().unwrap().as_deref() == Some(&sound.id);
+                let is_playing = playing_ids
+                    .lock()
+                    .map(|ids| ids.contains(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("playing_ids lock poisoned: {}", e);
+                        false
+                    });
+                let is_active = active_sound_id
+                    .lock()
+                    .map(|id| id.as_deref() == Some(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("active_sound_id lock poisoned: {}", e);
+                        false
+                    });
                 if is_playing {
                     cell.add_css_class("sound-cell-playing");
                 } else {
@@ -622,8 +794,11 @@ impl SoundListInner {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner_weak = Arc::downgrade(self);
             factory.connect_setup(move |_, item| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
                 let cell = GtkBox::new(Orientation::Horizontal, 0);
                 cell.set_hexpand(true);
                 cell.set_halign(gtk4::Align::Fill);
@@ -649,7 +824,7 @@ impl SoundListInner {
                 else {
                     return;
                 };
-                let sound = obj.borrow::<Sound>();
+                let sound = obj.borrow::<SoundRowData>();
                 let cell = list_item.child().unwrap().downcast::<GtkBox>().unwrap();
                 let label = cell.first_child().unwrap().downcast::<Label>().unwrap();
 
@@ -664,8 +839,20 @@ impl SoundListInner {
                 }
 
                 cell.set_widget_name(&sound.id);
-                let is_playing = playing_ids.lock().unwrap().contains(&sound.id);
-                let is_active = active_sound_id.lock().unwrap().as_deref() == Some(&sound.id);
+                let is_playing = playing_ids
+                    .lock()
+                    .map(|ids| ids.contains(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("playing_ids lock poisoned: {}", e);
+                        false
+                    });
+                let is_active = active_sound_id
+                    .lock()
+                    .map(|id| id.as_deref() == Some(&sound.id))
+                    .unwrap_or_else(|e| {
+                        log::warn!("active_sound_id lock poisoned: {}", e);
+                        false
+                    });
                 if is_playing {
                     cell.add_css_class("sound-cell-playing");
                 } else {
@@ -693,8 +880,11 @@ impl SoundListInner {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
         });
 
-        let inner = Arc::clone(self);
+        let inner_weak = Arc::downgrade(self);
         gesture.connect_released(move |gesture, _, x, y| {
+            let Some(inner) = inner_weak.upgrade() else {
+                return;
+            };
             let Some(widget) = gesture.widget() else {
                 return;
             };
@@ -718,12 +908,13 @@ impl SoundListInner {
         // reach the ColumnView's MultiSelection gesture for normal row selection.
         drag_source.set_exclusive(false);
 
-        let inner = Arc::clone(self);
+        let inner_weak = Arc::downgrade(self);
         drag_source.connect_prepare(move |source, _, _| {
-            let _ = source.set_state(gtk4::EventSequenceState::Claimed);
-            let Some(widget) = source.widget() else {
+            let Some(inner) = inner_weak.upgrade() else {
                 return None;
             };
+            let _ = source.set_state(gtk4::EventSequenceState::Claimed);
+            let widget = source.widget()?;
 
             let sound_id = widget.widget_name().to_string();
             if sound_id.trim().is_empty() {
@@ -744,7 +935,14 @@ impl SoundListInner {
             );
 
             let payload = SoundTabDragPayload {
-                source_tab_id: inner.active_tab_id.lock().unwrap().clone(),
+                source_tab_id: inner
+                    .active_tab_id
+                    .lock()
+                    .map(|id| id.clone())
+                    .unwrap_or_else(|e| {
+                        log::warn!("active_tab_id lock poisoned: {}", e);
+                        crate::app_meta::GENERAL_TAB_ID.to_string()
+                    }),
                 sound_ids: sound_ids.clone(),
             }
             .normalized();
@@ -819,10 +1017,7 @@ impl SoundListInner {
         y: f64,
         sound_id: &str,
     ) {
-        let sound = {
-            let cfg = self.state.config.lock().unwrap();
-            cfg.get_sound(sound_id).cloned()
-        };
+        let sound = self.lookup_sound(sound_id);
 
         if let Some(sound) = sound {
             self.show_context_menu(widget, x, y, sound);
@@ -837,10 +1032,21 @@ impl SoundListInner {
             return;
         };
 
-        let active_tab = self.active_tab_id.lock().unwrap().clone();
+        let active_tab = self
+            .active_tab_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_else(|e| {
+                log::warn!("active_tab_id lock poisoned: {}", e);
+                crate::app_meta::GENERAL_TAB_ID.to_string()
+            });
         let tabs = {
-            let cfg = self.state.config.lock().unwrap();
-            cfg.tabs.clone()
+            if let Ok(cfg) = self.state.config.lock() {
+                cfg.tabs.clone()
+            } else {
+                log::warn!("Config lock poisoned in show_context_menu");
+                Vec::new()
+            }
         };
 
         let menu_model = gio::Menu::new();
@@ -943,9 +1149,16 @@ impl SoundListInner {
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 let error_window = win.clone();
+                let hotkeys_for_capture = Arc::clone(&state.hotkeys);
                 crate::ui::dialogs::show_hotkey_capture(
                     &win,
                     sound.hotkey.as_deref(),
+                    move |hotkey| {
+                        hotkeys_for_capture
+                            .lock()
+                            .map_err(|e| format!("Hotkeys lock poisoned: {}", e))?
+                            .validate_hotkey_blocking(hotkey)
+                    },
                     move |hotkey| match commands::set_hotkey(
                         sound.id.clone(),
                         hotkey,
@@ -955,10 +1168,11 @@ impl SoundListInner {
                         Ok(_) => inner_confirm.refresh_from_state_inner(),
                         Err(e) => {
                             log::warn!("Set hotkey failed: {e}");
+                            let message = crate::hotkeys::format_hotkey_error(&e);
                             crate::ui::dialogs::show_error(
                                 &error_window,
                                 "Failed to Set Hotkey",
-                                &e,
+                                &message,
                             );
                         }
                     },
@@ -1035,28 +1249,32 @@ impl SoundListInner {
             let win = win.clone();
             let action = gio::SimpleAction::new("delete", None);
             action.connect_activate(move |_, _| {
-                let skip_confirm = state.config.lock().unwrap().settings.skip_delete_confirm;
+                let skip_confirm = state
+                    .config
+                    .lock()
+                    .map(|cfg| cfg.settings.skip_delete_confirm)
+                    .unwrap_or_else(|e| {
+                        log::warn!("Config lock poisoned: {}", e);
+                        false
+                    });
                 let inner_confirm = Arc::clone(&inner);
                 let state_confirm = Arc::clone(&state);
                 let sound_to_delete = sound.clone();
                 let target_ids = target_ids.clone();
+                let selection_count = target_ids.len();
                 let target_ids_for_delete = target_ids.clone();
 
-                let delete_sound = move || {
-                    let mut had_error = false;
-                    for sound_id in &target_ids_for_delete {
-                        if let Err(e) = commands::remove_sound(
-                            sound_id.clone(),
-                            Arc::clone(&state_confirm.config),
-                            Arc::clone(&state_confirm.hotkeys),
-                        ) {
-                            had_error = true;
-                            log::warn!("Delete failed for {}: {e}", sound_id);
-                        }
-                    }
-                    if !had_error {
+                let delete_sound = move || match commands::remove_sounds(
+                    target_ids_for_delete.clone(),
+                    Arc::clone(&state_confirm.config),
+                    Arc::clone(&state_confirm.hotkeys),
+                ) {
+                    Ok(_) => {
                         inner_confirm.refresh_from_state_inner();
                         inner_confirm.emit_library_changed();
+                    }
+                    Err(e) => {
+                        log::warn!("Delete failed for {} sound(s): {e}", selection_count);
                     }
                 };
 
@@ -1107,95 +1325,223 @@ impl SoundListInner {
             else {
                 continue;
             };
-            let sound = obj.borrow::<Sound>();
+            let sound = obj.borrow::<SoundRowData>();
             ids.push(sound.id.clone());
         }
         ids
     }
 
-    fn filtered_sounds(&self) -> Vec<Sound> {
-        let sounds = self.all_sounds.lock().unwrap().clone();
-        let tab_id = self.active_tab_id.lock().unwrap().clone();
-        let search_query = self.search_query.lock().unwrap().to_lowercase();
-        let cfg = self.state.config.lock().unwrap();
-
-        let sounds = if tab_id == GENERAL_TAB_ID {
-            sounds
-        } else if let Some(tab) = cfg.tabs.iter().find(|tab| tab.id == tab_id) {
-            sounds
-                .into_iter()
-                .filter(|sound| tab.sound_ids.contains(&sound.id))
-                .collect()
-        } else {
-            sounds
-        };
-
-        if search_query.is_empty() {
-            sounds
-        } else {
-            sounds
-                .into_iter()
-                .filter(|sound| sound.name.to_lowercase().contains(&search_query))
-                .collect()
-        }
-    }
-
-    fn reload_store(&self, sounds: &[Sound]) {
-        let filtered_ids = {
-            let visible = self.filtered_sounds_from(sounds);
-            visible
-                .into_iter()
-                .map(BoxedAnyObject::new)
-                .collect::<Vec<_>>()
-        };
+    fn reload_store(&self) {
+        let filtered_rows = self.filtered_row_data_from_state();
+        let boxed_rows = filtered_rows
+            .into_iter()
+            .map(BoxedAnyObject::new)
+            .collect::<Vec<_>>();
 
         self.store.remove_all();
-        for sound in filtered_ids {
-            self.store.append(&sound);
+        for row in boxed_rows {
+            self.store.append(&row);
+        }
+        self.rebuild_visible_row_indices();
+    }
+
+    fn current_store_rows(&self) -> Vec<SoundRowData> {
+        (0..self.store.n_items())
+            .filter_map(|position| {
+                self.store
+                    .item(position)
+                    .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
+                    .map(|obj| obj.borrow::<SoundRowData>().clone())
+            })
+            .collect()
+    }
+
+    fn replace_row_at(&self, position: u32, row: SoundRowData) {
+        let replacements = [BoxedAnyObject::new(row)];
+        self.store.splice(position, 1, &replacements);
+    }
+
+    fn rebuild_visible_row_indices(&self) {
+        let mut indices = self.visible_row_indices.borrow_mut();
+        indices.clear();
+
+        for position in 0..self.store.n_items() {
+            let Some(obj) = self
+                .store
+                .item(position)
+                .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
+            else {
+                continue;
+            };
+            indices.insert(obj.borrow::<SoundRowData>().id.clone(), position);
         }
     }
 
-    fn filtered_sounds_from(&self, sounds: &[Sound]) -> Vec<Sound> {
-        let tab_id = self.active_tab_id.lock().unwrap().clone();
-        let search_query = self.search_query.lock().unwrap().to_lowercase();
-        let cfg = self.state.config.lock().unwrap();
+    /// Rebind only rows whose transient state changed, leaving the store intact.
+    fn rebind_rows_for_ids(&self, sound_ids: &HashSet<String>) {
+        if sound_ids.is_empty() {
+            return;
+        }
 
-        let sounds = if tab_id == GENERAL_TAB_ID {
-            sounds.to_vec()
-        } else if let Some(tab) = cfg.tabs.iter().find(|tab| tab.id == tab_id) {
-            sounds
-                .iter()
-                .filter(|sound| tab.sound_ids.contains(&sound.id))
-                .cloned()
-                .collect()
-        } else {
-            sounds.to_vec()
+        let mut changed_positions = Vec::new();
+        {
+            let indices = self.visible_row_indices.borrow();
+            for sound_id in sound_ids {
+                if let Some(position) = indices.get(sound_id) {
+                    changed_positions.push(*position);
+                }
+            }
+        }
+
+        changed_positions.sort_unstable();
+        changed_positions.dedup();
+        for position in changed_positions {
+            self.store.items_changed(position, 0, 0);
+        }
+    }
+
+    fn filtered_navigation_sounds_from_state(&self) -> Vec<NavigationSound> {
+        let tab_id = self.current_tab_id();
+        let search_query = self.current_search_query();
+        let cfg = match self.state.config.lock() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log::warn!("Config lock poisoned: {}", e);
+                return Vec::new();
+            }
         };
 
-        if search_query.is_empty() {
-            sounds
-        } else {
-            sounds
-                .into_iter()
-                .filter(|sound| sound.name.to_lowercase().contains(&search_query))
-                .collect()
-        }
+        let tab_sound_ids = Self::tab_sound_ids(&cfg, &tab_id);
+        cfg.sounds
+            .iter()
+            .filter(|sound| Self::matches_filters(sound, &tab_sound_ids, &search_query))
+            .map(|sound| NavigationSound {
+                id: sound.id.clone(),
+                name: sound.name.clone(),
+            })
+            .collect()
+    }
+
+    fn filtered_row_data_from_state(&self) -> Vec<SoundRowData> {
+        let tab_id = self.current_tab_id();
+        let search_query = self.current_search_query();
+        let cfg = match self.state.config.lock() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log::warn!("Config lock poisoned: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let tab_sound_ids = Self::tab_sound_ids(&cfg, &tab_id);
+        cfg.sounds
+            .iter()
+            .filter(|sound| Self::matches_filters(sound, &tab_sound_ids, &search_query))
+            .map(|sound| SoundRowData {
+                id: sound.id.clone(),
+                name: sound.name.clone(),
+                duration_ms: sound.duration_ms,
+                hotkey: sound.hotkey.clone(),
+            })
+            .collect()
     }
 
     /// Refresh the store from the current AppState config (called from action callbacks).
     fn refresh_from_state_inner(&self) {
-        let sounds = {
-            let cfg = self.state.config.lock().unwrap();
-            cfg.sounds.clone()
-        };
-        *self.all_sounds.lock().unwrap() = sounds.clone();
-        self.reload_store(&sounds);
+        let filtered_rows = self.filtered_row_data_from_state();
+        let current_rows = self.current_store_rows();
+
+        if current_rows.len() != filtered_rows.len() {
+            self.reload_store();
+            return;
+        }
+
+        if current_rows
+            .iter()
+            .zip(filtered_rows.iter())
+            .any(|(current, next)| current.id != next.id)
+        {
+            self.reload_store();
+            return;
+        }
+
+        let mut changed = false;
+        for (position, (current, next)) in current_rows.iter().zip(filtered_rows.iter()).enumerate()
+        {
+            if current.name != next.name
+                || current.duration_ms != next.duration_ms
+                || current.hotkey != next.hotkey
+            {
+                self.replace_row_at(position as u32, next.clone());
+                changed = true;
+            }
+        }
+
+        if changed || !current_rows.is_empty() || filtered_rows.is_empty() {
+            self.rebuild_visible_row_indices();
+        }
     }
 
     fn emit_library_changed(&self) {
         if let Some(ref cb) = *self.on_library_changed.borrow() {
             cb();
         }
+    }
+
+    fn lookup_sound(&self, sound_id: &str) -> Option<Sound> {
+        match self.state.config.lock() {
+            Ok(cfg) => cfg.get_sound(sound_id).cloned(),
+            Err(e) => {
+                log::warn!("Config lock poisoned in lookup_sound: {}", e);
+                None
+            }
+        }
+    }
+
+    fn current_tab_id(&self) -> String {
+        self.active_tab_id
+            .lock()
+            .map(|id| id.clone())
+            .unwrap_or_else(|e| {
+                log::warn!("active_tab_id lock poisoned: {}", e);
+                GENERAL_TAB_ID.to_string()
+            })
+    }
+
+    fn current_search_query(&self) -> String {
+        self.search_query
+            .lock()
+            .map(|q| q.to_lowercase())
+            .unwrap_or_else(|e| {
+                log::warn!("search_query lock poisoned: {}", e);
+                String::new()
+            })
+    }
+
+    fn tab_sound_ids<'a>(cfg: &'a crate::config::Config, tab_id: &str) -> Option<HashSet<&'a str>> {
+        if tab_id == GENERAL_TAB_ID {
+            None
+        } else {
+            cfg.tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .map(|tab| tab.sound_ids.iter().map(String::as_str).collect())
+        }
+    }
+
+    fn matches_filters(
+        sound: &Sound,
+        tab_sound_ids: &Option<HashSet<&str>>,
+        search_query: &str,
+    ) -> bool {
+        let tab_match = tab_sound_ids
+            .as_ref()
+            .is_none_or(|sound_ids| sound_ids.contains(sound.id.as_str()));
+        if !tab_match {
+            return false;
+        }
+
+        search_query.is_empty() || sound.name.to_lowercase().contains(search_query)
     }
 }
 

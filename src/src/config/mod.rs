@@ -37,6 +37,16 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_for_persistence_disables_multiple_playback() {
+        let mut cfg = Config::default();
+        cfg.settings.allow_multiple_playbacks = true;
+
+        cfg.sanitize_for_persistence();
+
+        assert!(!cfg.settings.allow_multiple_playbacks);
+    }
+
+    #[test]
     fn typed_settings_serialize_to_legacy_strings() {
         let cfg = Config::default();
         let value = serde_json::to_value(&cfg).unwrap();
@@ -129,5 +139,40 @@ mod tests {
         let mut cfg = Config::default();
         let removed = cfg.remove_sounds_from_tab("missing-tab", &["sound-1".to_string()]);
         assert!(!removed);
+    }
+
+    #[test]
+    fn remove_sounds_batch_removes_sounds_and_tab_membership() {
+        let mut cfg = Config::default();
+
+        let mut sound_a = Sound::new("A".to_string(), "/tmp/a.wav".to_string());
+        sound_a.id = "sound-a".to_string();
+        let mut sound_b = Sound::new("B".to_string(), "/tmp/b.wav".to_string());
+        sound_b.id = "sound-b".to_string();
+        let mut sound_c = Sound::new("C".to_string(), "/tmp/c.wav".to_string());
+        sound_c.id = "sound-c".to_string();
+        cfg.sounds = vec![sound_a, sound_b, sound_c];
+
+        let mut tab = SoundTab::new("Custom".to_string(), 1);
+        tab.sound_ids = vec![
+            "sound-a".to_string(),
+            "sound-b".to_string(),
+            "sound-c".to_string(),
+        ];
+        cfg.tabs.push(tab);
+
+        cfg.remove_sounds(&[
+            "sound-b".to_string(),
+            "missing-id".to_string(),
+            "sound-c".to_string(),
+        ]);
+
+        let remaining_ids = cfg
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining_ids, vec!["sound-a"]);
+        assert_eq!(cfg.tabs[0].sound_ids, vec!["sound-a"]);
     }
 }

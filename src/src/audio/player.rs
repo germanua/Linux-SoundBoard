@@ -1,15 +1,16 @@
-//! Audio playback engine with dual output support
+//! Audio playback engine with dual output support.
 //!
-//! Seeking implementation follows the pattern from uamp/raplay:
-//! - Uses SeekMode::Coarse for reliable MP3/VBR seeking
-//! - Tracks actual timestamp from decoder, not calculated from samples
-//! - Properly handles decoder reset on seek
+//! Seeking follows the legacy LinuxSoundBoard rewind model:
+//! - decoder seeks use Symphonia coarse mode for resilience
+//! - a successful seek resets playback position tracking to the requested timeline
+//! - playback position then advances from written sample counts
 
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
 use libpulse_simple_binding::Simple;
 use log::{debug, error, info, warn};
-use rodio::source::{SeekError as RodioSeekError, UniformSourceIterator};
+use rodio::source::SeekError as RodioSeekError;
+use rodio::source::UniformSourceIterator;
 use rodio::Source;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -52,7 +53,7 @@ impl Timestamp {
 }
 
 /// Custom audio source that uses symphonia directly with proper error handling
-/// Following the uamp/raplay Symph pattern for reliable seeking
+/// Following the legacy Symphonia pattern for reliable seeking.
 struct SymphoniaSource {
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     format: Box<dyn symphonia::core::formats::FormatReader>,
@@ -148,8 +149,9 @@ impl SymphoniaSource {
     }
 
     /// Seek to position in milliseconds
-    /// Following uamp/raplay pattern: use Coarse mode, track actual_ts
-    fn seek(&mut self, pos_ms: u64) -> Result<Timestamp, String> {
+    /// Following the legacy pattern: use coarse seek and treat the requested
+    /// timeline position as authoritative for playback tracking.
+    fn seek(&mut self, pos_ms: u64) -> Result<(), String> {
         let time = Time::new(
             pos_ms / 1000,                   // seconds
             (pos_ms % 1000) as f64 / 1000.0, // fractional seconds
@@ -177,7 +179,6 @@ impl SymphoniaSource {
             }
         };
 
-        // Use Coarse seek mode - more reliable for VBR MP3 (uamp uses Coarse)
         let seek_result = self.format.seek(SeekMode::Coarse, seek_to);
 
         match seek_result {
@@ -197,8 +198,7 @@ impl SymphoniaSource {
                     pos_ms, seeked_to.actual_ts
                 );
 
-                self.get_time()
-                    .ok_or_else(|| "Cannot determine timestamp after seek".to_string())
+                Ok(())
             }
             Err(e) => {
                 warn!("Seek failed: {}", e);
@@ -337,7 +337,6 @@ impl Source for SymphoniaSource {
     }
     fn try_seek(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
         self.seek(pos.as_millis() as u64)
-            .map(|_| ())
             .map_err(|e| RodioSeekError::Other(Box::new(std::io::Error::other(e))))
     }
 }
@@ -345,17 +344,125 @@ impl Source for SymphoniaSource {
 impl Iterator for SymphoniaSource {
     type Item = i16;
     fn next(&mut self) -> Option<Self::Item> {
-        // Force decode if buffer is exhausted or we just seeked
-        if self.needs_decode || self.current_frame_offset >= self.buffer.samples().len() {
-            self.decode_next_packet()?;
+        loop {
+            // Force decode if buffer is exhausted or we just seeked
+            if self.needs_decode || self.current_frame_offset >= self.buffer.samples().len() {
+                self.decode_next_packet()?;
+            }
+
+            if self.current_frame_offset < self.buffer.samples().len() {
+                let sample = self.buffer.samples()[self.current_frame_offset];
+                self.current_frame_offset += 1;
+                return Some(sample);
+            } else {
+                return None;
+            }
         }
-        if self.current_frame_offset < self.buffer.samples().len() {
-            let sample = self.buffer.samples()[self.current_frame_offset];
-            self.current_frame_offset += 1;
-            Some(sample)
-        } else {
-            None
-        }
+    }
+}
+
+/// A seek-safe playback source that rebuilds the conversion chain after seek.
+trait ResettableSource: Source<Item = i16> {
+    fn seek_resettable(&mut self, pos: Duration) -> Result<(), RodioSeekError>;
+}
+
+impl ResettableSource for SymphoniaSource {
+    fn seek_resettable(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+        self.seek(pos.as_millis() as u64)
+            .map_err(|e| RodioSeekError::Other(Box::new(std::io::Error::other(e))))
+    }
+}
+
+struct ResettablePlaybackSource<S, F>
+where
+    S: ResettableSource,
+    F: Fn() -> Result<S, String>,
+{
+    factory: F,
+    converted: UniformSourceIterator<S, i16>,
+    target_channels: u16,
+    target_sample_rate: u32,
+    total_duration: Option<Duration>,
+}
+
+impl<S, F> ResettablePlaybackSource<S, F>
+where
+    S: ResettableSource,
+    F: Fn() -> Result<S, String>,
+{
+    fn new(factory: F, target_channels: u16, target_sample_rate: u32) -> Result<Self, String> {
+        let input = factory()?;
+        let total_duration = input.total_duration();
+        Ok(Self {
+            factory,
+            converted: UniformSourceIterator::<S, i16>::new(
+                input,
+                target_channels,
+                target_sample_rate,
+            ),
+            target_channels,
+            target_sample_rate,
+            total_duration,
+        })
+    }
+
+    /// Internal seek method that rebuilds the converter after seek.
+    fn seek_internal(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+        // Rebuild the source
+        let mut input = (self.factory)().map_err(|e| {
+            RodioSeekError::Other(Box::new(std::io::Error::other(format!(
+                "Failed to rebuild playback source: {e}"
+            ))))
+        })?;
+
+        input.seek_resettable(pos)?;
+
+        self.total_duration = input.total_duration();
+        self.converted = UniformSourceIterator::<S, i16>::new(
+            input,
+            self.target_channels,
+            self.target_sample_rate,
+        );
+
+        Ok(())
+    }
+}
+
+impl<S, F> Iterator for ResettablePlaybackSource<S, F>
+where
+    S: ResettableSource,
+    F: Fn() -> Result<S, String>,
+{
+    type Item = i16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.converted.next()
+    }
+}
+
+impl<S, F> Source for ResettablePlaybackSource<S, F>
+where
+    S: ResettableSource,
+    F: Fn() -> Result<S, String>,
+{
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.target_channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.target_sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.total_duration
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+        self.seek_internal(pos).map(|_| ())
     }
 }
 
@@ -455,6 +562,13 @@ fn bits_to_f32(bits: u32) -> f32 {
     f32::from_bits(bits)
 }
 
+fn clamp_seek_position_ms(position_ms: u64, duration_ms: Option<u64>) -> u64 {
+    match duration_ms {
+        Some(duration_ms) => position_ms.min(duration_ms),
+        None => position_ms,
+    }
+}
+
 enum AudioCommand {
     Play {
         sound_id: String,
@@ -469,7 +583,7 @@ enum AudioCommand {
     },
     StopAll,
     Seek {
-        sound_id: String,
+        play_id: String,
         position_ms: u64,
     },
     Pause {
@@ -605,11 +719,16 @@ impl AudioPlayer {
     pub fn stop_all(&self) {
         let _ = self.command_tx.send(AudioCommand::StopAll);
     }
-    pub fn seek(&self, sound_id: &str, position_ms: u64) {
-        let _ = self.command_tx.send(AudioCommand::Seek {
-            sound_id: sound_id.to_string(),
+    pub fn seek_playback(&self, play_id: &str, position_ms: u64) {
+        if let Err(e) = self.command_tx.send(AudioCommand::Seek {
+            play_id: play_id.to_string(),
             position_ms,
-        });
+        }) {
+            warn!(
+                "Failed to enqueue seek command: play_id={}, position_ms={}, error={}",
+                play_id, position_ms, e
+            );
+        }
     }
     pub fn pause(&self, sound_id: &str) {
         let _ = self.command_tx.send(AudioCommand::Pause {
@@ -914,6 +1033,7 @@ impl LookAheadLimiter {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum PlaybackMsg {
     Stop,
     Seek(u64),
@@ -921,11 +1041,47 @@ enum PlaybackMsg {
     Resume,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PendingPlaybackControl {
+    stop: bool,
+    seek_ms: Option<u64>,
+    paused: Option<bool>,
+}
+
+fn drain_playback_messages(
+    first: PlaybackMsg,
+    control_rx: &Receiver<PlaybackMsg>,
+) -> PendingPlaybackControl {
+    let mut pending = PendingPlaybackControl::default();
+    apply_playback_message(&mut pending, first);
+
+    while !pending.stop {
+        match control_rx.try_recv() {
+            Ok(msg) => apply_playback_message(&mut pending, msg),
+            Err(_) => break,
+        }
+    }
+
+    pending
+}
+
+fn apply_playback_message(pending: &mut PendingPlaybackControl, msg: PlaybackMsg) {
+    match msg {
+        PlaybackMsg::Stop => {
+            pending.stop = true;
+            pending.seek_ms = None;
+            pending.paused = None;
+        }
+        PlaybackMsg::Seek(ms) => pending.seek_ms = Some(ms),
+        PlaybackMsg::Pause => pending.paused = Some(true),
+        PlaybackMsg::Resume => pending.paused = Some(false),
+    }
+}
+
 struct PlayingSound {
     local_tx: Option<Sender<PlaybackMsg>>,
     virtual_tx: Option<Sender<PlaybackMsg>>,
     sound_id: String,
-    position_ms: Arc<AtomicU64>,
     paused: Arc<AtomicBool>,
     _local_thread: Option<thread::JoinHandle<()>>,
     _virtual_thread: Option<thread::JoinHandle<()>>,
@@ -952,6 +1108,7 @@ struct PlayRequest<'a> {
 
 struct PlaybackThreadContext {
     file_path: Arc<str>,
+    duration_ms: Option<u64>,
     local_enabled: bool,
     virtual_enabled: bool,
     base_volume: f32,
@@ -977,14 +1134,38 @@ impl PlayingSound {
             let _ = tx.send(PlaybackMsg::Stop);
         }
     }
-    fn seek(&self, pos_ms: u64) {
+    fn seek(&self, pos_ms: u64) -> SeekSendOutcome {
+        let mut had_channel = false;
+        let mut send_failed = false;
+
         if let Some(tx) = &self.local_tx {
-            let _ = tx.send(PlaybackMsg::Seek(pos_ms));
+            had_channel = true;
+            if tx.send(PlaybackMsg::Seek(pos_ms)).is_err() {
+                send_failed = true;
+                warn!(
+                    "Seek delivery failed on local channel: sound_id={}, position_ms={}",
+                    self.sound_id, pos_ms
+                );
+            }
         }
         if let Some(tx) = &self.virtual_tx {
-            let _ = tx.send(PlaybackMsg::Seek(pos_ms));
+            had_channel = true;
+            if tx.send(PlaybackMsg::Seek(pos_ms)).is_err() {
+                send_failed = true;
+                warn!(
+                    "Seek delivery failed on virtual channel: sound_id={}, position_ms={}",
+                    self.sound_id, pos_ms
+                );
+            }
         }
-        self.position_ms.store(pos_ms, Ordering::Relaxed);
+
+        if !had_channel {
+            SeekSendOutcome::NoControlChannel
+        } else if send_failed {
+            SeekSendOutcome::ChannelSendFailed
+        } else {
+            SeekSendOutcome::Sent
+        }
     }
     fn pause(&self) {
         if let Some(tx) = &self.local_tx {
@@ -1003,6 +1184,41 @@ impl PlayingSound {
             let _ = tx.send(PlaybackMsg::Resume);
         }
         self.paused.store(false, Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeekSendOutcome {
+    Sent,
+    NoControlChannel,
+    ChannelSendFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeekDispatchOutcome {
+    Sent,
+    MissingPlayId,
+    NoControlChannel,
+    ChannelSendFailed,
+}
+
+fn dispatch_playback_seek(
+    playing: &HashMap<String, PlayingSound>,
+    play_id: &str,
+    position_ms: u64,
+) -> SeekDispatchOutcome {
+    if let Some(ps) = playing.get(play_id) {
+        info!(
+            "Sending seek message to play_id={}, position_ms={}",
+            play_id, position_ms
+        );
+        match ps.seek(position_ms) {
+            SeekSendOutcome::Sent => SeekDispatchOutcome::Sent,
+            SeekSendOutcome::NoControlChannel => SeekDispatchOutcome::NoControlChannel,
+            SeekSendOutcome::ChannelSendFailed => SeekDispatchOutcome::ChannelSendFailed,
+        }
+    } else {
+        SeekDispatchOutcome::MissingPlayId
     }
 }
 
@@ -1099,28 +1315,30 @@ fn audio_thread_main(
                 crate::diagnostics::memory::log_memory_snapshot("audio_cmd:stop_all");
             }
             AudioCommand::Seek {
-                sound_id,
+                play_id,
                 position_ms,
-            } => {
-                let mut found = false;
-                for ps in playing.values() {
-                    if ps.sound_id == sound_id {
-                        info!(
-                            "Sending seek message to sound_id={}, position_ms={}",
-                            sound_id, position_ms
-                        );
-                        ps.seek(position_ms);
-                        found = true;
-                    }
-                }
-                if !found {
+            } => match dispatch_playback_seek(&playing, &play_id, position_ms) {
+                SeekDispatchOutcome::Sent => {}
+                SeekDispatchOutcome::MissingPlayId => {
                     warn!(
-                        "Seek: No playing sound found with sound_id={}. Playing sounds: {:?}",
-                        sound_id,
-                        playing.values().map(|ps| &ps.sound_id).collect::<Vec<_>>()
+                        "Seek: No playing sound found with play_id={}. Playing ids: {:?}",
+                        play_id,
+                        playing.keys().collect::<Vec<_>>()
                     );
                 }
-            }
+                SeekDispatchOutcome::NoControlChannel => {
+                    warn!(
+                        "Seek: play_id={} has no active control channel; position_ms={}",
+                        play_id, position_ms
+                    );
+                }
+                SeekDispatchOutcome::ChannelSendFailed => {
+                    warn!(
+                        "Seek: control channel send failed for play_id={}, position_ms={}",
+                        play_id, position_ms
+                    );
+                }
+            },
             AudioCommand::Pause { sound_id } => {
                 for ps in playing.values() {
                     if ps.sound_id == sound_id {
@@ -1299,6 +1517,33 @@ fn open_pulse_outputs_with_fallback(
     ))
 }
 
+fn build_dynamic_limiters(
+    auto_gain: &SharedAutoGain,
+    rate: u64,
+    channels: u64,
+    local_enabled: bool,
+    virtual_enabled: bool,
+) -> (Option<LookAheadLimiter>, Option<LookAheadLimiter>) {
+    let mode = auto_gain.mode();
+    if !auto_gain.is_enabled() || mode != AutoGainMode::DynamicLookAhead {
+        return (None, None);
+    }
+
+    let params = auto_gain.dynamic_params();
+    let local_limiter = if local_enabled && auto_gain.applies_to_output(false) {
+        Some(LookAheadLimiter::new(rate as u32, channels as u16, params))
+    } else {
+        None
+    };
+    let virtual_limiter = if virtual_enabled && auto_gain.applies_to_output(true) {
+        Some(LookAheadLimiter::new(rate as u32, channels as u16, params))
+    } else {
+        None
+    };
+
+    (local_limiter, virtual_limiter)
+}
+
 fn play_dual_output(request: PlayRequest<'_>) -> Result<(String, PlayingSound), String> {
     crate::diagnostics::memory::log_memory_snapshot("play_dual_output:start");
     let _ = std::fs::File::open(request.path).map_err(|e| format!("Failed to open file: {e}"))?;
@@ -1308,13 +1553,14 @@ fn play_dual_output(request: PlayRequest<'_>) -> Result<(String, PlayingSound), 
     let position_ms = Arc::new(AtomicU64::new(0));
     let paused = Arc::new(AtomicBool::new(false));
 
-    let duration_ms = probe_duration_ms(request.path);
+    let duration_ms = crate::audio::metadata::probe_duration_ms(request.path);
 
     let (tx, rx) = mpsc::channel();
     let path = Arc::clone(&file_path);
     let flag = Arc::clone(&finished_flag);
     let thread_context = PlaybackThreadContext {
         file_path: path,
+        duration_ms,
         local_enabled: true,
         virtual_enabled: true,
         base_volume: request.base_volume,
@@ -1363,7 +1609,6 @@ fn play_dual_output(request: PlayRequest<'_>) -> Result<(String, PlayingSound), 
             local_tx: Some(tx),
             virtual_tx: None,
             sound_id: request.sound_id.to_string(),
-            position_ms,
             paused,
             _local_thread: Some(handle),
             _virtual_thread: None,
@@ -1384,19 +1629,19 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
         virtual_pulse.is_some()
     );
 
-    let source = SymphoniaSource::from_path(&context.file_path)?;
-    let mut source = UniformSourceIterator::<SymphoniaSource, i16>::new(
-        source,
+    let file_path = Arc::clone(&context.file_path);
+    let mut source = ResettablePlaybackSource::new(
+        move || SymphoniaSource::from_path(&file_path),
         output_channels as u16,
         output_rate,
-    );
+    )?;
 
     let mut local_buffer: Vec<i16> = Vec::with_capacity(4096);
     let mut virtual_buffer: Vec<i16> = Vec::with_capacity(4096);
     let mut is_paused = false;
 
-    // Position tracking using decoder's actual timestamp (like uamp)
-    // We track output samples for position updates.
+    // Position tracking follows the requested seek timeline and then advances
+    // from output sample counts.
     let channels = source.channels() as u64;
     let rate = source.sample_rate() as u64;
     if channels == 0 || rate == 0 {
@@ -1404,67 +1649,65 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
     }
     let mut fallback_samples_written: u64 = 0;
     let mut eof_tracker = EofTracker::default();
-    let mut local_limiter: Option<LookAheadLimiter> = None;
-    let mut virtual_limiter: Option<LookAheadLimiter> = None;
+    let (mut local_limiter, mut virtual_limiter) = build_dynamic_limiters(
+        &context.shared_auto_gain,
+        rate,
+        channels,
+        local_pulse.is_some(),
+        virtual_pulse.is_some(),
+    );
     let mut last_dynamic_mode = context.shared_auto_gain.mode();
     let mut last_dynamic_params = context.shared_auto_gain.dynamic_params();
-    if context.shared_auto_gain.is_enabled() && last_dynamic_mode == AutoGainMode::DynamicLookAhead
-    {
-        if local_pulse.is_some() && context.shared_auto_gain.applies_to_output(false) {
-            local_limiter = Some(LookAheadLimiter::new(
-                rate as u32,
-                channels as u16,
-                last_dynamic_params,
-            ));
-        }
-        if virtual_pulse.is_some() && context.shared_auto_gain.applies_to_output(true) {
-            virtual_limiter = Some(LookAheadLimiter::new(
-                rate as u32,
-                channels as u16,
-                last_dynamic_params,
-            ));
-        }
-    }
 
     'playback: loop {
         while let Ok(msg) = context.control_rx.try_recv() {
-            match msg {
-                PlaybackMsg::Stop => break 'playback,
-                PlaybackMsg::Seek(ms) => {
-                    // Reduced logging for better performance during rapid seeking
-                    if let Some(pulse) = local_pulse.as_ref() {
-                        let _ = pulse.flush();
+            let pending = drain_playback_messages(msg, &context.control_rx);
+            if pending.stop {
+                break 'playback;
+            }
+
+            if let Some(ms) = pending.seek_ms {
+                let clamped_ms = clamp_seek_position_ms(ms, context.duration_ms);
+
+                if let Some(pulse) = local_pulse.as_ref() {
+                    let _ = pulse.flush();
+                }
+                if let Some(pulse) = virtual_pulse.as_ref() {
+                    let _ = pulse.flush();
+                }
+
+                match source.seek_internal(Duration::from_millis(clamped_ms)) {
+                    Ok(()) => {
+                        local_buffer.clear();
+                        virtual_buffer.clear();
+                        (local_limiter, virtual_limiter) = build_dynamic_limiters(
+                            &context.shared_auto_gain,
+                            rate,
+                            channels,
+                            local_pulse.is_some(),
+                            virtual_pulse.is_some(),
+                        );
+
+                        let seek_baseline_samples = (clamped_ms * rate * channels) / 1000;
+                        fallback_samples_written = seek_baseline_samples;
+
+                        context.position_ms.store(clamped_ms, Ordering::Relaxed);
+                        eof_tracker.reset();
+
+                        debug!(
+                            "Seek position tracking: baseline_samples={}, requested_position_ms={}",
+                            seek_baseline_samples, clamped_ms
+                        );
                     }
-                    if let Some(pulse) = virtual_pulse.as_ref() {
-                        let _ = pulse.flush();
-                    }
-
-                    match source.try_seek(Duration::from_millis(ms)) {
-                        Ok(_) => {
-                            local_buffer.clear();
-                            virtual_buffer.clear();
-
-                            // UniformSourceIterator seek uses requested timeline.
-                            context.position_ms.store(ms, Ordering::Relaxed);
-
-                            // Sync fallback counter to decoder position
-                            fallback_samples_written = (ms * rate * channels) / 1000;
-                            eof_tracker.reset();
-                        }
-                        Err(e) => {
-                            warn!("Seek failed: {}", e);
-                            // Don't update position if seek failed
-                        }
+                    Err(e) => {
+                        warn!("Seek failed: {}", e);
                     }
                 }
-                PlaybackMsg::Pause => {
-                    is_paused = true;
-                    context.paused.store(true, Ordering::Relaxed);
-                }
-                PlaybackMsg::Resume => {
-                    is_paused = false;
-                    context.paused.store(false, Ordering::Relaxed);
-                }
+            }
+
+            if let Some(paused) = pending.paused {
+                is_paused = paused;
+                context.paused.store(paused, Ordering::Relaxed);
             }
         }
 
@@ -1648,32 +1891,13 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
                             let restart_params = context.shared_auto_gain.dynamic_params();
                             last_dynamic_mode = restart_mode;
                             last_dynamic_params = restart_params;
-                            local_limiter = if local_pulse.is_some()
-                                && context.shared_auto_gain.is_enabled()
-                                && context.shared_auto_gain.applies_to_output(false)
-                                && restart_mode == AutoGainMode::DynamicLookAhead
-                            {
-                                Some(LookAheadLimiter::new(
-                                    rate as u32,
-                                    channels as u16,
-                                    restart_params,
-                                ))
-                            } else {
-                                None
-                            };
-                            virtual_limiter = if virtual_pulse.is_some()
-                                && context.shared_auto_gain.is_enabled()
-                                && context.shared_auto_gain.applies_to_output(true)
-                                && restart_mode == AutoGainMode::DynamicLookAhead
-                            {
-                                Some(LookAheadLimiter::new(
-                                    rate as u32,
-                                    channels as u16,
-                                    restart_params,
-                                ))
-                            } else {
-                                None
-                            };
+                            (local_limiter, virtual_limiter) = build_dynamic_limiters(
+                                &context.shared_auto_gain,
+                                rate,
+                                channels,
+                                local_pulse.is_some(),
+                                virtual_pulse.is_some(),
+                            );
 
                             debug!("Loop: restarting from beginning");
                             continue 'playback;
@@ -1756,44 +1980,122 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
     Ok(())
 }
 
-fn probe_duration_ms(path: &str) -> Option<u64> {
-    let file = std::fs::File::open(path).ok()?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-    {
-        hint.with_extension(ext);
-    }
-    let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .ok()?;
-    let track = probed.format.default_track()?;
-    let params = &track.codec_params;
-    if let (Some(tb), Some(n_frames)) = (params.time_base, params.n_frames) {
-        let time = tb.calc_time(n_frames);
-        let ms = time.seconds.saturating_mul(1000);
-        if ms > 0 {
-            return Some(ms);
-        }
-    }
-    if let (Some(n_frames), Some(sr)) = (params.n_frames, params.sample_rate) {
-        if sr > 0 {
-            return Some(((n_frames as u128) * 1000 / (sr as u128)) as u64);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::TryRecvError;
+
+    #[derive(Clone)]
+    struct TestSeekSource {
+        samples: Vec<i16>,
+        position: usize,
+        channels: u16,
+        sample_rate: u32,
+    }
+
+    impl Iterator for TestSeekSource {
+        type Item = i16;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let sample = self.samples.get(self.position).copied()?;
+            self.position += 1;
+            Some(sample)
+        }
+    }
+
+    impl Source for TestSeekSource {
+        fn current_frame_len(&self) -> Option<usize> {
+            None
+        }
+
+        fn channels(&self) -> u16 {
+            self.channels
+        }
+
+        fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(
+                (self.samples.len() as u64) / u64::from(self.channels.max(1)),
+            ))
+        }
+
+        fn try_seek(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+            let frame = pos.as_secs() as usize * usize::from(self.channels);
+            self.position = frame.min(self.samples.len());
+            Ok(())
+        }
+    }
+
+    impl ResettableSource for TestSeekSource {
+        fn seek_resettable(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+            self.try_seek(pos)
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingSeekSource {
+        samples: Vec<i16>,
+        position: usize,
+        channels: u16,
+        sample_rate: u32,
+    }
+
+    impl Iterator for FailingSeekSource {
+        type Item = i16;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let sample = self.samples.get(self.position).copied()?;
+            self.position += 1;
+            Some(sample)
+        }
+    }
+
+    impl Source for FailingSeekSource {
+        fn current_frame_len(&self) -> Option<usize> {
+            None
+        }
+
+        fn channels(&self) -> u16 {
+            self.channels
+        }
+
+        fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        fn total_duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(
+                (self.samples.len() as u64) / u64::from(self.channels.max(1)),
+            ))
+        }
+
+        fn try_seek(&mut self, _pos: Duration) -> Result<(), RodioSeekError> {
+            Err(RodioSeekError::Other(Box::new(std::io::Error::other(
+                "seek failed",
+            ))))
+        }
+    }
+
+    impl ResettableSource for FailingSeekSource {
+        fn seek_resettable(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
+            self.try_seek(pos)
+        }
+    }
+
+    fn test_playing_sound(local_tx: Sender<PlaybackMsg>, sound_id: &str) -> PlayingSound {
+        PlayingSound {
+            local_tx: Some(local_tx),
+            virtual_tx: None,
+            sound_id: sound_id.to_string(),
+            paused: Arc::new(AtomicBool::new(false)),
+            _local_thread: None,
+            _virtual_thread: None,
+            is_finished_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
 
     #[test]
     fn eof_tracker_flushes_tail_only_once_per_eof() {
@@ -1844,5 +2146,201 @@ mod tests {
             tracker.empty_buffer_outcome(42, false),
             EmptyBufferOutcome::KeepPlaying
         );
+    }
+
+    #[test]
+    fn clamp_seek_position_ms_preserves_seek_without_duration() {
+        assert_eq!(clamp_seek_position_ms(5_000, None), 5_000);
+        assert_eq!(clamp_seek_position_ms(0, None), 0);
+    }
+
+    #[test]
+    fn clamp_seek_position_ms_clamps_seek_near_end() {
+        assert_eq!(clamp_seek_position_ms(12_000, Some(10_000)), 10_000);
+        assert_eq!(clamp_seek_position_ms(9_999, Some(10_000)), 9_999);
+    }
+
+    #[test]
+    fn dispatch_playback_seek_targets_only_requested_play_id() {
+        let (target_tx, target_rx) = mpsc::channel();
+        let (other_tx, other_rx) = mpsc::channel();
+        let mut playing = HashMap::new();
+        playing.insert(
+            "play-1".to_string(),
+            test_playing_sound(target_tx, "shared-sound"),
+        );
+        playing.insert(
+            "play-2".to_string(),
+            test_playing_sound(other_tx, "shared-sound"),
+        );
+
+        assert_eq!(
+            dispatch_playback_seek(&playing, "play-2", 3_500),
+            SeekDispatchOutcome::Sent
+        );
+        assert_eq!(
+            other_rx.try_recv().expect("seek sent"),
+            PlaybackMsg::Seek(3_500)
+        );
+        assert!(matches!(target_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn dispatch_playback_seek_returns_missing_play_id() {
+        let playing = HashMap::new();
+
+        assert_eq!(
+            dispatch_playback_seek(&playing, "missing", 4_200),
+            SeekDispatchOutcome::MissingPlayId
+        );
+    }
+
+    #[test]
+    fn dispatch_playback_seek_returns_channel_send_failed_when_receiver_dropped() {
+        let (tx, rx) = mpsc::channel();
+        drop(rx);
+
+        let mut playing = HashMap::new();
+        playing.insert("play-1".to_string(), test_playing_sound(tx, "sound-1"));
+
+        assert_eq!(
+            dispatch_playback_seek(&playing, "play-1", 4_200),
+            SeekDispatchOutcome::ChannelSendFailed
+        );
+    }
+
+    #[test]
+    fn dispatch_playback_seek_returns_no_control_channel() {
+        let playing_sound = PlayingSound {
+            local_tx: None,
+            virtual_tx: None,
+            sound_id: "sound-1".to_string(),
+            paused: Arc::new(AtomicBool::new(false)),
+            _local_thread: None,
+            _virtual_thread: None,
+            is_finished_flag: Arc::new(AtomicBool::new(false)),
+        };
+        let mut playing = HashMap::new();
+        playing.insert("play-1".to_string(), playing_sound);
+
+        assert_eq!(
+            dispatch_playback_seek(&playing, "play-1", 1_200),
+            SeekDispatchOutcome::NoControlChannel
+        );
+    }
+
+    #[test]
+    fn drain_playback_messages_coalesces_to_last_seek() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(PlaybackMsg::Seek(2_000)).expect("first seek");
+        tx.send(PlaybackMsg::Seek(4_000)).expect("second seek");
+        tx.send(PlaybackMsg::Pause).expect("pause");
+
+        let pending = drain_playback_messages(PlaybackMsg::Seek(1_000), &rx);
+
+        assert_eq!(
+            pending,
+            PendingPlaybackControl {
+                stop: false,
+                seek_ms: Some(4_000),
+                paused: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn resettable_playback_source_rebuilds_converter_after_seek() {
+        let input = TestSeekSource {
+            samples: vec![100, 200, 300, 400],
+            position: 0,
+            channels: 1,
+            sample_rate: 1,
+        };
+        let mut source = ResettablePlaybackSource::new(move || Ok(input.clone()), 1, 2)
+            .expect("wrapper should build");
+
+        assert_eq!(source.next(), Some(100));
+        assert_eq!(source.next(), Some(150));
+
+        source
+            .try_seek(Duration::from_secs(2))
+            .expect("seek should succeed");
+
+        let post_seek = (0..4).filter_map(|_| source.next()).collect::<Vec<_>>();
+        assert_eq!(post_seek, vec![300, 350, 400]);
+    }
+
+    #[test]
+    fn resettable_playback_source_failed_seek_leaves_position_unchanged() {
+        let input = FailingSeekSource {
+            samples: vec![10, 20, 30, 40],
+            position: 0,
+            channels: 1,
+            sample_rate: 1,
+        };
+        let mut source = ResettablePlaybackSource::new(move || Ok(input.clone()), 1, 1)
+            .expect("wrapper should build");
+
+        assert_eq!(source.next(), Some(10));
+        assert!(source.try_seek(Duration::from_secs(2)).is_err());
+        assert_eq!(source.next(), Some(20));
+    }
+
+    #[test]
+    fn requested_seek_baseline_handles_seek_to_start() {
+        let requested_ms: u64 = 0;
+        let rate: u64 = 48_000;
+        let channels: u64 = 2;
+
+        let seek_baseline_samples = (requested_ms * rate * channels) / 1000;
+        assert_eq!(seek_baseline_samples, 0);
+    }
+
+    #[test]
+    fn requested_seek_baseline_handles_midpoint_seek() {
+        let requested_ms: u64 = 5_000;
+        let rate: u64 = 48_000;
+        let channels: u64 = 2;
+
+        let seek_baseline_samples = (requested_ms * rate * channels) / 1000;
+        assert_eq!(seek_baseline_samples, 480_000);
+    }
+
+    #[test]
+    fn requested_seek_baseline_handles_clamped_seek_near_end() {
+        let requested_ms: u64 = clamp_seek_position_ms(12_000, Some(10_000));
+        let rate: u64 = 48_000;
+        let channels: u64 = 2;
+
+        let seek_baseline_samples = (requested_ms * rate * channels) / 1000;
+        assert_eq!(seek_baseline_samples, 960_000);
+    }
+
+    #[test]
+    fn position_tracking_uses_requested_seek_baseline() {
+        let requested_ms: u64 = 10_000;
+        let rate: u64 = 48_000;
+        let channels: u64 = 2;
+
+        let seek_baseline_samples = (requested_ms * rate * channels) / 1000;
+        let samples_after_seek: u64 = 1000;
+        let total_samples = seek_baseline_samples + samples_after_seek;
+
+        let frames = total_samples / channels;
+        let position_ms = frames * 1000 / rate;
+
+        assert!(position_ms >= 10_010 && position_ms <= 10_011);
+    }
+
+    #[test]
+    fn position_tracking_without_seek_baseline_would_be_wrong() {
+        let rate = 48_000;
+        let channels = 2;
+
+        let samples_after_seek = 1000;
+        let frames = samples_after_seek / channels;
+        let position_ms = frames * 1000 / rate;
+
+        assert!(position_ms < 100);
     }
 }

@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 
-use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::Window;
 use libadwaita as adw;
@@ -26,12 +26,12 @@ fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
 }
 
 /// Open the settings dialog as a child of `parent`.
-pub fn show_settings(
+pub fn build_settings_dialog(
     parent: &Window,
     state: Arc<AppState>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
-) {
+) -> adw::PreferencesDialog {
     let prefs = adw::PreferencesDialog::builder()
         .title("Settings")
         .content_width(600)
@@ -46,6 +46,17 @@ pub fn show_settings(
     ));
     prefs.add(&build_hotkeys_page(Arc::clone(&state)));
 
+    prefs
+}
+
+/// Open the settings dialog as a child of `parent`.
+pub fn show_settings(
+    parent: &Window,
+    state: Arc<AppState>,
+    on_library_changed: Option<Rc<dyn Fn() + 'static>>,
+    on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
+) {
+    let prefs = build_settings_dialog(parent, state, on_library_changed, on_list_style_changed);
     prefs.present(Some(parent));
 }
 
@@ -79,9 +90,9 @@ fn build_general_page(
     {
         let state2 = Arc::clone(&state);
         let parent = parent.clone();
-        let folders_group2 = folders_group.clone();
-        let add_folder_row2 = add_folder_row.clone();
-        let folder_rows2 = Rc::clone(&folder_rows);
+        let folders_group_weak = folders_group.downgrade();
+        let add_folder_row_weak = add_folder_row.downgrade();
+        let folder_rows_weak = Rc::downgrade(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
@@ -89,9 +100,9 @@ fn build_general_page(
                 .build();
             let state3 = Arc::clone(&state2);
             let parent_for_dialog = parent.clone();
-            let folders_group3 = folders_group2.clone();
-            let add_folder_row3 = add_folder_row2.clone();
-            let folder_rows3 = Rc::clone(&folder_rows2);
+            let folders_group_weak2 = folders_group_weak.clone();
+            let add_folder_row_weak2 = add_folder_row_weak.clone();
+            let folder_rows_weak2 = folder_rows_weak.clone();
             let on_library_changed3 = on_library_changed2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
@@ -112,11 +123,20 @@ fn build_general_page(
                             ) {
                                 log::warn!("Refresh after adding folder failed: {e}");
                             }
+                            let Some(folders_group3) = folders_group_weak2.upgrade() else {
+                                return;
+                            };
+                            let Some(add_folder_row3) = add_folder_row_weak2.upgrade() else {
+                                return;
+                            };
+                            let Some(folder_rows3) = folder_rows_weak2.upgrade() else {
+                                return;
+                            };
                             rebuild_sound_folder_rows(
                                 &folders_group3,
                                 &add_folder_row3,
                                 Arc::clone(&state3),
-                                Rc::clone(&folder_rows3),
+                                folder_rows3,
                                 on_library_changed3.clone(),
                             );
                             if let Some(cb) = on_library_changed3.as_ref() {
@@ -153,7 +173,6 @@ fn build_general_page(
 
     {
         let (
-            allow_multi,
             auto_gain,
             skip_del,
             target_lufs,
@@ -166,7 +185,6 @@ fn build_general_page(
             let cfg = state.config.lock().unwrap();
             let s = &cfg.settings;
             (
-                s.allow_multiple_playbacks,
                 s.auto_gain,
                 s.skip_delete_confirm,
                 s.auto_gain_target_lufs,
@@ -178,19 +196,6 @@ fn build_general_page(
             )
         };
 
-        // Allow multiple playbacks
-        let multi_row = adw::SwitchRow::builder()
-            .title("Allow Multiple Sounds")
-            .subtitle("Play multiple sounds simultaneously")
-            .active(allow_multi)
-            .build();
-        let state2 = Arc::clone(&state);
-        multi_row.connect_active_notify(move |row| {
-            let _ =
-                commands::set_allow_multiple_playbacks(row.is_active(), Arc::clone(&state2.config));
-        });
-        playback_group.add(&multi_row);
-
         // Auto-gain toggle
         let auto_gain_row = adw::SwitchRow::builder()
             .title("Auto-Gain Normalization")
@@ -199,14 +204,16 @@ fn build_general_page(
             .build();
         {
             let state3 = Arc::clone(&state);
-            let ag_group = auto_gain_group.clone();
+            let ag_group = auto_gain_group.downgrade();
             auto_gain_row.connect_active_notify(move |row| {
                 let _ = commands::set_auto_gain(
                     row.is_active(),
                     Arc::clone(&state3.config),
                     Arc::clone(&state3.player),
                 );
-                ag_group.set_visible(row.is_active());
+                if let Some(ag_group) = ag_group.upgrade() {
+                    ag_group.set_visible(row.is_active());
+                }
             });
         }
         playback_group.add(&auto_gain_row);
@@ -228,7 +235,7 @@ fn build_general_page(
         // (a) Target Volume
         let target_row = adw::SpinRow::with_range(-24.0, 0.0, 0.5);
         target_row.set_title("Target Volume (LUFS)");
-        target_row.set_subtitle("Loudness target for normalization");
+        target_row.set_subtitle("Loudness target applied to the selected output(s)");
         target_row.set_value(target_lufs);
         {
             let state2 = Arc::clone(&state);
@@ -253,9 +260,9 @@ fn build_general_page(
         mode_row.set_selected(if is_dynamic { 1 } else { 0 });
         {
             let state2 = Arc::clone(&state);
-            let la = lookahead_row.clone();
-            let at = attack_row.clone();
-            let rl = release_row.clone();
+            let la = lookahead_row.downgrade();
+            let at = attack_row.downgrade();
+            let rl = release_row.downgrade();
             mode_row.connect_selected_notify(move |row| {
                 let mode = if row.selected() == 1 {
                     AutoGainMode::Dynamic
@@ -268,9 +275,15 @@ fn build_general_page(
                     Arc::clone(&state2.player),
                 );
                 let show_dyn = mode == AutoGainMode::Dynamic;
-                la.set_visible(show_dyn);
-                at.set_visible(show_dyn);
-                rl.set_visible(show_dyn);
+                if let Some(la) = la.upgrade() {
+                    la.set_visible(show_dyn);
+                }
+                if let Some(at) = at.upgrade() {
+                    at.set_visible(show_dyn);
+                }
+                if let Some(rl) = rl.upgrade() {
+                    rl.set_visible(show_dyn);
+                }
             });
         }
         auto_gain_group.add(&mode_row);
@@ -278,7 +291,7 @@ fn build_general_page(
         // (c) Apply To
         let apply_to_row = adw::ComboRow::builder()
             .title("Apply To")
-            .subtitle("Which output receives gain correction")
+            .subtitle("Auto-gain only affects the selected output path")
             .build();
         let apply_model = gtk4::StringList::new(&["Mic only (recommended)", "Mic + headphones"]);
         apply_to_row.set_model(Some(&apply_model));
@@ -322,9 +335,15 @@ fn build_general_page(
 
         {
             let state2 = Arc::clone(&state);
-            let at2 = attack_row.clone();
-            let rl2 = release_row.clone();
+            let at2 = attack_row.downgrade();
+            let rl2 = release_row.downgrade();
             lookahead_row.connect_value_notify(move |row| {
+                let Some(at2) = at2.upgrade() else {
+                    return;
+                };
+                let Some(rl2) = rl2.upgrade() else {
+                    return;
+                };
                 let _ = commands::set_auto_gain_dynamic_settings(
                     row.value() as u32,
                     at2.value() as u32,
@@ -336,9 +355,15 @@ fn build_general_page(
         }
         {
             let state2 = Arc::clone(&state);
-            let la2 = lookahead_row.clone();
-            let rl2 = release_row.clone();
+            let la2 = lookahead_row.downgrade();
+            let rl2 = release_row.downgrade();
             attack_row.connect_value_notify(move |row| {
+                let Some(la2) = la2.upgrade() else {
+                    return;
+                };
+                let Some(rl2) = rl2.upgrade() else {
+                    return;
+                };
                 let _ = commands::set_auto_gain_dynamic_settings(
                     la2.value() as u32,
                     row.value() as u32,
@@ -350,9 +375,15 @@ fn build_general_page(
         }
         {
             let state2 = Arc::clone(&state);
-            let la2 = lookahead_row.clone();
-            let at2 = attack_row.clone();
+            let la2 = lookahead_row.downgrade();
+            let at2 = attack_row.downgrade();
             release_row.connect_value_notify(move |row| {
+                let Some(la2) = la2.upgrade() else {
+                    return;
+                };
+                let Some(at2) = at2.upgrade() else {
+                    return;
+                };
                 let _ = commands::set_auto_gain_dynamic_settings(
                     la2.value() as u32,
                     at2.value() as u32,
@@ -369,7 +400,7 @@ fn build_general_page(
         // (e) Analyze Loudness button
         let analyze_row = adw::ActionRow::builder()
             .title("Analyze All Sounds")
-            .subtitle("Scan all sounds for loudness normalization")
+            .subtitle("Scan sounds that still lack loudness data")
             .build();
         let analyze_btn = gtk4::Button::builder()
             .label("Analyze")
@@ -384,22 +415,58 @@ fn build_general_page(
         analyze_row.add_suffix(&analyze_btn);
         {
             let state2 = Arc::clone(&state);
-            let spinner2 = spinner.clone();
-            let btn2 = analyze_btn.clone();
-            analyze_btn.connect_clicked(move |_| {
-                spinner2.set_visible(true);
-                spinner2.start();
-                btn2.set_sensitive(false);
-                let config = Arc::clone(&state2.config);
-                let spinner3 = spinner2.clone();
-                let btn3 = btn2.clone();
-                gtk4::glib::spawn_future_local(async move {
-                    let _ =
-                        gio::spawn_blocking(move || commands::analyze_all_loudness(config)).await;
-                    spinner3.stop();
-                    spinner3.set_visible(false);
-                    btn3.set_sensitive(true);
-                });
+            let spinner2 = spinner.downgrade();
+            analyze_btn.connect_clicked(move |btn| {
+                let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+                match commands::trigger_missing_loudness_analysis(
+                    Arc::clone(&state2.config),
+                    true,
+                    Some(Box::new(move |result| {
+                        let _ = completion_tx.send(result);
+                    })),
+                ) {
+                    Ok(commands::MissingLoudnessAnalysisTrigger::Started) => {
+                        if let Some(spinner2) = spinner2.upgrade() {
+                            spinner2.set_visible(true);
+                            spinner2.start();
+                        }
+                        btn.set_sensitive(false);
+
+                        let spinner3 = spinner2.clone();
+                        let btn3 = btn.downgrade();
+                        gtk4::glib::timeout_add_local(
+                            std::time::Duration::from_millis(50),
+                            move || match completion_rx.try_recv() {
+                                Ok(result) => {
+                                    if let Err(e) = result {
+                                        log::warn!("Manual loudness analysis failed: {e}");
+                                    }
+                                    if let Some(spinner3) = spinner3.upgrade() {
+                                        spinner3.stop();
+                                        spinner3.set_visible(false);
+                                    }
+                                    if let Some(btn3) = btn3.upgrade() {
+                                        btn3.set_sensitive(true);
+                                    }
+                                    gtk4::glib::ControlFlow::Break
+                                }
+                                Err(TryRecvError::Empty) => gtk4::glib::ControlFlow::Continue,
+                                Err(TryRecvError::Disconnected) => {
+                                    if let Some(spinner3) = spinner3.upgrade() {
+                                        spinner3.stop();
+                                        spinner3.set_visible(false);
+                                    }
+                                    if let Some(btn3) = btn3.upgrade() {
+                                        btn3.set_sensitive(true);
+                                    }
+                                    gtk4::glib::ControlFlow::Break
+                                }
+                            },
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("Failed to schedule manual loudness analysis: {e}"),
+                }
             });
         }
         auto_gain_group.add(&analyze_row);
@@ -552,26 +619,34 @@ fn build_general_page(
         // Dark row click
         {
             let state2 = Arc::clone(&state);
-            let dr = dark_row.clone();
-            let lr = light_row.clone();
+            let dr = dark_row.downgrade();
+            let lr = light_row.downgrade();
             dark_row.connect_activated(move |_| {
                 let _ = commands::set_theme("dark".to_string(), Arc::clone(&state2.config));
                 crate::ui::theme::apply_theme(Theme::Dark);
-                set_appearance_row_selected(&dr, true);
-                set_appearance_row_selected(&lr, false);
+                if let Some(dr) = dr.upgrade() {
+                    set_appearance_row_selected(&dr, true);
+                }
+                if let Some(lr) = lr.upgrade() {
+                    set_appearance_row_selected(&lr, false);
+                }
             });
         }
 
         // Light row click
         {
             let state2 = Arc::clone(&state);
-            let dr = dark_row.clone();
-            let lr = light_row.clone();
+            let dr = dark_row.downgrade();
+            let lr = light_row.downgrade();
             light_row.connect_activated(move |_| {
                 let _ = commands::set_theme("light".to_string(), Arc::clone(&state2.config));
                 crate::ui::theme::apply_theme(Theme::Light);
-                set_appearance_row_selected(&dr, false);
-                set_appearance_row_selected(&lr, true);
+                if let Some(dr) = dr.upgrade() {
+                    set_appearance_row_selected(&dr, false);
+                }
+                if let Some(lr) = lr.upgrade() {
+                    set_appearance_row_selected(&lr, true);
+                }
             });
         }
 
@@ -605,16 +680,20 @@ fn build_general_page(
         // Compact row click
         {
             let state2 = Arc::clone(&state);
-            let cr = compact_row.clone();
-            let cdr = card_row.clone();
+            let cr = compact_row.downgrade();
+            let cdr = card_row.downgrade();
             let on_list_style_changed_compact = on_list_style_changed.clone();
             compact_row.connect_activated(move |_| {
                 let _ = commands::set_list_style(
                     ListStyle::Compact.as_str().to_string(),
                     Arc::clone(&state2.config),
                 );
-                set_appearance_row_selected(&cr, true);
-                set_appearance_row_selected(&cdr, false);
+                if let Some(cr) = cr.upgrade() {
+                    set_appearance_row_selected(&cr, true);
+                }
+                if let Some(cdr) = cdr.upgrade() {
+                    set_appearance_row_selected(&cdr, false);
+                }
                 if let Some(cb) = on_list_style_changed_compact.as_ref() {
                     cb(ListStyle::Compact.as_str().to_string());
                 }
@@ -624,16 +703,20 @@ fn build_general_page(
         // Card row click
         {
             let state2 = Arc::clone(&state);
-            let cr = compact_row.clone();
-            let cdr = card_row.clone();
+            let cr = compact_row.downgrade();
+            let cdr = card_row.downgrade();
             let on_list_style_changed_card = on_list_style_changed.clone();
             card_row.connect_activated(move |_| {
                 let _ = commands::set_list_style(
                     ListStyle::Card.as_str().to_string(),
                     Arc::clone(&state2.config),
                 );
-                set_appearance_row_selected(&cr, false);
-                set_appearance_row_selected(&cdr, true);
+                if let Some(cr) = cr.upgrade() {
+                    set_appearance_row_selected(&cr, false);
+                }
+                if let Some(cdr) = cdr.upgrade() {
+                    set_appearance_row_selected(&cdr, true);
+                }
                 if let Some(cb) = on_list_style_changed_card.as_ref() {
                     cb(ListStyle::Card.as_str().to_string());
                 }
@@ -680,9 +763,9 @@ fn build_sound_folder_row(
     {
         let folder_owned = folder.clone();
         let state2 = Arc::clone(&state);
-        let folders_group2 = folders_group.clone();
-        let add_folder_row2 = add_folder_row.clone();
-        let folder_rows2 = Rc::clone(&folder_rows);
+        let folders_group2 = folders_group.downgrade();
+        let add_folder_row2 = add_folder_row.downgrade();
+        let folder_rows2 = Rc::downgrade(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         remove_btn.connect_clicked(move |_| {
             if let Err(e) =
@@ -691,11 +774,20 @@ fn build_sound_folder_row(
                 log::warn!("Remove folder failed: {e}");
                 return;
             }
+            let Some(folders_group2) = folders_group2.upgrade() else {
+                return;
+            };
+            let Some(add_folder_row2) = add_folder_row2.upgrade() else {
+                return;
+            };
+            let Some(folder_rows2) = folder_rows2.upgrade() else {
+                return;
+            };
             rebuild_sound_folder_rows(
                 &folders_group2,
                 &add_folder_row2,
                 Arc::clone(&state2),
-                Rc::clone(&folder_rows2),
+                folder_rows2,
                 on_library_changed2.clone(),
             );
             if let Some(cb) = on_library_changed2.as_ref() {
@@ -761,12 +853,12 @@ fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
             .availability_message()
             .map(|reason| {
                 format!(
-                    "These global hotkeys require X11/XWayland. Currently unavailable: {}",
+                    "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
                     reason
                 )
             })
             .unwrap_or_else(|| {
-                "These X11/XWayland hotkeys work from anywhere on your desktop".to_string()
+                "These global hotkeys work from anywhere on your desktop using the native backend for your session".to_string()
             })
     };
 
@@ -820,8 +912,8 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
     // Record hotkey
     {
         let state2 = Arc::clone(&state);
-        let lbl = hotkey_label.clone();
-        let clear2 = clear_btn.clone();
+        let lbl = hotkey_label.downgrade();
+        let clear2 = clear_btn.downgrade();
         record_btn.connect_clicked(move |btn| {
             if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
                 let current = {
@@ -831,9 +923,18 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                 let state3 = Arc::clone(&state2);
                 let lbl2 = lbl.clone();
                 let clear3 = clear2.clone();
-                let error_window = win.clone();
-                crate::ui::dialogs::show_hotkey_capture(&win, current.as_deref(), move |result| {
-                    match result {
+                let error_window = win.downgrade();
+                let hotkeys_for_capture = Arc::clone(&state2.hotkeys);
+                crate::ui::dialogs::show_hotkey_capture(
+                    &win,
+                    current.as_deref(),
+                    move |hotkey| {
+                        hotkeys_for_capture
+                            .lock()
+                            .map_err(|e| format!("Hotkeys lock poisoned: {}", e))?
+                            .validate_hotkey_blocking(hotkey)
+                    },
+                    move |result| match result {
                         Some(hk) => {
                             match commands::set_control_hotkey(
                                 action.id().to_string(),
@@ -842,16 +943,23 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                                 Arc::clone(&state3.hotkeys),
                             ) {
                                 Ok(_) => {
-                                    lbl2.set_text(&hk);
-                                    clear3.set_sensitive(true);
+                                    if let Some(lbl2) = lbl2.upgrade() {
+                                        lbl2.set_text(&hk);
+                                    }
+                                    if let Some(clear3) = clear3.upgrade() {
+                                        clear3.set_sensitive(true);
+                                    }
                                 }
                                 Err(e) => {
                                     log::warn!("Set control hotkey failed: {e}");
-                                    crate::ui::dialogs::show_error(
-                                        &error_window,
-                                        "Failed to Set Control Hotkey",
-                                        &e,
-                                    );
+                                    let message = crate::hotkeys::format_hotkey_error(&e);
+                                    if let Some(error_window) = error_window.upgrade() {
+                                        crate::ui::dialogs::show_error(
+                                            &error_window,
+                                            "Failed to Set Control Hotkey",
+                                            &message,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -863,21 +971,27 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                                 Arc::clone(&state3.hotkeys),
                             ) {
                                 Ok(_) => {
-                                    lbl2.set_text("Not set");
-                                    clear3.set_sensitive(false);
+                                    if let Some(lbl2) = lbl2.upgrade() {
+                                        lbl2.set_text("Not set");
+                                    }
+                                    if let Some(clear3) = clear3.upgrade() {
+                                        clear3.set_sensitive(false);
+                                    }
                                 }
                                 Err(e) => {
                                     log::warn!("Clear control hotkey failed: {e}");
-                                    crate::ui::dialogs::show_error(
-                                        &error_window,
-                                        "Failed to Clear Control Hotkey",
-                                        &e,
-                                    );
+                                    if let Some(error_window) = error_window.upgrade() {
+                                        crate::ui::dialogs::show_error(
+                                            &error_window,
+                                            "Failed to Clear Control Hotkey",
+                                            &e,
+                                        );
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    },
+                );
             }
         });
     }
@@ -885,7 +999,7 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
     // Clear hotkey
     {
         let state2 = Arc::clone(&state);
-        let lbl = hotkey_label.clone();
+        let lbl = hotkey_label.downgrade();
         clear_btn.connect_clicked(move |btn| {
             match commands::set_control_hotkey(
                 action.id().to_string(),
@@ -894,7 +1008,9 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                 Arc::clone(&state2.hotkeys),
             ) {
                 Ok(_) => {
-                    lbl.set_text("Not set");
+                    if let Some(lbl) = lbl.upgrade() {
+                        lbl.set_text("Not set");
+                    }
                     btn.set_sensitive(false);
                 }
                 Err(e) => {
