@@ -462,6 +462,24 @@ columnview row:hover > cell {
   background-color: rgba(148, 137, 121, 0.08);
 }
 
+/* Sound list selection should use the app palette, not the desktop accent */
+columnview.data-table row:selected > cell {
+  background-color: rgba(148, 137, 121, 0.18);
+}
+
+columnview.data-table row:selected:hover > cell {
+  background-color: rgba(148, 137, 121, 0.23);
+}
+
+columnview.data-table row:selected > cell label {
+  color: #dfd0b8;
+}
+
+columnview.data-table rubberband {
+  background-color: rgba(148, 137, 121, 0.13);
+  border: 1px solid rgba(148, 137, 121, 0.58);
+}
+
 /* Hotkey capture zone */
 .hotkey-capture-zone {
   border: 2px solid rgba(148, 137, 121, 0.5);
@@ -625,6 +643,14 @@ columnview.list-style-card row:nth-child(odd) > cell {
 /* Card mode hover - stronger effect */
 .list-style-card columnview row:hover > cell {
   background-color: rgba(148, 137, 121, 0.15);
+}
+
+.list-style-card columnview.data-table row:selected > cell {
+  background-color: rgba(148, 137, 121, 0.22);
+}
+
+.list-style-card columnview.data-table row:selected:hover > cell {
+  background-color: rgba(148, 137, 121, 0.28);
 }
 
 /* Card mode playing state - consistent color across all cells */
