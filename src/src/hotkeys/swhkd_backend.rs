@@ -13,6 +13,7 @@ use super::backend_runtime::HotkeyBackend;
 use super::error::unsupported_key_for_backend;
 use super::parse_hotkey_spec;
 use super::swhkd_config::SwhkdConfig;
+use super::swhkd_install::missing_swhkd_message;
 use super::swhkd_process::SwhkdProcesses;
 
 /// Helper struct to set atomic flag to false when dropped
@@ -42,15 +43,11 @@ impl SwhkdBackend {
 
         // Check if binaries exist
         if which::which("swhkd").is_err() {
-            return Err("swhkd not found in PATH. Please install swhkd package.\n\
-                 On Arch: yay -S swhkd\n\
-                 On Debian/Ubuntu: sudo apt install swhkd\n\
-                 On Fedora: sudo dnf install swhkd"
-                .to_string());
+            return Err(missing_swhkd_message("swhkd"));
         }
 
         if which::which("swhks").is_err() {
-            return Err("swhks not found in PATH. Please install swhkd package.".to_string());
+            return Err(missing_swhkd_message("swhks"));
         }
 
         // Create named pipe

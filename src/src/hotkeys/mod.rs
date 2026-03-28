@@ -6,6 +6,7 @@ mod manager_runtime;
 mod model;
 mod swhkd_backend;
 mod swhkd_config;
+mod swhkd_install;
 mod swhkd_process;
 mod x11_backend;
 

@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use super::swhkd_install::missing_swhkd_message;
+
 pub struct SwhkdProcesses {
     pub swhks_child: Option<Child>,
     pub swhkd_child: Option<Child>,
@@ -45,7 +47,7 @@ impl SwhkdProcesses {
         info!("Spawning swhks process");
 
         let swhks_path = which::which("swhks")
-            .map_err(|_| "swhks not found in PATH. Please install swhkd package.".to_string())?;
+            .map_err(|_| missing_swhkd_message("swhks"))?;
 
         Command::new(swhks_path)
             .spawn()
@@ -57,13 +59,13 @@ impl SwhkdProcesses {
         info!("Spawning swhkd process");
 
         let swhkd_path = which::which("swhkd")
-            .map_err(|_| "swhkd not found in PATH. Please install swhkd package.".to_string())?;
+            .map_err(|_| missing_swhkd_message("swhkd"))?;
 
         // Check if swhkd has setuid bit
         if !Self::has_setuid_bit(&swhkd_path) {
             warn!("swhkd does not have setuid bit set");
             return Err("swhkd requires setuid bit for proper operation.\n\
-                 Run: sudo chmod u+s /usr/bin/swhkd\n\
+                 Run: sudo chmod u+s \"$(command -v swhkd)\"\n\
                  Or reinstall the package."
                 .to_string());
         }

@@ -246,6 +246,9 @@ packaging/flatpak/
 - PulseAudio/PipeWire audio access
 - File system access (read-only for music/downloads)
 - Host-side `swhkd` for native Wayland hotkeys
+- `swhkd` packaging differs by distro:
+  - Arch: use the AUR packages `swhkd-bin` or `swhkd-git`
+  - Debian/Ubuntu/Fedora: build/install `swhkd` from the upstream `INSTALL.md`
 
 **Testing**:
 ```bash
@@ -297,6 +300,7 @@ For each package type, verify:
 - [ ] **Virtual Mic**: `pactl` creates virtual microphone successfully
 - [ ] **Audio Playback**: Sounds play correctly
 - [ ] **Global Hotkeys**: Wayland hotkeys work via `swhkd`; X11 hotkeys work via native X11 backend
+- [ ] **swhkd Guidance**: Debian/Ubuntu/Fedora packages do not claim `apt install swhkd` or `dnf install swhkd`
 - [ ] **Mic Passthrough**: Real mic mixes with soundboard audio
 - [ ] **File Operations**: Drag-and-drop and folder sync work
 - [ ] **Theme Integration**: Respects system dark/light theme

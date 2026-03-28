@@ -290,11 +290,17 @@ sudo dnf install fuse-libs  # Fedora
 # Wayland sessions use swhkd for global hotkeys
 pgrep swhkd
 
+# Arch users can install an AUR package:
+# yay -S swhkd-bin
+#
+# Debian/Ubuntu/Fedora users need the upstream install guide:
+# https://github.com/waycrate/swhkd/blob/main/INSTALL.md
+#
 # Check setuid permissions:
-ls -l /usr/bin/swhkd  # Should show 'rws' permissions
+ls -l "$(command -v swhkd)"  # Should show 'rws' permissions
 
 # Manual fix if needed:
-sudo chmod u+s /usr/bin/swhkd
+sudo chmod u+s "$(command -v swhkd)"
 
 # X11 sessions can also use the native X11 backend directly
 ```

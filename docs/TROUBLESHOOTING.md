@@ -501,15 +501,21 @@ echo $DISPLAY          # If set, X11 is available
   # Check if swhkd is running
   pgrep swhkd
 
+  # Arch users can install:
+  # yay -S swhkd-bin
+  #
+  # Debian/Ubuntu/Fedora users should follow:
+  # https://github.com/waycrate/swhkd/blob/main/INSTALL.md
+
   # If not running, the application will start it automatically
   # Verify setuid bit is set (should be done by package installation)
-  ls -l /usr/bin/swhkd  # Should show 'rws' permissions
+  ls -l "$(command -v swhkd)"  # Should show 'rws' permissions
   ```
 
 **2. Manual `swhkd` configuration (if needed)**
   ```bash
   # Set setuid bit on swhkd
-  sudo chmod u+s /usr/bin/swhkd
+  sudo chmod u+s "$(command -v swhkd)"
 
   # Restart the application
   ```
@@ -685,7 +691,7 @@ LSB_FORCE_X11=1 linux-soundboard
 pgrep swhkd
 
 # Check swhkd permissions
-ls -l /usr/bin/swhkd
+ls -l "$(command -v swhkd)"
 ```
 
 ---

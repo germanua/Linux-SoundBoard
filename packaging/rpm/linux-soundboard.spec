@@ -26,7 +26,6 @@ Requires:       pipewire
 Requires:       pipewire-pulseaudio
 Requires:       wireplumber
 Requires:       pulseaudio-utils
-Requires:       swhkd
 
 Recommends:     xorg-x11-server-Xwayland
 
@@ -80,8 +79,10 @@ if [ -f /usr/bin/swhkd ]; then
     chmod u+s /usr/bin/swhkd
     echo "✓ Configured swhkd with setuid permissions"
 else
-    echo "Warning: swhkd not found. Hotkeys may not work."
-    echo "Install swhkd: sudo dnf install swhkd"
+    echo "Warning: swhkd not found. Native Wayland hotkeys need a host-installed swhkd."
+    echo "Fedora does not currently ship swhkd in the official package set."
+    echo "Install it from upstream: https://github.com/waycrate/swhkd/blob/main/INSTALL.md"
+    echo "X11 and XWayland sessions can use the native X11 backend without swhkd."
 fi
 
 # Ensure swhks is executable

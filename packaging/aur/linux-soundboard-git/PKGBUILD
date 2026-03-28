@@ -29,7 +29,8 @@ optdepends=(
   'pipewire-pulse: PipeWire-backed PulseAudio server for virtual microphone routing'
   'pulseaudio: PulseAudio server for virtual microphone routing'
   'wireplumber: recommended PipeWire session manager'
-  'swhkd: native Wayland global hotkeys and optional universal hotkey daemon'
+  'swhkd-bin: native Wayland global hotkeys from the AUR'
+  'swhkd-git: development build of the native Wayland hotkey daemon'
   'xorg-xwayland: enables the native X11 backend inside Wayland sessions'
 )
 provides=('linux-soundboard')
