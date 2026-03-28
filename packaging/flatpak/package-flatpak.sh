@@ -59,6 +59,7 @@ fi
 # Build Flatpak
 BUILD_DIR="$REPO_ROOT/flatpak-build"
 REPO_DIR="$REPO_ROOT/flatpak-repo"
+VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/src/Cargo.toml" | head -n 1)"
 
 echo "Building Flatpak with flatpak-builder..."
 rm -rf "$BUILD_DIR" "$REPO_DIR"
@@ -67,7 +68,7 @@ flatpak-builder --force-clean --repo="$REPO_DIR" "$BUILD_DIR" com.linuxsoundboar
 
 # Export to single-file bundle
 mkdir -p "$DIST_ROOT"
-BUNDLE_PATH="$DIST_ROOT/linux-soundboard-1.1.0.flatpak"
+BUNDLE_PATH="$DIST_ROOT/linux-soundboard-$VERSION.flatpak"
 
 echo "Creating Flatpak bundle..."
 flatpak build-bundle "$REPO_DIR" "$BUNDLE_PATH" com.linuxsoundboard.app

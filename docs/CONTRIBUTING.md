@@ -87,7 +87,8 @@ See [Development Setup](#development-setup) below.
 
 **Recommended:**
 - PipeWire + WirePlumber (for testing virtual mic)
-- X11 development libraries (for hotkeys)
+- swhkd (for testing native Wayland hotkeys)
+- X11 development libraries (for the native X11 hotkey backend)
 
 ### Install Dependencies
 
@@ -433,7 +434,7 @@ Linux-SoundBoard/
 - **`ui/`**: GTK4 UI components (windows, dialogs, widgets)
 - **`audio/`**: Audio playback, normalization, file handling
 - **`pipewire/`**: Virtual microphone creation and management
-- **`hotkeys/`**: Global hotkey system (X11 and Portal backends)
+- **`hotkeys/`**: Global hotkey system (swhkd and X11 backends)
 - **`config/`**: Configuration loading, saving, defaults
 - **`commands/`**: Business logic (play sound, manage library, etc.)
 

@@ -1,13 +1,12 @@
-pkgbase = linux-soundboard-git
+pkgbase = linux-soundboard
 	pkgdesc = Native Linux soundboard with full Wayland/X11 support and virtual microphone support
-	pkgver = 1.1.0.r23.g1b8c651
-	pkgrel = 3
+	pkgver = 1.1.0
+	pkgrel = 2
 	url = https://github.com/germanua/Linux-SoundBoard
-	install = linux-soundboard-git.install
+	install = linux-soundboard.install
 	arch = x86_64
 	license = custom:PolyForm-Noncommercial-1.0.0
 	makedepends = cargo
-	makedepends = git
 	makedepends = imagemagick
 	makedepends = clang
 	makedepends = pkgconf
@@ -24,9 +23,7 @@ pkgbase = linux-soundboard-git
 	optdepends = wireplumber: recommended PipeWire session manager
 	optdepends = swhkd: native Wayland global hotkeys and optional universal hotkey daemon
 	optdepends = xorg-xwayland: enables the native X11 backend inside Wayland sessions
-	provides = linux-soundboard
-	conflicts = linux-soundboard
-	source = linux-soundboard::git+https://github.com/germanua/Linux-SoundBoard.git#branch=main
+	source = linux-soundboard-1.1.0.tar.gz::https://github.com/germanua/Linux-SoundBoard/archive/refs/tags/v1.1.0.tar.gz
 	sha256sums = SKIP
 
-pkgname = linux-soundboard-git
+pkgname = linux-soundboard

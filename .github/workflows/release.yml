@@ -28,33 +28,40 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/v}"
           cat > release_notes.md << 'EOF'
           ## Linux Soundboard $VERSION
-          
+
+          ### Platform Support
+
+          - Native Wayland support with `swhkd` hotkeys
+          - Full native X11 and XWayland support
+          - Virtual microphone support through PipeWire/PulseAudio
+
           ### Installation
-          
+
           Choose the package format for your distribution:
-          
+
           - **Ubuntu/Debian**: Download `linux-soundboard_$VERSION-1_amd64.deb`
           - **Fedora/RHEL**: Download `linux-soundboard-$VERSION-1.fc*.x86_64.rpm`
           - **Any Distribution**: Download `linux-soundboard-$VERSION.flatpak` or `linux-soundboard-x86_64.AppImage`
+          - **Other Distros**: Use the generic release bundle from `package-release.sh`
           - **Arch Linux**: Use AUR: `yay -S linux-soundboard-git`
-          
+
           ### What's New
-          
+
           See [CHANGELOG.md](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/CHANGELOG.md) for full details.
-          
+
           ### Quick Start
-          
+
           1. Install using your preferred method above
           2. Launch the application
           3. Select `Linux_Soundboard_Mic` as input in Discord/OBS/Zoom
-          
+
           ### Documentation
-          
+
           - [Troubleshooting Guide](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/TROUBLESHOOTING.md)
           - [Contributing Guide](https://github.com/germanua/Linux-SoundBoard/blob/main/docs/CONTRIBUTING.md)
-          
+
           ### Checksums
-          
+
           See `SHA256SUMS.txt` for file verification.
           EOF
           sed -i "s/\$VERSION/$VERSION/g" release_notes.md
@@ -86,8 +93,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       
-      - name: Build AppImage
-        run: ./packaging/linux/package-appimage.sh
+      - name: Build AppImage and generic release bundle
+        run: ./packaging/linux/package-release.sh
       
       - name: Upload AppImage artifacts
         uses: softprops/action-gh-release@v1
@@ -95,6 +102,7 @@ jobs:
           files: |
             dist/linux-soundboard-x86_64.AppImage
             dist/linux-soundboard-${{ needs.create-release.outputs.version }}-x86_64.AppImage
+            dist/linux-soundboard-${{ needs.create-release.outputs.version }}-linux-*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -62,9 +62,31 @@ tar -C "$DIST_ROOT" -czf "$archive_path" "$bundle_name"
 
 "$SCRIPT_DIR/package-appimage.sh" --skip-build
 
+cat >"$DIST_ROOT/release-notes.md" <<EOF
+## Linux Soundboard $version
+
+- Full native Wayland and X11 support
+- Wayland global hotkeys via swhkd
+- Native X11/XWayland hotkey backend
+- AppImage, DEB, RPM, Flatpak, and AUR packaging support
+
+### Included in this local release bundle
+
+- $bundle_name.tar.gz
+- ${APP_BINARY}-$(uname -m).AppImage
+
+### Distribution notes
+
+- Ubuntu/Debian: build or ship the DEB package from \`packaging/debian/\`
+- Fedora/RHEL: build or ship the RPM package from \`packaging/rpm/\`
+- Flatpak: build or ship the bundle from \`packaging/flatpak/\`
+- Arch Linux: update both \`linux-soundboard\` and \`linux-soundboard-git\` AUR files
+EOF
+
 echo "Created release bundle:"
 echo "  Directory: $bundle_dir"
 echo "  Archive:   $archive_path"
 echo "  AppImage:  $DIST_ROOT/${APP_BINARY}-$(uname -m).AppImage"
+echo "  Notes:     $DIST_ROOT/release-notes.md"
 echo
 echo "Users can extract the archive and run ./install-user.sh to install the desktop launcher and icon."

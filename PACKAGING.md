@@ -71,17 +71,17 @@ cd /path/to/Linux-SoundBoard
 1. Builds the Rust application with `cargo build --release`
 2. Generates icons from `icon.png`
 3. Downloads and extracts `linuxdeploy` tool
-4. Patches GTK plugin for Wayland support
+4. Patches GTK plugin for native Wayland support
 5. Bundles GTK4, Libadwaita, and dependencies
 6. Bundles `pactl` binary for virtual microphone
 7. Adds preflight dependency checker
 8. Creates Type 2 AppImage with embedded squashfs
 
 **New in v1.1.0**:
-- ✅ Native Wayland support with X11 fallback
+- ✅ Full native Wayland and X11 support
 - ✅ Bundled `pactl` for virtual mic
 - ✅ Automatic dependency checking
-- ✅ Smart display backend detection
+- ✅ Smart GTK backend detection
 
 **Troubleshooting**:
 - If `pactl` is not found during build, install `pulseaudio-utils`
@@ -241,11 +241,11 @@ packaging/flatpak/
 
 **Runtime**: `org.gnome.Platform//47`
 
-**Permissions**:
+**Permissions / Host Requirements**:
 - Wayland + X11 display access
 - PulseAudio/PipeWire audio access
 - File system access (read-only for music/downloads)
-- Desktop portal access (global shortcuts)
+- Host-side `swhkd` for native Wayland hotkeys
 
 **Testing**:
 ```bash
@@ -293,10 +293,10 @@ For each package type, verify:
 - [ ] **Installation**: Package installs without errors
 - [ ] **Dependencies**: All dependencies are automatically installed
 - [ ] **Launch**: Application launches from menu and command line
-- [ ] **Display Server**: Works on Wayland (native) and X11
+- [ ] **Display Server**: Works natively on both Wayland and X11
 - [ ] **Virtual Mic**: `pactl` creates virtual microphone successfully
 - [ ] **Audio Playback**: Sounds play correctly
-- [ ] **Global Hotkeys**: Hotkeys work (X11 or Portal backend)
+- [ ] **Global Hotkeys**: Wayland hotkeys work via `swhkd`; X11 hotkeys work via native X11 backend
 - [ ] **Mic Passthrough**: Real mic mixes with soundboard audio
 - [ ] **File Operations**: Drag-and-drop and folder sync work
 - [ ] **Theme Integration**: Respects system dark/light theme
@@ -325,6 +325,8 @@ cargo fmt -- --check
 - [ ] Update version in `src/Cargo.toml`
 - [ ] Update `packaging/debian/changelog`
 - [ ] Update `packaging/rpm/linux-soundboard.spec` (Version + %changelog)
+- [ ] Update `packaging/aur/PKGBUILD` and `packaging/aur/linux-soundboard-git/PKGBUILD`
+- [ ] Regenerate AUR `.SRCINFO` files
 - [ ] Update `packaging/flatpak/com.linuxsoundboard.app.metainfo.xml` (add release)
 - [ ] Update `README.md` (version numbers in download links)
 - [ ] Run all tests: `cargo test`
@@ -345,6 +347,9 @@ cargo fmt -- --check
 
 # Flatpak
 ./packaging/flatpak/package-flatpak.sh
+
+# Generic release bundle for other distros
+./packaging/linux/package-release.sh
 ```
 
 ### Test Packages
@@ -366,17 +371,18 @@ cargo fmt -- --check
 2. **Create GitHub Release**:
    - Go to GitHub Releases
    - Create new release from tag `v1.1.0`
-   - Write release notes
+   - Write release notes highlighting full native Wayland and X11 support
    - Upload all packages:
      - `linux-soundboard-x86_64.AppImage`
      - `linux-soundboard-1.1.0-x86_64.AppImage`
+     - `linux-soundboard-1.1.0-linux-x86_64.tar.gz`
      - `linux-soundboard_1.1.0-1_amd64.deb`
      - `linux-soundboard-1.1.0-1.fc40.x86_64.rpm`
      - `linux-soundboard-1.1.0.flatpak`
 
 3. **Update AUR**:
-   - Update `PKGBUILD` version
-   - Update checksums
+   - Update stable and git `PKGBUILD` files
+   - Update `.SRCINFO`
    - Push to AUR repository
 
 4. **Submit to Flathub** (if ready):

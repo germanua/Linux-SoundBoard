@@ -1,0 +1,68 @@
+# Maintainer: germanua <tony.avramnco@icloud.com>
+
+pkgname=linux-soundboard
+pkgver=1.1.0
+pkgrel=2
+pkgdesc="Native Linux soundboard with full Wayland/X11 support and virtual microphone support"
+arch=('x86_64')
+url="https://github.com/germanua/Linux-SoundBoard"
+license=('custom:PolyForm-Noncommercial-1.0.0')
+depends=(
+  'gtk4'
+  'libadwaita'
+  'libpulse'
+  'libx11'
+  'libxi'
+  'libxtst'
+  'libxkbcommon'
+  'hicolor-icon-theme'
+)
+makedepends=(
+  'cargo'
+  'imagemagick'
+  'clang'
+  'pkgconf'
+)
+optdepends=(
+  'pipewire-pulse: PipeWire-backed PulseAudio server for virtual microphone routing'
+  'pulseaudio: PulseAudio server for virtual microphone routing'
+  'wireplumber: recommended PipeWire session manager'
+  'swhkd: native Wayland global hotkeys and optional universal hotkey daemon'
+  'xorg-xwayland: enables the native X11 backend inside Wayland sessions'
+)
+source=(
+  "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
+)
+sha256sums=('SKIP')
+install="${pkgname}.install"
+
+build() {
+    cd "$srcdir/Linux-SoundBoard-$pkgver"
+    bash packaging/linux/generate-icons.sh assets/icons/icon.png
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo build --frozen --locked --release --manifest-path src/Cargo.toml
+}
+
+check() {
+    cd "$srcdir/Linux-SoundBoard-$pkgver"
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo test --frozen --locked --release --manifest-path src/Cargo.toml
+}
+
+package() {
+    cd "$srcdir/Linux-SoundBoard-$pkgver"
+
+    install -Dm755 "$srcdir/target/release/linux-soundboard" \
+      "$pkgdir/usr/bin/linux-soundboard"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 packaging/rpm/linux-soundboard.desktop \
+      "$pkgdir/usr/share/applications/com.linuxsoundboard.app.desktop"
+
+    local icon_root="src/resources/icons"
+    local icon_name="com.linuxsoundboard.app.png"
+    local size
+    for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+      install -Dm644 "${icon_root}/${size}/apps/${icon_name}" \
+        "$pkgdir/usr/share/icons/hicolor/${size}/apps/${icon_name}"
+    done
+}

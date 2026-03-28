@@ -336,13 +336,13 @@ echo $DISPLAY
 
 ---
 
-#### ❌ Crash on Startup with Wayland
+#### ❌ Crash on Startup in a Wayland Session
 
-**Problem:** Wayland compatibility issue.
+**Problem:** Local compositor or GTK stack issue in your session.
 
 **Solution:**
 
-Force X11 backend:
+The app supports Wayland natively, but you can temporarily fall back to X11:
 ```bash
 GDK_BACKEND=x11 linux-soundboard
 ```
@@ -491,38 +491,50 @@ echo $WAYLAND_DISPLAY  # If set, you're on Wayland
 echo $DISPLAY          # If set, X11 is available
 ```
 
-**Solutions by Environment:**
+**Wayland and X11 hotkey paths:**
 
-**1. X11 / XWayland (Most Common):**
-- Hotkeys should work automatically
-- Make sure XWayland is installed:
+**1. Wayland sessions: verify `swhkd` is installed and running**
   ```bash
-  # Ubuntu/Debian
-  sudo apt install xwayland
+  # Check if swhkd is installed
+  which swhkd
 
-  # Fedora
-  sudo dnf install xorg-x11-server-Xwayland
+  # Check if swhkd is running
+  pgrep swhkd
+
+  # If not running, the application will start it automatically
+  # Verify setuid bit is set (should be done by package installation)
+  ls -l /usr/bin/swhkd  # Should show 'rws' permissions
   ```
 
-**2. Pure Wayland (No XWayland):**
-- Enable Portal backend:
+**2. Manual `swhkd` configuration (if needed)**
   ```bash
-  LSB_ENABLE_PORTAL_HOTKEYS=1 linux-soundboard
-  ```
-- Install desktop portal:
-  ```bash
-  # Ubuntu/Debian
-  sudo apt install xdg-desktop-portal-gtk
+  # Set setuid bit on swhkd
+  sudo chmod u+s /usr/bin/swhkd
 
-  # Fedora
-  sudo dnf install xdg-desktop-portal-gtk
+  # Restart the application
   ```
 
-**3. Check compositor support:**
-- GNOME: Full support
-- KDE Plasma: Full support
-- Sway: Requires portal configuration
-- Hyprland: Requires portal configuration
+**3. Check `swhkd` logs**
+  ```bash
+  # View swhkd logs
+  journalctl -xe | grep swhkd
+
+  # Or check the config file
+  cat ~/.config/swhkd/swhkdrc
+  ```
+
+**4. X11 and XWayland sessions: use the native X11 backend**
+  - Native X11 hotkeys work on X11 directly
+  - XWayland lets you use the X11 backend from a Wayland session when needed
+  - Install XWayland if needed:
+    ```bash
+    # Ubuntu/Debian
+    sudo apt install xwayland
+
+    # Fedora
+    sudo dnf install xorg-x11-server-Xwayland
+    ```
+
 
 ---
 
@@ -669,11 +681,14 @@ RUST_LOG=debug linux-soundboard
 # Force X11 mode
 LSB_FORCE_X11=1 linux-soundboard
 
-# Enable Portal hotkeys
-LSB_ENABLE_PORTAL_HOTKEYS=1 linux-soundboard
+# Check Wayland hotkey daemon
+pgrep swhkd
+
+# Check swhkd permissions
+ls -l /usr/bin/swhkd
 ```
 
 ---
 
-**Last Updated:** 2026-03-24  
-**Version:** 1.1.0
+**Last Updated:** 2026-03-28
+**Version:** 1.1.0 packaging refresh

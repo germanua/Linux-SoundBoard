@@ -31,13 +31,13 @@ Depends: ${shlibs:Depends},
          wireplumber,
          pulseaudio-utils
 Recommends: xwayland,
-            xdg-desktop-portal-gtk
+            swhkd
 Description: Native Linux soundboard with virtual microphone support
  A high-performance, native Linux soundboard built with Rust, GTK4, and
  Libadwaita. Features include:
   * Virtual microphone for routing audio to Discord, OBS, Zoom, etc.
   * Mic passthrough to mix your voice with soundboard audio
   * LUFS normalization for consistent volume levels
-  * Global hotkeys (X11/XWayland and Portal backends)
+  * Native Wayland hotkeys via swhkd with full native X11/XWayland support
   * Modern GTK4/Libadwaita UI with dark mode support
   * PipeWire/PulseAudio integration

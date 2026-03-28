@@ -40,10 +40,10 @@ Built with **Rust**, **GTK4**, and **Libadwaita** for native performance and mod
 - 🎤 **Virtual Microphone** - Automatically creates a virtual audio device
 - 🎙️ **Mic Passthrough** - Mix your real microphone with soundboard audio
 - 🔊 **LUFS Normalization** - Keep all sounds at consistent volume
-- ⌨️ **Global Hotkeys** - Works on X11, XWayland, and Wayland (with portal)
+- ⌨️ **Global Hotkeys** - Native Wayland hotkeys via swhkd, plus full native X11 support
 - 🎨 **Modern UI** - Native GTK4/Libadwaita with dark mode support
 - 📁 **Organized Library** - Tabs, folder sync, drag & drop
-- 🖥️ **Wayland Native** - Full support for modern display servers
+- 🖥️ **Display Server Support** - Full native Wayland and X11 support
 - 📦 **Multiple Formats** - AppImage, DEB, RPM, Flatpak, AUR
 
 ---
@@ -252,15 +252,15 @@ Enable **LUFS Normalization** in settings to keep all sounds at consistent volum
 | **UI Framework** | GTK4 + Libadwaita |
 | **Audio Engine** | Rodio + Symphonia |
 | **Audio Routing** | PulseAudio + PipeWire |
-| **Global Hotkeys** | X11/XInput2 + XDG Portal |
+| **Global Hotkeys** | swhkd on Wayland + native X11/XInput2 backend |
 | **Formats** | MP3, WAV, OGG, FLAC, AAC |
 
 ### Display Server Support
 
-- ✅ **X11**: Full support
-- ✅ **XWayland**: Full support
-- ✅ **Wayland**: Native support with automatic X11 fallback
-- ✅ **Portal Backend**: For pure Wayland global shortcuts
+- ✅ **Wayland**: Native GTK Wayland support with swhkd hotkeys
+- ✅ **X11**: Native X11 backend with XInput2 hotkeys
+- ✅ **TTY**: Full support via swhkd
+- ✅ **XWayland**: Supported when you want the X11 backend inside a Wayland session
 
 ---
 
@@ -285,10 +285,18 @@ sudo apt install libfuse2  # Ubuntu/Debian
 sudo dnf install fuse-libs  # Fedora
 ```
 
-**Global hotkeys not working on Wayland?**
+**Hotkeys not working?**
 ```bash
-# Enable Portal backend
-LSB_ENABLE_PORTAL_HOTKEYS=1 linux-soundboard
+# Wayland sessions use swhkd for global hotkeys
+pgrep swhkd
+
+# Check setuid permissions:
+ls -l /usr/bin/swhkd  # Should show 'rws' permissions
+
+# Manual fix if needed:
+sudo chmod u+s /usr/bin/swhkd
+
+# X11 sessions can also use the native X11 backend directly
 ```
 
 **More issues?** Check the [**Troubleshooting Guide**](docs/TROUBLESHOOTING.md)
@@ -306,7 +314,7 @@ LSB_ENABLE_PORTAL_HOTKEYS=1 linux-soundboard
 
 ## 🆕 What's New in v1.1.0
 
-- ✅ **Native Wayland Support** - No more forced X11!
+- ✅ **Full Native Wayland + X11 Support** - Wayland via swhkd, X11 via the native backend
 - ✅ **DEB & RPM Packages** - Native packages for Ubuntu, Debian, Fedora
 - ✅ **Flatpak Support** - Universal package for all distributions
 - ✅ **Improved AppImage** - Bundled dependencies, better compatibility

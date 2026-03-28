@@ -1,6 +1,6 @@
 Name:           linux-soundboard
 Version:        1.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
 License:        PolyForm-Noncommercial-1.0.0
@@ -26,15 +26,16 @@ Requires:       pipewire
 Requires:       pipewire-pulseaudio
 Requires:       wireplumber
 Requires:       pulseaudio-utils
+Requires:       swhkd
 
 Recommends:     xorg-x11-server-Xwayland
-Recommends:     xdg-desktop-portal-gtk
 
 %description
 A high-performance, native Linux soundboard built with Rust, GTK4, and
 Libadwaita. Features include virtual microphone for routing audio to
 Discord, OBS, Zoom, etc., mic passthrough, LUFS normalization, global
-hotkeys, and modern GTK4/Libadwaita UI with PipeWire/PulseAudio integration.
+hotkeys via swhkd on Wayland and via the native X11 backend on X11/XWayland, and modern GTK4/Libadwaita
+UI with PipeWire/PulseAudio integration.
 
 %prep
 %setup -q
@@ -71,7 +72,33 @@ install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
 %{_datadir}/icons/hicolor/*/apps/com.linuxsoundboard.app.png
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 
+%post
+echo "Configuring LinuxSoundBoard..."
+
+# Set setuid bit on swhkd if it exists
+if [ -f /usr/bin/swhkd ]; then
+    chmod u+s /usr/bin/swhkd
+    echo "✓ Configured swhkd with setuid permissions"
+else
+    echo "Warning: swhkd not found. Hotkeys may not work."
+    echo "Install swhkd: sudo dnf install swhkd"
+fi
+
+# Ensure swhks is executable
+if [ -f /usr/bin/swhks ]; then
+    chmod +x /usr/bin/swhks
+fi
+
+echo "✓ LinuxSoundBoard configuration complete"
+
 %changelog
+* Tue Mar 25 2026 germanua <tony.avramnco@icloud.com> - 1.1.0-2
+- Migrated from Portal to swhkd for universal hotkey support
+- Added support for Wayland, X11, and TTY hotkeys
+- Improved hotkey reliability with hot reload via SIGHUP
+- Removed Portal backend dependency
+- Added automatic swhkd configuration in post-install
+
 * Mon Mar 24 2026 germanua <tony.avramnco@icloud.com> - 1.1.0-1
 - New upstream release
 - Add native Wayland support

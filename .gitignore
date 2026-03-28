@@ -56,4 +56,15 @@ flatpak-repo/
 # Documentation (internal)
 PLAN.md
 LOG OF RAM
+.codegrok/
+.github/agents/
 .github/instructions/
+*_ANALYSIS.md
+*_PLAN.md
+IMPLEMENTATION_SUMMARY.md
+OPTIMIZATION.md
+SWHKD_MIGRATION.md
+
+# AUR build artifacts
+packaging/aur/linux-soundboard-git/linux-soundboard/
+packaging/aur/linux-soundboard-git/*.pkg.tar.*

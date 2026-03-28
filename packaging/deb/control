@@ -1,0 +1,18 @@
+Package: linux-soundboard
+Version: 1.1.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Depends: libgtk-4-1, libadwaita-1-0, pipewire
+Maintainer: Your Name <your.email@example.com>
+Description: A Linux soundboard with PipeWire virtual mic support
+ LinuxSoundBoard is a feature-rich soundboard application for Linux
+ with PipeWire virtual microphone support and global hotkey functionality
+ via swhkd on Wayland, with full native X11 support.
+ .
+ Features:
+  - Play sound effects with native Wayland and X11 hotkeys
+  - Virtual microphone output via PipeWire
+  - Auto-gain normalization (EBU R128)
+  - Multiple playback modes
+  - GTK4/libadwaita modern UI
