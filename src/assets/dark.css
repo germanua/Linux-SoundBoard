@@ -22,10 +22,18 @@ entry {
 }
 
 .sound-cell-playing {
-  background-color: rgba(148, 137, 121, 0.15);
+  background-color: transparent;
 }
 
 .sound-cell-active {
+  background-color: transparent;
+}
+
+.sound-row-playing > cell {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+.sound-row-active > cell {
   background-color: rgba(148, 137, 121, 0.2);
 }
 
@@ -188,11 +196,16 @@ columnview {
   color: #dfd0b8;
 }
 
+columnview > listview {
+  border-spacing: 0;
+}
+
 columnview row > cell {
   padding: 0;
   border: none;
   box-shadow: none;
   outline: none;
+  background-image: none;
 }
 
 columnview row > cell label {
@@ -485,26 +498,51 @@ entry.volume-input {
 }
 
 /* Sound row hover */
+columnview row:hover {
+  background-color: rgba(148, 137, 121, 0.08);
+}
+
 columnview row:hover > cell {
   background-color: rgba(148, 137, 121, 0.08);
 }
 
 /* Sound list selection should use the app palette, not the desktop accent */
+columnview.data-table row:selected {
+  background-color: rgba(148, 137, 121, 0.18);
+  background-image: none;
+}
+
 columnview.data-table row:selected > cell {
   background-color: rgba(148, 137, 121, 0.18);
+  background-image: none;
+  border: none;
+  outline: none;
+  box-shadow: none;
+}
+
+columnview.data-table row:selected:hover {
+  background-color: rgba(148, 137, 121, 0.23);
+  background-image: none;
 }
 
 columnview.data-table row:selected:hover > cell {
   background-color: rgba(148, 137, 121, 0.23);
+  background-image: none;
 }
 
 columnview.data-table row:selected > cell label {
   color: #dfd0b8;
 }
 
+columnview.data-table row:selected:focus-within {
+  background-color: rgba(148, 137, 121, 0.25);
+  background-image: none;
+}
+
 columnview.data-table row:selected:focus-within > cell {
   background-color: rgba(148, 137, 121, 0.25);
   box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.42);
+  background-image: none;
 }
 
 columnview.data-table row:focus-within:not(:selected) > cell {
@@ -647,12 +685,12 @@ columnview header button {
    ══════════════════════════════════════════════════════════════════════════ */
 
 /* Card mode header - match cell padding */
-.list-style-card columnview header button {
+columnview.list-style-card header button {
   padding: 12px 14px;
 }
 
 /* Card mode container */
-.list-style-card columnview row > cell {
+columnview.list-style-card row > cell {
   padding: 16px 12px;
 }
 
@@ -666,11 +704,11 @@ columnview header button {
 }
 
 /* Card mode row backgrounds - more visible alternation */
-.list-style-card columnview row:nth-child(even) > cell {
+columnview.list-style-card row:nth-child(even) > cell {
   background-color: rgba(148, 137, 121, 0.06);
 }
 
-.list-style-card columnview row:nth-child(odd) > cell {
+columnview.list-style-card row:nth-child(odd) > cell {
   background-color: rgba(34, 40, 49, 0.3);
 }
 
@@ -681,34 +719,42 @@ columnview.list-style-card row:nth-child(odd) > cell {
 }
 
 /* Card mode hover - stronger effect */
-.list-style-card columnview row:hover > cell {
+columnview.list-style-card row:hover > cell {
   background-color: rgba(148, 137, 121, 0.15);
 }
 
-.list-style-card columnview.data-table row:selected > cell {
+columnview.list-style-card.data-table row:selected > cell {
   background-color: rgba(148, 137, 121, 0.22);
 }
 
-.list-style-card columnview.data-table row:selected:hover > cell {
+columnview.list-style-card.data-table row:selected:hover > cell {
   background-color: rgba(148, 137, 121, 0.28);
 }
 
 /* Card mode playing state - consistent color across all cells */
-.list-style-card .sound-cell-playing {
-  background-color: rgba(148, 137, 121, 0.18);
+columnview.list-style-card .sound-cell-playing {
+  background-color: transparent;
 }
 
-.list-style-card .sound-cell-first.sound-cell-playing {
+columnview.list-style-card .sound-cell-first.sound-cell-playing {
   border-left-color: #948979;
 }
 
 /* Card mode active/selected - stronger accent */
-.list-style-card .sound-cell-active {
-  background-color: rgba(148, 137, 121, 0.25);
+columnview.list-style-card .sound-cell-active {
+  background-color: transparent;
 }
 
-.list-style-card .sound-cell-first.sound-cell-active {
+columnview.list-style-card .sound-cell-first.sound-cell-active {
   border-left-color: #dfd0b8;
+}
+
+columnview.list-style-card .sound-row-playing > cell {
+  background-color: rgba(148, 137, 121, 0.18);
+}
+
+columnview.list-style-card .sound-row-active > cell {
+  background-color: rgba(148, 137, 121, 0.25);
 }
 
 /* Card mode playing dot - larger with glow simulation */

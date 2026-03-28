@@ -76,6 +76,8 @@ impl SoundList {
         col_view.set_vexpand(true);
         col_view.set_hexpand(true);
         col_view.set_reorderable(false);
+        col_view.set_show_column_separators(false);
+        col_view.set_show_row_separators(false);
         // Enable rubberband selection (click and drag to select multiple rows).
         col_view.set_enable_rubberband(true);
         col_view.add_css_class("data-table");
@@ -124,6 +126,26 @@ impl SoundList {
     /// Return the GTK widget to embed in the window layout.
     pub fn widget(&self) -> &Widget {
         self.inner.scroll.upcast_ref()
+    }
+
+    fn sync_state_class(widget: &Widget, class_name: &str, enabled: bool) {
+        if enabled {
+            widget.add_css_class(class_name);
+        } else {
+            widget.remove_css_class(class_name);
+        }
+    }
+
+    fn sync_sound_state_classes(widget: &impl IsA<Widget>, is_playing: bool, is_active: bool) {
+        let widget = widget.as_ref();
+
+        Self::sync_state_class(widget, "sound-cell-playing", is_playing);
+        Self::sync_state_class(widget, "sound-cell-active", is_active);
+
+        if let Some(row) = widget.parent().and_then(|cell| cell.parent()) {
+            Self::sync_state_class(&row, "sound-row-playing", is_playing);
+            Self::sync_state_class(&row, "sound-row-active", is_active);
+        }
     }
 
     /// Set the active tab — filters the visible sounds.
@@ -586,16 +608,7 @@ impl SoundListInner {
                         log::warn!("active_sound_id lock poisoned: {}", e);
                         false
                     });
-                if is_playing {
-                    cell.add_css_class("sound-cell-playing");
-                } else {
-                    cell.remove_css_class("sound-cell-playing");
-                }
-                if is_active {
-                    cell.add_css_class("sound-cell-active");
-                } else {
-                    cell.remove_css_class("sound-cell-active");
-                }
+                SoundList::sync_sound_state_classes(&cell, is_playing, is_active);
             });
         }
 
@@ -691,17 +704,7 @@ impl SoundListInner {
                 warn.set_visible(is_invalid);
                 hbox.set_widget_name(&sound.id);
 
-                if is_playing {
-                    hbox.add_css_class("sound-cell-playing");
-                } else {
-                    hbox.remove_css_class("sound-cell-playing");
-                }
-
-                if is_active {
-                    hbox.add_css_class("sound-cell-active");
-                } else {
-                    hbox.remove_css_class("sound-cell-active");
-                }
+                SoundList::sync_sound_state_classes(&hbox, is_playing, is_active);
             });
         }
 
@@ -772,16 +775,7 @@ impl SoundListInner {
                         log::warn!("active_sound_id lock poisoned: {}", e);
                         false
                     });
-                if is_playing {
-                    cell.add_css_class("sound-cell-playing");
-                } else {
-                    cell.remove_css_class("sound-cell-playing");
-                }
-                if is_active {
-                    cell.add_css_class("sound-cell-active");
-                } else {
-                    cell.remove_css_class("sound-cell-active");
-                }
+                SoundList::sync_sound_state_classes(&cell, is_playing, is_active);
             });
         }
 
@@ -853,16 +847,7 @@ impl SoundListInner {
                         log::warn!("active_sound_id lock poisoned: {}", e);
                         false
                     });
-                if is_playing {
-                    cell.add_css_class("sound-cell-playing");
-                } else {
-                    cell.remove_css_class("sound-cell-playing");
-                }
-                if is_active {
-                    cell.add_css_class("sound-cell-active");
-                } else {
-                    cell.remove_css_class("sound-cell-active");
-                }
+                SoundList::sync_sound_state_classes(&cell, is_playing, is_active);
             });
         }
 
