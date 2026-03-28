@@ -77,6 +77,15 @@ headerbar:backdrop,
   box-shadow: none;
 }
 
+.main-window button:focus-visible,
+.main-window entry:focus,
+.main-window searchentry:focus,
+.main-window scale:focus slider,
+.main-window row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.48);
+  outline: none;
+}
+
 .transport-bar label {
   color: #dfd0b8;
 }
@@ -101,6 +110,20 @@ headerbar:backdrop,
   color: #dfd0b8;
   border-radius: 10px;
   background-image: none;
+}
+
+.transport-bar button:active,
+.transport-bar togglebutton:active {
+  background-color: rgba(148, 137, 121, 0.18);
+  border-color: rgba(148, 137, 121, 0.42);
+  box-shadow: none;
+}
+
+.transport-bar button:checked,
+.transport-bar togglebutton:checked {
+  background-color: rgba(148, 137, 121, 0.24);
+  border-color: rgba(148, 137, 121, 0.46);
+  box-shadow: none;
 }
 
 .transport-btn {
@@ -220,6 +243,10 @@ row.appearance-choice-row {
 .navigation-sidebar row:selected {
   background-color: rgba(148, 137, 121, 0.2);
   border-left: 4px solid #948979;
+}
+
+.navigation-sidebar row:selected:focus-within {
+  background-color: rgba(148, 137, 121, 0.25);
 }
 
 .navigation-sidebar row:hover:not(:selected) {
@@ -475,6 +502,19 @@ columnview.data-table row:selected > cell label {
   color: #dfd0b8;
 }
 
+columnview.data-table row:selected:focus-within > cell {
+  background-color: rgba(148, 137, 121, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.42);
+}
+
+columnview.data-table row:focus-within:not(:selected) > cell {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.28);
+}
+
+columnview.data-table row:active > cell {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
 columnview.data-table rubberband {
   background-color: rgba(148, 137, 121, 0.13);
   border: 1px solid rgba(148, 137, 121, 0.58);
@@ -707,4 +747,18 @@ columnview.list-style-card row:nth-child(odd) > cell {
   font-weight: 600;
   border: 1px solid rgba(148, 137, 121, 1);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.transport-search:focus,
+entry.volume-input:focus,
+.hotkey-capture-zone:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.45);
+  outline: none;
+}
+
+.lsb-settings-dialog entry:focus,
+.lsb-settings-dialog spinbutton:focus-within,
+.lsb-settings-dialog row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.4);
+  outline: none;
 }

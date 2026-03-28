@@ -46,6 +46,7 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         .width_request(1100)
         .height_request(650)
         .build();
+    window.add_css_class("main-window");
 
     // Root vertical box: [setup_banner?] + [transport] + [content_pane]
     let root_box = GtkBox::new(Orientation::Vertical, 0);

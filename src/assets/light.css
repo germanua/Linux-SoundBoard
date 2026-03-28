@@ -67,6 +67,15 @@ headerbar:backdrop,
   box-shadow: none;
 }
 
+.main-window button:focus-visible,
+.main-window entry:focus,
+.main-window searchentry:focus,
+.main-window scale:focus slider,
+.main-window row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(168, 141, 82, 0.45);
+  outline: none;
+}
+
 .transport-bar label {
   color: #332b1f;
 }
@@ -91,6 +100,20 @@ headerbar:backdrop,
   color: #332b1f;
   border-radius: 10px;
   background-image: none;
+}
+
+.transport-bar button:active,
+.transport-bar togglebutton:active {
+  background-color: rgba(168, 141, 82, 0.16);
+  border-color: rgba(168, 141, 82, 0.4);
+  box-shadow: none;
+}
+
+.transport-bar button:checked,
+.transport-bar togglebutton:checked {
+  background-color: rgba(168, 141, 82, 0.22);
+  border-color: rgba(168, 141, 82, 0.44);
+  box-shadow: none;
 }
 
 .transport-btn {
@@ -210,6 +233,10 @@ row.appearance-choice-row {
 .navigation-sidebar row:selected {
   background-color: rgba(168, 141, 82, 0.2);
   border-left: 4px solid #a88d52;
+}
+
+.navigation-sidebar row:selected:focus-within {
+  background-color: rgba(168, 141, 82, 0.24);
 }
 
 .navigation-sidebar row:hover:not(:selected) {
@@ -465,6 +492,19 @@ columnview.data-table row:selected > cell label {
   color: #332b1f;
 }
 
+columnview.data-table row:selected:focus-within > cell {
+  background-color: rgba(168, 141, 82, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(168, 141, 82, 0.42);
+}
+
+columnview.data-table row:focus-within:not(:selected) > cell {
+  box-shadow: inset 0 0 0 1px rgba(168, 141, 82, 0.28);
+}
+
+columnview.data-table row:active > cell {
+  background-color: rgba(168, 141, 82, 0.14);
+}
+
 columnview.data-table rubberband {
   background-color: rgba(168, 141, 82, 0.12);
   border: 1px solid rgba(168, 141, 82, 0.55);
@@ -697,4 +737,18 @@ columnview.list-style-card row:nth-child(odd) > cell {
   font-weight: 600;
   border: 1px solid rgba(168, 141, 82, 1);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.transport-search:focus,
+entry.volume-input:focus,
+.hotkey-capture-zone:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(168, 141, 82, 0.45);
+  outline: none;
+}
+
+.lsb-settings-dialog entry:focus,
+.lsb-settings-dialog spinbutton:focus-within,
+.lsb-settings-dialog row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(168, 141, 82, 0.38);
+  outline: none;
 }

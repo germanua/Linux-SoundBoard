@@ -123,7 +123,6 @@ pub fn show_confirm<F>(
 {
     let dialog = adw::AlertDialog::new(Some(title), Some(message));
     dialog.add_responses(&[("cancel", "Cancel"), ("confirm", confirm_label)]);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
     dialog.connect_response(None, move |d, response| {
         if response == "confirm" {
             on_confirm();
@@ -151,7 +150,6 @@ pub fn show_input<F>(
     entry.select_region(0, -1);
     dialog.set_extra_child(Some(&entry));
     dialog.add_responses(&[("cancel", "Cancel"), ("confirm", confirm_label)]);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Suggested);
 
     // Allow Enter key in the entry to confirm
     let dialog_for_entry = dialog.clone();
@@ -193,8 +191,6 @@ pub fn show_missing_file<FLocate, FRemove>(
         ("remove", "Remove Sound"),
         ("locate", "Locate File…"),
     ]);
-    dialog.set_response_appearance("locate", adw::ResponseAppearance::Suggested);
-    dialog.set_response_appearance("remove", adw::ResponseAppearance::Destructive);
     dialog.connect_response(None, move |d, response| {
         match response {
             "locate" => on_locate(),
@@ -220,7 +216,6 @@ pub fn show_path_info(parent: &Window, sound_name: &str, path: &str) {
     dialog.set_extra_child(Some(&path_label));
 
     dialog.add_responses(&[("close", "Close"), ("copy", "Copy to Clipboard")]);
-    dialog.set_response_appearance("copy", adw::ResponseAppearance::Suggested);
 
     let path_owned = path.to_string();
     dialog.connect_response(None, move |d, response| {
@@ -284,8 +279,6 @@ pub fn show_hotkey_capture<F, V>(
     dialog.set_extra_child(Some(&vbox));
 
     dialog.add_responses(&[("cancel", "Cancel"), ("clear", "Clear"), ("save", "Save")]);
-    dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
-    dialog.set_response_appearance("clear", adw::ResponseAppearance::Destructive);
 
     // Shared state for captured hotkey
     let captured: Rc<RefCell<Option<String>>> =
