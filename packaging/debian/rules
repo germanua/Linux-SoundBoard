@@ -36,5 +36,5 @@ override_dh_auto_install:
 	done
 	
 	# Install metainfo
-	install -Dm644 dist/com.linuxsoundboard.app.metainfo.xml \
+	install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
 		debian/linux-soundboard/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml
