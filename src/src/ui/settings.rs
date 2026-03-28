@@ -37,6 +37,7 @@ pub fn build_settings_dialog(
         .content_width(600)
         .content_height(700)
         .build();
+    prefs.add_css_class("lsb-settings-dialog");
 
     prefs.add(&build_general_page(
         Arc::clone(&state),
@@ -404,7 +405,7 @@ fn build_general_page(
             .build();
         let analyze_btn = gtk4::Button::builder()
             .label("Analyze")
-            .css_classes(vec!["suggested-action"])
+            .css_classes(vec!["settings-primary-btn"])
             .valign(gtk4::Align::Center)
             .build();
         let spinner = gtk4::Spinner::builder()
@@ -755,7 +756,7 @@ fn build_sound_folder_row(
     let row = adw::ActionRow::builder().title(&folder).build();
 
     let remove_btn = gtk4::Button::builder()
-        .css_classes(vec!["flat", "destructive-action"])
+        .css_classes(vec!["flat", "settings-danger-btn"])
         .valign(gtk4::Align::Center)
         .build();
     icons::apply_button_icon(&remove_btn, icons::REMOVE);
@@ -896,7 +897,7 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
 
     let clear_btn = gtk4::Button::builder()
         .label("Clear")
-        .css_classes(vec!["flat", "destructive-action"])
+        .css_classes(vec!["flat", "settings-danger-btn"])
         .valign(gtk4::Align::Center)
         .sensitive(current_hotkey.is_some())
         .build();

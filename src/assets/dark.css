@@ -311,6 +311,44 @@ columnview header button:checked {
   border: 1px solid rgba(148, 137, 121, 0.5);
 }
 
+/* Settings dialog controls should keep the app palette instead of the system accent */
+.lsb-settings-dialog switch {
+  color: #dfd0b8;
+}
+
+.lsb-settings-dialog switch:checked {
+  background-color: #948979;
+  color: #dfd0b8;
+}
+
+.lsb-settings-dialog switch:checked slider {
+  background-color: #f2e7d5;
+}
+
+.lsb-settings-dialog button.settings-primary-btn {
+  background-color: #948979;
+  color: #f2e7d5;
+  border: 1px solid rgba(223, 208, 184, 0.22);
+  box-shadow: none;
+}
+
+.lsb-settings-dialog button.settings-primary-btn:hover {
+  background-color: #a39887;
+}
+
+.lsb-settings-dialog button.settings-primary-btn:active {
+  background-color: #847866;
+}
+
+.lsb-settings-dialog button.settings-danger-btn,
+.lsb-settings-dialog button.settings-danger-btn image {
+  color: #d98d7a;
+}
+
+.lsb-settings-dialog button.settings-danger-btn:hover {
+  background-color: rgba(217, 141, 122, 0.1);
+}
+
 /* Refresh button spinning indicator */
 .spinning {
   animation: spin 0.8s linear infinite;
