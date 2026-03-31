@@ -23,8 +23,8 @@ use libadwaita as adw;
 use log::{info, warn};
 
 use crate::app_meta::{
-    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, HOTKEY_POLL_INTERVAL_MS, WAYLAND_BACKEND,
-    X11_BACKEND,
+    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FORCE_X11_ENV_VAR, HOTKEY_POLL_INTERVAL_MS,
+    WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
@@ -70,6 +70,29 @@ fn configure_preferred_backend() {
 
     let has_wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
     let has_x11 = std::env::var("DISPLAY").is_ok();
+    let force_x11 = std::env::var(FORCE_X11_ENV_VAR)
+        .ok()
+        .map(|v| {
+            let normalized = v.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false);
+
+    if force_x11 {
+        if has_x11 {
+            info!(
+                "{} requested; forcing GTK X11 via {}={}",
+                FORCE_X11_ENV_VAR, BACKEND_ENV_VAR, X11_BACKEND
+            );
+            std::env::set_var(BACKEND_ENV_VAR, X11_BACKEND);
+            return;
+        }
+
+        warn!(
+            "{} is set but DISPLAY is unavailable; cannot force GTK X11 backend",
+            FORCE_X11_ENV_VAR
+        );
+    }
 
     if has_wayland {
         info!(
