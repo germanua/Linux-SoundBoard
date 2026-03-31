@@ -5,6 +5,7 @@ description = "A Linux soundboard with PipeWire virtual mic support"
 authors = ["you"]
 edition = "2021"
 rust-version = "1.85"
+license = "PolyForm-Noncommercial-1.0.0"
 license-file = "../LICENSE"
 
 [lib]

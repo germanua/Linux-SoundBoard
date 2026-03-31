@@ -56,7 +56,7 @@ flatpak-repo/
 # Documentation (internal)
 PLAN.md
 LOG OF RAM
-.codegrok/
+**/.codegrok/
 .github/agents/
 .github/instructions/
 *_ANALYSIS.md
