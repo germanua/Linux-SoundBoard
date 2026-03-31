@@ -1,70 +1,54 @@
 # Dependencies
-node_modules/
+/node_modules/
 
-# Build outputs
-dist/
-target/
+# Rust and build outputs
+/target/
+/src/target/
+/dist/
+/debian/
 
-# Build artifacts
-src/target/
+# Packaging build directories
+/rpmbuild/
+/flatpak-build/
+/flatpak-repo/
+/.flatpak-builder/
+/packaging/aur/linux-soundboard-git/pkg/
+/packaging/aur/linux-soundboard-git/src/
+/packaging/aur/linux-soundboard-git/linux-soundboard/
+/packaging/aur/linux-soundboard-git/*.pkg.tar.*
+
+# Generated package artifacts
 *.AppImage
 *.deb
 *.rpm
 *.flatpak
 *.tar.gz
 
-# IDE
-.vscode/
-.idea/
+# Editors and temporary files
+/.vscode/
+/.idea/
+/.history/
 *.swp
 *.swo
 *~
-.history/
+*.tmp
+*.bak
+*.orig
+*.rej
 
-# OS
+# Operating system files
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs and runtime files
 *.log
 npm-debug.log*
+/pids
+*.pid
+*.pid.lock
+*.seed
 
-# Environment
+# Local environment files
 .env
 .env.local
 .env.*.local
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Temporary files
-*.tmp
-*.bak
-*~
-
-# RPM build directories
-rpmbuild/
-
-# Flatpak build directories
-flatpak-build/
-flatpak-repo/
-.flatpak-builder/
-
-# Documentation (internal)
-PLAN.md
-LOG OF RAM
-**/.codegrok/
-.github/agents/
-.github/instructions/
-*_ANALYSIS.md
-*_PLAN.md
-IMPLEMENTATION_SUMMARY.md
-OPTIMIZATION.md
-SWHKD_MIGRATION.md
-
-# AUR build artifacts
-packaging/aur/linux-soundboard-git/linux-soundboard/
-packaging/aur/linux-soundboard-git/*.pkg.tar.*
