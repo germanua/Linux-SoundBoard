@@ -1,12 +1,17 @@
 [package]
 name = "linux-soundboard"
 version = "1.1.0"
-description = "A Linux soundboard with PipeWire virtual mic support"
-authors = ["you"]
+authors = ["germanua"]
+description = "Native Linux soundboard with PipeWire virtual microphone support"
 edition = "2021"
 rust-version = "1.85"
-license = "PolyForm-Noncommercial-1.0.0"
 license-file = "../LICENSE"
+license = "PolyForm-Noncommercial-1.0.0"
+readme = "../README.md"
+homepage = "https://github.com/germanua/Linux-SoundBoard"
+repository = "https://github.com/germanua/Linux-SoundBoard"
+keywords = ["audio", "gtk4", "pipewire", "soundboard", "wayland"]
+categories = ["multimedia::audio"]
 
 [lib]
 name = "linux_soundboard"
@@ -20,31 +25,29 @@ path = "tests/test_main.rs"
 glib-build-tools = "0.20"
 
 [dependencies]
+chrono = "0.4"
+dirs = "5"
+ebur128 = "0.1"
+env_logger = "0.11"
+gio = "0.20"
+glib = "0.20"
 gtk4 = { version = "0.9", features = ["v4_10"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
-glib = "0.20"
-gio = "0.20"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dirs = "5"
-walkdir = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
-rayon = "1.8"
-rodio = { version = "0.18", features = ["symphonia-mp3", "symphonia-wav", "symphonia-vorbis", "symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
-symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "aac", "isomp4"] }
 libpulse-binding = "2"
 libpulse-simple-binding = "2"
-ebur128 = "0.1"
-parking_lot = "0.12"
-thiserror = "1"
 log = "0.4"
-env_logger = "0.11"
 nix = { version = "0.29", features = ["signal", "process", "user", "fs"] }
+parking_lot = "0.12"
+rayon = "1.8"
+rodio = { version = "0.18", features = ["symphonia-mp3", "symphonia-wav", "symphonia-vorbis", "symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "aac", "isomp4"] }
+thiserror = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
 which = "6"
-chrono = "0.4"
 x11 = { version = "2.21", features = ["xlib", "xinput"] }
-
-[dev-dependencies]
 
 [profile.release]
 strip = true
@@ -52,7 +55,55 @@ lto = true
 codegen-units = 1
 panic = "unwind"
 
-[package.metadata.generate-rpm]
+[package.metadata.deb]
+name = "linux-soundboard"
+maintainer = "germanua"
+copyright = "2026, germanua"
+section = "sound"
+priority = "optional"
+revision = "1"
+depends = "$auto, pipewire, pipewire-pulse, wireplumber, pulseaudio-utils"
+recommends = "xwayland"
+extended-description = """\
+A high-performance, native Linux soundboard built with Rust, GTK4, and \
+Libadwaita. Features include a virtual microphone for routing audio to \
+Discord, OBS, and Zoom, mic passthrough, LUFS normalization, global hotkeys \
+on Wayland and X11/XWayland, and tight PipeWire/PulseAudio integration."""
 assets = [
-    { source = "target/release/linux-soundboard", dest = "/usr/bin/linux-soundboard", mode = "755" }
+    "$auto",
+    ["../packaging/debian/linux-soundboard.desktop", "usr/share/applications/com.linuxsoundboard.app.desktop", "644"],
+    ["resources/icons/16x16/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/16x16/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/24x24/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/24x24/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/32x32/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/32x32/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/48x48/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/48x48/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/64x64/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/64x64/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/128x128/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/128x128/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/256x256/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/256x256/apps/com.linuxsoundboard.app.png", "644"],
+    ["resources/icons/512x512/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/512x512/apps/com.linuxsoundboard.app.png", "644"],
+    ["../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", "usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", "644"],
 ]
+
+[package.metadata.generate-rpm]
+summary = "Native Linux soundboard with PipeWire virtual microphone support"
+url = "https://github.com/germanua/Linux-SoundBoard"
+assets = [
+    { source = "target/release/linux-soundboard", dest = "/usr/bin/linux-soundboard", mode = "755" },
+    { source = "../packaging/rpm/linux-soundboard.desktop", dest = "/usr/share/applications/com.linuxsoundboard.app.desktop", mode = "644" },
+    { source = "resources/icons/16x16/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/16x16/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/24x24/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/24x24/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/32x32/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/32x32/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/48x48/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/48x48/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/64x64/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/64x64/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/128x128/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/128x128/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/256x256/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/256x256/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "resources/icons/512x512/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/512x512/apps/com.linuxsoundboard.app.png", mode = "644" },
+    { source = "../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", dest = "/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+gtk4 = "*"
+libadwaita = "*"
+pipewire = "*"
+pipewire-pulseaudio = "*"
+pulseaudio-utils = "*"
+wireplumber = "*"
