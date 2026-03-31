@@ -56,9 +56,26 @@ Built with **Rust**, **GTK4**, and **Libadwaita** for native performance and mod
 |--------------|-------------|---------|
 | **Arch Linux** | AUR | `yay -S linux-soundboard-git` |
 | **Ubuntu/Debian** | DEB Package | [Download .deb](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
-| **Fedora/RHEL** | RPM Package | [Download .rpm](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
+| **Fedora** | RPM Package | [Download .rpm](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
 | **Any Linux** | Flatpak | [Download .flatpak](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
 | **Portable** | AppImage | [Download .AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
+
+### One-Command Bootstrap
+
+If you have the repository checked out locally, the installer script can do the distro detection, package install, runtime setup, and Wayland `swhkd` provisioning for you:
+
+```bash
+cd LinuxSoundBoardv1
+./scripts/install.sh
+```
+
+What it automates:
+- Arch family: installs `linux-soundboard-git` from the AUR
+- Debian/Ubuntu family: installs the latest `.deb` release if one is published, otherwise falls back to the AppImage plus host runtime packages
+- Fedora family: installs the latest `.rpm` release if one is published, otherwise falls back to the AppImage plus host runtime packages
+- openSUSE/SUSE family: installs the latest AppImage plus host runtime packages
+- Wayland sessions: installs and configures `swhkd` automatically
+- X11 sessions: skips `swhkd` because the native X11 backend is used instead
 
 ### 3-Step Setup
 
@@ -117,7 +134,7 @@ chmod +x linux-soundboard-x86_64.AppImage
 
 ---
 
-### Fedora / RHEL
+### Fedora
 
 **Option 1: RPM Package (Recommended)**
 
