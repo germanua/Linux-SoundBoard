@@ -87,6 +87,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm]
+license = "PolyForm-Noncommercial-1.0.0"
 summary = "Native Linux soundboard with PipeWire virtual microphone support"
 url = "https://github.com/germanua/Linux-SoundBoard"
 assets = [
