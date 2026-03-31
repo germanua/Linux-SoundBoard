@@ -79,7 +79,16 @@ struct ScrubInteraction {
     active: bool,
     input: Option<ScrubInput>,
     preview_position_ms: Option<u64>,
+    pending_seek_position_ms: Option<u64>,
+    pending_seek_sound_id: Option<String>,
+    pending_seek_deadline_ms: Option<u64>,
+    last_committed_position_ms: Option<u64>,
+    last_committed_sound_id: Option<String>,
 }
+
+const SEEK_SETTLE_TOLERANCE_MS: u64 = 100;
+const PENDING_SEEK_TIMEOUT_MS: u64 = 800;
+const DEFAULT_SCRUB_DURATION_MS: u64 = 30_000;
 
 /// The transport bar widget bundle.
 #[derive(Clone)]
@@ -113,6 +122,7 @@ struct TransportInner {
     scrub_interaction: RefCell<ScrubInteraction>,
     scrub_commit_timeout: RefCell<Option<glib::SourceId>>,
     scrub_timer_id: RefCell<Option<glib::SourceId>>,
+    continue_suppressed_play_id: RefCell<Option<String>>,
     last_track_sound_id: RefCell<Option<String>>,
     state: Arc<AppState>,
     sound_list_provider: Mutex<Option<SoundListProvider>>,
@@ -413,6 +423,7 @@ impl TransportBar {
             scrub_interaction: RefCell::new(ScrubInteraction::default()),
             scrub_commit_timeout: RefCell::new(None),
             scrub_timer_id: RefCell::new(None),
+            continue_suppressed_play_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
             state,
             sound_list_provider: Mutex::new(None),
@@ -492,6 +503,11 @@ impl TransportBar {
         self.inner.play_adjacent_sound(1);
     }
 
+    /// Stop playback and suppress Continue mode auto-advance for this user action.
+    pub fn stop_all(&self) {
+        self.inner.stop_all_playback();
+    }
+
     /// Toggle headphones mute (for hotkey dispatch).
     pub fn toggle_headphones_mute(&self) {
         let _ = commands::toggle_local_mute(
@@ -561,7 +577,7 @@ impl TransportBar {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                commands::stop_all(Arc::clone(&inner.state.player));
+                inner.stop_all_playback();
             });
         }
 
@@ -917,8 +933,32 @@ impl TransportInner {
         );
 
         if let (Some(track), Some(position_ms)) = (track, position_ms) {
-            let _ =
-                commands::seek_sound(track.sound_id, position_ms, Arc::clone(&self.state.player));
+            {
+                let mut interaction = self.scrub_interaction.borrow_mut();
+                if interaction.last_committed_sound_id.as_deref() == Some(track.sound_id.as_str())
+                    && interaction.last_committed_position_ms == Some(position_ms)
+                {
+                    interaction.pending_seek_sound_id = None;
+                    interaction.pending_seek_position_ms = None;
+                    interaction.pending_seek_deadline_ms = None;
+                    return;
+                }
+                interaction.last_committed_sound_id = Some(track.sound_id.clone());
+                interaction.last_committed_position_ms = Some(position_ms);
+                interaction.pending_seek_sound_id = Some(track.sound_id.clone());
+                interaction.pending_seek_position_ms = Some(position_ms);
+                interaction.pending_seek_deadline_ms = Some(pending_seek_deadline_ms_from_now());
+            }
+
+            if let Err(e) =
+                commands::seek_sound(track.sound_id, position_ms, Arc::clone(&self.state.player))
+            {
+                log::warn!("Seek dispatch failed for {}ms: {}", position_ms, e);
+                let mut interaction = self.scrub_interaction.borrow_mut();
+                interaction.pending_seek_position_ms = None;
+                interaction.pending_seek_sound_id = None;
+                interaction.pending_seek_deadline_ms = None;
+            }
         }
     }
 
@@ -937,6 +977,7 @@ impl TransportInner {
     /// Play the sound at `offset` positions from the current active track.
     /// Wraps around at list boundaries.
     fn play_adjacent_sound(&self, offset: i32) {
+        self.clear_continue_suppression();
         let sounds = match self.sound_list_provider.lock().unwrap().as_ref() {
             Some(provider) => provider(),
             None => return,
@@ -974,28 +1015,25 @@ impl TransportInner {
     /// Called every 150ms to update the scrub bar from playback positions.
     fn update_scrub(&self) {
         let positions = commands::get_playback_positions(Arc::clone(&self.state.player));
+        let now_ms = glib::monotonic_time() as u64 / 1_000;
 
         if positions.is_empty() {
             self.cancel_scrub_interaction();
-            let should_continue = self.last_track_sound_id.borrow().is_some()
-                && self.state.config.lock().unwrap().settings.play_mode == PlayMode::Continue
-                && self.has_navigation_sounds();
+            let play_mode = { self.state.config.lock().unwrap().settings.play_mode };
+            let has_navigation_sounds = self.has_navigation_sounds();
+            let should_continue = should_continue_playback(
+                self.last_track_sound_id.borrow().is_some(),
+                play_mode,
+                has_navigation_sounds,
+                self.is_continue_suppressed(),
+            );
             if should_continue {
                 self.play_adjacent_sound(1);
                 return;
             }
 
-            self.play_btn.set_sensitive(false);
-            update_play_pause_button(&self.play_btn, false);
-            self.stop_btn.set_sensitive(false);
-            self.prev_btn.set_sensitive(false);
-            self.next_btn.set_sensitive(false);
-            self.scrub.set_sensitive(false);
-            self.track_name_label.set_visible(false);
-            *self.active_track.borrow_mut() = None;
-            *self.last_track_sound_id.borrow_mut() = None;
-            self.time_label.set_text("0:00");
-            self.dur_label.set_text("0:00");
+            self.clear_continue_suppression();
+            self.reset_idle_playback_ui();
             return;
         }
 
@@ -1004,21 +1042,42 @@ impl TransportInner {
         self.next_btn.set_sensitive(has_provider);
 
         if let Some(position) = positions.iter().find(|position| !position.finished) {
+            self.clear_continue_suppression_for_playback(&position.play_id);
             self.stop_btn.set_sensitive(true);
             self.play_btn.set_sensitive(true);
             update_play_pause_button(&self.play_btn, !position.paused);
-            let interaction = self.scrub_interaction.borrow().clone();
+            let interaction = {
+                let mut interaction = self.scrub_interaction.borrow_mut();
+                settle_pending_seek_state(
+                    &mut interaction,
+                    &position.sound_id,
+                    position.position_ms,
+                    now_ms,
+                );
+                interaction.clone()
+            };
 
-            if let Some(duration_ms) = position.duration_ms {
-                if duration_ms > 0 {
-                    self.scrub.set_sensitive(true);
-                    if should_sync_scrub_from_playback(&interaction) {
-                        self.scrub.set_value(
-                            (position.position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0),
-                        );
-                    }
-                }
+            let sound_snapshot = {
+                let cfg = self.state.config.lock().unwrap();
+                cfg.get_sound(&position.sound_id)
+                    .map(|sound| (sound.id.clone(), sound.name.clone(), sound.duration_ms))
+            };
+            let track_duration_ms = sound_snapshot
+                .as_ref()
+                .and_then(|(_, _, duration_ms)| *duration_ms);
+            let duration_ms = resolve_scrub_duration_ms(position.duration_ms, track_duration_ms);
+
+            self.scrub.set_sensitive(true);
+            if should_sync_scrub_from_playback(&interaction) {
+                self.scrub
+                    .set_value(scrub_progress_value(position.position_ms, duration_ms));
+            }
+
+            if position.duration_ms.is_some() || track_duration_ms.is_some() {
                 self.dur_label.set_text(&format_duration(duration_ms));
+            } else {
+                self.dur_label
+                    .set_text(&format!("~{}", format_duration(duration_ms)));
             }
             self.time_label
                 .set_text(&format_duration(displayed_scrub_position_ms(
@@ -1026,26 +1085,80 @@ impl TransportInner {
                     position.position_ms,
                 )));
 
-            let cfg = self.state.config.lock().unwrap();
-            if let Some(sound) = cfg.get_sound(&position.sound_id) {
-                self.track_name_label.set_label(&sound.name);
+            if let Some((sound_id, sound_name, _)) = sound_snapshot {
+                self.track_name_label.set_label(&sound_name);
                 self.track_name_label.set_visible(true);
                 *self.active_track.borrow_mut() = Some(ActiveTrack {
-                    sound_id: sound.id.clone(),
-                    sound_duration_ms: sound.duration_ms,
+                    sound_id: sound_id.clone(),
+                    sound_duration_ms: Some(duration_ms),
                     play_id: position.play_id.clone(),
                 });
-                *self.last_track_sound_id.borrow_mut() = Some(sound.id.clone());
+                *self.last_track_sound_id.borrow_mut() = Some(sound_id);
+            } else {
+                self.track_name_label.set_visible(false);
+                *self.active_track.borrow_mut() = Some(ActiveTrack {
+                    sound_id: position.sound_id.clone(),
+                    sound_duration_ms: Some(duration_ms),
+                    play_id: position.play_id.clone(),
+                });
+                *self.last_track_sound_id.borrow_mut() = Some(position.sound_id.clone());
             }
-        } else if positions.iter().all(|position| position.finished)
-            && self.active_track.borrow().is_some()
-        {
-            if self.state.config.lock().unwrap().settings.play_mode == PlayMode::Continue {
+        } else if positions.iter().all(|position| position.finished) {
+            let play_mode = { self.state.config.lock().unwrap().settings.play_mode };
+            let has_navigation_sounds = self.has_navigation_sounds();
+            if should_continue_playback(
+                self.last_track_sound_id.borrow().is_some(),
+                play_mode,
+                has_navigation_sounds,
+                self.is_continue_suppressed(),
+            ) {
                 self.play_adjacent_sound(1);
             } else {
-                *self.active_track.borrow_mut() = None;
+                self.clear_continue_suppression();
+                self.reset_idle_playback_ui();
             }
         }
+    }
+
+    fn stop_all_playback(&self) {
+        *self.continue_suppressed_play_id.borrow_mut() = self
+            .active_track
+            .borrow()
+            .as_ref()
+            .map(|track| track.play_id.clone());
+        commands::stop_all(Arc::clone(&self.state.player));
+    }
+
+    fn is_continue_suppressed(&self) -> bool {
+        self.continue_suppressed_play_id.borrow().is_some()
+    }
+
+    fn clear_continue_suppression(&self) {
+        *self.continue_suppressed_play_id.borrow_mut() = None;
+    }
+
+    fn clear_continue_suppression_for_playback(&self, play_id: &str) {
+        let should_clear = should_clear_continue_suppression(
+            self.continue_suppressed_play_id.borrow().as_deref(),
+            play_id,
+        );
+        if should_clear {
+            self.clear_continue_suppression();
+        }
+    }
+
+    fn reset_idle_playback_ui(&self) {
+        self.play_btn.set_sensitive(false);
+        update_play_pause_button(&self.play_btn, false);
+        self.stop_btn.set_sensitive(false);
+        self.prev_btn.set_sensitive(false);
+        self.next_btn.set_sensitive(false);
+        self.scrub.set_sensitive(false);
+        self.track_name_label.set_visible(false);
+        *self.active_track.borrow_mut() = None;
+        *self.last_track_sound_id.borrow_mut() = None;
+        self.time_label.set_text("0:00");
+        self.dur_label.set_text("0:00");
     }
 }
 
@@ -1053,11 +1166,32 @@ fn scrub_position_ms(value: f64, duration_ms: u64) -> u64 {
     value.clamp(0.0, 1.0).mul_add(duration_ms as f64, 0.0) as u64
 }
 
+fn resolve_scrub_duration_ms(
+    playback_duration_ms: Option<u64>,
+    track_duration_ms: Option<u64>,
+) -> u64 {
+    playback_duration_ms
+        .or(track_duration_ms)
+        .filter(|duration_ms| *duration_ms > 0)
+        .unwrap_or(DEFAULT_SCRUB_DURATION_MS)
+}
+
+fn scrub_progress_value(position_ms: u64, duration_ms: u64) -> f64 {
+    if duration_ms == 0 {
+        0.0
+    } else {
+        (position_ms as f64 / duration_ms as f64).clamp(0.0, 1.0)
+    }
+}
+
 fn begin_scrub_interaction_state(interaction: &mut ScrubInteraction, input: ScrubInput) {
     if !interaction.active {
         interaction.active = true;
     }
     interaction.input = Some(input);
+    interaction.pending_seek_position_ms = None;
+    interaction.pending_seek_sound_id = None;
+    interaction.pending_seek_deadline_ms = None;
 }
 
 fn record_scrub_preview_state(
@@ -1070,7 +1204,8 @@ fn record_scrub_preview_state(
         begin_scrub_interaction_state(interaction, default_input?);
     }
 
-    let position_ms = scrub_position_ms(value, duration_ms?);
+    let effective_duration = resolve_scrub_duration_ms(duration_ms, None);
+    let position_ms = scrub_position_ms(value, effective_duration);
     interaction.preview_position_ms = Some(position_ms);
     Some(position_ms)
 }
@@ -1099,6 +1234,55 @@ fn clear_scrub_interaction_state(interaction: &mut ScrubInteraction) {
     interaction.active = false;
     interaction.input = None;
     interaction.preview_position_ms = None;
+    interaction.pending_seek_position_ms = None;
+    interaction.pending_seek_sound_id = None;
+    interaction.pending_seek_deadline_ms = None;
+    interaction.last_committed_position_ms = None;
+    interaction.last_committed_sound_id = None;
+}
+
+fn pending_seek_deadline_ms_from_now() -> u64 {
+    (glib::monotonic_time() as u64 / 1_000) + PENDING_SEEK_TIMEOUT_MS
+}
+
+fn settle_pending_seek_state(
+    interaction: &mut ScrubInteraction,
+    playback_sound_id: &str,
+    playback_position_ms: u64,
+    now_ms: u64,
+) {
+    let Some(pending_seek_ms) = interaction.pending_seek_position_ms else {
+        return;
+    };
+    let pending_sound_matches =
+        interaction.pending_seek_sound_id.as_deref() == Some(playback_sound_id);
+
+    if !pending_sound_matches {
+        interaction.pending_seek_position_ms = None;
+        interaction.pending_seek_sound_id = None;
+        interaction.pending_seek_deadline_ms = None;
+        return;
+    }
+
+    if playback_position_ms.abs_diff(pending_seek_ms) <= SEEK_SETTLE_TOLERANCE_MS {
+        interaction.pending_seek_position_ms = None;
+        interaction.pending_seek_sound_id = None;
+        interaction.pending_seek_deadline_ms = None;
+        return;
+    }
+
+    if let Some(deadline_ms) = interaction.pending_seek_deadline_ms {
+        if now_ms >= deadline_ms {
+            log::debug!(
+                "Pending seek timeout reached: target={}ms current={}ms, clearing pending state",
+                pending_seek_ms,
+                playback_position_ms
+            );
+            interaction.pending_seek_position_ms = None;
+            interaction.pending_seek_sound_id = None;
+            interaction.pending_seek_deadline_ms = None;
+        }
+    }
 }
 
 fn displayed_scrub_position_ms(interaction: &ScrubInteraction, playback_position_ms: u64) -> u64 {
@@ -1106,13 +1290,34 @@ fn displayed_scrub_position_ms(interaction: &ScrubInteraction, playback_position
         interaction
             .preview_position_ms
             .unwrap_or(playback_position_ms)
+    } else if let Some(pending_seek_ms) = interaction.pending_seek_position_ms {
+        pending_seek_ms
     } else {
         playback_position_ms
     }
 }
 
 fn should_sync_scrub_from_playback(interaction: &ScrubInteraction) -> bool {
-    !interaction.active
+    !interaction.active && interaction.pending_seek_position_ms.is_none()
+}
+
+fn should_continue_playback(
+    has_last_track: bool,
+    play_mode: PlayMode,
+    has_navigation_sounds: bool,
+    continue_suppressed: bool,
+) -> bool {
+    has_last_track
+        && play_mode == PlayMode::Continue
+        && has_navigation_sounds
+        && !continue_suppressed
+}
+
+fn should_clear_continue_suppression(
+    suppressed_play_id: Option<&str>,
+    active_play_id: &str,
+) -> bool {
+    matches!(suppressed_play_id, Some(suppressed_play_id) if suppressed_play_id != active_play_id)
 }
 
 fn is_seek_key(keyval: gdk::Key) -> bool {
@@ -1257,6 +1462,26 @@ mod tests {
     }
 
     #[test]
+    fn resolve_scrub_duration_prefers_playback_then_track_then_default() {
+        assert_eq!(
+            resolve_scrub_duration_ms(Some(12_000), Some(10_000)),
+            12_000
+        );
+        assert_eq!(resolve_scrub_duration_ms(None, Some(10_000)), 10_000);
+        assert_eq!(
+            resolve_scrub_duration_ms(None, None),
+            DEFAULT_SCRUB_DURATION_MS
+        );
+    }
+
+    #[test]
+    fn scrub_progress_value_clamps_ratio() {
+        assert_eq!(scrub_progress_value(3_000, 12_000), 0.25);
+        assert_eq!(scrub_progress_value(15_000, 12_000), 1.0);
+        assert_eq!(scrub_progress_value(3_000, 0), 0.0);
+    }
+
+    #[test]
     fn begin_scrub_interaction_marks_pointer_active() {
         let mut interaction = ScrubInteraction::default();
 
@@ -1268,6 +1493,11 @@ mod tests {
                 active: true,
                 input: Some(ScrubInput::Pointer),
                 preview_position_ms: None,
+                pending_seek_position_ms: None,
+                pending_seek_sound_id: None,
+                pending_seek_deadline_ms: None,
+                last_committed_position_ms: None,
+                last_committed_sound_id: None,
             }
         );
     }
@@ -1308,6 +1538,11 @@ mod tests {
                 active: true,
                 input: Some(ScrubInput::Pointer),
                 preview_position_ms: Some(9_000),
+                pending_seek_position_ms: None,
+                pending_seek_sound_id: None,
+                pending_seek_deadline_ms: None,
+                last_committed_position_ms: None,
+                last_committed_sound_id: None,
             }
         );
     }
@@ -1380,6 +1615,11 @@ mod tests {
             active: true,
             input: Some(ScrubInput::Keyboard),
             preview_position_ms: Some(4_000),
+            pending_seek_position_ms: Some(4_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(4_800),
+            last_committed_position_ms: Some(4_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
         };
 
         clear_scrub_interaction_state(&mut interaction);
@@ -1393,6 +1633,11 @@ mod tests {
             active: true,
             input: Some(ScrubInput::Pointer),
             preview_position_ms: Some(4_000),
+            pending_seek_position_ms: None,
+            pending_seek_sound_id: None,
+            pending_seek_deadline_ms: None,
+            last_committed_position_ms: None,
+            last_committed_sound_id: None,
         };
 
         assert_eq!(displayed_scrub_position_ms(&interaction, 2_000), 4_000);
@@ -1405,6 +1650,118 @@ mod tests {
 
         assert_eq!(displayed_scrub_position_ms(&interaction, 2_000), 2_000);
         assert!(should_sync_scrub_from_playback(&interaction));
+    }
+
+    #[test]
+    fn pending_seek_blocks_sync_and_keeps_pending_display_position() {
+        let interaction = ScrubInteraction {
+            active: false,
+            input: None,
+            preview_position_ms: None,
+            pending_seek_position_ms: Some(8_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(8_800),
+            last_committed_position_ms: Some(8_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
+        };
+
+        assert_eq!(displayed_scrub_position_ms(&interaction, 1_000), 8_000);
+        assert!(!should_sync_scrub_from_playback(&interaction));
+    }
+
+    #[test]
+    fn settle_pending_seek_clears_after_backend_catches_up() {
+        let mut interaction = ScrubInteraction {
+            active: false,
+            input: None,
+            preview_position_ms: None,
+            pending_seek_position_ms: Some(10_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(10_800),
+            last_committed_position_ms: Some(10_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
+        };
+
+        settle_pending_seek_state(&mut interaction, "sound-1", 10_400, 10_700);
+        assert_eq!(interaction.pending_seek_position_ms, Some(10_000));
+
+        settle_pending_seek_state(
+            &mut interaction,
+            "sound-1",
+            10_000 + SEEK_SETTLE_TOLERANCE_MS,
+            10_750,
+        );
+        assert_eq!(interaction.pending_seek_position_ms, None);
+        assert_eq!(interaction.pending_seek_sound_id, None);
+        assert_eq!(interaction.pending_seek_deadline_ms, None);
+    }
+
+    #[test]
+    fn settle_pending_seek_clears_when_sound_changes() {
+        let mut interaction = ScrubInteraction {
+            active: false,
+            input: None,
+            preview_position_ms: None,
+            pending_seek_position_ms: Some(10_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(10_800),
+            last_committed_position_ms: Some(10_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
+        };
+
+        settle_pending_seek_state(&mut interaction, "sound-2", 1_000, 10_700);
+        assert_eq!(interaction.pending_seek_position_ms, None);
+        assert_eq!(interaction.pending_seek_sound_id, None);
+        assert_eq!(interaction.pending_seek_deadline_ms, None);
+    }
+
+    #[test]
+    fn settle_pending_seek_clears_when_deadline_expires() {
+        let mut interaction = ScrubInteraction {
+            active: false,
+            input: None,
+            preview_position_ms: None,
+            pending_seek_position_ms: Some(10_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(10_800),
+            last_committed_position_ms: Some(10_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
+        };
+
+        settle_pending_seek_state(&mut interaction, "sound-1", 6_000, 10_750);
+        assert_eq!(interaction.pending_seek_position_ms, Some(10_000));
+
+        settle_pending_seek_state(&mut interaction, "sound-1", 6_050, 10_800);
+        assert_eq!(interaction.pending_seek_position_ms, None);
+        assert_eq!(interaction.pending_seek_sound_id, None);
+        assert_eq!(interaction.pending_seek_deadline_ms, None);
+    }
+
+    #[test]
+    fn duplicate_commit_should_not_create_pending_seek() {
+        let mut interaction = ScrubInteraction {
+            active: false,
+            input: None,
+            preview_position_ms: None,
+            pending_seek_position_ms: Some(5_000),
+            pending_seek_sound_id: Some("sound-1".to_string()),
+            pending_seek_deadline_ms: Some(5_800),
+            last_committed_position_ms: Some(5_000),
+            last_committed_sound_id: Some("sound-1".to_string()),
+        };
+
+        // Duplicate commit path should clear pending state because no new seek is dispatched.
+        if interaction.last_committed_sound_id.as_deref() == Some("sound-1")
+            && interaction.last_committed_position_ms == Some(5_000)
+        {
+            interaction.pending_seek_sound_id = None;
+            interaction.pending_seek_position_ms = None;
+            interaction.pending_seek_deadline_ms = None;
+        }
+
+        assert_eq!(interaction.pending_seek_position_ms, None);
+        assert_eq!(interaction.pending_seek_sound_id, None);
+        assert_eq!(interaction.pending_seek_deadline_ms, None);
     }
 
     #[test]
@@ -1425,5 +1782,62 @@ mod tests {
     fn format_duration_formats_minutes_and_seconds() {
         assert_eq!(format_duration(0), "0:00");
         assert_eq!(format_duration(61_000), "1:01");
+    }
+
+    #[test]
+    fn resolve_scrub_duration_prefers_live_playback_duration() {
+        assert_eq!(resolve_scrub_duration_ms(Some(12_000), Some(8_000)), 12_000);
+    }
+
+    #[test]
+    fn resolve_scrub_duration_falls_back_to_track_duration() {
+        assert_eq!(resolve_scrub_duration_ms(None, Some(8_000)), 8_000);
+    }
+
+    #[test]
+    fn resolve_scrub_duration_uses_default_when_unknown() {
+        assert_eq!(
+            resolve_scrub_duration_ms(None, None),
+            DEFAULT_SCRUB_DURATION_MS
+        );
+    }
+
+    #[test]
+    fn scrub_progress_value_advances_with_default_duration() {
+        let duration_ms = resolve_scrub_duration_ms(None, None);
+
+        assert!(
+            scrub_progress_value(2_000, duration_ms) > scrub_progress_value(1_000, duration_ms)
+        );
+    }
+
+    #[test]
+    fn continue_mode_advances_when_state_allows_it() {
+        assert!(should_continue_playback(
+            true,
+            PlayMode::Continue,
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn continue_mode_does_not_advance_after_manual_stop() {
+        assert!(!should_continue_playback(
+            true,
+            PlayMode::Continue,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn continue_suppression_persists_for_same_playback() {
+        assert!(!should_clear_continue_suppression(Some("play-1"), "play-1",));
+    }
+
+    #[test]
+    fn continue_suppression_clears_when_new_playback_starts() {
+        assert!(should_clear_continue_suppression(Some("play-1"), "play-2",));
     }
 }

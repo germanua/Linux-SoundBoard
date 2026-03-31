@@ -8,8 +8,12 @@ rust-version = "1.85"
 license-file = "../LICENSE"
 
 [lib]
-name = "linux_soundboard_lib"
-crate-type = ["rlib"]
+name = "linux_soundboard"
+path = "src/lib.rs"
+
+[[test]]
+name = "integration"
+path = "tests/test_main.rs"
 
 [build-dependencies]
 glib-build-tools = "0.20"
@@ -27,10 +31,8 @@ uuid = { version = "1", features = ["v4", "serde"] }
 rayon = "1.8"
 rodio = { version = "0.18", features = ["symphonia-mp3", "symphonia-wav", "symphonia-vorbis", "symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
 symphonia = { version = "0.5", features = ["mp3", "ogg", "flac", "wav", "aac", "isomp4"] }
-# For direct PulseAudio sink playback (virtual mic output)
 libpulse-binding = "2"
 libpulse-simple-binding = "2"
-# EBU R128 loudness measurement for auto-gain normalization
 ebur128 = "0.1"
 parking_lot = "0.12"
 thiserror = "1"
@@ -41,12 +43,15 @@ which = "6"
 chrono = "0.4"
 x11 = { version = "2.21", features = ["xlib", "xinput"] }
 
-# PipeWire bindings (optional, may need system libpipewire-dev)
-# pipewire = { version = "0.8", optional = true }
-
+[dev-dependencies]
 
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
 panic = "unwind"
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/linux-soundboard", dest = "/usr/bin/linux-soundboard", mode = "755" }
+]

@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    linux_soundboard_lib::bootstrap::run();
+    linux_soundboard::bootstrap::run();
 }

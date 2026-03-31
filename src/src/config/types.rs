@@ -546,8 +546,27 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn default_schema_version() -> u32 {
+    1
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            sound_folders: vec![],
+            sounds: vec![],
+            tabs: vec![],
+            settings: Settings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Schema version for config migration
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     pub sound_folders: Vec<String>,
     pub sounds: Vec<Sound>,
     #[serde(default)]

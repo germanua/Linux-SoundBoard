@@ -37,6 +37,12 @@ pub struct NavigationSound {
     pub name: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ScrollOffsets {
+    vertical: f64,
+    horizontal: f64,
+}
+
 /// Format milliseconds as M:SS string.
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
@@ -162,22 +168,21 @@ impl SoundList {
 
     /// Update which sound IDs are currently playing and refresh the list.
     pub fn set_playing_ids(&self, ids: HashSet<String>) {
-        let changed_ids = {
+        let changed = {
             if let Ok(mut current) = self.inner.playing_ids.lock() {
                 if *current != ids {
-                    let changed_ids = current.symmetric_difference(&ids).cloned().collect();
                     *current = ids;
-                    Some(changed_ids)
+                    true
                 } else {
-                    None
+                    false
                 }
             } else {
                 log::warn!("playing_ids lock poisoned in set_playing_ids");
-                None
+                false
             }
         };
-        if let Some(changed_ids) = changed_ids {
-            self.inner.rebind_rows_for_ids(&changed_ids);
+        if changed {
+            self.inner.refresh_visible_sound_state();
         }
     }
 
@@ -202,28 +207,21 @@ impl SoundList {
 
     /// Set the active sound ID (current transport track) and refresh if changed.
     pub fn set_active_sound_id(&self, id: Option<String>) {
-        let changed_ids = {
+        let changed = {
             if let Ok(mut current) = self.inner.active_sound_id.lock() {
                 if *current != id {
-                    let mut changed_ids = HashSet::new();
-                    if let Some(previous) = current.clone() {
-                        changed_ids.insert(previous);
-                    }
-                    if let Some(next) = id.as_ref() {
-                        changed_ids.insert(next.clone());
-                    }
                     *current = id;
-                    Some(changed_ids)
+                    true
                 } else {
-                    None
+                    false
                 }
             } else {
                 log::warn!("active_sound_id lock poisoned in set_active_sound_id");
-                None
+                false
             }
         };
-        if let Some(changed_ids) = changed_ids {
-            self.inner.rebind_rows_for_ids(&changed_ids);
+        if changed {
+            self.inner.refresh_visible_sound_state();
         }
     }
 
@@ -1319,6 +1317,7 @@ impl SoundListInner {
     }
 
     fn reload_store(&self) {
+        let scroll_offsets = self.capture_scroll_offsets();
         let filtered_rows = self.filtered_row_data_from_state();
         let boxed_rows = filtered_rows
             .into_iter()
@@ -1330,6 +1329,7 @@ impl SoundListInner {
             self.store.append(&row);
         }
         self.rebuild_visible_row_indices();
+        self.restore_scroll_offsets(scroll_offsets);
     }
 
     fn current_store_rows(&self) -> Vec<SoundRowData> {
@@ -1348,6 +1348,23 @@ impl SoundListInner {
         self.store.splice(position, 1, &replacements);
     }
 
+    fn capture_scroll_offsets(&self) -> ScrollOffsets {
+        ScrollOffsets {
+            vertical: self.scroll.vadjustment().value(),
+            horizontal: self.scroll.hadjustment().value(),
+        }
+    }
+
+    fn restore_scroll_offsets(&self, offsets: ScrollOffsets) {
+        let vadjustment = self.scroll.vadjustment();
+        let hadjustment = self.scroll.hadjustment();
+
+        glib::idle_add_local_once(move || {
+            vadjustment.set_value(clamp_adjustment_value(&vadjustment, offsets.vertical));
+            hadjustment.set_value(clamp_adjustment_value(&hadjustment, offsets.horizontal));
+        });
+    }
+
     fn rebuild_visible_row_indices(&self) {
         let mut indices = self.visible_row_indices.borrow_mut();
         indices.clear();
@@ -1364,27 +1381,95 @@ impl SoundListInner {
         }
     }
 
+    fn refresh_visible_sound_state(&self) {
+        if let Some(root) = self.col_view.first_child() {
+            self.refresh_visible_sound_state_widget(&root);
+        }
+    }
+
+    fn refresh_visible_sound_state_widget(&self, widget: &Widget) {
+        if widget.has_css_class("sound-cell") {
+            self.refresh_sound_cell_widget(widget);
+        }
+
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            self.refresh_visible_sound_state_widget(&current);
+            child = current.next_sibling();
+        }
+    }
+
+    fn refresh_sound_cell_widget(&self, widget: &Widget) {
+        let sound_id = widget.widget_name();
+        if sound_id.is_empty() {
+            return;
+        }
+
+        let is_playing = self
+            .playing_ids
+            .lock()
+            .map(|ids| ids.contains(sound_id.as_str()))
+            .unwrap_or_else(|e| {
+                log::warn!("playing_ids lock poisoned: {}", e);
+                false
+            });
+        let is_active = self
+            .active_sound_id
+            .lock()
+            .map(|id| id.as_deref() == Some(sound_id.as_str()))
+            .unwrap_or_else(|e| {
+                log::warn!("active_sound_id lock poisoned: {}", e);
+                false
+            });
+
+        SoundList::sync_sound_state_classes(widget, is_playing, is_active);
+
+        if let Ok(container) = widget.clone().downcast::<GtkBox>() {
+            if let Some(dot) = container
+                .first_child()
+                .and_then(|child| child.downcast::<Label>().ok())
+            {
+                if dot.has_css_class("playing-dot") {
+                    dot.set_visible(is_playing);
+                }
+            }
+        }
+    }
+
     /// Rebind only rows whose transient state changed, leaving the store intact.
     fn rebind_rows_for_ids(&self, sound_ids: &HashSet<String>) {
         if sound_ids.is_empty() {
             return;
         }
 
-        let mut changed_positions = Vec::new();
+        let scroll_offsets = self.capture_scroll_offsets();
+        let mut replacements = Vec::new();
         {
             let indices = self.visible_row_indices.borrow();
             for sound_id in sound_ids {
                 if let Some(position) = indices.get(sound_id) {
-                    changed_positions.push(*position);
+                    let Some(obj) = self
+                        .store
+                        .item(*position)
+                        .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
+                    else {
+                        continue;
+                    };
+                    replacements.push((*position, obj.borrow::<SoundRowData>().clone()));
                 }
             }
         }
 
-        changed_positions.sort_unstable();
-        changed_positions.dedup();
-        for position in changed_positions {
-            self.store.items_changed(position, 0, 0);
+        replacements.sort_unstable_by_key(|(position, _)| *position);
+        replacements.dedup_by_key(|(position, _)| *position);
+
+        // Replacing the boxed row forces GtkColumnView to bind the row again.
+        // A bare `items_changed(position, 0, 0)` is not sufficient here because
+        // the transient playback state lives outside the row model object.
+        for (position, row) in replacements {
+            self.replace_row_at(position, row);
         }
+        self.restore_scroll_offsets(scroll_offsets);
     }
 
     fn filtered_navigation_sounds_from_state(&self) -> Vec<NavigationSound> {
@@ -1452,6 +1537,7 @@ impl SoundListInner {
             return;
         }
 
+        let scroll_offsets = self.capture_scroll_offsets();
         let mut changed = false;
         for (position, (current, next)) in current_rows.iter().zip(filtered_rows.iter()).enumerate()
         {
@@ -1466,6 +1552,9 @@ impl SoundListInner {
 
         if changed || !current_rows.is_empty() || filtered_rows.is_empty() {
             self.rebuild_visible_row_indices();
+            if changed {
+                self.restore_scroll_offsets(scroll_offsets);
+            }
         }
     }
 
@@ -1530,6 +1619,12 @@ impl SoundListInner {
 
         search_query.is_empty() || sound.name.to_lowercase().contains(search_query)
     }
+}
+
+fn clamp_adjustment_value(adjustment: &gtk4::Adjustment, value: f64) -> f64 {
+    let lower = adjustment.lower();
+    let upper = (adjustment.upper() - adjustment.page_size()).max(lower);
+    value.clamp(lower, upper)
 }
 
 fn parse_uri_list(uri_list: &str) -> Vec<String> {

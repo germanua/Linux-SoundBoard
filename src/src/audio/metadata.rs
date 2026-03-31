@@ -1,5 +1,6 @@
 //! Shared audio metadata probing helpers.
 
+use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
 
@@ -21,8 +22,53 @@ fn time_to_ms(time: Time) -> Option<u64> {
     (millis > 0).then_some(millis)
 }
 
+/// Estimate duration from file size and bitrate (fallback when n_frames is unavailable)
+fn estimate_duration_from_file(path: &str, sample_rate: u32, channels: u8) -> Option<u64> {
+    let metadata = File::open(path).ok()?.metadata().ok()?;
+    let file_size_bytes = metadata.len();
+
+    // Common bitrates for different formats (bits per second)
+    // These are estimates that will be refined if we have codec info
+    let estimated_bitrate = match Path::new(path)
+        .extension()?
+        .to_str()?
+        .to_lowercase()
+        .as_str()
+    {
+        "mp3" => 192_000,          // 192 kbps typical MP3
+        "ogg" | "opus" => 128_000, // 128 kbps typical OGG
+        "flac" => 800_000,         // ~800 kbps typical FLAC (lossless)
+        "wav" => {
+            // For WAV, estimate from file size and format
+            // WAV header is 44 bytes, data is raw PCM
+            if file_size_bytes > 44 {
+                let data_bytes = file_size_bytes - 44;
+                let bytes_per_sample = 2; // S16LE = 2 bytes per sample
+                let total_samples = data_bytes / (bytes_per_sample * channels as u64);
+                let duration_secs = total_samples / sample_rate as u64;
+                return Some(duration_secs * 1000);
+            }
+            return None;
+        }
+        "aac" | "m4a" => 192_000, // 192 kbps typical AAC
+        _ => 192_000,             // Default fallback
+    };
+
+    // Duration = (file_size * 8) / bitrate (in milliseconds)
+    let duration_secs = (file_size_bytes * 8) / estimated_bitrate;
+    let duration_ms = duration_secs * 1000;
+
+    // Sanity check: reject unreasonably short or long durations
+    if duration_ms < 100 || duration_ms > 24 * 60 * 60 * 1000 {
+        return None;
+    }
+
+    Some(duration_ms)
+}
+
 pub fn probe_duration_ms(path: &str) -> Option<u64> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = File::open(path).ok()?;
+    let _file_size = file.metadata().ok()?.len();
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -48,8 +94,19 @@ pub fn probe_duration_ms(path: &str) -> Option<u64> {
     })?;
 
     let params = &track.codec_params;
-    let (time_base, n_frames) = (params.time_base?, params.n_frames?);
-    time_to_ms(time_base.calc_time(n_frames))
+
+    // Try primary method: time_base + n_frames
+    if let (Some(time_base), Some(n_frames)) = (params.time_base, params.n_frames) {
+        if let Some(duration) = time_to_ms(time_base.calc_time(n_frames)) {
+            return Some(duration);
+        }
+    }
+
+    // Fallback: Estimate duration from file size and codec info
+    let sample_rate = params.sample_rate.unwrap_or(44100);
+    let channels = params.channels.map(|c| c.count() as u8).unwrap_or(2);
+
+    estimate_duration_from_file(path, sample_rate, channels)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ebur128::{EbuR128, Mode};
 use log::{debug, warn};
@@ -27,6 +28,24 @@ const MIN_GAIN_FACTOR: f32 = 0.01;
 const MIN_PREVIEW_WINDOW_MS: u64 = 500;
 /// If preview windows disagree by this amount, prefer louder segments.
 const PREVIEW_SPREAD_LOUD_BIAS_LU: f64 = 5.0;
+
+/// Atomic flag for cancelling loudness analysis
+static ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Cancel any ongoing loudness analysis
+pub fn cancel_loudness_analysis() {
+    ANALYSIS_CANCELLED.store(true, Ordering::SeqCst);
+}
+
+/// Check if loudness analysis was cancelled
+pub fn is_loudness_analysis_cancelled() -> bool {
+    ANALYSIS_CANCELLED.load(Ordering::SeqCst)
+}
+
+/// Reset cancellation flag before starting new analysis
+pub fn reset_loudness_analysis_cancelled() {
+    ANALYSIS_CANCELLED.store(false, Ordering::SeqCst);
+}
 
 struct AnalysisDecoderContext {
     format: Box<dyn FormatReader>,
@@ -163,6 +182,11 @@ fn analyze_context(
             if total_frames >= limit {
                 break;
             }
+        }
+
+        // Check for cancellation periodically (every 10000 frames)
+        if total_frames % 10000 == 0 && is_loudness_analysis_cancelled() {
+            return Err("Analysis cancelled".to_string());
         }
 
         let packet = match context.format.next_packet() {
@@ -486,5 +510,18 @@ mod tests {
     fn test_combine_smart_preview_uses_mean_when_spread_small() {
         let combined = combine_smart_preview_lufs(&[-15.0, -14.5, -14.0]);
         assert!((combined - -14.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_cancel_loudness_analysis() {
+        // Test that cancellation flag works
+        reset_loudness_analysis_cancelled();
+        assert!(!is_loudness_analysis_cancelled());
+
+        cancel_loudness_analysis();
+        assert!(is_loudness_analysis_cancelled());
+
+        reset_loudness_analysis_cancelled();
+        assert!(!is_loudness_analysis_cancelled());
     }
 }

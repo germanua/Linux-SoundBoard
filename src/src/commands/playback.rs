@@ -139,7 +139,6 @@ pub fn play_sound(
     config: Arc<Mutex<Config>>,
     player: Arc<Mutex<AudioPlayer>>,
 ) -> Result<String, String> {
-    // Get sound data first (brief lock).
     let sound = {
         let cfg = config
             .lock()
@@ -153,13 +152,10 @@ pub fn play_sound(
         return Err("Sound is disabled".to_string());
     }
 
-    // Get player lock
     let player = player
         .lock()
         .map_err(|e| format!("Player lock poisoned: {}", e))?;
 
-    // Playback is serialized in the backend so a new play request replaces
-    // any currently active playback threads.
     player.stop_all();
 
     let base_volume = sound.volume as f32 / 100.0;
@@ -331,7 +327,14 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
 
     log::info!("Analyzing loudness for {} sounds", sounds_to_analyze.len());
 
+    // Reset cancellation flag before analysis
+    loudness::reset_loudness_analysis_cancelled();
+
     let analyze_entry = |(id, path): &(String, String)| -> Option<(String, f64)> {
+        // Check for cancellation
+        if loudness::is_loudness_analysis_cancelled() {
+            return None;
+        }
         if !Path::new(path).exists() {
             return None;
         }
@@ -385,8 +388,7 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
             Err(e) => {
                 log::warn!(
                     "Failed to build bounded loudness pool ({} threads): {}. Falling back to sequential analysis.",
-                    analysis_threads,
-                    e
+                    analysis_threads, e
                 );
                 sounds_to_analyze
                     .iter()
@@ -425,6 +427,11 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
     Ok(analyzed_count)
 }
 
+/// Cancel ongoing loudness analysis
+pub fn cancel_loudness_analysis() {
+    loudness::cancel_loudness_analysis();
+}
+
 #[allow(dead_code)]
 pub fn analyze_sound_loudness(
     id: String,
@@ -452,7 +459,6 @@ pub fn analyze_sound_loudness(
         );
         None
     };
-
     let mut cfg = config
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
@@ -460,7 +466,6 @@ pub fn analyze_sound_loudness(
         sound.loudness_lufs = lufs;
     }
     cfg.save().map_err(|e| e.to_string())?;
-
     Ok(lufs)
 }
 
@@ -488,18 +493,15 @@ pub fn seek_playback(
     if position_ms > 24 * 60 * 60 * 1000 {
         return Err("Seek position too large (max 24 hours)".to_string());
     }
-
     log::debug!(
         "Dispatching seek request: play_id={}, position_ms={}",
         play_id,
         position_ms
     );
-
     player
         .lock()
         .map(|p| p.seek_playback(&play_id, position_ms))
         .map_err(|e| format!("Player lock poisoned: {}", e))?;
-
     Ok(())
 }
 
@@ -511,17 +513,14 @@ pub fn seek_sound(
     if position_ms > 24 * 60 * 60 * 1000 {
         return Err("Seek position too large (max 24 hours)".to_string());
     }
-
     let player = player
         .lock()
         .map_err(|e| format!("Player lock poisoned: {}", e))?;
-
     let play_id = player
         .get_playback_positions()
         .into_iter()
         .find(|position| !position.finished && position.sound_id == id)
         .map(|position| position.play_id);
-
     if let Some(play_id) = play_id {
         log::debug!(
             "Dispatching legacy seek request: sound_id={}, play_id={}, position_ms={}",
@@ -537,7 +536,6 @@ pub fn seek_sound(
             position_ms
         );
     }
-
     Ok(())
 }
 
@@ -562,14 +560,12 @@ pub fn get_audio_status(player: Arc<Mutex<AudioPlayer>>) -> AudioStatus {
         }
     };
     let playing = player.get_playing();
-
     let mut positions: HashMap<String, u64> = HashMap::new();
     for p in player.get_playback_positions() {
         if !p.finished {
             positions.entry(p.sound_id.clone()).or_insert(p.position_ms);
         }
     }
-
     AudioStatus { playing, positions }
 }
 

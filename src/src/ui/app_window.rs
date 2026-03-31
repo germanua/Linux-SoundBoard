@@ -507,13 +507,13 @@ pub fn handle_hotkey(
 }
 
 fn handle_control_hotkey(
-    state: &Arc<AppState>,
+    _state: &Arc<AppState>,
     transport: &TransportBar,
     action: crate::config::ControlHotkeyAction,
 ) {
     match action {
         crate::config::ControlHotkeyAction::StopAll => {
-            commands::stop_all(Arc::clone(&state.player));
+            transport.stop_all();
         }
         crate::config::ControlHotkeyAction::PlayPause => {
             transport.toggle_play_pause();

@@ -1,4 +1,15 @@
 //! Application bootstrap and startup wiring.
+//!
+//! TODO: This module should be refactored to use the init/ subsystem.
+//! See PLANS/ARCH_BOOTSTRAP_REFACTOR_PLAN.md for details.
+//!
+//! Target architecture:
+//! - init/mod.rs: InitOrchestrator, InitPhase
+//! - init/config.rs: Configuration initialization
+//! - init/audio.rs: Audio player initialization
+//! - init/hotkeys.rs: Hotkey manager setup
+//! - init/ui.rs: UI component wiring
+//! - init/error.rs: InitError with phase context
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -128,7 +139,6 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
         let hotkey_timer_id = Rc::new(RefCell::new(Some(glib::timeout_add_local(
             Duration::from_millis(HOTKEY_POLL_INTERVAL_MS),
             move || {
-                // Use try_lock to avoid blocking and handle poison gracefully
                 if let Ok(guard) = hotkey_receiver.try_lock() {
                     while let Ok(sound_id) = guard.try_recv() {
                         crate::ui::app_window::handle_hotkey(
@@ -136,7 +146,6 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
                         );
                     }
                 } else {
-                    // Lock is held elsewhere or poisoned - skip this poll cycle
                     warn!("Hotkey receiver lock unavailable, skipping poll");
                 }
                 glib::ControlFlow::Continue
@@ -331,7 +340,7 @@ mod tests {
         let base =
             std::env::temp_dir().join(format!("lsb-bootstrap-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&base).expect("create temp audio dir");
-        let path = base.join(format!("tone.{ext}"));
+        let path = base.join(format!("tone.{}", ext));
         fs::write(&path, build_test_wave_payload()).expect("write test audio payload");
         path
     }

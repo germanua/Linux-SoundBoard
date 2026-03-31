@@ -13,7 +13,7 @@ use rodio::source::SeekError as RodioSeekError;
 use rodio::source::UniformSourceIterator;
 use rodio::Source;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -480,6 +480,7 @@ pub struct PlaybackPosition {
 
 struct PlaybackSnapshot {
     sound_id: String,
+    playback_order: u64,
     position_ms: Arc<AtomicU64>,
     paused: Arc<AtomicBool>,
     duration_ms: Option<u64>,
@@ -1101,6 +1102,7 @@ struct PlayRequest<'a> {
     virtual_available: bool,
     sound_id: &'a str,
     path: &'a str,
+    playback_order: u64,
     base_volume: f32,
     sound_lufs: Option<f64>,
     shared: PlaybackSharedState,
@@ -1222,6 +1224,52 @@ fn dispatch_playback_seek(
     }
 }
 
+fn remove_registry_entries(
+    positions_registry: &Arc<Mutex<HashMap<String, PlaybackSnapshot>>>,
+    play_ids: &HashSet<String>,
+) {
+    if play_ids.is_empty() {
+        return;
+    }
+
+    if let Ok(mut reg) = positions_registry.lock() {
+        reg.retain(|play_id, _| !play_ids.contains(play_id));
+    }
+}
+
+fn stop_sound_entries(
+    sound_id: &str,
+    playing: &mut HashMap<String, PlayingSound>,
+    positions_registry: &Arc<Mutex<HashMap<String, PlaybackSnapshot>>>,
+) {
+    let stopped_play_ids: HashSet<String> = playing
+        .iter()
+        .filter(|(_, ps)| ps.sound_id == sound_id)
+        .map(|(play_id, _)| play_id.clone())
+        .collect();
+
+    for play_id in &stopped_play_ids {
+        if let Some(ps) = playing.remove(play_id) {
+            ps.stop();
+        }
+    }
+
+    remove_registry_entries(positions_registry, &stopped_play_ids);
+}
+
+fn stop_all_playing(
+    playing: &mut HashMap<String, PlayingSound>,
+    positions_registry: &Arc<Mutex<HashMap<String, PlaybackSnapshot>>>,
+) {
+    let stopped_play_ids: HashSet<String> = playing.keys().cloned().collect();
+
+    for (_, ps) in playing.drain() {
+        ps.stop();
+    }
+
+    remove_registry_entries(positions_registry, &stopped_play_ids);
+}
+
 fn audio_thread_main(
     rx: Receiver<AudioCommand>,
     initial_local_volume: f32,
@@ -1238,6 +1286,7 @@ fn audio_thread_main(
     let shared_local_volume = Arc::new(SharedVolume::new(initial_local_volume));
     let shared_auto_gain = Arc::new(SharedAutoGain::new(false, -14.0));
     let shared_loop = Arc::new(AtomicBool::new(false));
+    let mut next_playback_order: u64 = 0;
 
     info!("Audio thread started");
     crate::diagnostics::memory::log_memory_snapshot("audio_thread:start");
@@ -1258,6 +1307,8 @@ fn audio_thread_main(
                 sound_lufs,
                 response,
             } => {
+                let playback_order = next_playback_order;
+                next_playback_order = next_playback_order.saturating_add(1);
                 crate::diagnostics::memory::log_memory_snapshot("audio_cmd:play:before");
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     play_dual_output(PlayRequest {
@@ -1265,6 +1316,7 @@ fn audio_thread_main(
                         virtual_available,
                         sound_id: &sound_id,
                         path: &path,
+                        playback_order,
                         base_volume,
                         sound_lufs,
                         shared: PlaybackSharedState {
@@ -1297,21 +1349,10 @@ fn audio_thread_main(
                 }
             }
             AudioCommand::StopSound { sound_id } => {
-                for id in playing
-                    .iter()
-                    .filter(|(_, ps)| ps.sound_id == sound_id)
-                    .map(|(id, _)| id.clone())
-                    .collect::<Vec<_>>()
-                {
-                    if let Some(ps) = playing.remove(&id) {
-                        ps.stop();
-                    }
-                }
+                stop_sound_entries(&sound_id, &mut playing, &positions_registry);
             }
             AudioCommand::StopAll => {
-                for (_, ps) in playing.drain() {
-                    ps.stop();
-                }
+                stop_all_playing(&mut playing, &positions_registry);
                 crate::diagnostics::memory::log_memory_snapshot("audio_cmd:stop_all");
             }
             AudioCommand::Seek {
@@ -1381,23 +1422,43 @@ fn audio_thread_main(
             }
 
             AudioCommand::GetPlaybackPositions { response } => {
-                let mut res = Vec::new();
-                if let Ok(reg) = positions_registry.lock() {
-                    for (play_id, snap) in reg.iter() {
-                        res.push(PlaybackPosition {
-                            play_id: play_id.clone(),
-                            sound_id: snap.sound_id.clone(),
-                            position_ms: snap.position_ms.load(Ordering::Relaxed),
-                            paused: snap.paused.load(Ordering::Relaxed),
-                            finished: snap.is_finished_flag.load(Ordering::Relaxed),
-                            duration_ms: snap.duration_ms,
-                        });
-                    }
-                }
+                let res = positions_registry
+                    .lock()
+                    .map(|reg| build_playback_positions(&reg))
+                    .unwrap_or_default();
                 let _ = response.send(res);
             }
         }
     }
+}
+
+fn build_playback_positions(registry: &HashMap<String, PlaybackSnapshot>) -> Vec<PlaybackPosition> {
+    let mut ordered: Vec<(u64, PlaybackPosition)> = registry
+        .iter()
+        .map(|(play_id, snap)| {
+            (
+                snap.playback_order,
+                PlaybackPosition {
+                    play_id: play_id.clone(),
+                    sound_id: snap.sound_id.clone(),
+                    position_ms: snap.position_ms.load(Ordering::Relaxed),
+                    paused: snap.paused.load(Ordering::Relaxed),
+                    finished: snap.is_finished_flag.load(Ordering::Relaxed),
+                    duration_ms: snap.duration_ms,
+                },
+            )
+        })
+        .collect();
+
+    // The app only supports one logical "current" playback. Keep unfinished
+    // entries ahead of finished ones and prefer the newest playback first.
+    ordered.sort_by(|(left_order, left), (right_order, right)| {
+        left.finished
+            .cmp(&right.finished)
+            .then_with(|| right_order.cmp(left_order))
+    });
+
+    ordered.into_iter().map(|(_, position)| position).collect()
 }
 
 fn test_default_sink_available() -> bool {
@@ -1595,6 +1656,7 @@ fn play_dual_output(request: PlayRequest<'_>) -> Result<(String, PlayingSound), 
             play_id.clone(),
             PlaybackSnapshot {
                 sound_id: request.sound_id.to_string(),
+                playback_order: request.playback_order,
                 position_ms: Arc::clone(&position_ms),
                 paused: Arc::clone(&paused),
                 duration_ms,
@@ -1668,6 +1730,15 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
 
             if let Some(ms) = pending.seek_ms {
                 let clamped_ms = clamp_seek_position_ms(ms, context.duration_ms);
+                let current_position_ms = context.position_ms.load(Ordering::Relaxed);
+
+                if current_position_ms == clamped_ms {
+                    debug!(
+                        "Skipping redundant seek: position_ms={}, file_path={}",
+                        clamped_ms, context.file_path
+                    );
+                    continue;
+                }
 
                 if let Some(pulse) = local_pulse.as_ref() {
                     let _ = pulse.flush();
@@ -1691,7 +1762,7 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
                         let seek_baseline_samples = (clamped_ms * rate * channels) / 1000;
                         fallback_samples_written = seek_baseline_samples;
 
-                        context.position_ms.store(clamped_ms, Ordering::Relaxed);
+                        context.position_ms.store(clamped_ms, Ordering::SeqCst);
                         eof_tracker.reset();
 
                         debug!(
@@ -1884,7 +1955,7 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
                     match source.try_seek(Duration::from_millis(0)) {
                         Ok(_) => {
                             fallback_samples_written = 0;
-                            context.position_ms.store(0, Ordering::Relaxed);
+                            context.position_ms.store(0, Ordering::SeqCst);
                             eof_tracker.reset();
 
                             let restart_mode = context.shared_auto_gain.mode();
@@ -1963,9 +2034,8 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
             fallback_samples_written.saturating_add(samples_decoded_this_cycle);
 
         // Sample-based position against fixed output rate.
-        let frames = fallback_samples_written / channels;
-        let ms = frames * 1000 / rate;
-        context.position_ms.store(ms, Ordering::Relaxed);
+        let ms = (fallback_samples_written * 1000) / (rate * channels);
+        context.position_ms.store(ms, Ordering::SeqCst);
 
         local_buffer.clear();
         virtual_buffer.clear();
@@ -2093,6 +2163,17 @@ mod tests {
             paused: Arc::new(AtomicBool::new(false)),
             _local_thread: None,
             _virtual_thread: None,
+            is_finished_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn test_playback_snapshot(sound_id: &str, playback_order: u64) -> PlaybackSnapshot {
+        PlaybackSnapshot {
+            sound_id: sound_id.to_string(),
+            playback_order,
+            position_ms: Arc::new(AtomicU64::new(0)),
+            paused: Arc::new(AtomicBool::new(false)),
+            duration_ms: None,
             is_finished_flag: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -2246,6 +2327,113 @@ mod tests {
                 paused: Some(true),
             }
         );
+    }
+
+    #[test]
+    fn stop_sound_entries_remove_matching_registry_snapshots_immediately() {
+        let (keep_tx, _keep_rx) = mpsc::channel();
+        let (stop_tx, _stop_rx) = mpsc::channel();
+        let mut playing = HashMap::new();
+        playing.insert(
+            "play-keep".to_string(),
+            test_playing_sound(keep_tx, "sound-keep"),
+        );
+        playing.insert(
+            "play-stop".to_string(),
+            test_playing_sound(stop_tx, "sound-stop"),
+        );
+
+        let positions_registry = Arc::new(Mutex::new(HashMap::from([
+            (
+                "play-keep".to_string(),
+                test_playback_snapshot("sound-keep", 0),
+            ),
+            (
+                "play-stop".to_string(),
+                test_playback_snapshot("sound-stop", 1),
+            ),
+        ])));
+
+        stop_sound_entries("sound-stop", &mut playing, &positions_registry);
+
+        assert!(playing.contains_key("play-keep"));
+        assert!(!playing.contains_key("play-stop"));
+
+        let registry = positions_registry.lock().expect("registry lock");
+        assert!(registry.contains_key("play-keep"));
+        assert!(!registry.contains_key("play-stop"));
+    }
+
+    #[test]
+    fn stop_all_playing_clears_registry_immediately() {
+        let (first_tx, _first_rx) = mpsc::channel();
+        let (second_tx, _second_rx) = mpsc::channel();
+        let mut playing = HashMap::new();
+        playing.insert(
+            "play-1".to_string(),
+            test_playing_sound(first_tx, "sound-1"),
+        );
+        playing.insert(
+            "play-2".to_string(),
+            test_playing_sound(second_tx, "sound-2"),
+        );
+
+        let positions_registry = Arc::new(Mutex::new(HashMap::from([
+            ("play-1".to_string(), test_playback_snapshot("sound-1", 0)),
+            ("play-2".to_string(), test_playback_snapshot("sound-2", 1)),
+        ])));
+
+        stop_all_playing(&mut playing, &positions_registry);
+
+        assert!(playing.is_empty());
+        assert!(positions_registry.lock().expect("registry lock").is_empty());
+    }
+
+    #[test]
+    fn build_playback_positions_prefers_newest_unfinished_playback() {
+        let mut registry = HashMap::new();
+        registry.insert(
+            "play-old".to_string(),
+            PlaybackSnapshot {
+                sound_id: "sound-old".to_string(),
+                playback_order: 1,
+                position_ms: Arc::new(AtomicU64::new(9_000)),
+                paused: Arc::new(AtomicBool::new(false)),
+                duration_ms: Some(10_000),
+                is_finished_flag: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        registry.insert(
+            "play-new".to_string(),
+            PlaybackSnapshot {
+                sound_id: "sound-new".to_string(),
+                playback_order: 2,
+                position_ms: Arc::new(AtomicU64::new(200)),
+                paused: Arc::new(AtomicBool::new(false)),
+                duration_ms: Some(10_000),
+                is_finished_flag: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        registry.insert(
+            "play-finished".to_string(),
+            PlaybackSnapshot {
+                sound_id: "sound-finished".to_string(),
+                playback_order: 3,
+                position_ms: Arc::new(AtomicU64::new(10_000)),
+                paused: Arc::new(AtomicBool::new(false)),
+                duration_ms: Some(10_000),
+                is_finished_flag: Arc::new(AtomicBool::new(true)),
+            },
+        );
+
+        let positions = build_playback_positions(&registry);
+
+        assert_eq!(positions[0].play_id, "play-new");
+        assert!(!positions[0].finished);
+        assert_eq!(positions[1].play_id, "play-old");
+        assert!(!positions[1].finished);
+        assert_eq!(positions[2].play_id, "play-finished");
+        assert!(positions[2].finished);
     }
 
     #[test]

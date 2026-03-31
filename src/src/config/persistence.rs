@@ -21,7 +21,22 @@ impl Config {
         let path = Self::config_path();
         if path.exists() {
             let content = fs::read_to_string(&path)?;
-            let mut config: Config = serde_json::from_str(&content)?;
+            let raw: serde_json::Value = serde_json::from_str(&content)?;
+
+            // Check schema version
+            let version = raw
+                .get("schema_version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(0);
+
+            let config_value = if version == crate::config::migration::CURRENT_SCHEMA_VERSION {
+                raw
+            } else {
+                crate::config::migration::run_migrations(raw, version)?
+            };
+
+            let mut config: Config = serde_json::from_value(config_value)?;
             config.sanitize_for_persistence();
             Ok(config)
         } else {
