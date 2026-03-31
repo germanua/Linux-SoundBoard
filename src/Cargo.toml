@@ -6,7 +6,6 @@ description = "Native Linux soundboard with PipeWire virtual microphone support"
 edition = "2021"
 rust-version = "1.85"
 license-file = "../LICENSE"
-license = "PolyForm-Noncommercial-1.0.0"
 readme = "../README.md"
 homepage = "https://github.com/germanua/Linux-SoundBoard"
 repository = "https://github.com/germanua/Linux-SoundBoard"
@@ -15,7 +14,11 @@ categories = ["multimedia::audio"]
 
 [lib]
 name = "linux_soundboard"
-path = "src/lib.rs"
+path = "app/lib.rs"
+
+[[bin]]
+name = "linux-soundboard"
+path = "app/main.rs"
 
 [[test]]
 name = "integration"

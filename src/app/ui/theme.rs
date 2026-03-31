@@ -25,8 +25,8 @@ pub fn apply_theme(theme: Theme) {
 
     // Load custom CSS for accent colors and extra styling
     let css = match theme {
-        Theme::Dark => include_str!("../../assets/dark.css"),
-        Theme::Light => include_str!("../../assets/light.css"),
+        Theme::Dark => include_str!("../../themes/dark.css"),
+        Theme::Light => include_str!("../../themes/light.css"),
     };
 
     let provider = CssProvider::new();
