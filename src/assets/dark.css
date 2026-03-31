@@ -29,11 +29,19 @@ entry {
   background-color: transparent;
 }
 
-.sound-row-playing > cell {
+.sound-row-playing {
   background-color: rgba(148, 137, 121, 0.15);
 }
 
-.sound-row-active > cell {
+.sound-row-active {
+  background-color: rgba(148, 137, 121, 0.2);
+}
+
+columnview row > cell.sound-cell-playing {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+columnview row > cell.sound-cell-active {
   background-color: rgba(148, 137, 121, 0.2);
 }
 
@@ -205,6 +213,7 @@ columnview row > cell {
   border: none;
   box-shadow: none;
   outline: none;
+  background-color: transparent;
   background-image: none;
 }
 
@@ -503,7 +512,7 @@ columnview row:hover {
 }
 
 columnview row:hover > cell {
-  background-color: rgba(148, 137, 121, 0.08);
+  background-color: transparent;
 }
 
 /* Sound list selection should use the app palette, not the desktop accent */
@@ -513,7 +522,7 @@ columnview.data-table row:selected {
 }
 
 columnview.data-table row:selected > cell {
-  background-color: rgba(148, 137, 121, 0.18);
+  background-color: transparent;
   background-image: none;
   border: none;
   outline: none;
@@ -526,7 +535,7 @@ columnview.data-table row:selected:hover {
 }
 
 columnview.data-table row:selected:hover > cell {
-  background-color: rgba(148, 137, 121, 0.23);
+  background-color: transparent;
   background-image: none;
 }
 
@@ -541,7 +550,7 @@ columnview.data-table row:selected:focus-within {
 }
 
 columnview.data-table row:selected:focus-within > cell {
-  background-color: rgba(148, 137, 121, 0.25);
+  background-color: transparent;
   background-image: none;
   box-shadow: none;
 }
@@ -554,7 +563,7 @@ columnview.data-table row:focus-within:not(:selected) > cell {
   box-shadow: none;
 }
 
-columnview.data-table row:active > cell {
+columnview.data-table row:active {
   background-color: rgba(148, 137, 121, 0.15);
 }
 
@@ -704,35 +713,39 @@ columnview.list-style-card row > cell {
 }
 
 .list-style-card .sound-cell-first {
-  border-left: 4px solid transparent;
+  border-left: none;
   padding-left: 16px;
 }
 
+columnview.list-style-card row > cell:first-child {
+  border-left: 4px solid transparent;
+}
+
 /* Card mode row backgrounds - more visible alternation */
-columnview.list-style-card row:nth-child(even) > cell {
+columnview.list-style-card row:nth-child(even) {
   background-color: rgba(148, 137, 121, 0.06);
 }
 
-columnview.list-style-card row:nth-child(odd) > cell {
+columnview.list-style-card row:nth-child(odd) {
   background-color: rgba(34, 40, 49, 0.3);
 }
 
 /* Card mode row backgrounds - disable zebra striping */
-columnview.list-style-card row:nth-child(even) > cell,
-columnview.list-style-card row:nth-child(odd) > cell {
+columnview.list-style-card row:nth-child(even),
+columnview.list-style-card row:nth-child(odd) {
   background-color: transparent;
 }
 
 /* Card mode hover - stronger effect */
-columnview.list-style-card row:hover > cell {
+columnview.list-style-card row:hover {
   background-color: rgba(148, 137, 121, 0.15);
 }
 
-columnview.list-style-card.data-table row:selected > cell {
+columnview.list-style-card.data-table row:selected {
   background-color: rgba(148, 137, 121, 0.22);
 }
 
-columnview.list-style-card.data-table row:selected:hover > cell {
+columnview.list-style-card.data-table row:selected:hover {
   background-color: rgba(148, 137, 121, 0.28);
 }
 
@@ -742,7 +755,7 @@ columnview.list-style-card .sound-cell-playing {
 }
 
 columnview.list-style-card .sound-cell-first.sound-cell-playing {
-  border-left-color: #948979;
+  border-left-color: transparent;
 }
 
 /* Card mode active/selected - stronger accent */
@@ -751,14 +764,22 @@ columnview.list-style-card .sound-cell-active {
 }
 
 columnview.list-style-card .sound-cell-first.sound-cell-active {
+  border-left-color: transparent;
+}
+
+columnview.list-style-card row > cell:first-child.sound-cell-playing {
+  border-left-color: #948979;
+}
+
+columnview.list-style-card row > cell:first-child.sound-cell-active {
   border-left-color: #dfd0b8;
 }
 
-columnview.list-style-card .sound-row-playing > cell {
+columnview.list-style-card row > cell.sound-cell-playing {
   background-color: rgba(148, 137, 121, 0.18);
 }
 
-columnview.list-style-card .sound-row-active > cell {
+columnview.list-style-card row > cell.sound-cell-active {
   background-color: rgba(148, 137, 121, 0.25);
 }
 
