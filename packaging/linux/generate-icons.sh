@@ -22,7 +22,8 @@ fi
 
 for size in "${SIZES[@]}"; do
     target_dir="$ICON_ROOT/${size}x${size}/apps"
-    target_file="$target_dir/$APP_ID.png"
+    primary_target="$target_dir/$APP_ID.png"
+    alias_target="$target_dir/$APP_ICON_NAME.png"
     mkdir -p "$target_dir"
 
     magick "$SOURCE_ICON" \
@@ -30,7 +31,11 @@ for size in "${SIZES[@]}"; do
         -gravity center \
         -resize "${size}x${size}" \
         -extent "${size}x${size}" \
-        "$target_file"
+        "$primary_target"
+
+    if [[ "$alias_target" != "$primary_target" ]]; then
+        cp "$primary_target" "$alias_target"
+    fi
 done
 
 echo "Updated app icons from: $SOURCE_ICON"

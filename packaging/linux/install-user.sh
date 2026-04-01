@@ -36,7 +36,9 @@ install -Dm755 "$BINARY_SOURCE" "$INSTALL_BINARY"
 
 while IFS= read -r icon_path; do
     size_dir="$(basename "$(dirname "$(dirname "$icon_path")")")"
-    install -Dm644 "$icon_path" "$ICON_THEME_DIR/$size_dir/apps/$APP_ID.png"
+    for icon_name in "$APP_ID" "$APP_ICON_NAME"; do
+        install -Dm644 "$icon_path" "$ICON_THEME_DIR/$size_dir/apps/$icon_name.png"
+    done
 done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 desktop_file="$DESKTOP_DIR/$APP_ID.desktop"
@@ -48,7 +50,7 @@ Type=Application
 Name=$APP_NAME
 Comment=$APP_COMMENT
 Exec=$INSTALL_BINARY
-Icon=$APP_ID
+Icon=$APP_ICON_NAME
 Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;

@@ -76,11 +76,14 @@ package() {
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 
   local icon_root="src/resources/icons"
-  local icon_name="com.linuxsoundboard.app.png"
+  local icon_names=("com.linuxsoundboard.app.png" "linux-soundboard.png")
   local size
   for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
-    install -Dm644 "${icon_root}/${size}/apps/${icon_name}" \
-      "${pkgdir}/usr/share/icons/hicolor/${size}/apps/${icon_name}"
+    local icon_name
+    for icon_name in "${icon_names[@]}"; do
+      install -Dm644 "${icon_root}/${size}/apps/${icon_name}" \
+        "${pkgdir}/usr/share/icons/hicolor/${size}/apps/${icon_name}"
+    done
   done
 
   install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/com.linuxsoundboard.app.desktop" <<'EOF'
@@ -90,7 +93,7 @@ Type=Application
 Name=Linux Soundboard
 Comment=A Linux soundboard with PipeWire virtual mic support
 Exec=linux-soundboard
-Icon=com.linuxsoundboard.app
+Icon=linux-soundboard
 Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;

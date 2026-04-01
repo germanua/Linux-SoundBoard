@@ -45,7 +45,7 @@ Type=Application
 Name=$APP_NAME
 Comment=$APP_COMMENT
 Exec=$APP_BINARY
-Icon=$APP_ID
+Icon=$APP_ICON_NAME
 Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;
@@ -55,7 +55,9 @@ EOF
 
 while IFS= read -r icon_path; do
     size_dir="$(basename "$(dirname "$(dirname "$icon_path")")")"
-    install -Dm644 "$icon_path" "$bundle_dir/icons/$size_dir/apps/$APP_ID.png"
+    for icon_name in "$APP_ID" "$APP_ICON_NAME"; do
+        install -Dm644 "$icon_path" "$bundle_dir/icons/$size_dir/apps/$icon_name.png"
+    done
 done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 tar -C "$DIST_ROOT" -czf "$archive_path" "$bundle_name"

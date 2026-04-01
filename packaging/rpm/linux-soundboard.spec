@@ -58,6 +58,8 @@ install -Dm644 packaging/rpm/linux-soundboard.desktop \
 for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
     install -Dm644 src/resources/icons/$size/apps/com.linuxsoundboard.app.png \
         %{buildroot}%{_datadir}/icons/hicolor/$size/apps/com.linuxsoundboard.app.png
+    install -Dm644 src/resources/icons/$size/apps/linux-soundboard.png \
+        %{buildroot}%{_datadir}/icons/hicolor/$size/apps/linux-soundboard.png
 done
 
 # Install metainfo
@@ -69,6 +71,7 @@ install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
 %{_bindir}/linux-soundboard
 %{_datadir}/applications/com.linuxsoundboard.app.desktop
 %{_datadir}/icons/hicolor/*/apps/com.linuxsoundboard.app.png
+%{_datadir}/icons/hicolor/*/apps/linux-soundboard.png
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 
 %post
@@ -91,6 +94,23 @@ if [ -f /usr/bin/swhks ]; then
 fi
 
 echo "✓ LinuxSoundBoard configuration complete"
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t %{_datadir}/icons/hicolor >/dev/null 2>&1 || true
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database %{_datadir}/applications >/dev/null 2>&1 || true
+fi
+
+%postun
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t %{_datadir}/icons/hicolor >/dev/null 2>&1 || true
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database %{_datadir}/applications >/dev/null 2>&1 || true
+fi
 
 %changelog
 * Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.1-1

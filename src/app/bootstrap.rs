@@ -10,8 +10,8 @@ use libadwaita as adw;
 use log::{info, warn};
 
 use crate::app_meta::{
-    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FALLBACK_RENDERER, FORCE_X11_ENV_VAR,
-    HOTKEY_POLL_INTERVAL_MS, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
+    APP_BINARY, APP_ICON_NAME, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FALLBACK_RENDERER,
+    FORCE_X11_ENV_VAR, HOTKEY_POLL_INTERVAL_MS, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
@@ -28,7 +28,7 @@ pub fn run() {
     gtk4::init().expect("Failed to initialize GTK4");
     normalize_legacy_dark_theme_setting();
     adw::init().expect("Failed to initialize libadwaita");
-    Window::set_default_icon_name(APP_ID);
+    Window::set_default_icon_name(APP_ICON_NAME);
 
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_activate_handler());

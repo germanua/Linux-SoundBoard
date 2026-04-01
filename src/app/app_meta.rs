@@ -1,5 +1,5 @@
 pub const APP_ID: &str = "com.linuxsoundboard.app";
-pub const APP_ICON_NAME: &str = APP_ID;
+pub const APP_ICON_NAME: &str = "linux-soundboard";
 pub const APP_TITLE: &str = "Linux Soundboard";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_BINARY: &str = env!("CARGO_PKG_NAME");

@@ -159,7 +159,7 @@ Type=Application
 Name=$APP_NAME
 Comment=$APP_COMMENT
 Exec=$APP_BINARY
-Icon=$APP_ID
+Icon=$APP_ICON_NAME
 Terminal=false
 Categories=AudioVideo;Audio;
 Keywords=soundboard;audio;pipewire;microphone;
@@ -191,7 +191,9 @@ install -Dm644 "$METAINFO_FILE" "$APPDIR/usr/share/metainfo/$APP_ID.metainfo.xml
 
 while IFS= read -r icon_path; do
     size_dir="$(basename "$(dirname "$(dirname "$icon_path")")")"
-    install -Dm644 "$icon_path" "$APPDIR/usr/share/icons/hicolor/$size_dir/apps/$APP_ID.png"
+    for icon_name in "$APP_ID" "$APP_ICON_NAME"; do
+        install -Dm644 "$icon_path" "$APPDIR/usr/share/icons/hicolor/$size_dir/apps/$icon_name.png"
+    done
 done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 (
@@ -202,7 +204,7 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
         --appdir "$APPDIR" \
         --executable "$BINARY_SOURCE" \
         --desktop-file "$APPDIR/usr/share/applications/$APP_ID.desktop" \
-        --icon-file "$ICON_SOURCE_ROOT/512x512/apps/$APP_ID.png" \
+        --icon-file "$ICON_SOURCE_ROOT/512x512/apps/$APP_ICON_NAME.png" \
         --plugin gtk
 )
 

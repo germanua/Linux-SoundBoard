@@ -33,6 +33,8 @@ override_dh_auto_install:
 	for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do \
 		install -Dm644 src/resources/icons/$$size/apps/com.linuxsoundboard.app.png \
 			debian/linux-soundboard/usr/share/icons/hicolor/$$size/apps/com.linuxsoundboard.app.png; \
+		install -Dm644 src/resources/icons/$$size/apps/linux-soundboard.png \
+			debian/linux-soundboard/usr/share/icons/hicolor/$$size/apps/linux-soundboard.png; \
 	done
 	
 	# Install metainfo
