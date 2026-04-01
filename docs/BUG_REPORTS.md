@@ -14,7 +14,7 @@ Linux Soundboard uses GitHub Issues for bug reports and regressions.
 
 - Distribution and version
 - Session type: `Wayland`, `X11`, or `XWayland`
-- Install method: `AUR`, `.deb`, `.rpm`, or `AppImage`
+- Install method: `AUR`, `.deb`, `.rpm`, `AppImage`, or source build
 - Exact steps to reproduce
 - Expected behavior
 - Actual behavior
