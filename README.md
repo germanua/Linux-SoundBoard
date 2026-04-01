@@ -29,8 +29,6 @@
   ·
   <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
   ·
-  <a href="PACKAGING.md"><strong>Packaging</strong></a>
-  ·
   <a href="docs/BUG_REPORTS.md"><strong>Bug Reports</strong></a>
 </p>
 
@@ -102,7 +100,6 @@ If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, 
 - [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
 - [Bug Reporting Guide](docs/BUG_REPORTS.md)
 - [Changelog](docs/CHANGELOG.md)
-- [Packaging and Release Guide](PACKAGING.md)
 
 ## Build From Source
 

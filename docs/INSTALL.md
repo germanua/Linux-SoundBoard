@@ -161,7 +161,7 @@ cargo build --release
 
 ## Flatpak
 
-The repository contains Flatpak packaging files, but the project does not currently publish an end-user Flathub install target. If you want a Flatpak build, use the maintainer workflow in [../PACKAGING.md](../PACKAGING.md).
+The repository contains Flatpak packaging files, but the project does not currently publish an end-user Flathub install target.
 
 ## Next Step
 
