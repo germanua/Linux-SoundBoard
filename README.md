@@ -31,7 +31,7 @@
   ·
   <a href="PACKAGING.md"><strong>Packaging</strong></a>
   ·
-  <a href="docs/CONTRIBUTING.md"><strong>Contributing</strong></a>
+  <a href="docs/BUG_REPORTS.md"><strong>Bug Reports</strong></a>
 </p>
 
 ## Overview
@@ -100,8 +100,8 @@ If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, 
 - [Installation Guide](docs/INSTALL.md)
 - [Screenshot Gallery](docs/SCREENSHOTS.md)
 - [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+- [Bug Reporting Guide](docs/BUG_REPORTS.md)
 - [Changelog](docs/CHANGELOG.md)
-- [Contributing Guide](docs/CONTRIBUTING.md)
 - [Packaging and Release Guide](PACKAGING.md)
 
 ## Build From Source
@@ -122,6 +122,8 @@ System dependency setup for Debian, Fedora, and Arch is documented in [docs/INST
 - Issues: https://github.com/germanua/Linux-SoundBoard/issues
 - Discussions: https://github.com/germanua/Linux-SoundBoard/discussions
 - AUR package: https://aur.archlinux.org/packages/linux-soundboard-git
+
+Bug report expectations are documented in [docs/BUG_REPORTS.md](docs/BUG_REPORTS.md).
 
 ## License
 

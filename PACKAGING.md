@@ -192,6 +192,7 @@ When cutting a release, update:
 
 - `README.md`
 - `docs/INSTALL.md`
+- `docs/BUG_REPORTS.md`
 - `docs/CHANGELOG.md`
 - `docs/TROUBLESHOOTING.md`
 - screenshots in `assets/screenshots/` if the UI changed materially
