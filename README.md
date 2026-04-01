@@ -1,407 +1,128 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Linux Soundboard" width="400">
+  <img src="assets/logo.png" alt="Linux Soundboard" width="320">
 </p>
 
 <h1 align="center">Linux Soundboard</h1>
 
 <p align="center">
-  <strong>High-performance soundboard for Linux with virtual microphone support</strong>
+  Native Linux soundboard with PipeWire virtual microphone support, LUFS normalization, and global hotkeys for Wayland and X11.
 </p>
 
 <p align="center">
   <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest">
-    <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github&color=blue" alt="Latest Release">
+    <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github" alt="Latest Release">
   </a>
   <a href="https://aur.archlinux.org/packages/linux-soundboard-git">
-    <img src="https://img.shields.io/aur/version/linux-soundboard-git?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR Version">
+    <img src="https://img.shields.io/aur/version/linux-soundboard-git?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-green?style=for-the-badge" alt="License">
+    <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
   </a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Linux-orange?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/rust-1.85+-red?style=flat-square&logo=rust" alt="Rust">
-  <img src="https://img.shields.io/badge/GTK-4-green?style=flat-square&logo=gnome" alt="GTK4">
-  <img src="https://img.shields.io/github/stars/germanua/Linux-SoundBoard?style=flat-square&logo=github" alt="Stars">
+  <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest"><strong>Download Release</strong></a>
+  ·
+  <a href="docs/INSTALL.md"><strong>Installation Guide</strong></a>
+  ·
+  <a href="docs/SCREENSHOTS.md"><strong>Screenshot Gallery</strong></a>
+  ·
+  <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
+  ·
+  <a href="PACKAGING.md"><strong>Packaging</strong></a>
+  ·
+  <a href="docs/CONTRIBUTING.md"><strong>Contributing</strong></a>
 </p>
 
----
+## Overview
 
-## 🎵 What is Linux Soundboard?
+Linux Soundboard routes sound effects into a virtual microphone so they can be used in Discord, OBS, Zoom, game chat, and any other app that accepts a standard audio input. It is built with Rust, GTK4, and Libadwaita and targets native Linux workflows instead of Electron wrappers or browser-based mixers.
 
-Play sounds directly into your microphone stream for **Discord**, **OBS**, **Zoom**, and any other application. Features a virtual microphone that seamlessly mixes your voice with soundboard audio.
+Core capabilities:
 
-Built with **Rust**, **GTK4**, and **Libadwaita** for native performance and modern Linux desktop integration.
+- Virtual microphone output via PipeWire and PulseAudio tools
+- Mic passthrough so your voice and soundboard audio share one input device
+- LUFS normalization for consistent playback loudness
+- Global hotkeys with `swhkd` on Wayland and a native X11 backend on X11/XWayland
+- Sound library tabs, folder sync, drag and drop, and separate output levels for speakers and mic
 
-### ✨ Key Features
+## Screenshots
 
-- 🎤 **Virtual Microphone** - Automatically creates a virtual audio device
-- 🎙️ **Mic Passthrough** - Mix your real microphone with soundboard audio
-- 🔊 **LUFS Normalization** - Keep all sounds at consistent volume
-- ⌨️ **Global Hotkeys** - Native Wayland hotkeys via swhkd, plus full native X11 support
-- 🎨 **Modern UI** - Native GTK4/Libadwaita with dark mode support
-- 📁 **Organized Library** - Tabs, folder sync, drag & drop
-- 🖥️ **Display Server Support** - Full native Wayland and X11 support
-- 📦 **Multiple Formats** - AppImage, DEB, RPM, Flatpak, AUR
+<p align="center">
+  <img src="assets/screenshots/Main_dark.png" alt="Main window in dark mode" width="880">
+</p>
 
----
+<p align="center">
+  <img src="assets/screenshots/Main_light.png" alt="Main window in light mode" width="880">
+</p>
 
-## 🚀 Quick Start
+<p align="center">
+  <img src="assets/screenshots/Settings_dark1.png" alt="Settings overview in dark mode" width="420">
+  <img src="assets/screenshots/Settings_hotkeys_dark.png" alt="Hotkey settings in dark mode" width="420">
+</p>
 
-### Choose Your Installation Method
+See the full gallery in [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md).
 
-| Distribution | Recommended | Command |
-|--------------|-------------|---------|
-| **Arch Linux** | AUR | `yay -S linux-soundboard-git` |
-| **Ubuntu/Debian** | DEB Package | [Download .deb](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
-| **Fedora** | RPM Package | [Download .rpm](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
-| **Any Linux** | Flatpak | [Download .flatpak](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
-| **Portable** | AppImage | [Download .AppImage](https://github.com/germanua/Linux-SoundBoard/releases/latest) |
+## Install
 
-### One-Command Bootstrap
+Use the method that matches your system:
 
-If you have the repository checked out locally, the installer script can do the distro detection, package install, runtime setup, and Wayland `swhkd` provisioning for you:
+| Platform | Recommended path | Notes |
+| --- | --- | --- |
+| Arch Linux | `yay -S linux-soundboard-git` | AUR package |
+| Ubuntu / Debian | GitHub release `.deb` | Native package install |
+| Fedora | GitHub release `.rpm` | Native package install |
+| Any x86_64 distro | AppImage | Portable build from Releases |
+| Flatpak users | Build from repo manifest | Flathub listing is not published yet |
 
-```bash
-cd LinuxSoundBoardv1
-./scripts/install.sh
-```
+Detailed commands, bootstrap setup, and source builds live in [docs/INSTALL.md](docs/INSTALL.md).
 
-What it automates:
-- Arch family: installs `linux-soundboard-git` from the AUR
-- Debian/Ubuntu family: installs the latest `.deb` release if one is published, otherwise falls back to the AppImage plus host runtime packages
-- Fedora family: installs the latest `.rpm` release if one is published, otherwise falls back to the AppImage plus host runtime packages
-- openSUSE/SUSE family: installs the latest AppImage plus host runtime packages
-- Wayland sessions: installs and configures `swhkd` automatically
-- X11 sessions: skips `swhkd` because the native X11 backend is used instead
+## Quick Start
 
-### 3-Step Setup
+1. Install the application from a release package, AppImage, or the AUR.
+2. Launch `linux-soundboard`.
+3. In Discord, OBS, Zoom, or another target app, select `Linux_Soundboard_Mic` as the input device.
+4. Add a folder or drag audio files into the library.
+5. If you are on Wayland, make sure `swhkd` is installed so global hotkeys can work outside the app window.
 
-1. **Install** using your preferred method above
-2. **Launch** the application from your menu or terminal
-3. **Select** `Linux_Soundboard_Mic` as input in Discord/OBS/Zoom
+## Display Server Support
 
-That's it! 🎉
+| Session | UI backend | Global hotkeys |
+| --- | --- | --- |
+| Wayland | Native GTK Wayland | `swhkd` |
+| X11 | Native GTK X11 | Built-in X11/XInput2 backend |
+| XWayland | Native GTK X11 when forced | Built-in X11/XInput2 backend |
 
----
+If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, see the renderer notes in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-## 📦 Installation
+## Documentation
 
-### Arch Linux (AUR)
+- [Installation Guide](docs/INSTALL.md)
+- [Screenshot Gallery](docs/SCREENSHOTS.md)
+- [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
+- [Changelog](docs/CHANGELOG.md)
+- [Contributing Guide](docs/CONTRIBUTING.md)
+- [Packaging and Release Guide](PACKAGING.md)
 
-```bash
-yay -S linux-soundboard-git
-```
+## Build From Source
 
-Or with paru:
-```bash
-paru -S linux-soundboard-git
-```
-
----
-
-### Ubuntu / Debian
-
-**Option 1: DEB Package (Recommended)**
+If you want a local native build:
 
 ```bash
-# Download
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard_1.1.0-1_amd64.deb
-
-# Install
-sudo apt install ./linux-soundboard_1.1.0-1_amd64.deb
-
-# Run
-linux-soundboard
-```
-
-**Option 2: AppImage**
-
-```bash
-# Download
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
-
-# Make executable
-chmod +x linux-soundboard-x86_64.AppImage
-
-# Run
-./linux-soundboard-x86_64.AppImage
-```
-
-> **Note:** If you get a FUSE error, install `libfuse2`: `sudo apt install libfuse2`
-
----
-
-### Fedora
-
-**Option 1: RPM Package (Recommended)**
-
-```bash
-# Download
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.0-1.fc40.x86_64.rpm
-
-# Install
-sudo dnf install ./linux-soundboard-1.1.0-1.fc40.x86_64.rpm
-
-# Run
-linux-soundboard
-```
-
-**Option 2: AppImage**
-
-```bash
-# Download
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-x86_64.AppImage
-
-# Make executable and run
-chmod +x linux-soundboard-x86_64.AppImage
-./linux-soundboard-x86_64.AppImage
-```
-
-> **Note:** If you get a FUSE error, install `fuse-libs`: `sudo dnf install fuse-libs`
-
----
-
-### Flatpak (Universal)
-
-**Coming soon to Flathub!**
-
-For now, download the bundle:
-
-```bash
-# Download
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.0.flatpak
-
-# Install
-flatpak install linux-soundboard-1.1.0.flatpak
-
-# Run
-flatpak run com.linuxsoundboard.app
-```
-
----
-
-### Build from Source
-
-<details>
-<summary><strong>Click to expand build instructions</strong></summary>
-
-#### Requirements
-
-- Rust 1.85+
-- GTK4 and Libadwaita development libraries
-- PulseAudio development libraries
-- PipeWire + WirePlumber (recommended)
-
-#### Install Dependencies
-
-**Ubuntu/Debian:**
-```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libpulse-dev \
-  libx11-dev libxi-dev pkg-config imagemagick cargo rustc
-```
-
-**Fedora:**
-```bash
-sudo dnf install gtk4-devel libadwaita-devel pulseaudio-libs-devel \
-  libX11-devel libXi-devel pkg-config ImageMagick cargo rust alsa-lib-devel
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S gtk4 libadwaita libpulse libx11 libxi pkgconf imagemagick cargo
-```
-
-#### Build
-
-```bash
-# Clone repository
 git clone https://github.com/germanua/Linux-SoundBoard.git
-cd Linux-SoundBoard
-
-# Build
-cd src
+cd Linux-SoundBoard/src
 cargo build --release
-
-# Run
 ./target/release/linux-soundboard
 ```
 
-</details>
+System dependency setup for Debian, Fedora, and Arch is documented in [docs/INSTALL.md](docs/INSTALL.md).
 
----
+## Support
 
-## 🎮 Usage
+- Issues: https://github.com/germanua/Linux-SoundBoard/issues
+- Discussions: https://github.com/germanua/Linux-SoundBoard/discussions
+- AUR package: https://aur.archlinux.org/packages/linux-soundboard-git
 
-### Basic Setup
+## License
 
-1. **Launch** Linux Soundboard
-2. **Add sounds**:
-   - Click **Settings** → **Add Folder** to scan a directory
-   - Or **drag & drop** audio files into the window
-3. **Configure virtual mic**:
-   - In Discord/OBS/Zoom, select `Linux_Soundboard_Mic` as input
-   - Toggle **Mic Passthrough** to mix your voice with sounds
-
-### Global Hotkeys
-
-1. Click the **edit icon** on any sound
-2. Press your desired key combination
-3. Hotkeys work system-wide (even when app is minimized)
-
-**Supported keys:** All standard keys plus full numpad support
-
-### Audio Normalization
-
-Enable **LUFS Normalization** in settings to keep all sounds at consistent volume:
-- **Static Mode**: Pre-scans all sounds (faster playback)
-- **Dynamic Mode**: Real-time normalization (more accurate)
-
----
-
-## 🏗️ Architecture
-
-| Component | Technology |
-|-----------|------------|
-| **Language** | Rust 1.85+ |
-| **UI Framework** | GTK4 + Libadwaita |
-| **Audio Engine** | Rodio + Symphonia |
-| **Audio Routing** | PulseAudio + PipeWire |
-| **Global Hotkeys** | swhkd on Wayland + native X11/XInput2 backend |
-| **Formats** | MP3, WAV, OGG, FLAC, AAC |
-
-### Display Server Support
-
-- ✅ **Wayland**: Native GTK Wayland support with swhkd hotkeys
-- ✅ **X11**: Native X11 backend with XInput2 hotkeys
-- ✅ **TTY**: Full support via swhkd
-- ✅ **XWayland**: Supported when you want the X11 backend inside a Wayland session
-
----
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Virtual microphone not created?**
-```bash
-# Install PipeWire
-sudo apt install pipewire pipewire-pulse wireplumber  # Ubuntu/Debian
-sudo dnf install pipewire pipewire-pulseaudio wireplumber  # Fedora
-
-# Enable and start
-systemctl --user enable --now pipewire pipewire-pulse wireplumber
-```
-
-**AppImage won't run?**
-```bash
-# Install FUSE2
-sudo apt install libfuse2  # Ubuntu/Debian
-sudo dnf install fuse-libs  # Fedora
-```
-
-**Hotkeys not working?**
-```bash
-# Wayland sessions use swhkd for global hotkeys
-pgrep swhkd
-
-# Arch users can install an AUR package:
-# yay -S swhkd-bin
-#
-# Debian/Ubuntu/Fedora users need the upstream install guide:
-# https://github.com/waycrate/swhkd/blob/main/INSTALL.md
-#
-# Check setuid permissions:
-ls -l "$(command -v swhkd)"  # Should show 'rws' permissions
-
-# Manual fix if needed:
-sudo chmod u+s "$(command -v swhkd)"
-
-# X11 sessions can also use the native X11 backend directly
-```
-
-**More issues?** Check the [**Troubleshooting Guide**](docs/TROUBLESHOOTING.md)
-
----
-
-## 📚 Documentation
-
-- [**Troubleshooting Guide**](docs/TROUBLESHOOTING.md) - Solutions to common issues
-- [**Changelog**](docs/CHANGELOG.md) - Version history and changes
-- [**Contributing Guide**](docs/CONTRIBUTING.md) - How to contribute
-- [**Packaging Guide**](PACKAGING.md) - Build packages for distributions
-
----
-
-## 🆕 What's New in v1.1.0
-
-- ✅ **Full Native Wayland + X11 Support** - Wayland via swhkd, X11 via the native backend
-- ✅ **DEB & RPM Packages** - Native packages for Ubuntu, Debian, Fedora
-- ✅ **Flatpak Support** - Universal package for all distributions
-- ✅ **Improved AppImage** - Bundled dependencies, better compatibility
-- ✅ **Better Error Messages** - Know exactly what's missing
-- ✅ **Automated Builds** - CI/CD for all package types
-
-[**Full Changelog**](docs/CHANGELOG.md)
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read the [Contributing Guide](docs/CONTRIBUTING.md) first.
-
-### Ways to Contribute
-
-- 🐛 Report bugs
-- 💡 Suggest features
-- 📝 Improve documentation
-- 🔧 Submit pull requests
-- ⭐ Star the project
-
----
-
-## 📄 License
-
-This project is licensed under the **PolyForm Noncommercial 1.0.0** license.
-
-- ✅ **Free for personal use**
-- ✅ **Free for educational use**
-- ✅ **Free for non-profit use**
-- ❌ **Commercial use requires separate license**
-
-See the [LICENSE](LICENSE) file for full terms.
-
----
-
-## 🌟 Support
-
-- **Issues**: [GitHub Issues](https://github.com/germanua/Linux-SoundBoard/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/germanua/Linux-SoundBoard/discussions)
-- **AUR**: [linux-soundboard-git](https://aur.archlinux.org/packages/linux-soundboard-git)
-
----
-
-## 🙏 Acknowledgments
-
-Built with:
-- [Rust](https://www.rust-lang.org/) - Systems programming language
-- [GTK4](https://www.gtk.org/) - UI toolkit
-- [Libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) - GNOME design patterns
-- [Rodio](https://github.com/RustAudio/rodio) - Audio playback
-- [PipeWire](https://pipewire.org/) - Audio routing
-
----
-
-<p align="center">
-  <sub>Made with ❤️ for the Linux community</sub>
-</p>
-
-<p align="center">
-  <a href="https://github.com/germanua/Linux-SoundBoard/stargazers">⭐ Star this project</a>
-  •
-  <a href="https://github.com/germanua/Linux-SoundBoard/issues">🐛 Report Bug</a>
-  •
-  <a href="https://github.com/germanua/Linux-SoundBoard/discussions">💬 Discussions</a>
-</p>
+Linux Soundboard is licensed under the PolyForm Noncommercial 1.0.0 license. Commercial use requires a separate license. See [LICENSE](LICENSE).

@@ -1,40 +1,25 @@
 # Screenshots
 
-This directory contains screenshots for the README and documentation.
+This directory contains the screenshots used by the project documentation.
 
-## Required Screenshots
+## Current Files
 
-Please add the following screenshots:
+- `Main_dark.png` - Main application window in dark mode
+- `Main_light.png` - Main application window in light mode
+- `Settings_dark1.png` - General settings view in dark mode
+- `Settings_dark2.png` - Alternate settings view in dark mode
+- `Settings_hotkeys_dark.png` - Hotkey settings in dark mode
+- `Settings_hotkeys_light.png` - Hotkey settings in light mode
+- `Settings_light1.png` - General settings view in light mode
+- `Settings_light2.png` - Alternate settings view in light mode
 
-1. **main-window.png** - Main application window with sound library
-2. **settings.png** - Settings dialog
-3. **dark-mode.png** - Application in dark mode
-4. **virtual-mic-setup.png** - Virtual microphone configuration
+## Where They Are Used
 
-## Screenshot Guidelines
+- [README.md](../../README.md) embeds the main window and selected settings screenshots.
+- [docs/SCREENSHOTS.md](../../docs/SCREENSHOTS.md) contains the full gallery.
 
-- **Resolution**: 1920x1080 or higher
-- **Format**: PNG (preferred) or JPG
-- **Content**: 
-  - Show the application in use
-  - Include some example sounds
-  - Demonstrate key features
-- **Privacy**: Don't include personal information
+## Refresh Rules
 
-## How to Take Screenshots
-
-1. Launch Linux Soundboard
-2. Add some example sounds
-3. Take screenshots using your system's screenshot tool
-4. Save them in this directory with descriptive names
-5. Update README.md to reference the screenshots
-
-## Usage in README
-
-Once screenshots are added, update the README.md:
-
-```markdown
-<p align="center">
-  <img src="assets/screenshots/main-window.png" alt="Main Window" width="800">
-</p>
-```
+- Keep screenshots representative of the current release UI.
+- Avoid personal paths, usernames, unrelated desktop windows, or private data.
+- Use PNG exports with readable text and visible controls.

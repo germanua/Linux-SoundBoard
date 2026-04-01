@@ -1,532 +1,203 @@
-# Packaging Guide for Linux Soundboard
+# Packaging and Release Guide
 
-This document provides comprehensive instructions for building and maintaining Linux Soundboard packages across different distributions.
+This guide is for maintainers building release artifacts, validating them, and publishing GitHub releases.
 
-## Table of Contents
+## Repository Layout
 
-- [Prerequisites](#prerequisites)
-- [Building Packages](#building-packages)
-  - [AppImage](#appimage)
-  - [DEB (Debian/Ubuntu)](#deb-debianubuntu)
-  - [RPM (Fedora/RHEL)](#rpm-fedorarhel)
-  - [Flatpak](#flatpak)
-- [Testing Packages](#testing-packages)
-- [Release Checklist](#release-checklist)
-- [Troubleshooting](#troubleshooting)
+| Path | Purpose |
+| --- | --- |
+| `packaging/linux/package-appimage.sh` | Build AppImage bundles |
+| `packaging/debian/package-deb.sh` | Build Debian packages |
+| `packaging/rpm/package-rpm.sh` | Build RPM packages |
+| `packaging/flatpak/package-flatpak.sh` | Build Flatpak bundles |
+| `packaging/linux/package-release.sh` | Create a local release bundle |
+| `scripts/install.sh` | End-user bootstrap installer |
 
----
+## Source of Truth
 
-## Prerequisites
+Before you build, verify version metadata in the files that drive packaging:
 
-### Build System Requirements
+- `src/Cargo.toml`
+- `packaging/debian/changelog`
+- `packaging/rpm/linux-soundboard.spec`
+- `packaging/flatpak/com.linuxsoundboard.app.metainfo.xml`
 
-- **Operating System**: Linux (preferably Arch, Ubuntu 24.04, or Fedora 40)
-- **Rust**: 1.85 or later (via rustup)
-- **Git**: For version control
-- **ImageMagick**: For icon generation
+If artifact filenames are already fixed for a release, keep the release upload aligned to the actual built files even if local metadata has advanced to a newer package revision.
 
-### Distribution-Specific Tools
+## Build Requirements
 
-| Package Type | Required Tools |
-|--------------|----------------|
-| AppImage | `linuxdeploy`, `curl` |
-| DEB | `dpkg-dev`, `debhelper` (>= 13) |
-| RPM | `rpm-build`, `rpmbuild` |
+Common tools:
+
+- `git`
+- `cargo` and `rustc` 1.85+
+- `pkg-config`
+- `ImageMagick`
+
+Package-specific tools:
+
+| Format | Required tools |
+| --- | --- |
+| AppImage | `curl`, `bash`, network access for linuxdeploy downloads |
+| DEB | `dpkg-buildpackage`, `debhelper` |
+| RPM | `rpmbuild` |
 | Flatpak | `flatpak-builder`, `python3` |
 
-### Runtime Dependencies
-
-All packages require these runtime dependencies:
-- GTK4 (>= 4.10)
-- Libadwaita (>= 1.5)
-- PulseAudio libraries
-- PipeWire + WirePlumber
-- PulseAudio utilities (`pactl`)
-
----
-
-## Building Packages
+## Build Commands
 
 ### AppImage
 
-**Location**: `packaging/linux/package-appimage.sh`
-
-**Build Command**:
 ```bash
-cd /path/to/Linux-SoundBoard
 ./packaging/linux/package-appimage.sh
 ```
 
-**Output**:
-- `dist/linux-soundboard-x86_64.AppImage` (stable name)
-- `dist/linux-soundboard-1.1.0-x86_64.AppImage` (versioned)
+Expected output in `dist/`:
 
-**Build Options**:
+- `linux-soundboard-x86_64.AppImage`
+- versioned AppImage output when produced by the script
+
+### Debian Package
+
 ```bash
-# Skip Rust build (use existing binary)
-./packaging/linux/package-appimage.sh --skip-build
-```
-
-**What It Does**:
-1. Builds the Rust application with `cargo build --release`
-2. Generates icons from `icon.png`
-3. Downloads and extracts `linuxdeploy` tool
-4. Patches GTK plugin for native Wayland support
-5. Bundles GTK4, Libadwaita, and dependencies
-6. Bundles `pactl` binary for virtual microphone
-7. Adds preflight dependency checker
-8. Creates Type 2 AppImage with embedded squashfs
-
-**New in v1.1.0**:
-- ✅ Full native Wayland and X11 support
-- ✅ Bundled `pactl` for virtual mic
-- ✅ Automatic dependency checking
-- ✅ Smart GTK backend detection
-
-**Troubleshooting**:
-- If `pactl` is not found during build, install `pulseaudio-utils`
-- If linuxdeploy fails, check internet connection (downloads tools)
-- If GTK plugin patching fails, check `dist/.appimage-tools/linuxdeploy-plugin-gtk.sh`
-
----
-
-### DEB (Debian/Ubuntu)
-
-**Location**: `packaging/debian/`
-
-**Build Command**:
-```bash
-cd /path/to/Linux-SoundBoard
 ./packaging/debian/package-deb.sh
 ```
 
-**Output**:
-- `dist/linux-soundboard_1.1.0-1_amd64.deb`
+Expected output in `dist/`:
 
-**Package Structure**:
-```
-packaging/debian/
-├── control          # Package metadata and dependencies
-├── rules            # Build instructions (Makefile)
-├── changelog        # Version history
-├── copyright        # License information
-├── compat           # Debhelper compatibility level (13)
-└── linux-soundboard.desktop  # Desktop entry
-```
+- `linux-soundboard_<version>_<arch>.deb`
 
-**What It Does**:
-1. Runs `dpkg-buildpackage` to build the package
-2. Compiles Rust application
-3. Generates icons
-4. Installs binary to `/usr/bin/`
-5. Installs desktop file and icons
-6. Creates `.deb` package with dependency metadata
+### RPM Package
 
-**Dependencies** (auto-installed):
-- libgtk-4-1
-- libadwaita-1-0
-- libpulse0
-- pipewire, pipewire-pulse, wireplumber
-- pulseaudio-utils
-
-**Testing**:
 ```bash
-# Install
-sudo apt install ./dist/linux-soundboard_1.1.0-1_amd64.deb
-
-# Verify
-dpkg -L linux-soundboard
-linux-soundboard --version
-
-# Uninstall
-sudo apt remove linux-soundboard
-```
-
-**Updating Version**:
-1. Edit `packaging/debian/changelog`
-2. Update version in `src/Cargo.toml`
-3. Rebuild package
-
----
-
-### RPM (Fedora/RHEL)
-
-**Location**: `packaging/rpm/`
-
-**Build Command**:
-```bash
-cd /path/to/Linux-SoundBoard
 ./packaging/rpm/package-rpm.sh
 ```
 
-**Output**:
-- `dist/linux-soundboard-1.1.0-1.fc40.x86_64.rpm`
+Expected output in `dist/`:
 
-**Package Structure**:
-```
-packaging/rpm/
-├── linux-soundboard.spec     # RPM spec file
-├── linux-soundboard.desktop  # Desktop entry
-└── package-rpm.sh            # Build script
-```
+- `linux-soundboard-<version>.<arch>.rpm`
 
-**What It Does**:
-1. Creates source tarball from git repository
-2. Sets up RPM build directory (`~/rpmbuild/`)
-3. Runs `rpmbuild -ba` to build package
-4. Compiles Rust application
-5. Generates icons
-6. Installs files to appropriate locations
-7. Creates `.rpm` package with dependency metadata
-
-**Dependencies** (auto-installed):
-- gtk4
-- libadwaita
-- pulseaudio-libs
-- pipewire, pipewire-pulseaudio, wireplumber
-- pulseaudio-utils
-
-**Testing**:
-```bash
-# Install
-sudo dnf install ./dist/linux-soundboard-1.1.0-1.fc40.x86_64.rpm
-
-# Verify
-rpm -ql linux-soundboard
-linux-soundboard --version
-
-# Uninstall
-sudo dnf remove linux-soundboard
-```
-
-**Updating Version**:
-1. Edit `packaging/rpm/linux-soundboard.spec` (Version and %changelog)
-2. Update version in `src/Cargo.toml`
-3. Rebuild package
-
----
-
-### Flatpak
-
-**Location**: `packaging/flatpak/`
-
-**Build Command**:
-```bash
-cd /path/to/Linux-SoundBoard/packaging/flatpak
-./package-flatpak.sh
-```
-
-**Output**:
-- `dist/linux-soundboard-1.1.0.flatpak` (single-file bundle)
-- `flatpak-repo/` (OSTree repository)
-
-**Package Structure**:
-```
-packaging/flatpak/
-├── com.linuxsoundboard.app.yml          # Flatpak manifest
-├── com.linuxsoundboard.app.desktop      # Desktop entry
-├── com.linuxsoundboard.app.metainfo.xml # AppStream metadata
-├── package-flatpak.sh                   # Build script
-├── FLATHUB_SUBMISSION.md                # Flathub guide
-└── cargo-sources.json                   # Cargo dependencies (generated)
-```
-
-**What It Does**:
-1. Checks for Flatpak and flatpak-builder
-2. Installs GNOME SDK 47 if needed
-3. Generates `cargo-sources.json` from `Cargo.lock`
-4. Builds application in sandboxed environment
-5. Creates OSTree repository
-6. Exports single-file `.flatpak` bundle
-
-**Runtime**: `org.gnome.Platform//47`
-
-**Permissions / Host Requirements**:
-- Wayland + X11 display access
-- PulseAudio/PipeWire audio access
-- File system access (read-only for music/downloads)
-- Host-side `swhkd` for native Wayland hotkeys
-- `swhkd` packaging differs by distro:
-  - Arch: use the AUR packages `swhkd-bin` or `swhkd-git`
-  - Debian/Ubuntu/Fedora: build/install `swhkd` from the upstream `INSTALL.md`
-
-**Testing**:
-```bash
-# Install locally
-flatpak install ./dist/linux-soundboard-1.1.0.flatpak
-
-# Run
-flatpak run com.linuxsoundboard.app
-
-# Uninstall
-flatpak uninstall com.linuxsoundboard.app
-```
-
-**Flathub Submission**:
-See `packaging/flatpak/FLATHUB_SUBMISSION.md` for detailed instructions.
-
-**Updating Version**:
-1. Edit `packaging/flatpak/com.linuxsoundboard.app.metainfo.xml` (add release entry)
-2. Update version in `src/Cargo.toml`
-3. Regenerate `cargo-sources.json`:
-   ```bash
-   python3 flatpak-cargo-generator.py ../../src/Cargo.lock -o cargo-sources.json
-   ```
-4. Rebuild package
-
----
-
-## Testing Packages
-
-### Test Matrix
-
-| Distribution | Version | Desktop | Package Types | Priority |
-|--------------|---------|---------|---------------|----------|
-| Ubuntu | 24.04 | GNOME (Wayland) | DEB, AppImage, Flatpak | High |
-| Ubuntu | 22.04 | GNOME (X11) | DEB, AppImage | Medium |
-| Debian | 13 | GNOME | DEB | Medium |
-| Fedora | 40 | GNOME (Wayland) | RPM, AppImage, Flatpak | High |
-| Fedora | 39 | GNOME (Wayland) | RPM | Medium |
-| Arch | Latest | Any | AUR (existing) | High |
-
-### Test Checklist
-
-For each package type, verify:
-
-- [ ] **Installation**: Package installs without errors
-- [ ] **Dependencies**: All dependencies are automatically installed
-- [ ] **Launch**: Application launches from menu and command line
-- [ ] **Display Server**: Works natively on both Wayland and X11
-- [ ] **Virtual Mic**: `pactl` creates virtual microphone successfully
-- [ ] **Audio Playback**: Sounds play correctly
-- [ ] **Global Hotkeys**: Wayland hotkeys work via `swhkd`; X11 hotkeys work via native X11 backend
-- [ ] **swhkd Guidance**: Debian/Ubuntu/Fedora packages do not claim `apt install swhkd` or `dnf install swhkd`
-- [ ] **Mic Passthrough**: Real mic mixes with soundboard audio
-- [ ] **File Operations**: Drag-and-drop and folder sync work
-- [ ] **Theme Integration**: Respects system dark/light theme
-- [ ] **Uninstallation**: Removes cleanly without leftover files
-
-### Automated Testing
+### Flatpak Bundle
 
 ```bash
-# Run unit tests
-cd src
-cargo test
-
-# Run clippy
-cargo clippy --all-targets --all-features -- -D warnings
-
-# Format check
-cargo fmt -- --check
-```
-
----
-
-## Release Checklist
-
-### Pre-Release
-
-- [ ] Update version in `src/Cargo.toml`
-- [ ] Update `packaging/debian/changelog`
-- [ ] Update `packaging/rpm/linux-soundboard.spec` (Version + %changelog)
-- [ ] Update `packaging/aur/PKGBUILD` and `packaging/aur/linux-soundboard-git/PKGBUILD`
-- [ ] Regenerate AUR `.SRCINFO` files
-- [ ] Update `packaging/flatpak/com.linuxsoundboard.app.metainfo.xml` (add release)
-- [ ] Update `README.md` (version numbers in download links)
-- [ ] Run all tests: `cargo test`
-- [ ] Run clippy: `cargo clippy`
-- [ ] Format code: `cargo fmt`
-
-### Build All Packages
-
-```bash
-# AppImage
-./packaging/linux/package-appimage.sh
-
-# DEB (on Ubuntu/Debian)
-./packaging/debian/package-deb.sh
-
-# RPM (on Fedora or with mock)
-./packaging/rpm/package-rpm.sh
-
-# Flatpak
 ./packaging/flatpak/package-flatpak.sh
-
-# Generic release bundle for other distros
-./packaging/linux/package-release.sh
 ```
 
-### Test Packages
+Expected output:
 
-- [ ] Test AppImage on Ubuntu 24.04 (Wayland)
-- [ ] Test DEB on Ubuntu 24.04
-- [ ] Test RPM on Fedora 40
-- [ ] Test Flatpak on any distribution
-- [ ] Verify all packages on fresh VMs
+- `dist/linux-soundboard-<version>.flatpak`
+- `flatpak-repo/`
 
-### Create Release
+## Local Validation
 
-1. **Tag Release**:
-   ```bash
-   git tag -a v1.1.0 -m "Release v1.1.0"
-   git push origin v1.1.0
-   ```
+Validate each package on its target distro before uploading it:
 
-2. **Create GitHub Release**:
-   - Go to GitHub Releases
-   - Create new release from tag `v1.1.0`
-   - Write release notes highlighting full native Wayland and X11 support
-   - Upload all packages:
-     - `linux-soundboard-x86_64.AppImage`
-     - `linux-soundboard-1.1.0-x86_64.AppImage`
-     - `linux-soundboard-1.1.0-linux-x86_64.tar.gz`
-     - `linux-soundboard_1.1.0-1_amd64.deb`
-     - `linux-soundboard-1.1.0-1.fc40.x86_64.rpm`
-     - `linux-soundboard-1.1.0.flatpak`
+### Debian and Ubuntu
 
-3. **Update AUR**:
-   - Update stable and git `PKGBUILD` files
-   - Update `.SRCINFO`
-   - Push to AUR repository
-
-4. **Submit to Flathub** (if ready):
-   - Follow `packaging/flatpak/FLATHUB_SUBMISSION.md`
-
-### Post-Release
-
-- [ ] Announce on GitHub Discussions
-- [ ] Update project website (if applicable)
-- [ ] Monitor issue tracker for bug reports
-- [ ] Update documentation if needed
-
----
-
-## Troubleshooting
-
-### AppImage Issues
-
-**Problem**: FUSE error when running AppImage
-```
-fuse: failed to exec fusermount: No such file or directory
-```
-**Solution**: Install FUSE2
 ```bash
-# Ubuntu/Debian
-sudo apt install libfuse2
-
-# Fedora
-sudo dnf install fuse-libs
+sudo apt install ./linux-soundboard_1.1.0-1_amd64.deb
+linux-soundboard
 ```
 
-**Problem**: `pactl` not found during build
-**Solution**: Install PulseAudio utilities on build system
+### Fedora
+
 ```bash
-sudo apt install pulseaudio-utils  # Ubuntu/Debian
-sudo dnf install pulseaudio-utils  # Fedora
+sudo dnf install ./linux-soundboard-1.1.0-1.x86_64.rpm
+linux-soundboard
 ```
 
-**Problem**: GTK plugin patching fails
-**Solution**: Check if `linuxdeploy-plugin-gtk.sh` was downloaded correctly
+### AppImage
+
 ```bash
-ls -la dist/.appimage-tools/linuxdeploy-plugin-gtk.sh
+chmod +x ./dist/linux-soundboard-x86_64.AppImage
+./dist/linux-soundboard-x86_64.AppImage
 ```
 
----
+Test on both:
 
-### DEB Package Issues
+- a Wayland session with `swhkd`
+- an X11 or XWayland session using the native X11 backend
 
-**Problem**: `dpkg-buildpackage: command not found`
-**Solution**: Install build tools
+If you validate inside VMware and see GTK UI freezes or a large memory jump, retest with `GSK_RENDERER=cairo`. That isolates renderer issues from package issues.
+
+## Release Workflow
+
+### 1. Generate Checksums
+
+From the directory that holds the final artifacts:
+
 ```bash
-sudo apt install dpkg-dev debhelper
+sha256sum linux-soundboard-1.1.0-1.x86_64.rpm linux-soundboard_1.1.0-1_amd64.deb > SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt
 ```
 
-**Problem**: Missing build dependencies
-**Solution**: Install all required development packages
+### 2. Create and Push the Tag
+
 ```bash
-sudo apt install libgtk-4-dev libadwaita-1-dev libpulse-dev libx11-dev libxi-dev
+git tag -a v1.1.0 -m "Linux Soundboard v1.1.0"
+git push origin v1.1.0
 ```
 
----
+### 3. Create the Draft Release
 
-### RPM Package Issues
-
-**Problem**: `rpmbuild: command not found`
-**Solution**: Install RPM build tools
 ```bash
-sudo dnf install rpm-build
+gh release create v1.1.0 \
+  --repo germanua/Linux-SoundBoard \
+  --title "Linux Soundboard v1.1.0" \
+  --draft \
+  --generate-notes \
+  /path/to/linux-soundboard-1.1.0-1.x86_64.rpm \
+  /path/to/linux-soundboard_1.1.0-1_amd64.deb \
+  /path/to/SHA256SUMS.txt
 ```
 
-**Problem**: Source tarball creation fails
-**Solution**: Ensure you're in a git repository or use manual tarball creation
+### 4. Update Assets if You Rebuild
 
----
-
-### Flatpak Issues
-
-**Problem**: GNOME SDK 47 not found
-**Solution**: Install SDK manually
 ```bash
-flatpak install flathub org.gnome.Platform//47 org.gnome.Sdk//47
+gh release upload v1.1.0 \
+  /path/to/linux-soundboard-1.1.0-1.x86_64.rpm \
+  /path/to/linux-soundboard_1.1.0-1_amd64.deb \
+  /path/to/SHA256SUMS.txt \
+  --clobber
 ```
 
-**Problem**: `cargo-sources.json` missing
-**Solution**: Generate it manually
+### 5. Publish the Release
+
 ```bash
-cd packaging/flatpak
-python3 flatpak-cargo-generator.py ../../src/Cargo.lock -o cargo-sources.json
+gh release edit v1.1.0 --draft=false
 ```
 
-**Problem**: Build fails with Rust errors
-**Solution**: Ensure `Cargo.lock` is up to date
-```bash
-cd src
-cargo update
-cargo build --release
-```
+## Host Requirements That Matter at Runtime
 
----
+Package builds install the application. They do not replace host audio/session requirements.
 
-## Version Management
+Required host runtime stack:
 
-### Semantic Versioning
+- `pipewire`
+- `pipewire-pulse` or `pipewire-pulseaudio`
+- `wireplumber`
+- `pulseaudio-utils`
 
-Linux Soundboard follows [Semantic Versioning](https://semver.org/):
-- **MAJOR**: Incompatible API changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes (backward compatible)
+For Wayland hotkeys:
 
-Current version: **1.1.0**
+- `swhkd` must be installed on the host
+- Arch family: use `swhkd-bin` or `swhkd-git`
+- Debian, Ubuntu, Fedora, openSUSE: use upstream installation guidance
 
-### Files to Update
+Upstream `swhkd` installation notes:
 
-When bumping version, update these files:
-1. `src/Cargo.toml` - `version = "1.1.0"`
-2. `packaging/debian/changelog` - Add new entry
-3. `packaging/rpm/linux-soundboard.spec` - `Version:` and `%changelog`
-4. `packaging/flatpak/com.linuxsoundboard.app.metainfo.xml` - Add `<release>` entry
-5. `README.md` - Update download links if needed
+- https://github.com/waycrate/swhkd/blob/main/INSTALL.md
 
----
+## Documentation Checklist
 
-## Continuous Integration
+When cutting a release, update:
 
-GitHub Actions workflows are located in `.github/workflows/`:
+- `README.md`
+- `docs/INSTALL.md`
+- `docs/CHANGELOG.md`
+- `docs/TROUBLESHOOTING.md`
+- screenshots in `assets/screenshots/` if the UI changed materially
 
-- `ci.yml` - Build and test on every push
-- `release.yml` - Build all packages on tag push
+## Troubleshooting Release Work
 
-See Phase 6 of the implementation plan for CI/CD setup.
-
----
-
-## Support
-
-For packaging questions or issues:
-- GitHub Issues: https://github.com/germanua/Linux-SoundBoard/issues
-- Discussions: https://github.com/germanua/Linux-SoundBoard/discussions
-
----
-
-**Last Updated**: 2026-03-24  
-**Version**: 1.1.0
+- If a draft release shows a temporary `untagged-...` URL, verify the real tag exists on `origin` and re-check the release after GitHub finishes reconciling the draft.
+- If the `.deb` or `.rpm` filename does not match the docs, fix the docs or rebuild the package. Do not publish misleading install commands.
+- If Fedora or Ubuntu VM tests fail but real hardware does not, treat renderer virtualization issues separately from package correctness.
