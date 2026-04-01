@@ -25,6 +25,8 @@
   ·
   <a href="docs/INSTALL.md"><strong>Installation Guide</strong></a>
   ·
+  <a href="docs/FEATURE_REFERENCE.md"><strong>Feature Reference</strong></a>
+  ·
   <a href="docs/SCREENSHOTS.md"><strong>Screenshot Gallery</strong></a>
   ·
   <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
@@ -75,6 +77,8 @@ Use the method that matches your system:
 
 Detailed commands, bootstrap setup, and source builds live in [docs/INSTALL.md](docs/INSTALL.md).
 
+For a complete map of the app UI, user actions, right-click menus, hotkeys, tab behavior, drag-and-drop flows, and settings, see [docs/FEATURE_REFERENCE.md](docs/FEATURE_REFERENCE.md).
+
 ## Quick Start
 
 1. Install the application from a release package, AppImage, or the AUR.
@@ -96,6 +100,7 @@ If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, 
 ## Documentation
 
 - [Installation Guide](docs/INSTALL.md)
+- [Feature Reference](docs/FEATURE_REFERENCE.md)
 - [Screenshot Gallery](docs/SCREENSHOTS.md)
 - [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
 - [Bug Reporting Guide](docs/BUG_REPORTS.md)
