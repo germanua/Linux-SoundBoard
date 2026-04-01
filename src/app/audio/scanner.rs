@@ -1,21 +1,21 @@
-//! Audio file scanner using walkdir
+//! Audio file scanner.
 
 use log::info;
 use rayon::prelude::*;
 use std::path::Path;
 use walkdir::WalkDir;
 
-/// Supported audio file extensions
+/// Supported audio extensions.
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "flac", "m4a", "aac"];
 
-/// Represents a discovered audio file
+/// Discovered audio file.
 #[derive(Debug, Clone)]
 pub struct AudioFile {
     pub path: String,
     pub name: String,
 }
 
-/// Scan a folder for audio files
+/// Scan one folder for supported audio files.
 pub fn scan_folder(folder: &str) -> Vec<AudioFile> {
     let mut files = Vec::new();
 
@@ -55,7 +55,7 @@ pub fn scan_folder(folder: &str) -> Vec<AudioFile> {
     files
 }
 
-/// Scan multiple folders for audio files
+/// Scan multiple folders in parallel.
 pub fn scan_folders(folders: &[String]) -> Vec<AudioFile> {
     folders
         .par_iter()
@@ -63,7 +63,7 @@ pub fn scan_folders(folders: &[String]) -> Vec<AudioFile> {
         .collect()
 }
 
-/// Check if a file is a supported audio file
+/// Check whether a path has a supported audio extension.
 pub fn is_audio_file(path: &str) -> bool {
     let path = Path::new(path);
 

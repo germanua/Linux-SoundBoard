@@ -1,5 +1,3 @@
-//! Sound list widget — GtkColumnView with gio::ListStore model.
-
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -43,13 +41,11 @@ struct ScrollOffsets {
     horizontal: f64,
 }
 
-/// Format milliseconds as M:SS string.
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// The sound list widget bundle.
 #[derive(Clone)]
 pub struct SoundList {
     inner: Arc<SoundListInner>,
@@ -70,7 +66,7 @@ struct SoundListInner {
     visible_row_indices: RefCell<HashMap<String, u32>>,
 }
 
-// Safety: SoundListInner is only used on the GTK main thread.
+// GTK main thread only.
 unsafe impl Send for SoundListInner {}
 unsafe impl Sync for SoundListInner {}
 
@@ -84,11 +80,9 @@ impl SoundList {
         col_view.set_reorderable(false);
         col_view.set_show_column_separators(false);
         col_view.set_show_row_separators(false);
-        // Enable rubberband selection (click and drag to select multiple rows).
         col_view.set_enable_rubberband(true);
         col_view.add_css_class("data-table");
 
-        // Apply list style class based on config
         {
             if let Ok(cfg) = state.config.lock() {
                 if cfg.settings.list_style == ListStyle::Card {
@@ -131,7 +125,6 @@ impl SoundList {
         sl
     }
 
-    /// Return the GTK widget to embed in the window layout.
     pub fn widget(&self) -> &Widget {
         self.inner.scroll.upcast_ref()
     }
@@ -150,16 +143,13 @@ impl SoundList {
         Self::sync_state_class(widget, "sound-cell-playing", is_playing);
         Self::sync_state_class(widget, "sound-cell-active", is_active);
 
-        // Mirror state onto the immediate ColumnView cell wrapper so CSS can
-        // paint a full-width background without traversing to GTK's recycled
-        // row widgets, which triggered critical warnings and crashes.
+        // Mirror state onto the cell wrapper so CSS can paint full-width rows.
         if let Some(cell) = widget.parent() {
             Self::sync_state_class(&cell, "sound-cell-playing", is_playing);
             Self::sync_state_class(&cell, "sound-cell-active", is_active);
         }
     }
 
-    /// Set the active tab — filters the visible sounds.
     pub fn set_active_tab(&self, tab_id: String) {
         if let Ok(mut id) = self.inner.active_tab_id.lock() {
             *id = tab_id;
@@ -169,7 +159,6 @@ impl SoundList {
         self.refresh_from_state();
     }
 
-    /// Update which sound IDs are currently playing and refresh the list.
     pub fn set_playing_ids(&self, ids: HashSet<String>) {
         let changed = {
             if let Ok(mut current) = self.inner.playing_ids.lock() {
@@ -189,7 +178,6 @@ impl SoundList {
         }
     }
 
-    /// Store which sound IDs have missing source files and refresh the list.
     pub fn set_invalid_ids(&self, ids: HashSet<String>) {
         let changed_ids = if let Ok(mut ids_set) = self.inner.invalid_ids.lock() {
             if *ids_set != ids {
@@ -208,7 +196,6 @@ impl SoundList {
         }
     }
 
-    /// Set the active sound ID (current transport track) and refresh if changed.
     pub fn set_active_sound_id(&self, id: Option<String>) {
         let changed = {
             if let Ok(mut current) = self.inner.active_sound_id.lock() {
@@ -228,7 +215,6 @@ impl SoundList {
         }
     }
 
-    /// Set the search filter query and refresh the displayed list.
     pub fn set_search_filter(&self, query: String) {
         let changed = if let Ok(mut q) = self.inner.search_query.lock() {
             if *q != query {
@@ -246,24 +232,19 @@ impl SoundList {
         }
     }
 
-    /// Reload sounds from AppState config.
     pub fn refresh_from_state(&self) {
         self.inner.refresh_from_state_inner();
     }
 
-    /// Append newly imported sounds to the list.
     pub fn append_sounds(&self, _new_sounds: Vec<Sound>) {
-        // New sounds are already in Config, just refresh the view
         self.refresh_from_state();
         self.inner.emit_library_changed();
     }
 
-    /// Return the currently visible sounds in lightweight form for transport navigation.
     pub fn get_navigation_sounds(&self) -> Vec<NavigationSound> {
         self.inner.filtered_navigation_sounds_from_state()
     }
 
-    /// Return the currently active tab id.
     pub fn active_tab_id(&self) -> String {
         self.inner
             .active_tab_id
@@ -279,7 +260,6 @@ impl SoundList {
         self.inner.reload_store();
     }
 
-    /// Register callback fired when sound membership or tab membership changes.
     pub fn connect_library_changed<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_library_changed.borrow_mut() = Some(Box::new(f));
     }
@@ -290,7 +270,6 @@ impl SoundList {
         self.inner.visible_row_indices.borrow_mut().clear();
     }
 
-    /// Set the list style mode ("compact" or "card")
     pub fn set_list_style(&self, style: &str) {
         let cv = &self.inner.col_view;
         if ListStyle::from_str(style).unwrap_or_default() == ListStyle::Card {
@@ -455,7 +434,6 @@ impl SoundListInner {
     }
 
     fn setup_drag_drop(self: &Arc<Self>) {
-        // Setup drop target for files
         let drop_target_files = gtk4::DropTarget::new(
             gtk4::gdk::FileList::static_type(),
             gtk4::gdk::DragAction::COPY,
@@ -464,7 +442,6 @@ impl SoundListInner {
         let drop_target_text =
             gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::COPY);
 
-        // Handle file drops
         {
             let inner_weak = Arc::downgrade(self);
             drop_target_files.connect_drop(move |_, value, _, _| {
@@ -488,7 +465,6 @@ impl SoundListInner {
             });
         }
 
-        // Handle text/URI drops
         {
             let inner_weak = Arc::downgrade(self);
             drop_target_text.connect_drop(move |_, value, _, _| {
@@ -519,7 +495,6 @@ impl SoundListInner {
             return false;
         }
 
-        // Get the current active tab
         let tab_id = self
             .active_tab_id
             .lock()
@@ -536,7 +511,6 @@ impl SoundListInner {
             Some(tab_id.clone())
         };
 
-        // Import files to the current tab
         match commands::import_files_to_tab(paths, tab_id_opt, Arc::clone(&self.state.config)) {
             Ok(new_sounds) => {
                 log::info!("Successfully imported {} sounds", new_sounds.len());
@@ -864,7 +838,7 @@ impl SoundListInner {
         gesture.set_button(3);
         gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
         gesture.connect_pressed(|gesture, _, _, _| {
-            // Keep existing multi-selection when opening context menu via right click.
+            // Keep the selection when opening the context menu.
             gesture.set_state(gtk4::EventSequenceState::Claimed);
         });
 
@@ -892,8 +866,7 @@ impl SoundListInner {
         drag_source.set_button(gtk4::gdk::BUTTON_PRIMARY);
         drag_source.set_propagation_phase(gtk4::PropagationPhase::Capture);
         drag_source.set_propagation_limit(gtk4::PropagationLimit::SameNative);
-        // Don't claim the event sequence exclusively so that single-clicks still
-        // reach the ColumnView's MultiSelection gesture for normal row selection.
+        // Leave the sequence shared so normal row selection still works.
         drag_source.set_exclusive(false);
 
         let inner_weak = Arc::downgrade(self);
@@ -942,7 +915,6 @@ impl SoundListInner {
             let payload = payload?;
             log::info!("Drag prepare: payload created successfully");
 
-            // Create drag icon showing sound count
             let count = sound_ids.len();
             let icon_text = if count == 1 {
                 "1 sound".to_string()
@@ -1441,7 +1413,6 @@ impl SoundListInner {
         }
     }
 
-    /// Rebind only rows whose transient state changed, leaving the store intact.
     fn rebind_rows_for_ids(&self, sound_ids: &HashSet<String>) {
         if sound_ids.is_empty() {
             return;
@@ -1468,9 +1439,7 @@ impl SoundListInner {
         replacements.sort_unstable_by_key(|(position, _)| *position);
         replacements.dedup_by_key(|(position, _)| *position);
 
-        // Replacing the boxed row forces GtkColumnView to bind the row again.
-        // A bare `items_changed(position, 0, 0)` is not sufficient here because
-        // the transient playback state lives outside the row model object.
+        // Replace the row so GtkColumnView rebinds transient playback state.
         for (position, row) in replacements {
             self.replace_row_at(position, row);
         }
@@ -1523,7 +1492,6 @@ impl SoundListInner {
             .collect()
     }
 
-    /// Refresh the store from the current AppState config (called from action callbacks).
     fn refresh_from_state_inner(&self) {
         let filtered_rows = self.filtered_row_data_from_state();
         let current_rows = self.current_store_rows();
@@ -1641,14 +1609,11 @@ fn parse_uri_list(uri_list: &str) -> Vec<String> {
                 return None;
             }
 
-            // Handle file:// URIs
             if let Some(path) = line.strip_prefix("file://") {
-                // Simple URL decode for common cases
                 let decoded = percent_decode(path);
                 return Some(decoded);
             }
 
-            // Return as-is if not a file:// URI
             Some(line.to_string())
         })
         .collect()

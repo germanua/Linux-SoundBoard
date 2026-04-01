@@ -1,5 +1,3 @@
-//! Transport control bar — playback controls, scrub bar, volume sliders.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -53,18 +51,10 @@ fn apply_transport_button_size(button: &impl IsA<Widget>) {
     button.set_valign(Align::Center);
 }
 
-/// Which sound is currently the "active track" in the transport bar.
-///
-/// MEMORY OPTIMIZATION: Store only the fields we actually use (id, duration_ms)
-/// instead of cloning the entire Sound struct which contains many unused fields
-/// (path, source_path, hotkey, volume, enabled, loudness_lufs).
 #[derive(Clone)]
 struct ActiveTrack {
-    /// Sound ID - used for pause/resume and seek operations
     sound_id: String,
-    /// Duration in milliseconds - used for scrub bar position calculation
     sound_duration_ms: Option<u64>,
-    #[allow(dead_code)]
     play_id: String,
 }
 
@@ -90,7 +80,6 @@ const SEEK_SETTLE_TOLERANCE_MS: u64 = 100;
 const PENDING_SEEK_TIMEOUT_MS: u64 = 800;
 const DEFAULT_SCRUB_DURATION_MS: u64 = 30_000;
 
-/// The transport bar widget bundle.
 #[derive(Clone)]
 pub struct TransportBar {
     inner: Rc<TransportInner>,
@@ -455,7 +444,6 @@ impl TransportBar {
         self.inner.widget.upcast_ref()
     }
 
-    /// Connect a callback to the search entry's `search-changed` signal.
     pub fn connect_search_changed<F: Fn(String) + 'static>(&self, f: F) {
         self.inner
             .search_entry
@@ -464,7 +452,6 @@ impl TransportBar {
             });
     }
 
-    /// Store a closure that returns the currently filtered sound list.
     pub fn set_sound_list_provider<F: Fn() -> Vec<NavigationSound> + Send + Sync + 'static>(
         &self,
         f: F,
@@ -472,7 +459,6 @@ impl TransportBar {
         *self.inner.sound_list_provider.lock().unwrap() = Some(Box::new(f));
     }
 
-    /// Toggle play/pause on the current active track (for hotkey dispatch).
     pub fn toggle_play_pause(&self) {
         let track = self.inner.active_track.borrow();
         if let Some(track) = track.as_ref() {
@@ -493,22 +479,18 @@ impl TransportBar {
         }
     }
 
-    /// Play the previous sound in the list (for hotkey dispatch).
     pub fn play_previous(&self) {
         self.inner.play_adjacent_sound(-1);
     }
 
-    /// Play the next sound in the list (for hotkey dispatch).
     pub fn play_next(&self) {
         self.inner.play_adjacent_sound(1);
     }
 
-    /// Stop playback and suppress Continue mode auto-advance for this user action.
     pub fn stop_all(&self) {
         self.inner.stop_all_playback();
     }
 
-    /// Toggle headphones mute (for hotkey dispatch).
     pub fn toggle_headphones_mute(&self) {
         let _ = commands::toggle_local_mute(
             Arc::clone(&self.inner.state.config),
@@ -516,12 +498,10 @@ impl TransportBar {
         );
     }
 
-    /// Toggle mic passthrough (for hotkey dispatch).
     pub fn toggle_mic_mute(&self) {
         let _ = commands::toggle_mic_passthrough(Arc::clone(&self.inner.state.config));
     }
 
-    /// Cycle play mode default → loop → continue (for hotkey dispatch).
     pub fn cycle_play_mode(&self) {
         let new_mode = self
             .inner
@@ -540,17 +520,14 @@ impl TransportBar {
         update_play_mode_button(&self.inner.playmode_btn, new_mode);
     }
 
-    /// Store a sender used to dispatch toast notifications.
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
         *self.inner.toast_sender.lock().unwrap() = Some(sender);
     }
 
-    /// Register callback fired after library mutations like refresh/import from settings.
     pub fn connect_library_changed<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_library_changed.borrow_mut() = Some(Rc::new(f));
     }
 
-    /// Register callback fired when list style changes in settings.
     pub fn connect_list_style_changed<F: Fn(String) + 'static>(&self, f: F) {
         *self.inner.on_list_style_changed.borrow_mut() = Some(Rc::new(f));
     }
@@ -714,9 +691,7 @@ impl TransportBar {
                     let Some(inner_seek) = inner_weak.upgrade() else {
                         return glib::Propagation::Proceed;
                     };
-                    // Only track preview during actual user interaction (not programmatic updates)
                     if scroll_type == gtk4::ScrollType::Jump {
-                        // User is dragging the slider
                         inner_seek.begin_scrub_interaction(ScrubInput::Pointer);
 
                         if let Some(position_ms) = inner_seek.record_scrub_preview(value) {
@@ -725,14 +700,13 @@ impl TransportBar {
                                 .set_text(&format_duration(position_ms));
                         }
 
-                        // Cancel any pending commit timeout
                         if let Some(timeout_id) =
                             inner_seek.scrub_commit_timeout.borrow_mut().take()
                         {
                             timeout_id.remove();
                         }
 
-                        // Schedule a new commit timeout (fires 100ms after last drag movement)
+                        // Coalesce drag updates into one seek.
                         let inner_weak_commit = Rc::downgrade(&inner_seek);
                         let timeout_id =
                             glib::timeout_add_local_once(Duration::from_millis(100), move || {
@@ -974,8 +948,6 @@ impl TransportInner {
         }
     }
 
-    /// Play the sound at `offset` positions from the current active track.
-    /// Wraps around at list boundaries.
     fn play_adjacent_sound(&self, offset: i32) {
         self.clear_continue_suppression();
         let sounds = match self.sound_list_provider.lock().unwrap().as_ref() {
@@ -1012,7 +984,6 @@ impl TransportInner {
         }
     }
 
-    /// Called every 150ms to update the scrub bar from playback positions.
     fn update_scrub(&self) {
         let positions = commands::get_playback_positions(Arc::clone(&self.state.player));
         let now_ms = glib::monotonic_time() as u64 / 1_000;
@@ -1750,7 +1721,7 @@ mod tests {
             last_committed_sound_id: Some("sound-1".to_string()),
         };
 
-        // Duplicate commit path should clear pending state because no new seek is dispatched.
+        // Clear pending state when a duplicate commit does not dispatch a seek.
         if interaction.last_committed_sound_id.as_deref() == Some("sound-1")
             && interaction.last_committed_position_ms == Some(5_000)
         {

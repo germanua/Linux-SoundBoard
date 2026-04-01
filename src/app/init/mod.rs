@@ -1,8 +1,3 @@
-//! Modular initialization subsystem.
-//!
-//! This module provides phase-based initialization for the application,
-//! breaking up the monolithic bootstrap.rs into testable components.
-
 pub mod audio;
 pub mod config;
 pub mod error;

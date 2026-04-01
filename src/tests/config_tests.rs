@@ -1,5 +1,3 @@
-//! Integration tests for config persistence.
-
 use linux_soundboard::config::{Config, Theme};
 
 #[test]

@@ -1,5 +1,3 @@
-//! GTK4 native user interface modules
-
 pub mod app_window;
 pub mod dialogs;
 pub mod icons;

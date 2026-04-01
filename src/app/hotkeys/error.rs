@@ -8,7 +8,6 @@ pub fn hotkey_conflict(existing_id: &str) -> String {
     coded_error(HOTKEY_CONFLICT, existing_id)
 }
 
-#[allow(dead_code)]
 pub fn unsupported_key_for_backend(backend: &str, detail: impl AsRef<str>) -> String {
     coded_error(
         UNSUPPORTED_KEY_FOR_BACKEND,
@@ -16,19 +15,9 @@ pub fn unsupported_key_for_backend(backend: &str, detail: impl AsRef<str>) -> St
     )
 }
 
-#[allow(dead_code)]
-pub fn portal_unavailable(detail: impl AsRef<str>) -> String {
-    coded_error(PORTAL_UNAVAILABLE, detail)
-}
-
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn portal_rejected_by_compositor(detail: impl AsRef<str>) -> String {
     coded_error(PORTAL_REJECTED_BY_COMPOSITOR, detail)
-}
-
-#[allow(dead_code)]
-pub fn x11_backend_unavailable(detail: impl AsRef<str>) -> String {
-    coded_error(X11_BACKEND_UNAVAILABLE, detail)
 }
 
 pub fn format_hotkey_error(raw: &str) -> String {

@@ -1,5 +1,3 @@
-//! Config persistence and sanitization helpers.
-
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +21,6 @@ impl Config {
             let content = fs::read_to_string(&path)?;
             let raw: serde_json::Value = serde_json::from_str(&content)?;
 
-            // Check schema version
             let version = raw
                 .get("schema_version")
                 .and_then(|v| v.as_u64())

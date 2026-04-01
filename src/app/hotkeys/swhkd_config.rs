@@ -14,11 +14,10 @@ pub struct SwhkdConfig {
 }
 
 impl SwhkdConfig {
-    /// Create new config manager
+    /// Create a config manager.
     pub fn new(pipe_path: PathBuf) -> Result<Self, String> {
         let config_path = Self::get_config_path()?;
 
-        // Ensure config directory exists
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create config directory: {}", e))?;
@@ -31,7 +30,7 @@ impl SwhkdConfig {
         })
     }
 
-    /// Get the swhkd config file path
+    /// Resolve the `swhkd` config path.
     fn get_config_path() -> Result<PathBuf, String> {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("XDG_CONFIG_HOME"))
@@ -46,7 +45,7 @@ impl SwhkdConfig {
         Ok(config_dir.join("swhkd").join("swhkdrc"))
     }
 
-    /// Add a hotkey binding
+    /// Add a hotkey binding.
     pub fn add_hotkey(&mut self, sound_id: &str, hotkey: &str) -> Result<(), String> {
         let swhkd_hotkey = Self::convert_to_swhkd_format(hotkey)?;
         debug!(
@@ -68,30 +67,28 @@ impl SwhkdConfig {
         removed
     }
 
-    /// Convert our canonical hotkey format to the exact swhkd key syntax.
+    /// Convert a canonical hotkey to `swhkd` syntax.
     fn convert_to_swhkd_format(hotkey: &str) -> Result<String, String> {
         Ok(format!("~{}", parse_hotkey_spec(hotkey)?.swhkd_string()?))
     }
 
-    /// Write the config file
+    /// Write the config file.
     pub fn write_to_file(&self) -> Result<(), String> {
         info!("Writing swhkd config to: {}", self.config_path.display());
 
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         let mut content = format!(
-            "# LinuxSoundBoard - Auto-generated configuration\n\
-             # DO NOT EDIT MANUALLY - Changes will be overwritten\n\
+            "# LinuxSoundBoard swhkd config\n\
+             # Do not edit manually; changes will be overwritten\n\
              # Last updated: {}\n\
              \n",
             timestamp
         );
 
-        // Sort hotkeys for consistent output
         let mut sorted_hotkeys: Vec<_> = self.hotkeys.iter().collect();
         sorted_hotkeys.sort_by_key(|(id, _)| *id);
 
         for (sound_id, hotkey) in sorted_hotkeys {
-            // Determine if this is a control hotkey or sound hotkey
             let comment = if sound_id.starts_with("control:") {
                 format!("# Control: {}", sound_id.strip_prefix("control:").unwrap())
             } else {
@@ -107,7 +104,6 @@ impl SwhkdConfig {
             ));
         }
 
-        // Write to file
         let mut file = fs::File::create(&self.config_path)
             .map_err(|e| format!("Failed to create config file: {}", e))?;
 
@@ -118,7 +114,7 @@ impl SwhkdConfig {
         Ok(())
     }
 
-    /// Send SIGHUP to swhkd to reload config
+    /// Send `SIGHUP` to reload `swhkd`.
     pub fn reload_swhkd(swhkd_pid: i32) -> Result<(), String> {
         info!("Sending SIGHUP to swhkd (PID: {})", swhkd_pid);
 

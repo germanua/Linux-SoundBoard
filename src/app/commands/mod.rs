@@ -1,4 +1,4 @@
-//! Command handlers grouped by responsibility.
+//! Command handlers.
 
 mod hotkeys;
 mod library;

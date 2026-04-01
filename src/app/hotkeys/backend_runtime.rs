@@ -15,6 +15,6 @@ pub trait HotkeyBackend: Send + Sync {
         Ok(())
     }
     fn start_listener(&self, sender: Sender<String>);
-    /// Get self as Any for downcasting
+    /// Downcast support.
     fn as_any(&self) -> &dyn Any;
 }

@@ -1,5 +1,3 @@
-//! Configuration model types.
-
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
 use uuid::Uuid;
@@ -564,7 +562,6 @@ impl Default for Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Schema version for config migration
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub sound_folders: Vec<String>,

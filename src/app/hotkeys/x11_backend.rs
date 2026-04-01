@@ -14,21 +14,15 @@ use super::backend_runtime::HotkeyBackend;
 use super::error::hotkey_conflict;
 use super::{normalize_capture_key, parse_hotkey_spec, HotkeyCode, HotkeyModifier};
 
-/// X11 hotkey backend with proper resource cleanup.
-///
-/// Tracks the display pointer and stop flag to ensure XCloseDisplay
-/// is called when the backend is dropped or the listener is stopped.
+/// X11 hotkey backend with cleanup tracking.
 pub struct X11Backend {
     bindings: Arc<Mutex<HashMap<String, Binding>>>,
     started: AtomicBool,
-    /// Stop signal for the listener thread
     stop_flag: Arc<AtomicBool>,
-    /// Raw display pointer for cleanup (protected by Mutex for thread safety)
     display_ptr: Arc<Mutex<Option<NonNullXDisplay>>>,
 }
 
-/// Wrapper for X11 Display pointer that is safe to send between threads.
-/// X11 library handles are thread-safe with proper synchronization.
+/// Wrapper for an X11 display pointer.
 #[derive(Debug)]
 struct NonNullXDisplay(*mut xlib::Display);
 
@@ -48,7 +42,7 @@ struct Binding {
 }
 
 impl X11Backend {
-    /// Creates a new X11Backend with cleanup tracking.
+    /// Create a new X11 backend.
     pub fn new() -> Result<Self, String> {
         if session_is_wayland() {
             return Err("Wayland session detected; X11 backend disabled".to_string());
@@ -107,12 +101,12 @@ impl X11Backend {
         Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
     }
 
-    /// Returns a clone of the stop flag for the listener thread
+    /// Clone the stop flag.
     fn stop_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop_flag)
     }
 
-    /// Returns a clone of the display pointer tracker for the listener thread
+    /// Clone the display tracker.
     fn display_ptr(&self) -> Arc<Mutex<Option<NonNullXDisplay>>> {
         Arc::clone(&self.display_ptr)
     }
@@ -134,10 +128,8 @@ fn session_is_wayland() -> bool {
 
 impl Drop for X11Backend {
     fn drop(&mut self) {
-        // Signal the listener thread to stop
         self.stop_flag.store(true, Ordering::SeqCst);
 
-        // Close the X11 display if it's still open
         if let Ok(mut display_guard) = self.display_ptr.lock() {
             if let Some(display) = display_guard.take() {
                 unsafe {
@@ -226,7 +218,6 @@ impl HotkeyBackend for X11Backend {
                 return;
             }
 
-            // Store the display pointer for cleanup on drop
             if let Ok(mut ptr_guard) = display_ptr.lock() {
                 *ptr_guard = Some(NonNullXDisplay(display));
             }
@@ -252,19 +243,16 @@ impl HotkeyBackend for X11Backend {
             let mut event: xlib::XEvent = std::mem::zeroed();
 
             loop {
-                // Check stop flag before waiting for events
                 if stop_flag.load(Ordering::SeqCst) {
                     info!("X11 listener received stop signal");
                     break;
                 }
 
-                // Use XPending to check if there are events without blocking
                 while xlib::XPending(display) == 0 {
                     if stop_flag.load(Ordering::SeqCst) {
                         info!("X11 listener received stop signal (in pending loop)");
                         break;
                     }
-                    // Small sleep to avoid busy-waiting
                     thread::sleep(std::time::Duration::from_millis(10));
                 }
 
@@ -309,7 +297,6 @@ impl HotkeyBackend for X11Backend {
                             }
                             _ if is_press => {
                                 if let Some(code) = normalize_capture_key(&key_name, keycode) {
-                                    // Handle poison gracefully in hotkey listener thread
                                     let snapshot: Vec<(String, Binding)> = match bindings.lock() {
                                         Ok(guard) => guard
                                             .iter()
@@ -342,7 +329,6 @@ impl HotkeyBackend for X11Backend {
                 xlib::XFreeEventData(display, &mut cookie);
             }
 
-            // Clean up: close the display when thread exits
             if let Ok(mut ptr_guard) = display_ptr.lock() {
                 if let Some(disp) = ptr_guard.take() {
                     disp.close();
@@ -367,19 +353,12 @@ mod tests {
 
     #[test]
     fn test_x11_backend_creation_without_display() {
-        // This test verifies that X11Backend properly handles the DISPLAY check
-        // When DISPLAY is not set, it should return an error
-        // Note: This test will pass/fail based on environment
         let result = X11Backend::new();
-        // The result depends on whether X11 is available
         match result {
             Ok(backend) => {
-                // If X11 is available, backend should be created
-                // Drop it to verify cleanup happens
                 drop(backend);
             }
             Err(e) => {
-                // If X11 is not available, we get an error
                 assert!(e.contains("DISPLAY") || e.contains("X11"));
             }
         }

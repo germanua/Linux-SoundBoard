@@ -1,20 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use crate::config::{Config, PlayMode, Sound, Theme};
+use crate::config::{Config, PlayMode, Sound};
 
-/// Helper to acquire config lock with poison handling - returns Result
-#[allow(dead_code)]
-pub fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
-where
-    F: FnOnce(&Config) -> R,
-{
-    config
-        .lock()
-        .map(|guard| f(&guard))
-        .map_err(|e| format!("Config lock poisoned: {}", e))
-}
-
-/// Helper to acquire config mut lock with poison handling - returns Result
+/// Lock config mutably and surface poison errors.
 pub fn with_config_mut<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
 where
     F: FnOnce(&mut Config) -> R,
@@ -25,7 +13,7 @@ where
         .map_err(|e| format!("Config lock poisoned: {}", e))
 }
 
-/// Execute config operation with automatic save on success
+/// Run a config mutation and save on success.
 pub fn with_saved_config<F>(config: &Arc<Mutex<Config>>, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut Config),
@@ -36,7 +24,7 @@ where
     })?
 }
 
-/// Execute config operation that returns a value, with automatic save on success
+/// Run a config mutation that returns a value and save on success.
 pub fn with_saved_config_result<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
 where
     F: FnOnce(&mut Config) -> Result<R, String>,
@@ -44,7 +32,7 @@ where
     with_config_mut(config, f)?
 }
 
-/// Execute config operation that returns (), with automatic save on success
+/// Run a config mutation that returns `()` and save on success.
 pub fn with_saved_config_checked<F>(config: &Arc<Mutex<Config>>, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut Config) -> Result<(), String>,
@@ -52,17 +40,17 @@ where
     with_config_mut(config, |cfg| f(cfg))?
 }
 
-/// Parse theme string to Theme enum (kept for potential future use)
-#[allow(dead_code)]
-pub fn parse_theme(s: &str) -> Result<Theme, String> {
+/// Parse a theme string.
+#[cfg(test)]
+pub(crate) fn parse_theme(s: &str) -> Result<crate::config::Theme, String> {
     match s.to_lowercase().as_str() {
-        "dark" => Ok(Theme::Dark),
-        "light" => Ok(Theme::Light),
+        "dark" => Ok(crate::config::Theme::Dark),
+        "light" => Ok(crate::config::Theme::Light),
         _ => Err(format!("Invalid theme '{}'. Use 'dark' or 'light'.", s)),
     }
 }
 
-/// Parse auto gain mode string
+/// Parse auto-gain mode.
 pub fn parse_auto_gain_mode(s: &str) -> Result<crate::config::AutoGainMode, String> {
     match s.to_lowercase().as_str() {
         "dynamic" => Ok(crate::config::AutoGainMode::Dynamic),
@@ -74,7 +62,7 @@ pub fn parse_auto_gain_mode(s: &str) -> Result<crate::config::AutoGainMode, Stri
     }
 }
 
-/// Parse auto gain apply to string
+/// Parse auto-gain scope.
 pub fn parse_auto_gain_apply_to(s: &str) -> Result<crate::config::AutoGainApplyTo, String> {
     match s.to_lowercase().as_str() {
         "both" => Ok(crate::config::AutoGainApplyTo::Both),
@@ -86,7 +74,7 @@ pub fn parse_auto_gain_apply_to(s: &str) -> Result<crate::config::AutoGainApplyT
     }
 }
 
-/// Validate play mode string
+/// Parse play mode.
 pub fn validate_play_mode(s: &str) -> Result<PlayMode, String> {
     match s.to_lowercase().as_str() {
         "default" => Ok(PlayMode::Default),
@@ -99,7 +87,7 @@ pub fn validate_play_mode(s: &str) -> Result<PlayMode, String> {
     }
 }
 
-/// Number of threads for audio metadata analysis (duration/probe)
+/// Cap metadata analysis threads.
 pub fn bounded_audio_analysis_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).clamp(1, 4))
@@ -116,7 +104,7 @@ pub(crate) fn probe_duration_ms(path: &str) -> Option<u64> {
     crate::audio::metadata::probe_duration_ms(path)
 }
 
-/// Get default sound import directory
+/// Resolve the default import directory.
 pub fn default_sound_import_dir(
     audio_dir: Option<std::path::PathBuf>,
     home_dir: Option<std::path::PathBuf>,

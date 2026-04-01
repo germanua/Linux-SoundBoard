@@ -1,5 +1,3 @@
-//! Application metadata and shared constants.
-
 pub const APP_ID: &str = "com.linuxsoundboard.app";
 pub const APP_ICON_NAME: &str = APP_ID;
 pub const APP_TITLE: &str = "Linux Soundboard";

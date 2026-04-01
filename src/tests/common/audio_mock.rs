@@ -1,10 +1,6 @@
-//! Fake audio player for headless integration testing.
-//! Does NOT require PulseAudio or any audio system.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Fake playback position for testing
 #[derive(Debug, Clone)]
 pub struct FakePlaybackPosition {
     pub play_id: String,
@@ -15,7 +11,6 @@ pub struct FakePlaybackPosition {
     pub duration_ms: Option<u64>,
 }
 
-/// Fake audio player for headless testing
 pub struct FakeAudioPlayer {
     plays: Mutex<Vec<(String, String)>>, // (sound_id, path)
     positions: Mutex<HashMap<String, FakePlaybackPosition>>,

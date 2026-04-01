@@ -1,4 +1,4 @@
-//! Audio module
+//! Audio helpers.
 
 pub mod analysis_worker;
 pub mod file_link;

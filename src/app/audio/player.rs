@@ -1,9 +1,6 @@
-//! Audio playback engine with dual output support.
+//! Audio playback with local and virtual outputs.
 //!
-//! Seeking follows the legacy LinuxSoundBoard rewind model:
-//! - decoder seeks use Symphonia coarse mode for resilience
-//! - a successful seek resets playback position tracking to the requested timeline
-//! - playback position then advances from written sample counts
+//! Seek handling keeps the requested timeline stable after decoder jumps.
 
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
@@ -33,10 +30,9 @@ const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const FALLBACK_OUTPUT_SAMPLE_RATE: u32 = 44_100;
 const TARGET_OUTPUT_CHANNELS: u8 = 2;
 
-/// Timestamp with current position and total duration (following raplay pattern)
+/// Playback timestamp and total duration.
 #[derive(Clone, Copy, Debug)]
 pub struct Timestamp {
-    #[allow(dead_code)]
     pub current: Duration,
     pub total: Duration,
 }
@@ -46,14 +42,12 @@ impl Timestamp {
         Self { current, total }
     }
 
-    #[allow(dead_code)]
     pub fn total_ms(&self) -> u64 {
         self.total.as_millis() as u64
     }
 }
 
-/// Custom audio source that uses symphonia directly with proper error handling
-/// Following the legacy Symphonia pattern for reliable seeking.
+/// Symphonia-backed source with seek tracking.
 struct SymphoniaSource {
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     format: Box<dyn symphonia::core::formats::FormatReader>,
@@ -63,9 +57,7 @@ struct SymphoniaSource {
     buffer: SampleBuffer<i16>,
     spec: SignalSpec,
     current_frame_offset: usize,
-    /// Last decoded timestamp - tracks actual decoder position (like uamp's last_ts)
     last_ts: u64,
-    /// Flag to force buffer refresh after seek
     needs_decode: bool,
 }
 
@@ -148,19 +140,17 @@ impl SymphoniaSource {
         })
     }
 
-    /// Seek to position in milliseconds
-    /// Following the legacy pattern: use coarse seek and treat the requested
-    /// timeline position as authoritative for playback tracking.
+    /// Seek to a position in milliseconds.
     fn seek(&mut self, pos_ms: u64) -> Result<(), String> {
         let time = Time::new(
             pos_ms / 1000,                   // seconds
             (pos_ms % 1000) as f64 / 1000.0, // fractional seconds
         );
 
-        // Build seek target - prefer TimeStamp when we have time_base and n_frames (like uamp)
+        // Prefer timestamp seeks when the container exposes frame counts.
         let seek_to = if let (Some(tb), Some(max_frames)) = (self.time_base, self.n_frames) {
             let ts = tb.calc_timestamp(time);
-            // Clamp to valid range (max - 1 to avoid seeking past end)
+            // Clamp to the last valid frame.
             let clamped_ts = ts.min(max_frames.saturating_sub(1));
             debug!(
                 "Seeking with TimeStamp: requested_ts={}, clamped_ts={}, max_frames={}",
@@ -171,7 +161,7 @@ impl SymphoniaSource {
                 track_id: self.track_id,
             }
         } else {
-            // Fallback to time-based seek
+            // Fall back to time-based seek.
             debug!("Seeking with Time (fallback): {:?}", time);
             SeekTo::Time {
                 time,
@@ -183,14 +173,12 @@ impl SymphoniaSource {
 
         match seek_result {
             Ok(seeked_to) => {
-                // Update last_ts from ACTUAL seek position (critical for accurate tracking)
                 self.last_ts = seeked_to.actual_ts;
 
-                // Clear buffer and force decode on next read
                 self.needs_decode = true;
                 self.current_frame_offset = 0;
 
-                // Reset decoder state (uamp only resets on ResetRequired, but we do it always for safety)
+                // Reset decoder state after seek.
                 self.decoder.reset();
 
                 info!(
@@ -207,7 +195,7 @@ impl SymphoniaSource {
         }
     }
 
-    /// Get current position and total duration (following raplay pattern)
+    /// Current playback position and total duration.
     fn get_time(&self) -> Option<Timestamp> {
         let time_base = self.time_base?;
 
@@ -225,7 +213,7 @@ impl SymphoniaSource {
         Some(Timestamp::new(current, total))
     }
 
-    /// Decode next packet with proper error handling (following uamp pattern)
+    /// Decode the next packet, skipping recoverable errors.
     fn decode_next_packet(&mut self) -> Option<()> {
         let mut recoverable_packet_errors: usize = 0;
         const MAX_RECOVERABLE_PACKET_ERRORS: usize = 2048;
@@ -235,17 +223,16 @@ impl SymphoniaSource {
                 Err(SymphoniaError::IoError(e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                 {
-                    return None; // End of stream
+                    return None;
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    // Handle reset request (can happen after seek in some formats)
+                    // Some formats need a reset after seek.
                     debug!("Format reader requested reset");
                     self.decoder.reset();
                     continue;
                 }
                 Err(SymphoniaError::DecodeError(msg)) => {
-                    // Recoverable demuxer errors (junk bytes, malformed frames) are common in
-                    // real-world MP3 files. Keep scanning packets instead of treating as EOF.
+                    // Skip malformed packets instead of stopping on bad media.
                     recoverable_packet_errors = recoverable_packet_errors.saturating_add(1);
                     if recoverable_packet_errors > MAX_RECOVERABLE_PACKET_ERRORS {
                         warn!(
@@ -279,12 +266,12 @@ impl SymphoniaSource {
                 recoverable_packet_errors = 0;
             }
 
-            // Skip packets for other tracks
+            // Ignore packets from other tracks.
             if packet.track_id() != self.track_id {
                 continue;
             }
 
-            // Update timestamp from packet (tracks actual decoder position)
+            // Track the decoder's actual position.
             self.last_ts = packet.ts();
 
             match self.decoder.decode(&packet) {
@@ -300,13 +287,13 @@ impl SymphoniaSource {
                     return Some(());
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    // Decoder needs reset (uamp handles this)
+                    // Decoder wants a reset here too.
                     debug!("Decoder requested reset");
                     self.decoder.reset();
                     continue;
                 }
                 Err(SymphoniaError::DecodeError(msg)) => {
-                    // Recoverable decode error - skip this packet (like uamp)
+                    // Skip bad packets and keep going.
                     debug!("Decode error (skipping packet): {}", msg);
                     continue;
                 }
@@ -321,9 +308,7 @@ impl SymphoniaSource {
 
 impl Source for SymphoniaSource {
     fn current_frame_len(&self) -> Option<usize> {
-        // IMPORTANT: rodio::UniformSourceIterator snapshots this value to build its internal
-        // Take<> chunk. Returning Some(0) before first decode causes a permanent empty stream.
-        // Use None for streaming/unknown frame length.
+        // Rodio snapshots this before the first decode, so keep it unknown.
         None
     }
     fn channels(&self) -> u16 {
@@ -345,7 +330,7 @@ impl Iterator for SymphoniaSource {
     type Item = i16;
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // Force decode if buffer is exhausted or we just seeked
+            // Decode again after seek or when the buffer runs dry.
             if self.needs_decode || self.current_frame_offset >= self.buffer.samples().len() {
                 self.decode_next_packet()?;
             }
@@ -361,7 +346,7 @@ impl Iterator for SymphoniaSource {
     }
 }
 
-/// A seek-safe playback source that rebuilds the conversion chain after seek.
+/// Playback source that rebuilds its conversion chain after seek.
 trait ResettableSource: Source<Item = i16> {
     fn seek_resettable(&mut self, pos: Duration) -> Result<(), RodioSeekError>;
 }
@@ -406,9 +391,8 @@ where
         })
     }
 
-    /// Internal seek method that rebuilds the converter after seek.
+    /// Rebuild the source after seek.
     fn seek_internal(&mut self, pos: Duration) -> Result<(), RodioSeekError> {
-        // Rebuild the source
         let mut input = (self.factory)().map_err(|e| {
             RodioSeekError::Other(Box::new(std::io::Error::other(format!(
                 "Failed to rebuild playback source: {e}"
@@ -465,8 +449,6 @@ where
         self.seek_internal(pos).map(|_| ())
     }
 }
-
-// --- Types & Commands ---
 
 #[derive(Clone, Serialize, Debug)]
 pub struct PlaybackPosition {
@@ -578,7 +560,6 @@ enum AudioCommand {
         sound_lufs: Option<f64>,
         response: Sender<Result<String, String>>,
     },
-    #[allow(dead_code)]
     StopSound {
         sound_id: String,
     },
@@ -619,11 +600,9 @@ enum AudioCommand {
     SetLooping {
         enabled: bool,
     },
-    #[allow(dead_code)]
     GetPlaying {
         response: Sender<Vec<String>>,
     },
-    #[allow(dead_code)]
     IsAvailable {
         response: Sender<bool>,
     },
@@ -709,7 +688,6 @@ impl AudioPlayer {
             .map_err(|e| e.to_string())?;
         response_rx.recv().map_err(|e| e.to_string())?
     }
-    #[allow(dead_code)]
     pub fn stop_sound(&self, sound_id: &str) -> Result<(), String> {
         self.command_tx
             .send(AudioCommand::StopSound {
@@ -742,7 +720,6 @@ impl AudioPlayer {
         });
     }
 
-    #[allow(dead_code)]
     pub fn get_playing(&self) -> Vec<String> {
         let (response_tx, response_rx) = mpsc::channel();
         if self
@@ -757,7 +734,6 @@ impl AudioPlayer {
         response_rx.recv().unwrap_or_default()
     }
 
-    #[allow(dead_code)]
     pub fn is_available(&self) -> bool {
         let (response_tx, response_rx) = mpsc::channel();
         if self
@@ -855,13 +831,11 @@ struct AutoGainDynamicParams {
     release_ms: u32,
 }
 
-/// Shared auto-gain state readable by all playback threads in real-time.
-/// Uses atomics so UI changes are immediately reflected in currently-playing sounds.
+/// Shared auto-gain state for playback threads.
 pub struct SharedAutoGain {
     enabled: AtomicBool,
     mode_bits: AtomicU32,
     apply_to_bits: AtomicU32,
-    /// Target LUFS stored as f64 bits in an AtomicU64
     target_lufs_bits: AtomicU64,
     lookahead_ms: AtomicU32,
     attack_ms: AtomicU32,
@@ -923,8 +897,7 @@ impl SharedAutoGain {
             release_ms: self.release_ms.load(Ordering::Relaxed),
         }
     }
-    /// Compute the gain factor for a sound with the given LUFS measurement.
-    /// Returns 1.0 if auto-gain should not apply on this output.
+    /// Return the gain for this output, or 1.0 if auto-gain is inactive.
     fn gain_for(&self, sound_lufs: Option<f64>, is_virtual_output: bool) -> f32 {
         if !self.is_enabled() {
             return 1.0;
@@ -1293,7 +1266,6 @@ fn audio_thread_main(
 
     while let Ok(cmd) = rx.recv() {
         playing.retain(|_, ps| !ps.is_finished());
-        // Clean registry
         {
             let mut reg = positions_registry.lock().unwrap();
             reg.retain(|_, snap| !snap.is_finished_flag.load(Ordering::Relaxed));
@@ -1450,8 +1422,7 @@ fn build_playback_positions(registry: &HashMap<String, PlaybackSnapshot>) -> Vec
         })
         .collect();
 
-    // The app only supports one logical "current" playback. Keep unfinished
-    // entries ahead of finished ones and prefer the newest playback first.
+    // Keep unfinished playback ahead of finished entries, newest first.
     ordered.sort_by(|(left_order, left), (right_order, right)| {
         left.finished
             .cmp(&right.finished)
@@ -1702,8 +1673,7 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
     let mut virtual_buffer: Vec<i16> = Vec::with_capacity(4096);
     let mut is_paused = false;
 
-    // Position tracking follows the requested seek timeline and then advances
-    // from output sample counts.
+    // Track the requested seek first, then advance by written samples.
     let channels = source.channels() as u64;
     let rate = source.sample_rate() as u64;
     if channels == 0 || rate == 0 {
@@ -2033,7 +2003,7 @@ fn play_to_pulse_sinks_dynamic(context: PlaybackThreadContext) -> Result<(), Str
         fallback_samples_written =
             fallback_samples_written.saturating_add(samples_decoded_this_cycle);
 
-        // Sample-based position against fixed output rate.
+        // Update position from written samples.
         let ms = (fallback_samples_written * 1000) / (rate * channels);
         context.position_ms.store(ms, Ordering::SeqCst);
 
@@ -2189,7 +2159,7 @@ mod tests {
         tracker.mark_tail_flushed();
         assert!(!tracker.should_flush_tail());
 
-        // Repeated EOF notifications must not re-arm tail flushing.
+        // EOF should only flush the tail once.
         assert!(!tracker.mark_source_exhausted());
         assert!(!tracker.should_flush_tail());
     }

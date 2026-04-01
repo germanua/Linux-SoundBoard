@@ -122,7 +122,6 @@ pub(super) fn wait_for_missing_loudness_analysis_to_finish(timeout: std::time::D
     false
 }
 
-#[allow(dead_code)]
 pub fn list_sounds(config: Arc<Mutex<Config>>) -> Vec<Sound> {
     config
         .lock()
@@ -327,11 +326,9 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
 
     log::info!("Analyzing loudness for {} sounds", sounds_to_analyze.len());
 
-    // Reset cancellation flag before analysis
     loudness::reset_loudness_analysis_cancelled();
 
     let analyze_entry = |(id, path): &(String, String)| -> Option<(String, f64)> {
-        // Check for cancellation
         if loudness::is_loudness_analysis_cancelled() {
             return None;
         }
@@ -427,12 +424,11 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
     Ok(analyzed_count)
 }
 
-/// Cancel ongoing loudness analysis
+/// Cancel loudness backfill.
 pub fn cancel_loudness_analysis() {
     loudness::cancel_loudness_analysis();
 }
 
-#[allow(dead_code)]
 pub fn analyze_sound_loudness(
     id: String,
     config: Arc<Mutex<Config>>,
@@ -469,7 +465,6 @@ pub fn analyze_sound_loudness(
     Ok(lufs)
 }
 
-#[allow(dead_code)]
 pub fn stop_sound(id: String, player: Arc<Mutex<AudioPlayer>>) -> Result<(), String> {
     player
         .lock()
@@ -547,7 +542,6 @@ pub fn resume_sound(id: String, player: Arc<Mutex<AudioPlayer>>) {
     let _ = player.lock().map(|p| p.resume(&id));
 }
 
-#[allow(dead_code)]
 pub fn get_audio_status(player: Arc<Mutex<AudioPlayer>>) -> AudioStatus {
     let player = match player.lock() {
         Ok(p) => p,
@@ -580,7 +574,6 @@ pub fn get_playback_positions(player: Arc<Mutex<AudioPlayer>>) -> Vec<PlaybackPo
 }
 
 #[derive(serde::Serialize)]
-#[allow(dead_code)]
 pub struct AudioStatus {
     pub playing: Vec<String>,
     pub positions: HashMap<String, u64>,

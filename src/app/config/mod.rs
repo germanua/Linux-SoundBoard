@@ -1,5 +1,3 @@
-//! Configuration management module.
-
 mod defaults;
 pub mod migration;
 pub use migration::{MigrationError, CURRENT_SCHEMA_VERSION};

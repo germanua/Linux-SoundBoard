@@ -1,5 +1,3 @@
-//! Common test utilities and mocks.
-
 pub mod audio_mock;
 pub mod config_fixture;
 pub mod temp_dir;

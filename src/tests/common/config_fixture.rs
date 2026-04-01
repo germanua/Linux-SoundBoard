@@ -1,8 +1,5 @@
-//! Config builder for test fixtures.
-
 use std::sync::{Arc, Mutex};
 
-/// Builder for creating test Config instances
 pub struct ConfigBuilder {
     config: linux_soundboard::config::Config,
 }

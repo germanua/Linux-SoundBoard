@@ -15,7 +15,6 @@ pub struct MemorySnapshot {
     pub rss_file_kb: Option<u64>,
     pub rss_shmem_kb: Option<u64>,
     pub threads: Option<u64>,
-    // smaps_rollup fields
     pub pss_kb: Option<u64>,
     pub private_clean_kb: Option<u64>,
     pub private_dirty_kb: Option<u64>,
@@ -280,7 +279,6 @@ pub fn read_memory_snapshot() -> Option<MemorySnapshot> {
         }
     }
 
-    // Attempt to augment with smaps_rollup data (gracefully handle absence)
     if let Some(smaps) = read_smaps_rollup() {
         snapshot.pss_kb = smaps.pss_kb;
         snapshot.private_clean_kb = smaps.private_clean_kb;
@@ -320,7 +318,6 @@ pub fn log_memory_snapshot(tag: &str) {
 pub fn estimate_config_bytes(config: &crate::config::Config) -> usize {
     let mut total = 0;
 
-    // Sound string bytes
     for sound in &config.sounds {
         total += sound.id.len();
         total += sound.name.len();
@@ -333,7 +330,6 @@ pub fn estimate_config_bytes(config: &crate::config::Config) -> usize {
         }
     }
 
-    // Tab string bytes
     for tab in &config.tabs {
         total += tab.id.len();
         total += tab.name.len();
@@ -342,17 +338,14 @@ pub fn estimate_config_bytes(config: &crate::config::Config) -> usize {
         }
     }
 
-    // Folder string bytes
     for folder in &config.sound_folders {
         total += folder.len();
     }
 
-    // Settings string bytes (approximate)
     if let Some(ref mic_source) = config.settings.mic_source {
         total += mic_source.len();
     }
 
-    // Control hotkeys
     let hotkeys = &config.settings.control_hotkeys;
     if let Some(ref hk) = hotkeys.play_pause {
         total += hk.len();
@@ -380,8 +373,6 @@ pub fn estimate_config_bytes(config: &crate::config::Config) -> usize {
 }
 
 pub fn estimate_ui_bytes(config: &crate::config::Config) -> usize {
-    // Rough estimate: each sound row might have ~200 bytes of UI overhead
-    // each tab might have ~100 bytes
     let sound_rows = config.sounds.len() * 200;
     let tab_rows = config.tabs.len() * 100;
     sound_rows + tab_rows
@@ -658,7 +649,6 @@ pub fn write_memory_report() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(&output_path, json)?;
     info!("Memory report written to: {}", output_path);
 
-    // Also write a text summary
     let text_path = output_path.replace(".json", ".txt");
     let mut text = String::new();
     text.push_str("Linux Soundboard Memory Report\n");
@@ -929,7 +919,6 @@ mod tests {
         let bytes = estimate_config_bytes(&config);
         assert!(bytes > 0);
 
-        // Should include at least the sound name and path
         assert!(bytes >= "Test".len() + "/path/test.wav".len());
     }
 

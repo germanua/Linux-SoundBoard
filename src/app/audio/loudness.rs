@@ -1,8 +1,4 @@
-//! EBU R128 loudness analysis for auto-gain normalization
-//!
-//! Analyzes audio files to measure integrated loudness (LUFS) using the EBU R128 standard.
-//! The measured loudness is used to compute a gain factor that normalizes playback volume
-//! so all sounds are perceived at roughly the same level.
+//! EBU R128 loudness analysis for auto-gain.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -18,31 +14,27 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
-/// Maximum gain factor allowed (~+12 dB) to prevent extreme amplification of very quiet files.
+/// Cap boost so very quiet files do not explode in volume.
 const MAX_GAIN_FACTOR: f32 = 4.0;
 
-/// Minimum gain factor to avoid completely silencing a sound.
+/// Keep a floor so gain never goes to zero.
 const MIN_GAIN_FACTOR: f32 = 0.01;
 
-/// Minimum duration per smart-preview window.
+/// Smallest window we use for smart previews.
 const MIN_PREVIEW_WINDOW_MS: u64 = 500;
-/// If preview windows disagree by this amount, prefer louder segments.
+/// Bias toward the louder window when previews disagree a lot.
 const PREVIEW_SPREAD_LOUD_BIAS_LU: f64 = 5.0;
 
-/// Atomic flag for cancelling loudness analysis
 static ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
 
-/// Cancel any ongoing loudness analysis
 pub fn cancel_loudness_analysis() {
     ANALYSIS_CANCELLED.store(true, Ordering::SeqCst);
 }
 
-/// Check if loudness analysis was cancelled
 pub fn is_loudness_analysis_cancelled() -> bool {
     ANALYSIS_CANCELLED.load(Ordering::SeqCst)
 }
 
-/// Reset cancellation flag before starting new analysis
 pub fn reset_loudness_analysis_cancelled() {
     ANALYSIS_CANCELLED.store(false, Ordering::SeqCst);
 }
@@ -175,7 +167,6 @@ fn analyze_context(
         .map(|path| format!(" ({})", path.display()))
         .unwrap_or_default();
 
-    // Decode entire file and feed samples to the analyzer.
     let mut total_frames: u64 = 0;
     loop {
         if let Some(limit) = max_frames {
@@ -184,7 +175,6 @@ fn analyze_context(
             }
         }
 
-        // Check for cancellation periodically (every 10000 frames)
         if total_frames % 10000 == 0 && is_loudness_analysis_cancelled() {
             return Err("Analysis cancelled".to_string());
         }
@@ -194,7 +184,7 @@ fn analyze_context(
             Err(symphonia::core::errors::Error::IoError(ref e))
                 if e.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
-                break; // End of stream
+                break;
             }
             Err(e) => {
                 warn!(
@@ -280,11 +270,6 @@ fn analyze_context(
     Ok(loudness)
 }
 
-/// Analyze the integrated loudness of an audio file (in-memory bytes).
-///
-/// Returns the integrated loudness in LUFS (Loudness Units relative to Full Scale).
-/// Typical values: -70 (very quiet) to 0 (maximum).
-#[allow(dead_code)]
 pub fn analyze_loudness(file_data: &[u8]) -> Result<f64, String> {
     let cursor = Cursor::new(file_data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
@@ -293,18 +278,13 @@ pub fn analyze_loudness(file_data: &[u8]) -> Result<f64, String> {
     analyze_context(context, None, None)
 }
 
-/// Analyze integrated loudness of an audio file by path (streaming from disk).
-///
-/// This avoids loading the entire file into memory (unlike [`analyze_loudness`]).
+/// Analyze loudness from a file on disk.
 pub fn analyze_loudness_path(path: &Path) -> Result<f64, String> {
     let context = build_decoder_context_for_path(path, "analysis")?;
     analyze_context(context, Some(path), None)
 }
 
-/// Analyze loudness using only the first `preview_ms` milliseconds.
-///
-/// This is intentionally approximate but much faster than decoding a whole file,
-/// making it suitable for import/refresh fast paths.
+/// Analyze just the start of a file for faster import-time estimates.
 pub fn analyze_loudness_path_preview(path: &Path, preview_ms: u32) -> Result<f64, String> {
     let context = build_decoder_context_for_path(path, "preview")?;
     let preview_frames = ((context.rate as u64).saturating_mul(preview_ms as u64) / 1000).max(1);
@@ -330,8 +310,7 @@ fn combine_smart_preview_lufs(values: &[f64]) -> f64 {
     }
     let mean = sum / finite_values.len() as f64;
 
-    // Tracks with quiet intros and loud drops often show a large spread.
-    // In those cases prefer the louder estimate to avoid over-boosting later sections.
+    // Quiet intros can skew preview windows; prefer the louder read when spread is wide.
     if max_lufs - min_lufs >= PREVIEW_SPREAD_LOUD_BIAS_LU {
         max_lufs
     } else {
@@ -339,10 +318,7 @@ fn combine_smart_preview_lufs(values: &[f64]) -> f64 {
     }
 }
 
-/// Analyze loudness from multiple short windows across the track.
-///
-/// This keeps the same rough decode budget as single-window preview while reducing
-/// bias from quiet intros (e.g., tracks that get much louder later).
+/// Analyze multiple windows to reduce quiet-intro bias.
 pub fn analyze_loudness_path_preview_smart(
     path: &Path,
     total_preview_ms: u32,
@@ -352,7 +328,6 @@ pub fn analyze_loudness_path_preview_smart(
     let mut start_offsets = vec![0_u64];
 
     if let Some(duration_ms) = duration_hint_ms {
-        // Use more than one window only when the track is long enough to matter.
         if duration_ms >= 8_000 {
             start_offsets.push(duration_ms.saturating_mul(55) / 100);
         }
@@ -441,17 +416,8 @@ pub fn analyze_loudness_path_preview_smart(
     Ok(combined)
 }
 
-/// Compute the linear gain factor to normalize a sound from its measured loudness
-/// to the target loudness level.
-///
-/// - `sound_lufs`: The measured integrated loudness of the sound (in LUFS).
-/// - `target_lufs`: The desired target loudness (in LUFS, e.g. -14.0).
-///
-/// Returns a linear gain factor (1.0 = no change, >1.0 = boost, <1.0 = attenuate).
-/// The result is clamped to [`MIN_GAIN_FACTOR`, `MAX_GAIN_FACTOR`] to prevent
-/// extreme amplification or silence.
+/// Convert measured loudness into a linear gain factor.
 pub fn compute_gain_factor(sound_lufs: f64, target_lufs: f64) -> f32 {
-    // Handle edge cases: if loudness is -inf or NaN (silence, corrupt file), don't adjust
     if !sound_lufs.is_finite() {
         return 1.0;
     }
@@ -474,28 +440,24 @@ mod tests {
 
     #[test]
     fn test_gain_factor_boost() {
-        // Sound is 6 dB quieter than target -> should boost by ~2x
         let gain = compute_gain_factor(-20.0, -14.0);
         assert!((gain - 2.0).abs() < 0.05);
     }
 
     #[test]
     fn test_gain_factor_attenuate() {
-        // Sound is 6 dB louder than target -> should attenuate by ~0.5x
         let gain = compute_gain_factor(-8.0, -14.0);
         assert!((gain - 0.5).abs() < 0.05);
     }
 
     #[test]
     fn test_gain_factor_capped() {
-        // Very quiet sound should be capped at MAX_GAIN_FACTOR
         let gain = compute_gain_factor(-50.0, -14.0);
         assert_eq!(gain, MAX_GAIN_FACTOR);
     }
 
     #[test]
     fn test_gain_factor_infinite_lufs() {
-        // -inf LUFS (silence) should return 1.0 (no adjustment)
         let gain = compute_gain_factor(f64::NEG_INFINITY, -14.0);
         assert_eq!(gain, 1.0);
     }
@@ -514,7 +476,6 @@ mod tests {
 
     #[test]
     fn test_cancel_loudness_analysis() {
-        // Test that cancellation flag works
         reset_loudness_analysis_cancelled();
         assert!(!is_loudness_analysis_cancelled());
 

@@ -1,17 +1,12 @@
-//! Configuration initialization phase.
-
 use super::error::InitError;
 
-/// Initialize configuration from disk or defaults.
 pub fn init_config() -> Result<crate::config::Config, InitError> {
     crate::config::Config::load().map_err(|e| InitError::Config(e.to_string()))
 }
 
-/// Validate configuration after loading.
 pub fn validate_config(config: &crate::config::Config) -> Vec<String> {
     let mut warnings = Vec::new();
 
-    // Check for sounds with missing files
     for sound in &config.sounds {
         if !std::path::Path::new(&sound.path).exists() {
             warnings.push(format!(
@@ -21,7 +16,6 @@ pub fn validate_config(config: &crate::config::Config) -> Vec<String> {
         }
     }
 
-    // Check for duplicate hotkeys
     let mut hotkey_set = std::collections::HashSet::new();
     for sound in &config.sounds {
         if let Some(ref hotkey) = sound.hotkey {

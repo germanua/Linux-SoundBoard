@@ -1,5 +1,3 @@
-//! Shared helpers for popover menu presentation.
-
 use gtk4::prelude::*;
 
 pub fn show_popover_menu(
@@ -20,7 +18,7 @@ pub fn show_popover_menu(
     popover.set_pointing_to(Some(&gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
 
     popover.connect_closed(move |popover| {
-        // Defer unparent so menu item activation has completed.
+        // Let activation finish before unparenting.
         let popover = popover.clone();
         glib::idle_add_local_once(move || popover.unparent());
     });

@@ -1,5 +1,3 @@
-//! Tabs sidebar — GtkListBox showing General + user tabs.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -19,7 +17,6 @@ use super::icons;
 use super::menu;
 use super::tab_dnd;
 
-/// Callback type for tab selection.
 pub type TabSelectedCallback = Box<dyn Fn(String) + 'static>;
 pub type TabMembershipChangedCallback = Box<dyn Fn() + 'static>;
 
@@ -48,8 +45,7 @@ fn resolve_sidebar_drop_intent(source_tab_id: &str, target_tab_id: &str) -> Side
 
 fn drag_action_for_intent(intent: SidebarDropIntent) -> gtk4::gdk::DragAction {
     match intent {
-        // Keep the cursor visually valid over any real tab row.
-        // Same-tab drops are still rejected in the drop handler.
+        // GTK wants a concrete action even for no-op drops.
         SidebarDropIntent::Noop => gtk4::gdk::DragAction::COPY,
         SidebarDropIntent::AddToTarget
         | SidebarDropIntent::RemoveFromSource
@@ -57,7 +53,6 @@ fn drag_action_for_intent(intent: SidebarDropIntent) -> gtk4::gdk::DragAction {
     }
 }
 
-/// The tabs sidebar widget.
 pub struct TabsSidebar {
     inner: Arc<TabsInner>,
 }
@@ -155,34 +150,26 @@ impl TabsSidebar {
         Self { inner }
     }
 
-    /// Return the root widget to embed in a parent container.
     pub fn widget(&self) -> &Widget {
         self.inner.scroll.upcast_ref()
     }
 
-    /// Register a callback fired when the user selects a tab.
     pub fn connect_tab_selected<F: Fn(String) + 'static>(&self, f: F) {
         *self.inner.on_tab_selected.borrow_mut() = Some(Box::new(f));
     }
 
-    /// Register callback fired when tab membership changes via drag & drop.
     pub fn connect_tab_membership_changed<F: Fn() + 'static>(&self, f: F) {
         *self.inner.on_tab_membership_changed.borrow_mut() = Some(Box::new(f));
     }
 
-    /// Reload the tab list from config, keeping the current selection.
-    #[allow(dead_code)]
     pub fn reload_tabs(&self) {
         self.inner.reload_tabs_and_emit(None);
     }
 
-    /// Reload and select a specific tab by ID.
-    #[allow(dead_code)]
     pub fn reload_tabs_select(&self, tab_id: &str) {
         self.inner.reload_tabs_and_emit(Some(tab_id));
     }
 
-    /// Set the toast sender for notifications
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
         *self.inner.toast_sender.lock().unwrap() = Some(sender);
     }

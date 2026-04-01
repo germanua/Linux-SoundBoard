@@ -74,7 +74,6 @@ fn get_pipewire_version(runner: &impl CommandRunner) -> Option<String> {
     None
 }
 
-#[allow(dead_code)]
 pub fn get_setup_instructions() -> String {
     r#"## PipeWire Setup Instructions
 

@@ -1,16 +1,3 @@
-//! Application bootstrap and startup wiring.
-//!
-//! TODO: This module should be refactored to use the init/ subsystem.
-//! See PLANS/ARCH_BOOTSTRAP_REFACTOR_PLAN.md for details.
-//!
-//! Target architecture:
-//! - init/mod.rs: InitOrchestrator, InitPhase
-//! - init/config.rs: Configuration initialization
-//! - init/audio.rs: Audio player initialization
-//! - init/hotkeys.rs: Hotkey manager setup
-//! - init/ui.rs: UI component wiring
-//! - init/error.rs: InitError with phase context
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
@@ -23,8 +10,8 @@ use libadwaita as adw;
 use log::{info, warn};
 
 use crate::app_meta::{
-    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FORCE_X11_ENV_VAR, HOTKEY_POLL_INTERVAL_MS,
-    FALLBACK_RENDERER, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
+    APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FALLBACK_RENDERER, FORCE_X11_ENV_VAR,
+    HOTKEY_POLL_INTERVAL_MS, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};

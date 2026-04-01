@@ -18,7 +18,6 @@ use super::shared::{
     probe_duration_ms, with_config_mut, with_saved_config,
 };
 
-#[allow(dead_code)]
 pub fn add_sound(name: String, path: String, config: Arc<Mutex<Config>>) -> Result<Sound, String> {
     if !Path::new(&path).exists() {
         return Err("File does not exist".to_string());
@@ -28,7 +27,6 @@ pub fn add_sound(name: String, path: String, config: Arc<Mutex<Config>>) -> Resu
     }
 
     {
-        // Handle poison gracefully
         let cfg = config
             .lock()
             .map_err(|e| format!("Config lock poisoned: {}", e))?;
@@ -259,7 +257,6 @@ pub fn refresh_sounds(
     }
 
     if !work.removed_ids.is_empty() {
-        // Handle poison gracefully
         if let Ok(mut manager) = hotkeys.lock() {
             let _ = manager.unregister_hotkeys_blocking(&work.removed_ids);
         } else {
@@ -294,7 +291,6 @@ pub fn refresh_sounds(
     Ok(sounds)
 }
 
-#[allow(dead_code)]
 pub fn import_dropped_files(
     paths: Vec<String>,
     config: Arc<Mutex<Config>>,
@@ -429,7 +425,6 @@ pub fn import_files_to_tab(
         sound_ids.push(sound.id.clone());
     }
 
-    // If a specific tab is provided, add sounds to it
     if let Some(tab_id) = tab_id {
         cfg.add_sounds_to_tab(&tab_id, sound_ids);
     }
@@ -502,7 +497,6 @@ pub fn validate_sources_for_startup(
     validate_sounds_chunked_with_report(sounds, STARTUP_VALIDATION_CHUNK_SIZE)
 }
 
-#[allow(dead_code)]
 pub fn validate_single_source(id: String, config: Arc<Mutex<Config>>) -> Result<bool, String> {
     let config = config
         .lock()
@@ -549,5 +543,4 @@ pub fn update_sound_source(
     }
 }
 
-#[allow(dead_code)]
 fn _keep_soundtab_in_module_tree(_: &SoundTab) {}

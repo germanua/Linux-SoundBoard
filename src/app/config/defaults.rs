@@ -1,5 +1,3 @@
-//! Configuration defaults shared by serde and runtime initialization.
-
 use crate::app_meta::CONFIG_DIR_NAME;
 
 pub const CONFIG_FILE_NAME: &str = "config.json";

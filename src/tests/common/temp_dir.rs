@@ -1,9 +1,6 @@
-//! Temporary directory management for tests.
-
 use std::fs;
 use std::path::PathBuf;
 
-/// Temporary config directory for testing
 pub struct TempConfigDir {
     path: PathBuf,
 }

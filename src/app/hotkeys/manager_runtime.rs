@@ -172,16 +172,13 @@ impl HotkeyManager {
         }
     }
 
-    /// Check if the hotkey system is healthy
-    /// Returns Ok if the backend is running, Err with details otherwise
+    /// Check that the active backend is healthy.
     pub fn is_healthy(&self) -> Result<(), String> {
         match &self.backend {
             Some(backend) => {
-                // Try to downcast to SwhkdBackend to use its specific health check
                 if let Some(swhkd) = (**backend).as_any().downcast_ref::<SwhkdBackend>() {
                     swhkd.is_healthy()
                 } else {
-                    // For other backends, just check if backend exists
                     Ok(())
                 }
             }
@@ -192,7 +189,7 @@ impl HotkeyManager {
         }
     }
 
-    /// Get a status message for the UI
+    /// Format a status message for the UI.
     pub fn status_message(&self) -> String {
         if self.deferred_start {
             return "Hotkeys: Idle (no bindings)".to_string();

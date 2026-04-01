@@ -1,6 +1,4 @@
-//! Comprehensive tests for command functions - simulating UI interactions.
-//!
-//! These tests verify that all button clicks and UI actions don't crash.
+//! Command tests.
 
 use crate::audio::player::AudioPlayer;
 use crate::commands;
@@ -11,17 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-/// Helper to create a test config with sounds
 fn create_test_config() -> Config {
     Config::default()
 }
 
-/// Helper to create Arc<Mutex<Config>>
 fn create_test_config_state() -> Arc<Mutex<Config>> {
     Arc::new(Mutex::new(Config::default()))
 }
 
-/// Helper to create a mock HotkeyManager for testing
 fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     use std::sync::mpsc;
     let (sender, _) = mpsc::channel();
@@ -29,7 +24,6 @@ fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(manager))
 }
 
-/// Helper to create AudioPlayer (will fail without PulseAudio, but tests should handle gracefully)
 fn create_test_audio_player() -> Arc<Mutex<AudioPlayer>> {
     Arc::new(Mutex::new(AudioPlayer::new_with_initial_volumes(0.8, 1.0)))
 }
@@ -95,10 +89,6 @@ fn cleanup_test_audio_path(path: &Path) {
         let _ = fs::remove_dir_all(parent);
     }
 }
-
-// ============================================================================
-// Playback Command Tests
-// ============================================================================
 
 #[test]
 fn test_list_sounds_returns_empty_when_no_sounds() {
@@ -166,10 +156,6 @@ fn test_set_skip_delete_confirm() {
     assert!(cfg.settings.skip_delete_confirm);
 }
 
-// ============================================================================
-// Library Command Tests - These are the crashing operations!
-// ============================================================================
-
 #[test]
 fn test_add_sound_file_not_exist() {
     let config = create_test_config_state();
@@ -202,9 +188,7 @@ fn test_add_sound_populates_duration_metadata() {
 #[test]
 fn test_add_sound_folder_valid_path() {
     let config = create_test_config_state();
-    // Use a path that might exist - /tmp or current dir
     let result = commands::add_sound_folder("/tmp".to_string(), config.clone());
-    // Should succeed even if no audio files found
     assert!(result.is_ok());
 
     let cfg = config.lock().unwrap();
@@ -296,7 +280,6 @@ fn test_refresh_sounds_empty_folders() {
     let config = create_test_config_state();
     let hotkeys = create_mock_hotkey_manager();
 
-    // Should not crash even with no folders configured
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         commands::refresh_sounds(config.clone(), hotkeys)
     }));
@@ -309,7 +292,7 @@ fn test_refresh_sounds_empty_folders() {
 #[test]
 fn test_refresh_sounds_with_folder() {
     let mut config = create_test_config();
-    config.sound_folders.push("/tmp".to_string()); // /tmp exists but may have no audio files
+    config.sound_folders.push("/tmp".to_string());
     let config = Arc::new(Mutex::new(config));
     let hotkeys = create_mock_hotkey_manager();
 
@@ -409,10 +392,6 @@ fn test_validate_all_sources_empty() {
     assert!(result.unwrap().is_empty());
 }
 
-// ============================================================================
-// Settings Command Tests
-// ============================================================================
-
 #[test]
 fn test_set_local_volume() {
     let config = create_test_config_state();
@@ -430,7 +409,6 @@ fn test_set_local_volume_clamp() {
     let config = create_test_config_state();
     let player = create_test_audio_player();
 
-    // Should clamp to 100 max
     let result = commands::set_local_volume(150, config.clone(), player);
     assert!(result.is_ok());
 
@@ -445,7 +423,7 @@ fn test_toggle_local_mute() {
 
     let result = commands::toggle_local_mute(config.clone(), player);
     assert!(result.is_ok());
-    assert!(result.unwrap()); // Should be muted now
+    assert!(result.unwrap());
 
     let cfg = config.lock().unwrap();
     assert!(cfg.settings.local_mute);
@@ -456,12 +434,10 @@ fn test_toggle_local_mute_again() {
     let config = create_test_config_state();
     let player = create_test_audio_player();
 
-    // First toggle - mute
     commands::toggle_local_mute(config.clone(), player.clone()).unwrap();
-    // Second toggle - unmute
     let result = commands::toggle_local_mute(config, player);
     assert!(result.is_ok());
-    assert!(!result.unwrap()); // Should be unmuted now
+    assert!(!result.unwrap());
 }
 
 #[test]
@@ -546,10 +522,6 @@ fn test_save_config() {
     let result = commands::save_config(config.clone());
     assert!(result.is_ok());
 }
-
-// ============================================================================
-// Tabs Command Tests
-// ============================================================================
 
 #[test]
 fn test_create_tab() {
@@ -670,16 +642,11 @@ fn test_remove_sound_from_tab() {
     assert!(cfg.tabs[0].sound_ids.is_empty());
 }
 
-// ============================================================================
-// Hotkeys Command Tests
-// ============================================================================
-
 #[test]
 fn test_set_hotkey_valid() {
     let config = create_test_config_state();
     let hotkeys = create_mock_hotkey_manager();
 
-    // Add a sound first
     let mut config_guard = config.lock().unwrap();
     config_guard
         .sounds
@@ -693,15 +660,12 @@ fn test_set_hotkey_valid() {
         config.clone(),
         hotkeys,
     );
-    // May fail if no hotkey backend available, but shouldn't crash
-    // Result depends on system state
     match result {
         Ok(_) => {
             let cfg = config.lock().unwrap();
             assert!(cfg.sounds[0].hotkey.is_some());
         }
         Err(e) => {
-            // Expected if no hotkey backend available
             println!(
                 "Hotkey registration failed (expected without X11/swhkd): {}",
                 e
@@ -715,7 +679,6 @@ fn test_set_hotkey_clear() {
     let config = create_test_config_state();
     let hotkeys = create_mock_hotkey_manager();
 
-    // Add a sound with hotkey
     let mut config_guard = config.lock().unwrap();
     let mut sound = Sound::new("Test".to_string(), "/tmp/test.mp3".to_string());
     sound.hotkey = Some("Ctrl+1".to_string());
@@ -734,10 +697,6 @@ fn test_set_hotkey_clear() {
         }
     }
 }
-
-// ============================================================================
-// Auto-Gain Command Tests
-// ============================================================================
 
 #[test]
 fn test_set_auto_gain_enabled() {
@@ -780,7 +739,6 @@ fn test_set_auto_gain_target_clamp() {
     let config = create_test_config_state();
     let player = create_test_audio_player();
 
-    // Should clamp to valid range [-24, 0]
     let result = commands::set_auto_gain_target(-30.0, config.clone(), player);
     assert!(result.is_ok());
 
@@ -876,14 +834,7 @@ fn test_set_auto_gain_dynamic_settings_clamp() {
     let config = create_test_config_state();
     let player = create_test_audio_player();
 
-    // Values outside valid ranges should be clamped
-    let result = commands::set_auto_gain_dynamic_settings(
-        500,  // lookahead > 200
-        100,  // attack > 50
-        2000, // release > 1000
-        config.clone(),
-        player,
-    );
+    let result = commands::set_auto_gain_dynamic_settings(500, 100, 2000, config.clone(), player);
     assert!(result.is_ok());
 
     let cfg = config.lock().unwrap();
@@ -892,28 +843,18 @@ fn test_set_auto_gain_dynamic_settings_clamp() {
     assert_eq!(cfg.settings.auto_gain_release_ms, 1000);
 }
 
-// ============================================================================
-// Playback Position Tests
-// ============================================================================
-
 #[test]
 fn test_get_playback_positions_empty() {
     let player = create_test_audio_player();
     let positions = commands::get_playback_positions(player);
-    // Should return empty vec, not crash
     assert!(positions.is_empty());
 }
 
 #[test]
 fn test_stop_all() {
     let player = create_test_audio_player();
-    // Should not crash
     commands::stop_all(player);
 }
-
-// ============================================================================
-// Shared Helper Function Tests
-// ============================================================================
 
 #[test]
 fn test_parse_theme() {
@@ -961,7 +902,6 @@ fn test_validate_play_mode() {
 #[test]
 fn test_bounded_audio_analysis_threads() {
     let threads = commands::shared::bounded_audio_analysis_threads();
-    // Should return at least 1
     assert!(threads >= 1);
 }
 
@@ -971,7 +911,6 @@ fn test_default_sound_import_dir() {
         None,
         Some(std::path::PathBuf::from("/home/test")),
     );
-    // Should end with soundboard-imports
     assert!(dir.to_string_lossy().ends_with("soundboard-imports"));
 }
 

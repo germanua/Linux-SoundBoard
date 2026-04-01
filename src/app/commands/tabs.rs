@@ -23,13 +23,9 @@ fn resolve_tab_drop_operation(source_tab_id: &str, target_tab_id: &str) -> TabDr
     let target_is_general = target_tab_id == GENERAL_TAB_ID;
 
     match (source_is_general, target_is_general) {
-        // Both general, or same tab (handled above) → nothing to do
         (true, true) => TabDropOperation::Noop,
-        // General → Custom: add sound to custom tab; General always shows all sounds
         (true, false) => TabDropOperation::AddToTarget,
-        // Custom → General: remove from source custom tab
         (false, true) => TabDropOperation::RemoveFromSource,
-        // Custom → Custom: move sound between tabs
         (false, false) => TabDropOperation::MoveBetweenCustomTabs,
     }
 }

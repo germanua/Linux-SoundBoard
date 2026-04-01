@@ -1,5 +1,3 @@
-//! Settings dialog — adw::PreferencesDialog with General + Control Hotkeys pages.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
@@ -25,7 +23,6 @@ fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
     }
 }
 
-/// Open the settings dialog as a child of `parent`.
 pub fn build_settings_dialog(
     parent: &Window,
     state: Arc<AppState>,
@@ -50,7 +47,6 @@ pub fn build_settings_dialog(
     prefs
 }
 
-/// Open the settings dialog as a child of `parent`.
 pub fn show_settings(
     parent: &Window,
     state: Arc<AppState>,
@@ -60,10 +56,6 @@ pub fn show_settings(
     let prefs = build_settings_dialog(parent, state, on_library_changed, on_list_style_changed);
     prefs.present(Some(parent));
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// General Page
-// ──────────────────────────────────────────────────────────────────────────────
 
 fn build_general_page(
     state: Arc<AppState>,
@@ -76,7 +68,6 @@ fn build_general_page(
         .icon_name(icons::name(icons::SETTINGS))
         .build();
 
-    // ── Sound Folders group ───────────────────────────────────────────
     let folders_group = adw::PreferencesGroup::builder()
         .title("Sound Folders")
         .description("Folders scanned for audio files on startup")
@@ -158,16 +149,13 @@ fn build_general_page(
     );
     page.add(&folders_group);
 
-    // ── Playback group ────────────────────────────────────────────────
     let playback_group = adw::PreferencesGroup::builder().title("Playback").build();
 
-    // ── Auto-Gain Normalization group (shown only when auto-gain is on) ──
     let auto_gain_group = adw::PreferencesGroup::builder()
         .title("Auto-Gain Normalization")
         .description("Fine-tune loudness normalization")
         .build();
 
-    // Dynamic settings rows (shown only when mode = "dynamic")
     let lookahead_row = adw::SpinRow::with_range(5.0, 200.0, 1.0);
     let attack_row = adw::SpinRow::with_range(1.0, 50.0, 1.0);
     let release_row = adw::SpinRow::with_range(50.0, 1000.0, 10.0);
@@ -197,7 +185,6 @@ fn build_general_page(
             )
         };
 
-        // Auto-gain toggle
         let auto_gain_row = adw::SwitchRow::builder()
             .title("Auto-Gain Normalization")
             .subtitle("Normalize loudness across all sounds")
@@ -219,7 +206,6 @@ fn build_general_page(
         }
         playback_group.add(&auto_gain_row);
 
-        // Skip delete confirmation
         let skip_del_row = adw::SwitchRow::builder()
             .title("Never Ask to Confirm Delete")
             .subtitle("Skip the confirmation dialog when deleting sounds")
@@ -231,9 +217,6 @@ fn build_general_page(
         });
         playback_group.add(&skip_del_row);
 
-        // ── Auto-gain group contents ─────────────────────────────────
-
-        // (a) Target Volume
         let target_row = adw::SpinRow::with_range(-24.0, 0.0, 0.5);
         target_row.set_title("Target Volume (LUFS)");
         target_row.set_subtitle("Loudness target applied to the selected output(s)");
@@ -250,7 +233,6 @@ fn build_general_page(
         }
         auto_gain_group.add(&target_row);
 
-        // (b) Auto-gain Mode
         let mode_row = adw::ComboRow::builder()
             .title("Auto-Gain Mode")
             .subtitle("How loudness correction is applied")
@@ -289,7 +271,6 @@ fn build_general_page(
         }
         auto_gain_group.add(&mode_row);
 
-        // (c) Apply To
         let apply_to_row = adw::ComboRow::builder()
             .title("Apply To")
             .subtitle("Auto-gain only affects the selected output path")
@@ -318,7 +299,6 @@ fn build_general_page(
         }
         auto_gain_group.add(&apply_to_row);
 
-        // (d) Dynamic settings
         lookahead_row.set_title("Look-ahead (ms)");
         lookahead_row.set_subtitle("Anticipation window for gain changes");
         lookahead_row.set_value(lookahead_ms as f64);
@@ -398,7 +378,6 @@ fn build_general_page(
         auto_gain_group.add(&attack_row);
         auto_gain_group.add(&release_row);
 
-        // (e) Analyze Loudness button
         let analyze_row = adw::ActionRow::builder()
             .title("Analyze All Sounds")
             .subtitle("Scan sounds that still lack loudness data")
@@ -477,7 +456,6 @@ fn build_general_page(
     page.add(&playback_group);
     page.add(&auto_gain_group);
 
-    // ── Microphone Source group ───────────────────────────────────────
     let mic_group = adw::PreferencesGroup::builder()
         .title("Microphone Source")
         .description("Select which microphone to use for virtual mic passthrough")
@@ -500,7 +478,6 @@ fn build_general_page(
         let model = gtk4::StringList::new(&items);
         mic_row.set_model(Some(&model));
 
-        // Select the current mic source
         let selected_idx = match &current_mic {
             Some(src) => source_names
                 .iter()
@@ -528,7 +505,6 @@ fn build_general_page(
     }
     page.add(&mic_group);
 
-    // ── Theme group ───────────────────────────────────────────────────
     let theme_group = adw::PreferencesGroup::builder().title("Appearance").build();
 
     {
@@ -537,7 +513,6 @@ fn build_general_page(
             cfg.settings.theme
         };
 
-        // Dark theme swatch colors: bg, surface, accent, text
         let dark_colors = ["#222831", "#393E46", "#948979", "#DFD0B8"];
         let light_colors = ["#f7f4ef", "#fffdfb", "#A88D52", "#332B1F"];
 
@@ -617,7 +592,6 @@ fn build_general_page(
         }
         light_row.add_suffix(&light_swatches);
 
-        // Dark row click
         {
             let state2 = Arc::clone(&state);
             let dr = dark_row.downgrade();
@@ -634,7 +608,6 @@ fn build_general_page(
             });
         }
 
-        // Light row click
         {
             let state2 = Arc::clone(&state);
             let dr = dark_row.downgrade();
@@ -655,7 +628,6 @@ fn build_general_page(
         theme_group.add(&light_row);
     }
 
-    // ── List Style selection ───────────────────────────────────────
     {
         let current_style = {
             let cfg = state.config.lock().unwrap();
@@ -678,7 +650,6 @@ fn build_general_page(
         card_row.add_css_class("appearance-choice-row");
         set_appearance_row_selected(&card_row, current_style == ListStyle::Card);
 
-        // Compact row click
         {
             let state2 = Arc::clone(&state);
             let cr = compact_row.downgrade();
@@ -701,7 +672,6 @@ fn build_general_page(
             });
         }
 
-        // Card row click
         {
             let state2 = Arc::clone(&state);
             let cr = compact_row.downgrade();
@@ -729,7 +699,6 @@ fn build_general_page(
     }
     page.add(&theme_group);
 
-    // ── About group ───────────────────────────────────────────────────
     let about_group = adw::PreferencesGroup::builder().title("About").build();
     about_group.add(
         &adw::ActionRow::builder()
@@ -858,10 +827,6 @@ fn rebuild_sound_folder_rows(
     folders_group.add(add_folder_row);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Control Hotkeys Page
-// ──────────────────────────────────────────────────────────────────────────────
-
 fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title("Control Hotkeys")
@@ -930,7 +895,6 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
     row.add_suffix(&record_btn);
     row.add_suffix(&clear_btn);
 
-    // Record hotkey
     {
         let state2 = Arc::clone(&state);
         let lbl = hotkey_label.downgrade();
@@ -1017,7 +981,6 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
         });
     }
 
-    // Clear hotkey
     {
         let state2 = Arc::clone(&state);
         let lbl = hotkey_label.downgrade();

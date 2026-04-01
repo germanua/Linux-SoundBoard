@@ -16,7 +16,7 @@ use super::swhkd_config::SwhkdConfig;
 use super::swhkd_install::missing_swhkd_message;
 use super::swhkd_process::SwhkdProcesses;
 
-/// Helper struct to set atomic flag to false when dropped
+/// Clears the flag when dropped.
 struct DropFlag {
     flag: Arc<AtomicBool>,
 }
@@ -33,7 +33,6 @@ pub struct SwhkdBackend {
     config: Arc<Mutex<SwhkdConfig>>,
     pipe_path: PathBuf,
     started: AtomicBool,
-    /// Tracks if the listener thread is alive
     listener_alive: Arc<AtomicBool>,
 }
 
@@ -41,7 +40,6 @@ impl SwhkdBackend {
     pub fn new() -> Result<Self, String> {
         info!("Initializing swhkd backend");
 
-        // Check if binaries exist
         if which::which("swhkd").is_err() {
             return Err(missing_swhkd_message("swhkd"));
         }
@@ -50,20 +48,16 @@ impl SwhkdBackend {
             return Err(missing_swhkd_message("swhks"));
         }
 
-        // Create named pipe
         let pipe_path = Self::create_hotkey_pipe()?;
 
-        // Initialize config
         let config = SwhkdConfig::new(pipe_path.clone())?;
 
-        // Check if swhkd is already running
         let processes = if SwhkdProcesses::is_swhkd_running() {
             info!("Using existing swhkd instance");
             SwhkdProcesses::attach_existing()?
         } else {
             info!("Spawning swhkd/swhks processes");
 
-            // Write initial empty config before spawning
             config.write_to_file()?;
 
             SwhkdProcesses::spawn_managed()?
@@ -71,7 +65,6 @@ impl SwhkdBackend {
 
         let processes_arc = Arc::new(Mutex::new(processes));
 
-        // Start the swhkd process monitor
         {
             let processes_guard = processes_arc
                 .lock()
@@ -88,12 +81,11 @@ impl SwhkdBackend {
         })
     }
 
-    /// Create named pipe for hotkey communication
+    /// Create the hotkey pipe.
     fn create_hotkey_pipe() -> Result<PathBuf, String> {
         let uid = nix::unistd::getuid();
         let runtime_dir = PathBuf::from(format!("/run/user/{}", uid));
 
-        // Ensure runtime directory exists
         if !runtime_dir.exists() {
             return Err(format!(
                 "Runtime directory does not exist: {}",
@@ -103,14 +95,11 @@ impl SwhkdBackend {
 
         let pipe_path = runtime_dir.join("lsb_hotkey.pipe");
 
-        // Remove old pipe if exists
         if pipe_path.exists() {
             fs::remove_file(&pipe_path).map_err(|e| format!("Failed to remove old pipe: {}", e))?;
         }
 
-        // Create named pipe with permissions that allow swhkd (which runs as root)
-        // to write to it. swhkd executes the echo command as root, so we need
-        // group/other write permissions.
+        // Let root-owned `swhkd` write to the pipe.
         nix::unistd::mkfifo(
             &pipe_path,
             nix::sys::stat::Mode::S_IRUSR
@@ -124,22 +113,17 @@ impl SwhkdBackend {
         Ok(pipe_path)
     }
 
-    /// Send SIGHUP to reload swhkd config
-    /// Note: swhkd needs time to reload after receiving SIGHUP, so we add a small delay
+    /// Reload `swhkd` after a config change.
     fn reload_swhkd(&self) -> Result<(), String> {
         let processes = self
             .processes
             .lock()
             .map_err(|e| format!("Failed to acquire processes lock (poisoned): {}", e))?;
 
-        // Give swhkd time to process any pending operations
-        // This is especially important during startup
         thread::sleep(Duration::from_millis(100));
 
         SwhkdConfig::reload_swhkd(processes.swhkd_pid)?;
 
-        // Give swhkd time to reload the config file
-        // swhkd parses config on SIGHUP and this takes a moment
         thread::sleep(Duration::from_millis(200));
 
         info!("swhkd config reload complete");
@@ -191,8 +175,7 @@ impl SwhkdBackend {
         config.write_to_file()?;
         drop(config);
 
-        // Unregister is on the delete path, so avoid blocking the GTK thread on the
-        // backend's reload pacing delays. The config file is already updated here.
+        // Keep delete-path unregisters off the GTK thread.
         self.reload_swhkd_async();
 
         Ok(())
@@ -216,17 +199,16 @@ impl SwhkdBackend {
             .map_err(|detail| unsupported_key_for_backend("swhkd", detail))
     }
 
-    /// Verify swhkd process is still running
+    /// Check that `swhkd` is still running.
     fn verify_swhkd_running(&self) -> Result<(), String> {
         let processes = self
             .processes
             .lock()
             .map_err(|e| format!("Failed to acquire processes lock (poisoned): {}", e))?;
 
-        // Check if process is still alive
         let pid = nix::unistd::Pid::from_raw(processes.swhkd_pid);
         match nix::sys::signal::kill(pid, None) {
-            Ok(_) => Ok(()), // Process is running
+            Ok(_) => Ok(()),
             Err(_) => Err(format!(
                 "swhkd process (PID {}) has crashed or exited.\n\
                  This usually happens due to:\n\
@@ -239,15 +221,12 @@ impl SwhkdBackend {
         }
     }
 
-    /// Check if the hotkey system is healthy
-    /// Returns Ok if swhkd is running and listener is alive
+    /// Check that the backend is healthy.
     pub fn is_healthy(&self) -> Result<(), String> {
-        // Check if listener is alive
         if !self.listener_alive.load(Ordering::SeqCst) {
             return Err("swhkd listener thread is not running".to_string());
         }
 
-        // Check if swhkd process is alive
         if let Err(e) = self.verify_swhkd_running() {
             return Err(format!("swhkd process is not running: {}", e));
         }
@@ -274,20 +253,16 @@ impl HotkeyBackend for SwhkdBackend {
 
         Self::validate_hotkey_binding(hotkey)?;
 
-        // Add to config (handle poison gracefully)
         let mut config = self
             .config
             .lock()
             .map_err(|e| format!("Failed to acquire config lock (poisoned): {}", e))?;
         config.add_hotkey(sound_id, hotkey)?;
 
-        // Write config file
         config.write_to_file()?;
 
-        // Release lock before reloading
         drop(config);
 
-        // Reload swhkd (hot reload via SIGHUP) - ignore errors if swhkd is unavailable
         if let Err(e) = self.reload_swhkd() {
             warn!(
                 "Failed to reload swhkd config: {}. Hotkey will be registered on next app restart.",
@@ -295,7 +270,6 @@ impl HotkeyBackend for SwhkdBackend {
             );
         }
 
-        // Verify swhkd is still running after reload (optional, don't fail on this)
         if let Err(e) = self.verify_swhkd_running() {
             warn!("swhkd verification warning: {}", e);
         }
@@ -329,17 +303,14 @@ impl HotkeyBackend for SwhkdBackend {
             pipe_path.display()
         );
 
-        // Mark listener as alive
         listener_alive.store(true, Ordering::SeqCst);
         info!("swhkd listener thread started");
 
         thread::spawn(move || {
-            // Set flag to false when thread exits
             let flag = listener_alive.clone();
             let _guard = DropFlag { flag };
 
             loop {
-                // Open pipe for reading (blocks until writer connects)
                 let file = match File::open(&pipe_path) {
                     Ok(f) => f,
                     Err(e) => {
@@ -369,7 +340,6 @@ impl HotkeyBackend for SwhkdBackend {
                     }
                 }
 
-                // Pipe was closed, reopen it
                 debug!("Hotkey pipe closed, reopening...");
                 thread::sleep(Duration::from_millis(100));
             }
@@ -381,14 +351,11 @@ impl Drop for SwhkdBackend {
     fn drop(&mut self) {
         info!("Cleaning up swhkd backend");
 
-        // Remove named pipe
         if self.pipe_path.exists() {
             if let Err(e) = fs::remove_file(&self.pipe_path) {
                 warn!("Failed to remove hotkey pipe: {}", e);
             }
         }
-
-        // Processes will be terminated by SwhkdProcesses::drop
     }
 }
 
@@ -398,7 +365,6 @@ mod tests {
 
     #[test]
     fn test_backend_name() {
-        // This test doesn't require actual swhkd installation
         assert_eq!("swhkd", "swhkd");
     }
 

@@ -1,9 +1,6 @@
-//! UI initialization phase.
-
 use crate::app_state::AppState;
 use std::sync::Arc;
 
-/// Build the initial UI window and transport bar.
 pub fn build_initial_ui(
     app: &gtk4::Application,
     state: Arc<AppState>,

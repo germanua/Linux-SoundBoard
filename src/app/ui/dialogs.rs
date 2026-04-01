@@ -1,5 +1,3 @@
-//! Reusable GTK4 dialogs for the soundboard app.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -100,8 +98,6 @@ where
     Ok(combo)
 }
 
-/// Show a simple error message dialog.
-#[allow(dead_code)]
 pub fn show_error(parent: &Window, title: &str, message: &str) {
     let dialog = adw::AlertDialog::new(Some(title), Some(message));
     dialog.add_responses(&[("ok", "OK")]);
@@ -109,9 +105,6 @@ pub fn show_error(parent: &Window, title: &str, message: &str) {
     dialog.present(Some(parent));
 }
 
-/// Show a confirmation dialog with a destructive action.
-///
-/// `on_confirm` is called only when the user clicks the confirm button.
 pub fn show_confirm<F>(
     parent: &Window,
     title: &str,
@@ -132,9 +125,6 @@ pub fn show_confirm<F>(
     dialog.present(Some(parent));
 }
 
-/// Show a text-input dialog (e.g., for renaming).
-///
-/// `on_confirm` receives the entered string only when the user confirms.
 pub fn show_input<F>(
     parent: &Window,
     title: &str,
@@ -151,7 +141,7 @@ pub fn show_input<F>(
     dialog.set_extra_child(Some(&entry));
     dialog.add_responses(&[("cancel", "Cancel"), ("confirm", confirm_label)]);
 
-    // Allow Enter key in the entry to confirm
+    // Enter submits the dialog.
     let dialog_for_entry = dialog.clone();
     entry.connect_activate(move |_| {
         dialog_for_entry.emit_by_name::<()>("response", &[&"confirm"]);
@@ -168,9 +158,6 @@ pub fn show_input<F>(
     dialog.present(Some(parent));
 }
 
-/// Show a "file not found" dialog for a missing audio source.
-///
-/// Offers the user three choices: cancel, remove the sound, or locate the file.
 pub fn show_missing_file<FLocate, FRemove>(
     parent: &Window,
     sound_name: &str,
@@ -202,7 +189,6 @@ pub fn show_missing_file<FLocate, FRemove>(
     dialog.present(Some(parent));
 }
 
-/// Show file path info with a "Copy to Clipboard" button.
 pub fn show_path_info(parent: &Window, sound_name: &str, path: &str) {
     let msg = format!("File path for '{}':", sound_name);
     let dialog = adw::AlertDialog::new(Some("File Location"), Some(&msg));
@@ -230,11 +216,6 @@ pub fn show_path_info(parent: &Window, sound_name: &str, path: &str) {
     dialog.present(Some(parent));
 }
 
-/// Show a hotkey capture dialog for recording key combinations.
-///
-/// The dialog presents a capture zone that listens for key presses and displays
-/// the captured combination. `on_confirm` receives `Some(combo)` on save or
-/// `None` when the user clears the hotkey.
 pub fn show_hotkey_capture<F, V>(
     parent: &Window,
     current_hotkey: Option<&str>,
@@ -254,7 +235,6 @@ pub fn show_hotkey_capture<F, V>(
         .build();
     vbox.append(&instruction);
 
-    // Capture zone — a focusable box that receives key events
     let capture_box = GtkBox::new(Orientation::Vertical, 8);
     capture_box.add_css_class("hotkey-capture-zone");
     capture_box.set_focusable(true);
@@ -280,17 +260,14 @@ pub fn show_hotkey_capture<F, V>(
 
     dialog.add_responses(&[("cancel", "Cancel"), ("clear", "Clear"), ("save", "Save")]);
 
-    // Shared state for captured hotkey
     let captured: Rc<RefCell<Option<String>>> =
         Rc::new(RefCell::new(current_hotkey.map(|s| s.to_string())));
 
-    // Key event controller on the capture box
     let key_ctrl = EventControllerKey::new();
     let captured_for_key = Rc::clone(&captured);
     let preview_for_key = preview_label.clone();
     let status_for_key = status_label.clone();
     key_ctrl.connect_key_pressed(move |_, keyval, keycode, modifier_state| {
-        // Ignore lone modifier presses
         let key_name = keyval.name().unwrap_or_default().to_string();
         if matches!(
             key_name.as_str(),
@@ -312,7 +289,6 @@ pub fn show_hotkey_capture<F, V>(
             return glib::Propagation::Stop;
         }
 
-        // Escape cancels capture without closing
         if key_name == "Escape" {
             status_for_key.set_text("Cancelled. Click to try again…");
             return glib::Propagation::Stop;
@@ -353,7 +329,6 @@ pub fn show_hotkey_capture<F, V>(
     });
     capture_box.add_controller(key_ctrl);
 
-    // Auto-focus the capture box when the dialog is shown
     let capture_box_focus = capture_box.clone();
     glib::idle_add_local_once(move || {
         capture_box_focus.grab_focus();

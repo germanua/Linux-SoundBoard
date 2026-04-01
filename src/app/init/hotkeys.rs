@@ -1,11 +1,8 @@
-//! Hotkey initialization phase.
-
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use crate::config::ControlHotkeyAction;
 
-/// Extract prebound hotkeys from config for registration.
 pub fn extract_prebound_hotkeys(config: &crate::config::Config) -> Vec<(String, String)> {
     let mut prebound: Vec<(String, String)> = config
         .sounds
@@ -27,7 +24,6 @@ pub fn extract_prebound_hotkeys(config: &crate::config::Config) -> Vec<(String, 
     prebound
 }
 
-/// Initialize the hotkey manager with prebound hotkeys.
 pub fn init_hotkeys(
     prebound_hotkeys: Vec<(String, String)>,
 ) -> Result<
@@ -42,6 +38,5 @@ pub fn init_hotkeys(
 
     let manager = crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
 
-    // Return a fresh receiver channel for use by the caller
     Ok((manager, mpsc::channel().1))
 }

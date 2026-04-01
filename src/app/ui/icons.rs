@@ -1,5 +1,3 @@
-//! Shared icon helpers and fallback mappings for the native UI.
-
 use gtk4::prelude::*;
 use gtk4::{Button, Image, ToggleButton};
 

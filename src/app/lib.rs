@@ -1,4 +1,3 @@
-//! Linux Soundboard library crate
 pub mod app_meta;
 pub mod app_state;
 pub mod audio;

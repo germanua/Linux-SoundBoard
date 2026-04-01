@@ -143,7 +143,6 @@ fn enable_mic_passthrough_with_source_runner(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn enable_mic_passthrough() -> Result<(), String> {
     enable_mic_passthrough_with_source(None)
 }
@@ -237,7 +236,6 @@ fn unload_modules_by_name(runner: &impl CommandRunner, sink_name: &str, source_n
     }
 }
 
-#[allow(dead_code)]
 pub fn list_sinks() -> Vec<String> {
     let runner = SystemCommandRunner;
     runner

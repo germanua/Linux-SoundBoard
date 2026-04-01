@@ -13,14 +13,12 @@ pub struct SwhkdProcesses {
     pub swhkd_child: Option<Child>,
     pub swhkd_pid: i32,
     pub managed: bool,
-    /// Flag set to false when monitor should stop
     pub monitor_running: Arc<AtomicBool>,
-    /// Flag set to true when swhkd has died
     pub swhkd_dead: Arc<AtomicBool>,
 }
 
 impl SwhkdProcesses {
-    /// Check if swhkd is already running (e.g., via systemd service)
+    /// Check whether `swhkd` is already running.
     pub fn is_swhkd_running() -> bool {
         Command::new("pgrep")
             .arg("-x")
@@ -30,7 +28,7 @@ impl SwhkdProcesses {
             .unwrap_or(false)
     }
 
-    /// Get PID of running swhkd process
+    /// Get the running `swhkd` PID.
     pub fn get_swhkd_pid() -> Option<i32> {
         let output = Command::new("pgrep").arg("-x").arg("swhkd").output().ok()?;
 
@@ -42,7 +40,7 @@ impl SwhkdProcesses {
         }
     }
 
-    /// Spawn swhks process (non-privileged)
+    /// Spawn `swhks`.
     pub fn spawn_swhks() -> Result<Child, String> {
         info!("Spawning swhks process");
 
@@ -53,13 +51,12 @@ impl SwhkdProcesses {
             .map_err(|e| format!("Failed to spawn swhks: {}", e))
     }
 
-    /// Spawn swhkd process (requires setuid bit or root privileges)
+    /// Spawn `swhkd`.
     pub fn spawn_swhkd() -> Result<Child, String> {
         info!("Spawning swhkd process");
 
         let swhkd_path = which::which("swhkd").map_err(|_| missing_swhkd_message("swhkd"))?;
 
-        // Check if swhkd has setuid bit
         if !Self::has_setuid_bit(&swhkd_path) {
             warn!("swhkd does not have setuid bit set");
             return Err("swhkd requires setuid bit for proper operation.\n\
@@ -73,20 +70,20 @@ impl SwhkdProcesses {
             .map_err(|e| format!("Failed to spawn swhkd: {}", e))
     }
 
-    /// Check if a binary has the setuid bit set
+    /// Check whether a binary has the setuid bit.
     fn has_setuid_bit(path: &Path) -> bool {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(metadata) = std::fs::metadata(path) {
                 let mode = metadata.permissions().mode();
-                return (mode & 0o4000) != 0; // Check setuid bit
+                return (mode & 0o4000) != 0;
             }
         }
         false
     }
 
-    /// Wait for swhks socket to be ready
+    /// Wait for the `swhks` socket.
     pub fn wait_for_swhks_socket() -> Result<(), String> {
         let uid = nix::unistd::getuid();
         let sock_path = PathBuf::from(format!("/run/user/{}/swhkd.sock", uid));
@@ -104,22 +101,17 @@ impl SwhkdProcesses {
         Err("Timeout waiting for swhks socket to be created".to_string())
     }
 
-    /// Create new managed processes
+    /// Create managed `swhks` and `swhkd` processes.
     pub fn spawn_managed() -> Result<Self, String> {
-        // Spawn swhks first
         let swhks_child = Self::spawn_swhks()?;
 
-        // Wait for socket to be ready
         Self::wait_for_swhks_socket()?;
 
-        // Spawn swhkd
         let swhkd_child = Self::spawn_swhkd()?;
         let swhkd_pid = swhkd_child.id() as i32;
 
-        // Give swhkd a moment to initialize
         thread::sleep(Duration::from_millis(500));
 
-        // Verify swhkd is still running (didn't crash on startup)
         let pid = nix::unistd::Pid::from_raw(swhkd_pid);
         match nix::sys::signal::kill(pid, None) {
             Ok(_) => {
@@ -148,7 +140,7 @@ impl SwhkdProcesses {
         })
     }
 
-    /// Attach to existing swhkd instance
+    /// Attach to an existing `swhkd` instance.
     pub fn attach_existing() -> Result<Self, String> {
         let swhkd_pid =
             Self::get_swhkd_pid().ok_or("swhkd is running but PID could not be determined")?;
@@ -165,8 +157,7 @@ impl SwhkdProcesses {
         })
     }
 
-    /// Start monitoring swhkd in a background thread
-    /// This will detect if swhkd dies and log an error
+    /// Monitor `swhkd` in the background.
     pub fn start_monitor(&self) {
         if !self.managed {
             debug!("Not starting monitor for unmanaged swhkd instance");
@@ -191,7 +182,6 @@ impl SwhkdProcesses {
 
                 let check_pid = nix::unistd::Pid::from_raw(pid);
                 if nix::sys::signal::kill(check_pid, None).is_err() {
-                    // swhkd has died
                     error!(
                         "CRITICAL: swhkd process (PID {}) has died!\n\
                          Hotkeys will stop working until the application is restarted.\n\
@@ -203,7 +193,6 @@ impl SwhkdProcesses {
                         pid
                     );
                     swhkd_dead.store(true, Ordering::SeqCst);
-                    // Stop monitoring since swhkd is dead
                     break;
                 }
             }
@@ -211,24 +200,21 @@ impl SwhkdProcesses {
         });
     }
 
-    /// Terminate managed processes
+    /// Terminate managed processes.
     pub fn terminate(&mut self) {
         if !self.managed {
             debug!("Not terminating unmanaged swhkd instance");
             return;
         }
 
-        // Stop monitor first
         self.monitor_running.store(false, Ordering::SeqCst);
 
-        // Kill swhkd first
         if let Some(mut child) = self.swhkd_child.take() {
             info!("Terminating swhkd process");
             let _ = child.kill();
             let _ = child.wait();
         }
 
-        // Then kill swhks
         if let Some(mut child) = self.swhks_child.take() {
             info!("Terminating swhks process");
             let _ = child.kill();

@@ -1,5 +1,3 @@
-//! Main application window — layout scaffold and hotkey dispatch.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,9 +27,7 @@ enum DropState {
     Rejected,
 }
 
-/// Build and return the main application window and transport bar.
 pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWindow, TransportBar) {
-    // Apply theme from config
     {
         let cfg = state.config.lock().unwrap();
         apply_theme(cfg.settings.theme);
@@ -48,10 +44,8 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         .build();
     window.add_css_class("main-window");
 
-    // Root vertical box: [setup_banner?] + [transport] + [content_pane]
     let root_box = GtkBox::new(Orientation::Vertical, 0);
 
-    // ── Setup banner (shown only if PipeWire unavailable) ─────────────
     {
         let pw = state.pipewire_status.lock().unwrap();
         if !pw.available {
@@ -80,11 +74,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         }
     }
 
-    // ── Transport bar ─────────────────────────────────────────────────
     let transport = TransportBar::new(Arc::clone(&state));
     root_box.append(transport.widget());
 
-    // ── Content pane: tabs sidebar + sound list ───────────────────────
     let paned = Paned::new(Orientation::Horizontal);
     paned.set_vexpand(true);
 
@@ -96,7 +88,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
 
     let sound_list = SoundList::new(Arc::clone(&state));
 
-    // Connect tab change → refresh sound list filter
     {
         let sl = sound_list.clone();
         tabs.connect_tab_selected(move |tab_id| {
@@ -104,7 +95,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
-    // Refresh list after tab membership drag/drop operations from the sidebar.
     {
         let sl = sound_list.clone();
         tabs.connect_tab_membership_changed(move || {
@@ -112,7 +102,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
-    // Connect search entry → filter sound list by name
     {
         let sl_search = sound_list.clone();
         transport.connect_search_changed(move |query| {
@@ -120,13 +109,11 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
-    // Connect sound list provider for prev/next/continue navigation
     {
         let sl_nav = sound_list.clone();
         transport.set_sound_list_provider(move || sl_nav.get_navigation_sounds());
     }
 
-    // Event-driven sidebar count refresh when library membership changes.
     {
         let tabs_counts = tabs.clone();
         sound_list.connect_library_changed(move || {
@@ -134,7 +121,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
-    // Event-driven full library refresh after transport/settings-triggered changes.
     {
         let tabs_sync = tabs.clone();
         let sl_sync = sound_list.clone();
@@ -144,7 +130,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         });
     }
 
-    // Event-driven list style switch from settings.
     {
         let sl_style = sound_list.clone();
         transport.connect_list_style_changed(move |style| {
@@ -155,11 +140,9 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     paned.set_end_child(Some(sound_list.widget()));
     root_box.append(&paned);
 
-    // Wrap root_box in a ToastOverlay for notifications
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root_box));
 
-    // Connect toast notifications via mpsc channel (ToastOverlay isn't Send)
     let toast_timer_id = {
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
         let toast_tx_tabs = toast_tx.clone();
@@ -177,7 +160,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         ))))
     };
 
-    // ── 150ms poll: update sound list playing indicators ──────────
     let playing_timer_id = {
         let sl_playing = sound_list.clone();
         let state_playing = Arc::clone(&state);
@@ -197,17 +179,14 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         ))))
     };
 
-    // set_content requires AdwApplicationWindow; use gtk4::Window::set_child instead
-    // (set after drop overlay is created below)
+    // `AdwApplicationWindow` does not expose `set_content`; use `set_child` here.
 
-    // ── Drag-and-drop for audio files (accepts gdk::FileList and text/uri-list) ──────────────
     let drop_target_files = gtk4::DropTarget::new(
         gtk4::gdk::FileList::static_type(),
         gtk4::gdk::DragAction::COPY,
     );
     let drop_target_text = gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::COPY);
 
-    // Drop zone overlay — shown while dragging files over the window
     let drop_overlay = gtk4::Overlay::new();
     drop_overlay.set_child(Some(&toast_overlay));
 
@@ -233,7 +212,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     drop_overlay.add_overlay(&drop_zone);
     set_drop_state(&drop_zone, &drop_title, &drop_subtitle, DropState::Hidden);
 
-    // Track hover state across both drop targets so the overlay reliably hides.
     let drag_hover_count = Arc::new(AtomicUsize::new(0));
 
     {
@@ -370,7 +348,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
     window.add_controller(drop_target_text);
     window.set_child(Some(&drop_overlay));
 
-    // ── Window close handler: cancel timers to prevent leaks ──────────
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
@@ -389,7 +366,6 @@ pub fn build_window(app: &Application, state: Arc<AppState>) -> (ApplicationWind
         glib::Propagation::Proceed
     });
 
-    // ── Startup: record loudness state without starting backfill ─────
     {
         let state_loudness = Arc::clone(&state);
         glib::idle_add_local_once(move || {
@@ -485,7 +461,6 @@ fn handle_drop_import(
     true
 }
 
-/// Dispatch a fired hotkey ID to the appropriate action.
 pub fn handle_hotkey(
     _window: &ApplicationWindow,
     state: &Arc<AppState>,
@@ -495,7 +470,6 @@ pub fn handle_hotkey(
     if let Some(action) = crate::config::ControlHotkeyAction::from_binding_id(id) {
         handle_control_hotkey(state, transport, action);
     } else {
-        // Sound hotkey — play the sound
         if let Err(e) = commands::play_sound(
             id.to_string(),
             Arc::clone(&state.config),
@@ -536,7 +510,6 @@ fn handle_control_hotkey(
     }
 }
 
-/// Display a brief toast notification in the overlay.
 pub fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
     let toast = adw::Toast::new(message);
     toast.set_timeout(2);
