@@ -24,7 +24,7 @@ use log::{info, warn};
 
 use crate::app_meta::{
     APP_BINARY, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FORCE_X11_ENV_VAR, HOTKEY_POLL_INTERVAL_MS,
-    WAYLAND_BACKEND, X11_BACKEND,
+    FALLBACK_RENDERER, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
@@ -32,6 +32,7 @@ use crate::config::{Config, ControlHotkeyAction};
 pub fn run() {
     env_logger::init();
     configure_preferred_backend();
+    configure_preferred_renderer();
     glib::set_prgname(Some(APP_BINARY));
     glib::set_application_name(APP_TITLE);
 
@@ -107,6 +108,42 @@ fn configure_preferred_backend() {
         );
         std::env::set_var(BACKEND_ENV_VAR, X11_BACKEND);
     }
+}
+
+fn configure_preferred_renderer() {
+    let previous = std::env::var(RENDERER_ENV_VAR).ok();
+    if previous.is_some() {
+        info!(
+            "Keeping GTK renderer unchanged because {} is already set: {:?}",
+            RENDERER_ENV_VAR, previous
+        );
+        return;
+    }
+
+    if !running_in_vmware_guest() {
+        return;
+    }
+
+    info!(
+        "VMware guest detected; forcing safer GTK renderer via {}={}",
+        RENDERER_ENV_VAR, FALLBACK_RENDERER
+    );
+    std::env::set_var(RENDERER_ENV_VAR, FALLBACK_RENDERER);
+}
+
+fn running_in_vmware_guest() -> bool {
+    const DMI_PATHS: &[&str] = &[
+        "/sys/class/dmi/id/product_name",
+        "/sys/class/dmi/id/product_version",
+        "/sys/class/dmi/id/sys_vendor",
+        "/sys/class/dmi/id/board_vendor",
+    ];
+
+    DMI_PATHS.iter().any(|path| {
+        std::fs::read_to_string(path)
+            .map(|value| value.to_ascii_lowercase().contains("vmware"))
+            .unwrap_or(false)
+    })
 }
 
 fn build_activate_handler() -> impl Fn(&Application) + 'static {

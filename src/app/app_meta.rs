@@ -15,6 +15,8 @@ pub const GENERAL_TAB_ID: &str = "general";
 
 pub const BACKEND_ENV_VAR: &str = "GDK_BACKEND";
 pub const FORCE_X11_ENV_VAR: &str = "LSB_FORCE_X11";
+pub const RENDERER_ENV_VAR: &str = "GSK_RENDERER";
+pub const FALLBACK_RENDERER: &str = "cairo";
 pub const WAYLAND_BACKEND: &str = "wayland";
 pub const X11_BACKEND: &str = "x11";
 pub const STARTUP_VIRTUAL_MIC_DELAY_MS: u64 = 200;
