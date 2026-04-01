@@ -29,8 +29,6 @@
   ·
   <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
   ·
-  <a href="PACKAGING.md"><strong>Packaging</strong></a>
-  ·
   <a href="docs/BUG_REPORTS.md"><strong>Bug Reports</strong></a>
 </p>
 
@@ -73,9 +71,9 @@ Use the method that matches your system:
 | Ubuntu / Debian | GitHub release `.deb` | Native package install |
 | Fedora | GitHub release `.rpm` | Native package install |
 | Any x86_64 distro | AppImage | Portable build from Releases |
-| Flatpak users | Build from repo manifest | Flathub listing is not published yet |
+| Flatpak users | Not published yet | Use one of the native release formats above |
 
-Detailed commands, bootstrap setup, and source builds live in [docs/INSTALL.md](docs/INSTALL.md).
+Detailed install steps live in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Quick Start
 
@@ -102,20 +100,6 @@ If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, 
 - [Troubleshooting Guide](docs/TROUBLESHOOTING.md)
 - [Bug Reporting Guide](docs/BUG_REPORTS.md)
 - [Changelog](docs/CHANGELOG.md)
-- [Packaging and Release Guide](PACKAGING.md)
-
-## Build From Source
-
-If you want a local native build:
-
-```bash
-git clone https://github.com/germanua/Linux-SoundBoard.git
-cd Linux-SoundBoard/src
-cargo build --release
-./target/release/linux-soundboard
-```
-
-System dependency setup for Debian, Fedora, and Arch is documented in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Support
 

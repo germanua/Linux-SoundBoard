@@ -1,6 +1,6 @@
 # Installation Guide
 
-Linux Soundboard supports native Linux packaging, portable AppImage usage, and source builds. This guide is for end users who want to install and run the application on a real system.
+Linux Soundboard is documented here as an end-user application. This guide focuses on installing a published build and getting it working on a real Linux system.
 
 ## Choose a Path
 
@@ -10,7 +10,6 @@ Linux Soundboard supports native Linux packaging, portable AppImage usage, and s
 | Ubuntu / Debian | GitHub release `.deb` | Native package |
 | Fedora | GitHub release `.rpm` | Native package |
 | openSUSE / other x86_64 distributions | AppImage | Portable package |
-| Development workstation | Source build | Local binary |
 
 ## GitHub Release Packages
 
@@ -78,24 +77,6 @@ If you use `paru`:
 paru -S linux-soundboard-git
 ```
 
-## One-Command Bootstrap
-
-If you have the repository checked out locally, `scripts/install.sh` can detect the current distro, install missing runtime packages, and provision `swhkd` for Wayland sessions:
-
-```bash
-cd LinuxSoundBoardv1
-./scripts/install.sh
-```
-
-What the script currently does:
-
-- Arch family: installs `linux-soundboard-git` from the AUR
-- Debian and Ubuntu: installs the latest published `.deb`, or falls back to the AppImage plus runtime packages if no `.deb` is available
-- Fedora: installs the latest published `.rpm`, or falls back to the AppImage plus runtime packages if no `.rpm` is available
-- openSUSE and SUSE family: installs the AppImage plus the host runtime packages it needs
-- Wayland sessions: installs and configures `swhkd`
-- X11 sessions: skips `swhkd` because the native X11 backend is used instead
-
 ## Wayland, X11, and Hotkeys
 
 Hotkeys depend on the session type:
@@ -124,44 +105,6 @@ systemctl --user status pipewire pipewire-pulse wireplumber
 
 4. In Discord, OBS, Zoom, or another target application, choose `Linux_Soundboard_Mic` as the input device.
 5. If you need your real microphone mixed in, enable mic passthrough in the app settings.
-
-## Build From Source
-
-### Debian and Ubuntu
-
-```bash
-sudo apt install build-essential cargo rustc pkg-config imagemagick \
-  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
-  libx11-dev libxi-dev pipewire pipewire-pulse wireplumber pulseaudio-utils
-```
-
-### Fedora
-
-```bash
-sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
-  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
-  libX11-devel libXi-devel pipewire pipewire-pulseaudio wireplumber pulseaudio-utils
-```
-
-### Arch Linux
-
-```bash
-sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita libpulse \
-  alsa-lib libx11 libxi pipewire pipewire-pulse wireplumber
-```
-
-### Build and Run
-
-```bash
-git clone https://github.com/germanua/Linux-SoundBoard.git
-cd Linux-SoundBoard/src
-cargo build --release
-./target/release/linux-soundboard
-```
-
-## Flatpak
-
-The repository contains Flatpak packaging files, but the project does not currently publish an end-user Flathub install target. If you want a Flatpak build, use the maintainer workflow in [../PACKAGING.md](../PACKAGING.md).
 
 ## Next Step
 
