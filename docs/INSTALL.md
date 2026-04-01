@@ -23,7 +23,7 @@ The release page is the canonical source for packaged builds:
 Download the current `.deb` package from the release page, then install it with APT so dependencies are resolved automatically:
 
 ```bash
-sudo apt install ./linux-soundboard_1.1.1-1_amd64.deb
+sudo apt install ./linux-soundboard_1.1.2-1_amd64.deb
 ```
 
 Runtime packages commonly involved on Debian-based systems:
@@ -38,7 +38,7 @@ Runtime packages commonly involved on Debian-based systems:
 Download the current `.rpm` package from the release page, then install it with DNF:
 
 ```bash
-sudo dnf install ./linux-soundboard-1.1.1-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-1.1.2-1.x86_64.rpm
 ```
 
 Runtime packages commonly involved on Fedora:

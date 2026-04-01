@@ -1,5 +1,5 @@
 Name:           linux-soundboard
-Version:        1.1.1
+Version:        1.1.2
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -113,6 +113,11 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.2-1
+- Fixed launcher icon lookup for native packages and AppImage builds
+- Installed icon aliases required by desktop search integrations
+- Refreshed icon and desktop caches in RPM lifecycle scripts
+
 * Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.1-1
 - Patch release for packaging and release metadata sync
 - Added third-party license notices and README acknowledgments

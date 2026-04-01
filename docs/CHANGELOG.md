@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-04-01
+
+### Fixed
+
+- Native packages and the AppImage now install a launcher icon name that desktop search menus resolve consistently.
+- RPM packaging now refreshes icon and desktop caches after install and uninstall so the app appears in search without manual cache rebuilds.
+
 ## [1.1.1] - 2026-04-01
 
 ### Added

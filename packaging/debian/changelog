@@ -1,3 +1,11 @@
+linux-soundboard (1.1.2-1) unstable; urgency=medium
+
+  * Fix desktop icon name so launcher search finds the app consistently
+  * Install icon aliases needed by native packages and the AppImage
+  * Refresh icon and desktop caches during RPM install and removal
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Wed, 01 Apr 2026 16:00:00 +0000
+
 linux-soundboard (1.1.1-1) unstable; urgency=medium
 
   * Patch release for release metadata and packaging sync

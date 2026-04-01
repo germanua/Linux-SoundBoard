@@ -1,7 +1,7 @@
 # Maintainer: germanua
 
 pkgname=linux-soundboard
-pkgver=1.1.1
+pkgver=1.1.2
 pkgrel=1
 pkgdesc="Native Linux soundboard with full Wayland/X11 support and virtual microphone support"
 arch=('x86_64')
