@@ -125,3 +125,9 @@ Bug report expectations are documented in [docs/BUG_REPORTS.md](docs/BUG_REPORTS
 ## License
 
 Linux Soundboard is licensed under the PolyForm Noncommercial 1.0.0 license. Commercial use requires a separate license. See [LICENSE](LICENSE).
+
+## Acknowledgments
+
+Linux Soundboard relies on open-source work across the Rust and Linux desktop audio ecosystem. Major pieces include Symphonia for audio decoding, GTK4 and Libadwaita for the native interface, and PulseAudio-compatible Linux audio plumbing.
+
+Full third-party license notices, upstream source links, and additional LGPL/MPL/MIT/Apache details are collected in [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md).
