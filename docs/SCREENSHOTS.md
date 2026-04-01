@@ -10,10 +10,12 @@ The images in `assets/screenshots/` are the canonical visuals used by the docs.
 
 ## Settings
 
-| General settings | General settings, alternate view |
-| --- | --- |
-| ![Settings dialog light 1](../assets/screenshots/Settings_light1.png) | ![Settings dialog light 2](../assets/screenshots/Settings_light2.png) |
-| ![Settings dialog dark 1](../assets/screenshots/Settings_dark1.png) | ![Settings dialog dark 2](../assets/screenshots/Settings_dark2.png) |
+`*1` shows the top of the general settings page. `*2` shows the same page after scrolling down to more options. Dark and light are separate theme variants of the same UI.
+
+| View | Dark | Light |
+| --- | --- | --- |
+| General settings, top of page | ![Settings dialog dark mode, top of page](../assets/screenshots/Settings_dark1.png) | ![Settings dialog light mode, top of page](../assets/screenshots/Settings_light1.png) |
+| General settings, scrolled down | ![Settings dialog dark mode, scrolled down](../assets/screenshots/Settings_dark2.png) | ![Settings dialog light mode, scrolled down](../assets/screenshots/Settings_light2.png) |
 
 ## Hotkeys
 

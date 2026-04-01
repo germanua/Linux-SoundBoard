@@ -6,12 +6,12 @@ This directory contains the screenshots used by the project documentation.
 
 - `Main_dark.png` - Main application window in dark mode
 - `Main_light.png` - Main application window in light mode
-- `Settings_dark1.png` - General settings view in dark mode
-- `Settings_dark2.png` - Alternate settings view in dark mode
+- `Settings_dark1.png` - General settings view in dark mode, top of page
+- `Settings_dark2.png` - General settings view in dark mode, scrolled down to more options
 - `Settings_hotkeys_dark.png` - Hotkey settings in dark mode
 - `Settings_hotkeys_light.png` - Hotkey settings in light mode
-- `Settings_light1.png` - General settings view in light mode
-- `Settings_light2.png` - Alternate settings view in light mode
+- `Settings_light1.png` - General settings view in light mode, top of page
+- `Settings_light2.png` - General settings view in light mode, scrolled down to more options
 
 ## Where They Are Used
 
