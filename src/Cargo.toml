@@ -1,6 +1,6 @@
 [package]
 name = "linux-soundboard"
-version = "1.1.0"
+version = "1.1.1"
 authors = ["germanua"]
 description = "Native Linux soundboard with PipeWire virtual microphone support"
 edition = "2021"

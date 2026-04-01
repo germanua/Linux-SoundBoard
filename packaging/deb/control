@@ -1,10 +1,10 @@
 Package: linux-soundboard
-Version: 1.1.0
+Version: 1.1.1
 Section: sound
 Priority: optional
 Architecture: amd64
 Depends: libgtk-4-1, libadwaita-1-0, pipewire
-Maintainer: Your Name <your.email@example.com>
+Maintainer: germanua <noreply@linuxsoundboard.invalid>
 Description: A Linux soundboard with PipeWire virtual mic support
  LinuxSoundBoard is a feature-rich soundboard application for Linux
  with PipeWire virtual microphone support and global hotkey functionality

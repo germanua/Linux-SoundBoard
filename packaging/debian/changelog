@@ -1,10 +1,18 @@
+linux-soundboard (1.1.1-1) unstable; urgency=medium
+
+  * Patch release for release metadata and packaging sync
+  * Add third-party license notices and README acknowledgments
+  * Refresh package examples and desktop packaging metadata
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Wed, 01 Apr 2026 11:40:38 +0000
+
 linux-soundboard (1.1.0-2) unstable; urgency=medium
 
   * Document full native Wayland and X11 support across package metadata
   * Clarify that Wayland hotkeys need a host-installed swhkd and remove invalid apt guidance
   * Refresh release notes and packaging guidance for DEB, RPM, Flatpak, and AUR
 
- -- germanua <tony.avramnco@icloud.com>  Sat, 28 Mar 2026 12:00:00 +0000
+ -- germanua <noreply@linuxsoundboard.invalid>  Sat, 28 Mar 2026 12:00:00 +0000
 
 linux-soundboard (1.1.0-1) unstable; urgency=medium
 
@@ -15,10 +23,10 @@ linux-soundboard (1.1.0-1) unstable; urgency=medium
   * Fix virtual microphone creation on modern distributions
   * Update dependencies for 2026 standards
 
- -- germanua <tony.avramnco@icloud.com>  Mon, 24 Mar 2026 14:00:00 +0000
+ -- germanua <noreply@linuxsoundboard.invalid>  Mon, 24 Mar 2026 14:00:00 +0000
 
 linux-soundboard (1.0.0-1) unstable; urgency=low
 
   * Initial release
 
- -- germanua <tony.avramnco@icloud.com>  Sat, 22 Mar 2026 00:00:00 +0000
+ -- germanua <noreply@linuxsoundboard.invalid>  Sat, 22 Mar 2026 00:00:00 +0000

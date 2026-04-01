@@ -1,6 +1,6 @@
 Name:           linux-soundboard
-Version:        1.1.0
-Release:        2%{?dist}
+Version:        1.1.1
+Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
 License:        PolyForm-Noncommercial-1.0.0
@@ -93,19 +93,24 @@ fi
 echo "✓ LinuxSoundBoard configuration complete"
 
 %changelog
-* Tue Mar 25 2026 germanua <tony.avramnco@icloud.com> - 1.1.0-2
+* Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.1-1
+- Patch release for packaging and release metadata sync
+- Added third-party license notices and README acknowledgments
+- Refreshed release package examples and install metadata
+
+* Tue Mar 25 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-2
 - Migrated from Portal to swhkd for universal hotkey support
 - Added support for Wayland, X11, and TTY hotkeys
 - Improved hotkey reliability with hot reload via SIGHUP
 - Removed Portal backend dependency
 - Added automatic swhkd configuration in post-install
 
-* Mon Mar 24 2026 germanua <tony.avramnco@icloud.com> - 1.1.0-1
+* Mon Mar 24 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-1
 - New upstream release
 - Add native Wayland support
 - Improve AppImage compatibility
 - Add distribution-specific packages
 - Fix virtual microphone creation on modern distributions
 
-* Sat Mar 22 2026 germanua <tony.avramnco@icloud.com> - 1.0.0-1
+* Sat Mar 22 2026 germanua <noreply@linuxsoundboard.invalid> - 1.0.0-1
 - Initial RPM release

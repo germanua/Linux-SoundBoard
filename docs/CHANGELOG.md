@@ -6,14 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-04-01
+
 ### Added
 
 - Explicit `LSB_FORCE_X11=1` startup override support for native builds.
+- README acknowledgments and a dedicated `THIRDPARTY_LICENSES.md` notice file for major third-party components and licenses.
 
 ### Changed
 
 - VMware guests now prefer a safer GTK renderer path automatically when `GSK_RENDERER` is not already set.
 - Troubleshooting documentation now separates renderer issues, session backend issues, and package-install issues more clearly.
+- Release metadata, package examples, and downstream packaging files were synced for the 1.1.1 release.
 
 ## [1.1.0] - 2026-03-24
 

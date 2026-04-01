@@ -53,6 +53,16 @@
   </keywords>
   
   <releases>
+    <release version="1.1.1" date="2026-04-01">
+      <description>
+        <p>Patch release for packaging and release metadata consistency:</p>
+        <ul>
+          <li>Added third-party license notices and README acknowledgments</li>
+          <li>Refreshed release package metadata and install examples</li>
+          <li>Kept native Wayland and X11 support documentation aligned with shipped artifacts</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-03-24">
       <description>
         <p>Major packaging and compatibility update:</p>
