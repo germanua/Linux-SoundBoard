@@ -79,12 +79,19 @@ fn build_general_page(
         .activatable(true)
         .build();
     add_folder_row.add_prefix(&icons::image(icons::ADD));
+
+    // Store folder_rows in the folders_group to keep it alive
+    // This prevents the Rc from being dropped when the function returns
+    unsafe {
+        folders_group.set_data("folder_rows", Rc::clone(&folder_rows));
+    }
+
     {
         let state2 = Arc::clone(&state);
         let parent = parent.clone();
         let folders_group_weak = folders_group.downgrade();
         let add_folder_row_weak = add_folder_row.downgrade();
-        let folder_rows_weak = Rc::downgrade(&folder_rows);
+        let folder_rows_clone = Rc::clone(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
@@ -94,7 +101,7 @@ fn build_general_page(
             let parent_for_dialog = parent.clone();
             let folders_group_weak2 = folders_group_weak.clone();
             let add_folder_row_weak2 = add_folder_row_weak.clone();
-            let folder_rows_weak2 = folder_rows_weak.clone();
+            let folder_rows_clone2 = Rc::clone(&folder_rows_clone);
             let on_library_changed3 = on_library_changed2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
@@ -103,32 +110,35 @@ fn build_general_page(
                     if let Ok(folder) = result {
                         if let Some(path) = folder.path() {
                             let path_str = path.to_string_lossy().to_string();
+                            log::info!("Add folder dialog result: {}", path_str);
                             if let Err(e) =
                                 commands::add_sound_folder(path_str, Arc::clone(&state3.config))
                             {
                                 log::warn!("Add folder failed: {e}");
                                 return;
                             }
+                            log::info!("Add folder command succeeded");
                             if let Err(e) = commands::refresh_sounds(
                                 Arc::clone(&state3.config),
                                 Arc::clone(&state3.hotkeys),
                             ) {
                                 log::warn!("Refresh after adding folder failed: {e}");
                             }
+                            log::info!("Refresh sounds completed");
                             let Some(folders_group3) = folders_group_weak2.upgrade() else {
+                                log::warn!("folders_group3 weak ref failed to upgrade");
                                 return;
                             };
                             let Some(add_folder_row3) = add_folder_row_weak2.upgrade() else {
+                                log::warn!("add_folder_row3 weak ref failed to upgrade");
                                 return;
                             };
-                            let Some(folder_rows3) = folder_rows_weak2.upgrade() else {
-                                return;
-                            };
+                            log::info!("Using strong Rc reference for folder_rows");
                             schedule_rebuild_sound_folder_rows(
                                 &folders_group3,
                                 &add_folder_row3,
                                 Arc::clone(&state3),
-                                folder_rows3,
+                                Rc::clone(&folder_rows_clone2),
                                 on_library_changed3.clone(),
                             );
                             if let Some(cb) = on_library_changed3.as_ref() {
@@ -735,29 +745,33 @@ fn build_sound_folder_row(
         let state2 = Arc::clone(&state);
         let folders_group2 = folders_group.downgrade();
         let add_folder_row2 = add_folder_row.downgrade();
-        let folder_rows2 = Rc::downgrade(&folder_rows);
+        let folder_rows2 = Rc::clone(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         remove_btn.connect_clicked(move |_| {
-            if let Err(e) =
-                commands::remove_sound_folder(folder_owned.clone(), Arc::clone(&state2.config))
-            {
+            log::info!("Remove folder button clicked: {}", folder_owned);
+            if let Err(e) = commands::remove_sound_folder(
+                folder_owned.clone(),
+                Arc::clone(&state2.config),
+                Arc::clone(&state2.hotkeys),
+            ) {
                 log::warn!("Remove folder failed: {e}");
                 return;
             }
+            log::info!("Remove folder command succeeded");
             let Some(folders_group2) = folders_group2.upgrade() else {
+                log::warn!("folders_group2 weak ref failed to upgrade");
                 return;
             };
             let Some(add_folder_row2) = add_folder_row2.upgrade() else {
+                log::warn!("add_folder_row2 weak ref failed to upgrade");
                 return;
             };
-            let Some(folder_rows2) = folder_rows2.upgrade() else {
-                return;
-            };
+            log::info!("Using strong Rc reference for folder_rows");
             schedule_rebuild_sound_folder_rows(
                 &folders_group2,
                 &add_folder_row2,
                 Arc::clone(&state2),
-                folder_rows2,
+                Rc::clone(&folder_rows2),
                 on_library_changed2.clone(),
             );
             if let Some(cb) = on_library_changed2.as_ref() {
@@ -777,9 +791,13 @@ fn schedule_rebuild_sound_folder_rows(
     folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
+    log::info!("schedule_rebuild_sound_folder_rows: Scheduling rebuild");
     let folders_group = folders_group.clone();
     let add_folder_row = add_folder_row.clone();
+
+    // Use idle_add to ensure this runs after the current event is processed
     gtk4::glib::idle_add_local_once(move || {
+        log::info!("schedule_rebuild_sound_folder_rows: Idle callback executing");
         rebuild_sound_folder_rows(
             &folders_group,
             &add_folder_row,
@@ -797,7 +815,12 @@ fn rebuild_sound_folder_rows(
     folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
+    log::info!("rebuild_sound_folder_rows: Starting rebuild");
     let existing_rows = std::mem::take(&mut *folder_rows.borrow_mut());
+    log::info!(
+        "rebuild_sound_folder_rows: Removing {} existing rows",
+        existing_rows.len()
+    );
     for row in existing_rows {
         folders_group.remove(&row);
     }
@@ -808,9 +831,15 @@ fn rebuild_sound_folder_rows(
 
     let folders = {
         let cfg = state.config.lock().unwrap();
+        log::info!(
+            "rebuild_sound_folder_rows: Config has {} folders: {:?}",
+            cfg.sound_folders.len(),
+            cfg.sound_folders
+        );
         cfg.sound_folders.clone()
     };
 
+    let mut new_rows = Vec::new();
     for folder in folders {
         let row = build_sound_folder_row(
             folder,
@@ -821,10 +850,18 @@ fn rebuild_sound_folder_rows(
             on_library_changed.clone(),
         );
         folders_group.add(&row);
-        folder_rows.borrow_mut().push(row);
+        new_rows.push(row);
     }
 
     folders_group.add(add_folder_row);
+
+    // Update the folder_rows RefCell with the new rows
+    *folder_rows.borrow_mut() = new_rows;
+
+    log::info!(
+        "rebuild_sound_folder_rows: Rebuild complete, {} rows added",
+        folder_rows.borrow().len()
+    );
 }
 
 fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
