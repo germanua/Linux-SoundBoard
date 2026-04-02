@@ -143,9 +143,16 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
             warn!("GTK display backend is unavailable during activation");
         }
 
-        let config = load_config();
+        let mut config = load_config();
         crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
         crate::diagnostics::record_phase_with_config("startup:config_loaded", &config);
+
+        let cleaned_count = cleanup_stale_tmp_sounds(&mut config);
+        if cleaned_count > 0 {
+            if let Err(e) = config.save() {
+                log::warn!("Failed to save config after cleanup: {}", e);
+            }
+        }
 
         let mic_status = setup_virtual_microphone(&config);
         crate::diagnostics::memory::log_memory_snapshot("startup:virtual_mic_ready");
@@ -257,6 +264,29 @@ fn record_config_phase(name: &str, config: &Arc<Mutex<Config>>) {
 
 fn record_state_phase(name: &str, state: &Arc<AppState>) {
     record_config_phase(name, &state.config);
+}
+
+fn cleanup_stale_tmp_sounds(config: &mut Config) -> usize {
+    use std::path::Path;
+
+    let sounds_to_remove: Vec<String> = config
+        .sounds
+        .iter()
+        .filter(|sound| {
+            let effective_path = sound.source_path.as_ref().unwrap_or(&sound.path);
+            let path = Path::new(effective_path);
+            path.starts_with("/tmp") && !path.exists()
+        })
+        .map(|s| s.id.clone())
+        .collect();
+
+    let count = sounds_to_remove.len();
+    if count > 0 {
+        info!("Cleaning up {} stale sound(s) from /tmp", count);
+        config.remove_sounds(&sounds_to_remove);
+    }
+
+    count
 }
 
 pub fn backfill_missing_sound_durations(config: &mut Config) -> bool {

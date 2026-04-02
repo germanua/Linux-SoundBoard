@@ -149,9 +149,57 @@ pub fn add_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<()
     })
 }
 
-pub fn remove_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<(), String> {
+pub fn remove_sound_folder(
+    folder: String,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+) -> Result<(), String> {
+    let folder_path = Path::new(&folder);
+
+    // Cancel any ongoing loudness analysis to stop processing sounds from this folder
+    log::info!(
+        "Cancelling loudness analysis before removing folder: {}",
+        folder
+    );
+    crate::commands::cancel_loudness_analysis();
+
+    // Collect sounds to remove whose effective source path is under this folder
+    let sounds_to_remove: Vec<String> = {
+        let cfg = config
+            .lock()
+            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+        cfg.sounds
+            .iter()
+            .filter(|sound| {
+                let effective_path = sound.source_path.as_ref().unwrap_or(&sound.path);
+                Path::new(effective_path).starts_with(folder_path)
+            })
+            .map(|s| s.id.clone())
+            .collect()
+    };
+
+    log::info!(
+        "Removing {} sounds from folder: {}",
+        sounds_to_remove.len(),
+        folder
+    );
+
+    // Unregister hotkeys for sounds being removed
+    if !sounds_to_remove.is_empty() {
+        if let Ok(mut manager) = hotkeys.lock() {
+            let _ = manager.unregister_hotkeys_blocking(&sounds_to_remove);
+        } else {
+            log::warn!(
+                "Hotkeys lock poisoned, skipping unregister for {} sounds",
+                sounds_to_remove.len()
+            );
+        }
+    }
+
+    // Remove folder and associated sounds
     with_saved_config(&config, |cfg| {
         cfg.remove_sound_folder(&folder);
+        cfg.remove_sounds(&sounds_to_remove);
     })
 }
 

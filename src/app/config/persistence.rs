@@ -52,12 +52,20 @@ impl Config {
 
     pub fn add_sound_folder(&mut self, folder: String) {
         if !self.sound_folders.contains(&folder) {
+            log::info!("Config: Adding folder: {}", folder);
             self.sound_folders.push(folder);
+            log::info!("Config: Total folders now: {}", self.sound_folders.len());
+        } else {
+            log::info!("Config: Folder already exists: {}", folder);
         }
     }
 
     pub fn remove_sound_folder(&mut self, folder: &str) {
+        log::info!("Config: Removing folder: {}", folder);
+        let before = self.sound_folders.len();
         self.sound_folders.retain(|f| f != folder);
+        let after = self.sound_folders.len();
+        log::info!("Config: Folders before: {}, after: {}", before, after);
     }
 
     pub fn add_sound(&mut self, sound: crate::config::Sound) {
