@@ -11,7 +11,6 @@ BuildRequires:  cargo >= 1.85
 BuildRequires:  rust >= 1.85
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
-BuildRequires:  pulseaudio-libs-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
 BuildRequires:  pkgconfig
@@ -19,13 +18,10 @@ BuildRequires:  ImageMagick
 
 Requires:       gtk4
 Requires:       libadwaita
-Requires:       pulseaudio-libs
 Requires:       libX11
 Requires:       libXi
 Requires:       pipewire
-Requires:       pipewire-pulseaudio
 Requires:       wireplumber
-Requires:       pulseaudio-utils
 
 Recommends:     xorg-x11-server-Xwayland
 
@@ -34,7 +30,7 @@ A high-performance, native Linux soundboard built with Rust, GTK4, and
 Libadwaita. Features include virtual microphone for routing audio to
 Discord, OBS, Zoom, etc., mic passthrough, LUFS normalization, global
 hotkeys via swhkd on Wayland and via the native X11 backend on X11/XWayland, and modern GTK4/Libadwaita
-UI with PipeWire/PulseAudio integration.
+UI with native PipeWire virtual microphone support.
 
 %prep
 %setup -q

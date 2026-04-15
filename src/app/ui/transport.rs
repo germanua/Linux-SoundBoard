@@ -1,7 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use glib::timeout_add_local;
 use gtk4::prelude::*;
@@ -15,6 +15,7 @@ use libadwaita::prelude::*;
 use crate::app_state::AppState;
 use crate::commands;
 use crate::config::PlayMode;
+use crate::timer_registry::remove_source_id_safe;
 
 use super::icons;
 use super::sound_list::NavigationSound;
@@ -23,6 +24,7 @@ type SoundListProvider = Box<dyn Fn() -> Vec<NavigationSound> + Send + Sync>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;
 const TRANSPORT_BUTTON_SIZE: i32 = 31;
+const SLOW_GTK_CALLBACK_THRESHOLD_MS: u128 = 16;
 
 fn weak_library_changed_callback(
     callback: &RefCell<Option<LibraryChangedCallback>>,
@@ -111,6 +113,8 @@ struct TransportInner {
     scrub_interaction: RefCell<ScrubInteraction>,
     scrub_commit_timeout: RefCell<Option<glib::SourceId>>,
     scrub_timer_id: RefCell<Option<glib::SourceId>>,
+    suppress_headphones_toggle: Cell<bool>,
+    suppress_mic_toggle: Cell<bool>,
     continue_suppressed_play_id: RefCell<Option<String>>,
     last_track_sound_id: RefCell<Option<String>>,
     state: Arc<AppState>,
@@ -412,6 +416,8 @@ impl TransportBar {
             scrub_interaction: RefCell::new(ScrubInteraction::default()),
             scrub_commit_timeout: RefCell::new(None),
             scrub_timer_id: RefCell::new(None),
+            suppress_headphones_toggle: Cell::new(false),
+            suppress_mic_toggle: Cell::new(false),
             continue_suppressed_play_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
             state,
@@ -431,7 +437,9 @@ impl TransportBar {
                 let Some(inner_poll) = inner_weak.upgrade() else {
                     return glib::ControlFlow::Break;
                 };
+                let started_at = Instant::now();
                 inner_poll.update_scrub();
+                log_slow_ui_callback("transport.update_scrub", started_at);
                 glib::ControlFlow::Continue
             });
             *tb.inner.scrub_timer_id.borrow_mut() = Some(timer_id);
@@ -492,14 +500,29 @@ impl TransportBar {
     }
 
     pub fn toggle_headphones_mute(&self) {
-        let _ = commands::toggle_local_mute(
+        match commands::toggle_local_mute(
             Arc::clone(&self.inner.state.config),
             Arc::clone(&self.inner.state.player),
-        );
+        ) {
+            Ok(local_mute) => self.apply_headphones_state(local_mute),
+            Err(e) => {
+                log::warn!("Toggle local mute failed via hotkey: {e}");
+                self.refresh_controls_from_state();
+            }
+        }
     }
 
     pub fn toggle_mic_mute(&self) {
-        let _ = commands::toggle_mic_passthrough(Arc::clone(&self.inner.state.config));
+        match commands::toggle_mic_passthrough(
+            Arc::clone(&self.inner.state.config),
+            Arc::clone(&self.inner.state.player),
+        ) {
+            Ok(enabled) => self.apply_mic_state(enabled),
+            Err(e) => {
+                log::warn!("Toggle mic passthrough failed via hotkey: {e}");
+                self.refresh_controls_from_state();
+            }
+        }
     }
 
     pub fn cycle_play_mode(&self) {
@@ -512,12 +535,35 @@ impl TransportBar {
             .settings
             .play_mode
             .next();
-        let _ = commands::set_play_mode(
+        if let Err(e) = commands::set_play_mode(
             new_mode.as_str().to_string(),
             Arc::clone(&self.inner.state.config),
             Arc::clone(&self.inner.state.player),
-        );
+        ) {
+            log::warn!("Set play mode failed via hotkey: {e}");
+            self.refresh_controls_from_state();
+            return;
+        }
         update_play_mode_button(&self.inner.playmode_btn, new_mode);
+    }
+
+    pub fn refresh_controls_from_state(&self) {
+        let (local_mute, mic_passthrough, play_mode) = self
+            .inner
+            .state
+            .config
+            .lock()
+            .map(|cfg| {
+                (
+                    cfg.settings.local_mute,
+                    cfg.settings.mic_passthrough,
+                    cfg.settings.play_mode,
+                )
+            })
+            .unwrap_or((false, true, PlayMode::Default));
+        self.apply_headphones_state(local_mute);
+        self.apply_mic_state(mic_passthrough);
+        update_play_mode_button(&self.inner.playmode_btn, play_mode);
     }
 
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
@@ -534,15 +580,29 @@ impl TransportBar {
 
     pub fn cleanup(&self) {
         if let Some(timeout_id) = self.inner.scrub_commit_timeout.borrow_mut().take() {
-            timeout_id.remove();
+            let _ = remove_source_id_safe(timeout_id);
         }
         if let Some(timer_id) = self.inner.scrub_timer_id.borrow_mut().take() {
-            timer_id.remove();
+            let _ = remove_source_id_safe(timer_id);
         }
         *self.inner.sound_list_provider.lock().unwrap() = None;
         *self.inner.toast_sender.lock().unwrap() = None;
         *self.inner.on_library_changed.borrow_mut() = None;
         *self.inner.on_list_style_changed.borrow_mut() = None;
+    }
+
+    fn apply_headphones_state(&self, local_mute: bool) {
+        self.inner.suppress_headphones_toggle.set(true);
+        self.inner.headphones_btn.set_active(!local_mute);
+        self.inner.suppress_headphones_toggle.set(false);
+        update_headphones_button(&self.inner.headphones_btn, !local_mute);
+    }
+
+    fn apply_mic_state(&self, enabled: bool) {
+        self.inner.suppress_mic_toggle.set(true);
+        self.inner.mic_btn.set_active(enabled);
+        self.inner.suppress_mic_toggle.set(false);
+        update_mic_button(&self.inner.mic_btn, enabled);
     }
 
     fn connect_signals(&self) {
@@ -644,20 +704,24 @@ impl TransportBar {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
+                if inner.suppress_headphones_toggle.get() {
+                    return;
+                }
+                let requested_enabled = btn.is_active();
                 match commands::toggle_local_mute(
                     Arc::clone(&inner.state.config),
                     Arc::clone(&inner.state.player),
                 ) {
                     Ok(muted) => {
-                        if muted {
-                            btn.remove_css_class("btn-active");
-                            icons::apply_button_icon(btn, icons::HEADPHONES_MUTED);
-                        } else {
-                            btn.add_css_class("btn-active");
-                            icons::apply_button_icon(btn, icons::HEADPHONES);
-                        }
+                        update_headphones_button(btn, !muted);
                     }
-                    Err(e) => log::warn!("Toggle local mute failed: {e}"),
+                    Err(e) => {
+                        log::warn!("Toggle local mute failed: {e}");
+                        inner.suppress_headphones_toggle.set(true);
+                        btn.set_active(!requested_enabled);
+                        inner.suppress_headphones_toggle.set(false);
+                        update_headphones_button(btn, !requested_enabled);
+                    }
                 }
             });
         }
@@ -668,17 +732,50 @@ impl TransportBar {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                match commands::toggle_mic_passthrough(Arc::clone(&inner.state.config)) {
-                    Ok(enabled) => {
-                        if enabled {
-                            btn.add_css_class("btn-active");
-                            icons::apply_button_icon(btn, icons::MICROPHONE);
-                        } else {
-                            btn.remove_css_class("btn-active");
-                            icons::apply_button_icon(btn, icons::MICROPHONE_DISABLED);
+                if inner.suppress_mic_toggle.get() {
+                    return;
+                }
+                let requested_enabled = btn.is_active();
+                btn.set_sensitive(false);
+                let btn_weak = btn.downgrade();
+                let inner_done_weak = Rc::downgrade(&inner);
+                if let Err(e) = commands::set_mic_passthrough_enabled_async(
+                    requested_enabled,
+                    Arc::clone(&inner.state.config),
+                    Arc::clone(&inner.state.player),
+                    move |result| {
+                        let Some(btn) = btn_weak.upgrade() else {
+                            return;
+                        };
+                        match result {
+                            Ok(enabled) => {
+                                if let Some(inner_done) = inner_done_weak.upgrade() {
+                                    inner_done.suppress_mic_toggle.set(true);
+                                    btn.set_active(enabled);
+                                    inner_done.suppress_mic_toggle.set(false);
+                                }
+                                update_mic_button(&btn, enabled);
+                            }
+                            Err(err) => {
+                                log::warn!("Toggle mic passthrough failed: {err}");
+                                let fallback_enabled = !requested_enabled;
+                                if let Some(inner_done) = inner_done_weak.upgrade() {
+                                    inner_done.suppress_mic_toggle.set(true);
+                                    btn.set_active(fallback_enabled);
+                                    inner_done.suppress_mic_toggle.set(false);
+                                }
+                                update_mic_button(&btn, fallback_enabled);
+                            }
                         }
-                    }
-                    Err(e) => log::warn!("Toggle mic passthrough failed: {e}"),
+                        btn.set_sensitive(true);
+                    },
+                ) {
+                    log::warn!("Failed to dispatch mic passthrough toggle: {e}");
+                    inner.suppress_mic_toggle.set(true);
+                    btn.set_active(!requested_enabled);
+                    inner.suppress_mic_toggle.set(false);
+                    update_mic_button(btn, !requested_enabled);
+                    btn.set_sensitive(true);
                 }
             });
         }
@@ -703,7 +800,7 @@ impl TransportBar {
                         if let Some(timeout_id) =
                             inner_seek.scrub_commit_timeout.borrow_mut().take()
                         {
-                            timeout_id.remove();
+                            let _ = remove_source_id_safe(timeout_id);
                         }
 
                         // Coalesce drag updates into one seek.
@@ -975,12 +1072,22 @@ impl TransportInner {
         let next_sound = &sounds[next_idx as usize];
 
         commands::stop_all(Arc::clone(&self.state.player));
-        if let Err(e) = commands::play_sound(
+        let sound_name = next_sound.name.clone();
+        if let Err(e) = commands::play_sound_async(
             next_sound.id.clone(),
             Arc::clone(&self.state.config),
             Arc::clone(&self.state.player),
+            move |result| {
+                if let Err(e) = result {
+                    log::warn!("Play adjacent failed for '{}': {}", sound_name, e);
+                }
+            },
         ) {
-            log::warn!("Play adjacent failed for '{}': {}", next_sound.name, e);
+            log::warn!(
+                "Failed to dispatch adjacent playback for '{}': {}",
+                next_sound.name,
+                e
+            );
         }
     }
 
@@ -1322,6 +1429,26 @@ fn update_play_pause_button(button: &ToggleButton, is_playing: bool) {
     }
 }
 
+fn update_mic_button(button: &ToggleButton, enabled: bool) {
+    if enabled {
+        button.add_css_class("btn-active");
+        icons::apply_button_icon(button, icons::MICROPHONE);
+    } else {
+        button.remove_css_class("btn-active");
+        icons::apply_button_icon(button, icons::MICROPHONE_DISABLED);
+    }
+}
+
+fn update_headphones_button(button: &ToggleButton, enabled: bool) {
+    if enabled {
+        button.add_css_class("btn-active");
+        icons::apply_button_icon(button, icons::HEADPHONES);
+    } else {
+        button.remove_css_class("btn-active");
+        icons::apply_button_icon(button, icons::HEADPHONES_MUTED);
+    }
+}
+
 fn play_mode_icon(mode: PlayMode) -> icons::IconPair {
     match mode {
         PlayMode::Loop => icons::PLAYMODE_LOOP,
@@ -1353,6 +1480,17 @@ fn play_mode_tooltip(mode: PlayMode) -> &'static str {
 fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+fn log_slow_ui_callback(name: &str, started_at: Instant) {
+    let elapsed_ms = started_at.elapsed().as_millis();
+    if elapsed_ms >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
+        log::debug!(
+            "GTK callback latency exceeded threshold: name={} elapsed_ms={}",
+            name,
+            elapsed_ms
+        );
+    }
 }
 
 fn begin_volume_edit(label: &Label, entry: &Entry) {

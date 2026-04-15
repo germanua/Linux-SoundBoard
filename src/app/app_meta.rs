@@ -20,8 +20,10 @@ pub const X11_BACKEND: &str = "x11";
 pub const STARTUP_VIRTUAL_MIC_DELAY_MS: u64 = 200;
 pub const HOTKEY_POLL_INTERVAL_MS: u64 = 50;
 
-pub const VIRTUAL_SINK_NAME: &str = "LinuxSoundboard_Sink";
-pub const VIRTUAL_SOURCE_NAME: &str = "LinuxSoundboard_Mic";
+pub const LOCAL_PLAYBACK_NODE_NAME: &str = "linuxsoundboard.local_playback";
+pub const MIC_CAPTURE_NODE_NAME: &str = "linuxsoundboard.mic_capture";
+pub const VIRTUAL_SINK_NAME: &str = "linuxsoundboard.virtual_output";
+pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
 pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
 pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";
 pub const LOOPBACK_LATENCY_MS: u32 = 30;

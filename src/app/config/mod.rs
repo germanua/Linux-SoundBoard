@@ -47,6 +47,11 @@ mod tests {
     }
 
     #[test]
+    fn config_default_uses_current_schema_version() {
+        assert_eq!(Config::default().schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
     fn typed_settings_serialize_to_legacy_strings() {
         let cfg = Config::default();
         let value = serde_json::to_value(&cfg).unwrap();
@@ -55,6 +60,8 @@ mod tests {
         assert_eq!(value["settings"]["auto_gain_apply_to"], "mic_only");
         assert_eq!(value["settings"]["play_mode"], "default");
         assert_eq!(value["settings"]["list_style"], "compact");
+        assert_eq!(value["settings"]["default_source_mode"], "manual");
+        assert_eq!(value["settings"]["mic_latency_profile"], "balanced");
     }
 
     #[test]
@@ -72,6 +79,8 @@ mod tests {
                     "allow_multiple_playbacks": true,
                     "mic_passthrough": true,
                     "mic_source": null,
+                    "default_source_mode": "weird",
+                    "mic_latency_profile": "turbo",
                     "skip_delete_confirm": false,
                     "auto_gain": false,
                     "auto_gain_mode": "weird",
@@ -93,6 +102,8 @@ mod tests {
         assert_eq!(cfg.settings.auto_gain_apply_to, AutoGainApplyTo::MicOnly);
         assert_eq!(cfg.settings.play_mode, PlayMode::Default);
         assert_eq!(cfg.settings.list_style, ListStyle::Compact);
+        assert_eq!(cfg.settings.default_source_mode, DefaultSourceMode::Manual);
+        assert_eq!(cfg.settings.mic_latency_profile, MicLatencyProfile::Balanced);
     }
 
     #[test]

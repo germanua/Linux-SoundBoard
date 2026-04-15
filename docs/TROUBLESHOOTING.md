@@ -9,7 +9,8 @@ cat /etc/os-release
 echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
 echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 echo "DISPLAY=$DISPLAY"
-systemctl --user status pipewire pipewire-pulse wireplumber
+systemctl --user status pipewire wireplumber
+wpctl status -n
 ```
 
 ## Installation Problems
@@ -34,7 +35,7 @@ sudo apt install ./linux-soundboard_1.1.2-1_amd64.deb
 If host audio packages are missing:
 
 ```bash
-sudo apt install pipewire pipewire-pulse wireplumber pulseaudio-utils
+sudo apt install pipewire wireplumber
 ```
 
 ### `.rpm` install reports missing dependencies
@@ -48,7 +49,7 @@ sudo dnf install ./linux-soundboard-1.1.2-1.x86_64.rpm
 If the audio stack is missing:
 
 ```bash
-sudo dnf install pipewire pipewire-pulseaudio wireplumber pulseaudio-utils
+sudo dnf install pipewire wireplumber
 ```
 
 ## Startup and UI Problems
@@ -111,32 +112,34 @@ Check the audio stack first:
 
 ```bash
 pgrep -x pipewire
-pactl list short sources
+pw-cli info 0
+wpctl status -n
 ```
 
 Install and start the required services if they are missing:
 
 ```bash
-systemctl --user enable --now pipewire pipewire-pulse wireplumber
+systemctl --user enable --now pipewire wireplumber
 ```
 
 Common package names:
 
-- Debian / Ubuntu: `pipewire pipewire-pulse wireplumber pulseaudio-utils`
-- Fedora: `pipewire pipewire-pulseaudio wireplumber pulseaudio-utils`
-- Arch Linux: `pipewire pipewire-pulse wireplumber`
+- Debian / Ubuntu: `pipewire wireplumber`
+- Fedora: `pipewire wireplumber`
+- Arch Linux: `pipewire wireplumber`
 
 ### Sounds play through speakers but not through Discord or OBS
 
 Verify that the target app is listening to `Linux_Soundboard_Mic`, not your physical microphone.
 
-List sources:
+List sources and the current default:
 
 ```bash
-pactl list short sources
+wpctl status -n
+wpctl inspect @DEFAULT_SOURCE@
 ```
 
-Then switch the target application input device to `Linux_Soundboard_Mic`.
+If the target app is a game that only reads the default source, set `Default Microphone` to `Auto While Running` before launching it.
 
 ### Mic passthrough does not work
 
@@ -147,7 +150,7 @@ Check three things:
 3. The source exists in PipeWire:
 
 ```bash
-pactl list short sources
+wpctl status -n
 ```
 
 ## Hotkey Problems
@@ -209,7 +212,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-### GTK, Libadwaita, PulseAudio, X11, or ALSA development packages are missing
+### GTK, Libadwaita, PipeWire, X11, or ALSA development packages are missing
 
 Use the dependency blocks in [INSTALL.md](INSTALL.md) under the source-build section.
 

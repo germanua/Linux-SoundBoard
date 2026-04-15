@@ -10,14 +10,12 @@ license=('custom:PolyForm-Noncommercial-1.0.0')
 depends=(
   'gtk4'
   'libadwaita'
-  'libpulse'
   'libx11'
   'libxi'
   'libxtst'
   'libxkbcommon'
   'hicolor-icon-theme'
   'pipewire'
-  'pipewire-pulse'
   'wireplumber'
 )
 makedepends=(

@@ -7,6 +7,29 @@ use crate::config::defaults::{
     default_auto_gain_release_ms, default_auto_gain_target,
 };
 
+macro_rules! impl_string_serde_enum {
+    ($type_name:ty) => {
+        impl Serialize for $type_name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $type_name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let value = String::deserialize(deserializer)?;
+                Ok(<$type_name>::from_str(&value).unwrap_or_default())
+            }
+        }
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Theme {
     #[default]
@@ -34,25 +57,7 @@ impl FromStr for Theme {
         }
     }
 }
-
-impl Serialize for Theme {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for Theme {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&value).unwrap_or_default())
-    }
-}
+impl_string_serde_enum!(Theme);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AutoGainMode {
@@ -88,25 +93,7 @@ impl FromStr for AutoGainMode {
         }
     }
 }
-
-impl Serialize for AutoGainMode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for AutoGainMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&value).unwrap_or_default())
-    }
-}
+impl_string_serde_enum!(AutoGainMode);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AutoGainApplyTo {
@@ -142,25 +129,7 @@ impl FromStr for AutoGainApplyTo {
         }
     }
 }
-
-impl Serialize for AutoGainApplyTo {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for AutoGainApplyTo {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&value).unwrap_or_default())
-    }
-}
+impl_string_serde_enum!(AutoGainApplyTo);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PlayMode {
@@ -204,31 +173,129 @@ impl FromStr for PlayMode {
         }
     }
 }
-
-impl Serialize for PlayMode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for PlayMode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&value).unwrap_or_default())
-    }
-}
+impl_string_serde_enum!(PlayMode);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ListStyle {
     #[default]
     Compact,
     Card,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DefaultSourceMode {
+    #[default]
+    Manual,
+    AutoWhileRunning,
+}
+
+impl DefaultSourceMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::AutoWhileRunning => "auto_while_running",
+        }
+    }
+}
+
+impl FromStr for DefaultSourceMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "manual" => Ok(Self::Manual),
+            "auto_while_running" => Ok(Self::AutoWhileRunning),
+            _ => Err(()),
+        }
+    }
+}
+impl_string_serde_enum!(DefaultSourceMode);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MicLatencyProfile {
+    #[default]
+    Balanced,
+    Low,
+    Ultra,
+}
+
+impl MicLatencyProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Low => "low",
+            Self::Ultra => "ultra",
+        }
+    }
+
+    pub const fn player_value(self) -> u32 {
+        match self {
+            Self::Balanced => 0,
+            Self::Low => 1,
+            Self::Ultra => 2,
+        }
+    }
+
+    pub const fn from_player_value(value: u32) -> Self {
+        match value {
+            1 => Self::Low,
+            2 => Self::Ultra,
+            _ => Self::Balanced,
+        }
+    }
+}
+
+impl FromStr for MicLatencyProfile {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "balanced" => Ok(Self::Balanced),
+            "low" => Ok(Self::Low),
+            "ultra" => Ok(Self::Ultra),
+            _ => Err(()),
+        }
+    }
+}
+impl_string_serde_enum!(MicLatencyProfile);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LoudnessAnalysisState {
+    #[default]
+    Pending,
+    Estimated,
+    Refined,
+    Unavailable,
+}
+
+impl LoudnessAnalysisState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Estimated => "estimated",
+            Self::Refined => "refined",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+impl FromStr for LoudnessAnalysisState {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "pending" => Ok(Self::Pending),
+            "estimated" => Ok(Self::Estimated),
+            "refined" => Ok(Self::Refined),
+            "unavailable" => Ok(Self::Unavailable),
+            _ => Err(()),
+        }
+    }
+}
+impl_string_serde_enum!(LoudnessAnalysisState);
+
+fn default_default_source_mode() -> DefaultSourceMode {
+    DefaultSourceMode::Manual
 }
 
 impl ListStyle {
@@ -251,25 +318,7 @@ impl FromStr for ListStyle {
         }
     }
 }
-
-impl Serialize for ListStyle {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ListStyle {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(Self::from_str(&value).unwrap_or_default())
-    }
-}
+impl_string_serde_enum!(ListStyle);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlHotkeyAction {
@@ -465,6 +514,12 @@ pub struct Sound {
     pub enabled: bool,
     #[serde(default)]
     pub loudness_lufs: Option<f64>,
+    #[serde(default)]
+    pub loudness_analysis_state: LoudnessAnalysisState,
+    #[serde(default)]
+    pub loudness_confidence: Option<f32>,
+    #[serde(default)]
+    pub loudness_source_fingerprint: Option<String>,
 }
 
 impl Sound {
@@ -479,6 +534,9 @@ impl Sound {
             volume: 100,
             enabled: true,
             loudness_lufs: None,
+            loudness_analysis_state: LoudnessAnalysisState::Pending,
+            loudness_confidence: None,
+            loudness_source_fingerprint: None,
         }
     }
 }
@@ -495,6 +553,10 @@ pub struct Settings {
     pub allow_multiple_playbacks: bool,
     pub mic_passthrough: bool,
     pub mic_source: Option<String>,
+    #[serde(default = "default_default_source_mode")]
+    pub default_source_mode: DefaultSourceMode,
+    #[serde(default)]
+    pub mic_latency_profile: MicLatencyProfile,
     #[serde(default)]
     pub skip_delete_confirm: bool,
     #[serde(default)]
@@ -519,6 +581,99 @@ pub struct Settings {
     pub list_style: ListStyle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VolumeSettingsDomain {
+    pub local_volume: u8,
+    pub local_mute: bool,
+    pub mic_volume: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicRoutingSettingsDomain {
+    pub mic_passthrough: bool,
+    pub mic_source: Option<String>,
+    pub default_source_mode: DefaultSourceMode,
+    pub mic_latency_profile: MicLatencyProfile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoGainSettingsDomain {
+    pub enabled: bool,
+    pub mode: AutoGainMode,
+    pub target_lufs: f64,
+    pub apply_to: AutoGainApplyTo,
+    pub lookahead_ms: u32,
+    pub attack_ms: u32,
+    pub release_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiSettingsDomain {
+    pub theme: Theme,
+    pub list_style: ListStyle,
+    pub skip_delete_confirm: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaybackSettingsDomain {
+    pub play_mode: PlayMode,
+    pub allow_multiple_playbacks: bool,
+}
+
+impl Settings {
+    pub fn volume_domain(&self) -> VolumeSettingsDomain {
+        VolumeSettingsDomain {
+            local_volume: self.local_volume,
+            local_mute: self.local_mute,
+            mic_volume: self.mic_volume,
+        }
+    }
+
+    pub fn mic_routing_domain(&self) -> MicRoutingSettingsDomain {
+        MicRoutingSettingsDomain {
+            mic_passthrough: self.mic_passthrough,
+            mic_source: self.mic_source.clone(),
+            default_source_mode: self.default_source_mode,
+            mic_latency_profile: self.mic_latency_profile,
+        }
+    }
+
+    pub fn auto_gain_domain(&self) -> AutoGainSettingsDomain {
+        AutoGainSettingsDomain {
+            enabled: self.auto_gain,
+            mode: self.auto_gain_mode,
+            target_lufs: self.auto_gain_target_lufs,
+            apply_to: self.auto_gain_apply_to,
+            lookahead_ms: self.auto_gain_lookahead_ms,
+            attack_ms: self.auto_gain_attack_ms,
+            release_ms: self.auto_gain_release_ms,
+        }
+    }
+
+    pub fn ui_domain(&self) -> UiSettingsDomain {
+        UiSettingsDomain {
+            theme: self.theme,
+            list_style: self.list_style,
+            skip_delete_confirm: self.skip_delete_confirm,
+        }
+    }
+
+    pub fn playback_domain(&self) -> PlaybackSettingsDomain {
+        PlaybackSettingsDomain {
+            play_mode: self.play_mode,
+            allow_multiple_playbacks: self.allow_multiple_playbacks,
+        }
+    }
+
+    pub fn normalize_for_persistence(&mut self) {
+        if !self.auto_gain_target_lufs.is_finite() {
+            self.auto_gain_target_lufs = default_auto_gain_target();
+        }
+        self.auto_gain_target_lufs = self.auto_gain_target_lufs.clamp(-24.0, 0.0);
+        self.allow_multiple_playbacks = false;
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -529,6 +684,8 @@ impl Default for Settings {
             allow_multiple_playbacks: false,
             mic_passthrough: true,
             mic_source: None,
+            default_source_mode: DefaultSourceMode::Manual,
+            mic_latency_profile: MicLatencyProfile::Balanced,
             skip_delete_confirm: false,
             auto_gain: false,
             auto_gain_mode: AutoGainMode::Static,
@@ -545,13 +702,13 @@ impl Default for Settings {
 }
 
 fn default_schema_version() -> u32 {
-    1
+    crate::config::migration::CURRENT_SCHEMA_VERSION
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: default_schema_version(),
             sound_folders: vec![],
             sounds: vec![],
             tabs: vec![],

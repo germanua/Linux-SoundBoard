@@ -2,12 +2,16 @@
 
 use crate::audio::player::AudioPlayer;
 use crate::commands;
-use crate::config::{Config, Sound, SoundTab};
+use crate::config::{Config, LoudnessAnalysisState, Sound, SoundTab};
 use crate::hotkeys::HotkeyManager;
+use crate::test_support::audio_fixtures::{
+    cleanup_test_audio_path, create_test_audio_file, create_test_audio_file_with_duration,
+};
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+const BACKGROUND_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn create_test_config() -> Config {
     Config::default()
@@ -24,70 +28,36 @@ fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(manager))
 }
 
-fn create_test_audio_player() -> Arc<Mutex<AudioPlayer>> {
-    Arc::new(Mutex::new(AudioPlayer::new_with_initial_volumes(0.8, 1.0)))
+fn create_test_audio_player() -> Arc<AudioPlayer> {
+    let mut config = Config::default();
+    config.settings.local_volume = 80;
+    config.settings.mic_volume = 100;
+    Arc::new(AudioPlayer::new_with_config(&config))
 }
 
 fn background_analysis_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static TEST_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
-    TEST_GUARD
+    let guard = TEST_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("background analysis test mutex poisoned")
+        .expect("background analysis test mutex poisoned");
+    wait_for_background_analysis_idle();
+    super::playback::reset_missing_loudness_analysis_test_state();
+    super::playback::reset_estimated_loudness_refinement_test_state();
+    guard
 }
 
-fn build_test_wave_payload() -> Vec<u8> {
-    let sample_rate = 44_100_u32;
-    let channels = 2_u16;
-    let bits_per_sample = 16_u16;
-    let sample_count = sample_rate / 5;
-    let bytes_per_sample = (bits_per_sample / 8) as usize;
-    let block_align = channels as usize * bytes_per_sample;
-    let byte_rate = sample_rate as usize * block_align;
-    let mut pcm = Vec::with_capacity(sample_count as usize * block_align);
-
-    for frame in 0..sample_count {
-        let phase = 2.0_f32 * std::f32::consts::PI * 440.0 * frame as f32 / sample_rate as f32;
-        let sample = (phase.sin() * 12_000.0) as i16;
-        for _ in 0..channels {
-            pcm.extend_from_slice(&sample.to_le_bytes());
-        }
-    }
-
-    let data_len = pcm.len() as u32;
-    let riff_len = 36 + data_len;
-
-    let mut bytes = Vec::with_capacity(44 + pcm.len());
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&riff_len.to_le_bytes());
-    bytes.extend_from_slice(b"WAVE");
-    bytes.extend_from_slice(b"fmt ");
-    bytes.extend_from_slice(&16_u32.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&channels.to_le_bytes());
-    bytes.extend_from_slice(&sample_rate.to_le_bytes());
-    bytes.extend_from_slice(&(byte_rate as u32).to_le_bytes());
-    bytes.extend_from_slice(&(block_align as u16).to_le_bytes());
-    bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&data_len.to_le_bytes());
-    bytes.extend_from_slice(&pcm);
-    bytes
-}
-
-fn create_test_audio_file(ext: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("lsb-audio-test-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&base).expect("create temp audio dir");
-    let path = base.join(format!("tone.{ext}"));
-    fs::write(&path, build_test_wave_payload()).expect("write test audio payload");
-    path
-}
-
-fn cleanup_test_audio_path(path: &Path) {
-    let _ = fs::remove_file(path);
-    if let Some(parent) = path.parent() {
-        let _ = fs::remove_dir_all(parent);
-    }
+fn wait_for_background_analysis_idle() {
+    assert!(
+        super::playback::wait_for_missing_loudness_analysis_to_finish(BACKGROUND_ANALYSIS_TIMEOUT),
+        "timed out waiting for loudness analysis to become idle"
+    );
+    assert!(
+        super::playback::wait_for_estimated_loudness_refinement_to_finish(
+            BACKGROUND_ANALYSIS_TIMEOUT,
+        ),
+        "timed out waiting for loudness refinement to become idle"
+    );
 }
 
 #[test]
@@ -208,8 +178,9 @@ fn test_remove_sound_folder() {
     let mut config = create_test_config();
     config.sound_folders.push("/tmp".to_string());
     let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
 
-    let result = commands::remove_sound_folder("/tmp".to_string(), config.clone());
+    let result = commands::remove_sound_folder("/tmp".to_string(), config.clone(), hotkeys);
     assert!(result.is_ok());
 
     let cfg = config.lock().unwrap();
@@ -321,6 +292,7 @@ fn test_refresh_sounds_populates_duration_metadata() {
 
     assert_eq!(sounds.len(), 1);
     assert!(sounds[0].duration_ms.is_some());
+    assert!(sounds[0].loudness_source_fingerprint.is_some());
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -344,6 +316,7 @@ fn test_import_dropped_files_populates_duration_metadata() {
 
     assert_eq!(imported.len(), 1);
     assert!(imported[0].duration_ms.is_some());
+    assert!(imported[0].loudness_source_fingerprint.is_some());
 
     cleanup_test_audio_path(&audio_path);
     let _ = fs::remove_dir_all(&target_root);
@@ -360,6 +333,7 @@ fn test_import_files_to_tab_populates_duration_metadata() {
 
     assert_eq!(imported.len(), 1);
     assert!(imported[0].duration_ms.is_some());
+    assert!(imported[0].loudness_source_fingerprint.is_some());
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -380,6 +354,7 @@ fn test_update_sound_source_refreshes_duration_metadata() {
             .expect("update succeeds");
 
     assert!(updated.duration_ms.is_some());
+            assert!(updated.loudness_source_fingerprint.is_some());
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -450,6 +425,41 @@ fn test_set_mic_volume() {
 
     let cfg = config.lock().unwrap();
     assert_eq!(cfg.settings.mic_volume, 75);
+}
+
+#[test]
+fn test_set_mic_latency_profile_low() {
+    let config = create_test_config_state();
+    let player = create_test_audio_player();
+
+    let result = commands::set_mic_latency_profile(
+        crate::config::MicLatencyProfile::Low,
+        config.clone(),
+        player,
+    );
+    assert!(result.is_ok());
+
+    let cfg = config.lock().unwrap();
+    assert_eq!(cfg.settings.mic_latency_profile, crate::config::MicLatencyProfile::Low);
+}
+
+#[test]
+fn test_set_mic_latency_profile_ultra() {
+    let config = create_test_config_state();
+    let player = create_test_audio_player();
+
+    let result = commands::set_mic_latency_profile(
+        crate::config::MicLatencyProfile::Ultra,
+        config.clone(),
+        player,
+    );
+    assert!(result.is_ok());
+
+    let cfg = config.lock().unwrap();
+    assert_eq!(
+        cfg.settings.mic_latency_profile,
+        crate::config::MicLatencyProfile::Ultra
+    );
 }
 
 #[test]
@@ -917,8 +927,6 @@ fn test_default_sound_import_dir() {
 #[test]
 fn test_trigger_missing_loudness_analysis_backfills_existing_sounds() {
     let _guard = background_analysis_test_guard();
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
-    super::playback::reset_missing_loudness_analysis_test_state();
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
     config.settings.auto_gain = true;
@@ -935,16 +943,131 @@ fn test_trigger_missing_loudness_analysis_backfills_existing_sounds() {
         Ok(commands::MissingLoudnessAnalysisTrigger::Started)
     ));
     assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
+    wait_for_background_analysis_idle();
 
     cleanup_test_audio_path(&audio_path);
 }
 
 #[test]
+fn test_trigger_missing_loudness_analysis_skips_unavailable_sounds() {
+    let _guard = background_analysis_test_guard();
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+
+    let mut sound = Sound::new("Unavailable Sound".to_string(), "/tmp/missing.wav".to_string());
+    sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+    sound.loudness_lufs = None;
+    config.sounds.push(sound);
+
+    let config = Arc::new(Mutex::new(config));
+    let result = commands::trigger_missing_loudness_analysis(config, false, None);
+
+    assert!(matches!(
+        result,
+        Ok(commands::MissingLoudnessAnalysisTrigger::SkippedNoMissingSounds)
+    ));
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
+}
+
+#[test]
+fn test_trigger_missing_loudness_analysis_starts_refinement_for_estimated_sounds() {
+    let _guard = background_analysis_test_guard();
+    let audio_path = create_test_audio_file("wav");
+
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+    let mut sound = Sound::new(
+        "Estimated Sound".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.loudness_lufs = Some(-16.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.5);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+
+    let result = commands::trigger_missing_loudness_analysis(Arc::clone(&config), false, None);
+    assert!(matches!(
+        result,
+        Ok(commands::MissingLoudnessAnalysisTrigger::SkippedNoMissingSounds)
+    ));
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
+    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 1);
+
+    wait_for_background_analysis_idle();
+
+    let cfg = config.lock().expect("config lock");
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_ne!(stored.loudness_analysis_state, LoudnessAnalysisState::Unavailable);
+    assert!(stored.loudness_confidence.unwrap_or(0.0) >= 0.5);
+    drop(cfg);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_trigger_estimated_loudness_refinement_force_refines_high_confidence_sound() {
+    let _guard = background_analysis_test_guard();
+    let audio_path = create_test_audio_file_with_duration("wav", 3_000);
+
+    let mut config = create_test_config();
+    config.settings.auto_gain = false;
+    let mut sound = Sound::new(
+        "Estimated High Confidence".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.loudness_lufs = Some(-16.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.98);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+
+    let result = commands::trigger_estimated_loudness_refinement(Arc::clone(&config), true);
+    assert!(matches!(
+        result,
+        Ok(commands::EstimatedLoudnessRefinementTrigger::Started)
+    ));
+    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 1);
+
+    wait_for_background_analysis_idle();
+
+    let cfg = config.lock().expect("config lock");
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(stored.loudness_analysis_state, LoudnessAnalysisState::Refined);
+    assert_eq!(stored.loudness_confidence, Some(1.0));
+    assert!(stored.loudness_lufs.is_some());
+    drop(cfg);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_trigger_estimated_loudness_refinement_skips_high_confidence_without_force() {
+    let _guard = background_analysis_test_guard();
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+
+    let mut sound = Sound::new("High Confidence".to_string(), "/tmp/high.wav".to_string());
+    sound.loudness_lufs = Some(-15.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.95);
+    config.sounds.push(sound);
+
+    let config = Arc::new(Mutex::new(config));
+    let result = commands::trigger_estimated_loudness_refinement(config, false);
+
+    assert!(matches!(
+        result,
+        Ok(commands::EstimatedLoudnessRefinementTrigger::SkippedNoCandidates)
+    ));
+    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 0);
+}
+
+#[test]
 fn test_set_auto_gain_schedules_loudness_backfill_for_missing_sounds() {
     let _guard = background_analysis_test_guard();
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
-    super::playback::reset_missing_loudness_analysis_test_state();
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
     config.sounds.push(Sound::new(
@@ -958,7 +1081,7 @@ fn test_set_auto_gain_schedules_loudness_backfill_for_missing_sounds() {
 
     assert!(result.is_ok());
     assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
+    wait_for_background_analysis_idle();
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -966,8 +1089,6 @@ fn test_set_auto_gain_schedules_loudness_backfill_for_missing_sounds() {
 #[test]
 fn test_add_sound_backfills_loudness_when_auto_gain_is_enabled() {
     let _guard = background_analysis_test_guard();
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
-    super::playback::reset_missing_loudness_analysis_test_state();
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
     config.settings.auto_gain = true;
@@ -980,7 +1101,8 @@ fn test_add_sound_backfills_loudness_when_auto_gain_is_enabled() {
     )
     .expect("add sound succeeds");
 
-    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
+    wait_for_background_analysis_idle();
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -988,8 +1110,6 @@ fn test_add_sound_backfills_loudness_when_auto_gain_is_enabled() {
 #[test]
 fn test_import_files_to_tab_backfills_loudness_when_auto_gain_is_enabled() {
     let _guard = background_analysis_test_guard();
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
-    super::playback::reset_missing_loudness_analysis_test_state();
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
     config.settings.auto_gain = true;
@@ -1003,16 +1123,42 @@ fn test_import_files_to_tab_backfills_loudness_when_auto_gain_is_enabled() {
     .expect("import succeeds");
 
     assert_eq!(imported.len(), 1);
-    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
+    wait_for_background_analysis_idle();
 
     cleanup_test_audio_path(&audio_path);
 }
 
 #[test]
+fn test_import_dropped_files_backfills_loudness_when_auto_gain_is_enabled() {
+    let _guard = background_analysis_test_guard();
+    let audio_path = create_test_audio_file("mp3");
+    let target_root =
+        std::env::temp_dir().join(format!("lsb-import-target-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&target_root).expect("create target dir");
+
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+    config
+        .sound_folders
+        .push(target_root.to_string_lossy().to_string());
+    let config = Arc::new(Mutex::new(config));
+
+    let imported =
+        commands::import_dropped_files(vec![audio_path.to_string_lossy().to_string()], config)
+            .expect("import succeeds");
+
+    assert_eq!(imported.len(), 1);
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
+    wait_for_background_analysis_idle();
+
+    cleanup_test_audio_path(&audio_path);
+    let _ = fs::remove_dir_all(&target_root);
+}
+
+#[test]
 fn test_refresh_sounds_backfills_loudness_for_new_library_files() {
     let _guard = background_analysis_test_guard();
-    assert!(super::playback::wait_for_missing_loudness_analysis_to_finish(Duration::from_secs(5)));
-    super::playback::reset_missing_loudness_analysis_test_state();
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
     config.settings.auto_gain = true;
@@ -1029,7 +1175,94 @@ fn test_refresh_sounds_backfills_loudness_for_new_library_files() {
     let sounds = commands::refresh_sounds(Arc::clone(&config), hotkeys).expect("refresh succeeds");
 
     assert_eq!(sounds.len(), 1);
-    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
+    wait_for_background_analysis_idle();
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
+    let _guard = background_analysis_test_guard();
+
+    let new_audio_path = create_test_audio_file("mp3");
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+
+    let mut sound = Sound::new("Source Test".to_string(), "/tmp/original.mp3".to_string());
+    sound.loudness_lufs = Some(-14.0);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+
+    let updated = commands::update_sound_source(
+        sound_id.clone(),
+        new_audio_path.to_string_lossy().to_string(),
+        Arc::clone(&config),
+    )
+    .expect("update succeeds");
+
+    assert!(updated.loudness_lufs.is_none());
+    assert_eq!(updated.loudness_analysis_state, LoudnessAnalysisState::Pending);
+    assert!(updated.loudness_confidence.is_none());
+    assert!(updated.loudness_source_fingerprint.is_some());
+    assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
+    wait_for_background_analysis_idle();
+
+    let cfg = config.lock().expect("config lock");
+    let stored = cfg.get_sound(&sound_id).expect("updated sound exists");
+    assert!(stored.loudness_lufs.is_none());
+    assert_ne!(stored.loudness_analysis_state, LoudnessAnalysisState::Estimated);
+    assert!(stored.loudness_confidence.is_none());
+    assert!(stored.loudness_source_fingerprint.is_some());
+    drop(cfg);
+
+    cleanup_test_audio_path(&new_audio_path);
+}
+
+#[test]
+fn test_refresh_sounds_invalidates_stale_loudness_fingerprint() {
+    let audio_path = create_test_audio_file("mp3");
+    let mut config = create_test_config();
+    config.settings.auto_gain = false;
+
+    let mut sound = Sound::new(
+        "Fingerprint Drift".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.duration_ms = commands::probe_duration_ms(&sound.path);
+    sound.loudness_lufs = Some(-14.5);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+    sound.loudness_confidence = Some(1.0);
+    sound.loudness_source_fingerprint = Some("stale-fingerprint".to_string());
+
+    config.sound_folders.push(
+        audio_path
+            .parent()
+            .expect("audio temp dir")
+            .to_string_lossy()
+            .to_string(),
+    );
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+
+    let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
+
+    let refreshed = commands::refresh_sounds(Arc::clone(&config), hotkeys).expect("refresh succeeds");
+    assert_eq!(refreshed.len(), 1);
+
+    let cfg = config.lock().expect("config lock");
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert!(stored.loudness_lufs.is_none());
+    assert_eq!(stored.loudness_analysis_state, LoudnessAnalysisState::Pending);
+    assert!(stored.loudness_confidence.is_none());
+    assert!(stored.loudness_source_fingerprint.is_some());
+    assert_ne!(
+        stored.loudness_source_fingerprint.as_deref(),
+        Some("stale-fingerprint")
+    );
+    drop(cfg);
 
     cleanup_test_audio_path(&audio_path);
 }

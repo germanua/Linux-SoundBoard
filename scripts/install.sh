@@ -336,7 +336,6 @@ install_app_appimage() {
     local url
     local install_dir="$HOME/.local/bin"
     local appimage_path="$install_dir/$APPIMAGE_NAME"
-    local runtime_pulse_package=""
     local fuse_package=""
 
     info "Installing the AppImage fallback."
@@ -350,14 +349,13 @@ install_app_appimage() {
         debian)
             fuse_package="$(apt_pick_package libfuse2t64 libfuse2 || true)"
             [[ -n "$fuse_package" ]] || fail "Could not locate a FUSE2 userspace package (tried libfuse2t64, libfuse2)."
-            apt_install "$fuse_package" pipewire pipewire-pulse wireplumber pulseaudio-utils
+            apt_install "$fuse_package" pipewire wireplumber
             ;;
         fedora)
-            dnf_install fuse-libs pipewire pipewire-pulseaudio wireplumber pulseaudio-utils
+            dnf_install fuse-libs pipewire wireplumber
             ;;
         opensuse)
-            runtime_pulse_package="$(zypper_pick_package pipewire-pulseaudio pipewire-pulse || true)"
-            zypper_install fuse pipewire wireplumber pulseaudio-utils ${runtime_pulse_package:+$runtime_pulse_package}
+            zypper_install fuse pipewire wireplumber
             ;;
         *)
             warn "Falling back to AppImage without distro-specific runtime dependency automation."
@@ -483,7 +481,7 @@ ensure_pipewire_services() {
         return
     fi
 
-    for service in pipewire.service pipewire-pulse.service wireplumber.service; do
+    for service in pipewire.service wireplumber.service; do
         if systemctl --user list-unit-files "$service" >/dev/null 2>&1; then
             systemctl --user enable --now "$service" >/dev/null 2>&1 || true
         fi

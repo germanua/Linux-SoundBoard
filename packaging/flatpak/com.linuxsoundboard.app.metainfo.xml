@@ -24,7 +24,7 @@
       <li>Modern GTK4/Libadwaita UI with dark mode support</li>
       <li>Organized sound library with tabs and folder sync</li>
       <li>Drag and drop support for easy sound import</li>
-      <li>PipeWire and PulseAudio integration</li>
+      <li>Native PipeWire virtual microphone routing</li>
     </ul>
   </description>
   

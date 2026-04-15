@@ -23,8 +23,6 @@ echo ""
 sudo dnf install -y \
     gtk4-devel \
     libadwaita-devel \
-    pulseaudio-libs-devel \
-    pulseaudio-utils \
     libX11-devel \
     libXi-devel \
     pkg-config \
@@ -33,7 +31,6 @@ sudo dnf install -y \
     rust \
     git \
     pipewire \
-    pipewire-pulseaudio \
     wireplumber \
     alsa-lib-devel \
     gcc \
@@ -105,7 +102,7 @@ echo ""
 echo "📋 Testing checklist:"
 echo "  1. Launch the application"
 echo "  2. Check Wayland support: echo \$WAYLAND_DISPLAY"
-echo "  3. Test virtual microphone: pactl list sources | grep Linux_Soundboard"
+echo "  3. Test virtual microphone: wpctl status -n | grep Linux_Soundboard"
 echo "  4. Test audio playback"
 echo "  5. Test global hotkeys"
 echo ""

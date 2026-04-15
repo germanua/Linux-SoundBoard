@@ -2,22 +2,12 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use crate::audio::player::AudioPlayer;
-use crate::config::{Config, ListStyle, Theme};
+use crate::config::{Config, DefaultSourceMode, ListStyle, MicLatencyProfile, Theme};
 use crate::pipewire::detection::{check_pipewire, PipeWireStatus};
 
-use super::shared::{with_config_mut, with_saved_config};
-
-/// Run a config mutation and save on success.
-fn with_saved_config_result<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
-where
-    F: FnOnce(&mut Config) -> R,
-{
-    with_config_mut(config, |cfg| {
-        let result = f(cfg);
-        cfg.save().map_err(|e| e.to_string())?;
-        Ok(result)
-    })?
-}
+use super::shared::{
+    dispatch_async_result, with_config_mut, with_saved_config, with_saved_config_result,
+};
 
 fn parse_theme(s: &str) -> Result<Theme, String> {
     match s.to_lowercase().as_str() {
@@ -30,41 +20,33 @@ fn parse_theme(s: &str) -> Result<Theme, String> {
 pub fn set_local_volume(
     volume: u8,
     config: Arc<Mutex<Config>>,
-    player: Arc<Mutex<AudioPlayer>>,
+    player: Arc<AudioPlayer>,
 ) -> Result<(), String> {
     let (clamped_volume, local_muted) = with_saved_config_result(&config, |cfg| {
         let clamped = volume.min(100);
         cfg.settings.local_volume = clamped;
-        (clamped, cfg.settings.local_mute)
+        Ok((clamped, cfg.settings.local_mute))
     })?;
 
-    if let Ok(player) = player.lock() {
-        if !local_muted {
-            player.set_local_volume(clamped_volume as f32 / 100.0);
-        }
-    } else {
-        log::warn!("Player lock poisoned, skipping volume change");
+    if !local_muted {
+        player.set_local_volume(clamped_volume as f32 / 100.0);
     }
     Ok(())
 }
 
 pub fn toggle_local_mute(
     config: Arc<Mutex<Config>>,
-    player: Arc<Mutex<AudioPlayer>>,
+    player: Arc<AudioPlayer>,
 ) -> Result<bool, String> {
     let (local_mute, local_volume) = with_saved_config_result(&config, |cfg| {
         cfg.settings.local_mute = !cfg.settings.local_mute;
-        (cfg.settings.local_mute, cfg.settings.local_volume)
+        Ok((cfg.settings.local_mute, cfg.settings.local_volume))
     })?;
 
-    if let Ok(player) = player.lock() {
-        if local_mute {
-            player.set_local_volume(0.0);
-        } else {
-            player.set_local_volume(local_volume as f32 / 100.0);
-        }
+    if local_mute {
+        player.set_local_volume(0.0);
     } else {
-        log::warn!("Player lock poisoned, skipping mute toggle");
+        player.set_local_volume(local_volume as f32 / 100.0);
     }
     Ok(local_mute)
 }
@@ -72,18 +54,15 @@ pub fn toggle_local_mute(
 pub fn set_mic_volume(
     volume: u8,
     config: Arc<Mutex<Config>>,
-    player: Arc<Mutex<AudioPlayer>>,
+    player: Arc<AudioPlayer>,
 ) -> Result<(), String> {
     let clamped = with_saved_config_result(&config, |cfg| {
         let clamped = volume.min(100);
         cfg.settings.mic_volume = clamped;
-        clamped
+        Ok(clamped)
     })?;
 
-    player
-        .lock()
-        .map(|player| player.set_mic_volume(clamped as f32 / 100.0))
-        .map_err(|e| format!("Player lock poisoned: {}", e))?;
+    player.set_mic_volume(clamped as f32 / 100.0);
     Ok(())
 }
 
@@ -113,63 +92,147 @@ pub fn set_list_style(style: String, config: Arc<Mutex<Config>>) -> Result<(), S
     })
 }
 
-pub fn toggle_mic_passthrough(config: Arc<Mutex<Config>>) -> Result<bool, String> {
-    use crate::pipewire::virtual_mic;
-
-    let (current_state, mic_source) = with_config_mut(&config, |cfg| {
-        let state = cfg.settings.mic_passthrough;
-        let source = cfg.settings.mic_source.clone();
-        (state, source)
-    })?;
-
-    let new_state = !current_state;
-
-    if new_state {
-        if let Err(e) = virtual_mic::enable_mic_passthrough_with_source(mic_source) {
-            log::warn!("Failed to enable mic passthrough: {}", e);
-        }
-    } else {
-        let _ = virtual_mic::disable_mic_passthrough();
-    }
+pub fn set_mic_passthrough_enabled(
+    enabled: bool,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<bool, String> {
+    player.set_mic_passthrough(enabled)?;
 
     let _ = with_config_mut(&config, |cfg| {
-        cfg.settings.mic_passthrough = new_state;
+        cfg.settings.mic_passthrough = enabled;
         cfg.save().map_err(|e| e.to_string())
     })?;
 
-    Ok(new_state)
+    Ok(enabled)
 }
 
-pub fn list_audio_sources() -> Vec<AudioSource> {
-    crate::pipewire::virtual_mic::list_sources()
+pub fn toggle_mic_passthrough(
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<bool, String> {
+    let current_state = with_config_mut(&config, |cfg| cfg.settings.mic_passthrough)?;
+    set_mic_passthrough_enabled(!current_state, config, player)
+}
+
+pub fn list_audio_sources(player: Arc<AudioPlayer>) -> Vec<AudioSource> {
+    player
+        .list_audio_sources()
         .into_iter()
-        .map(|name| AudioSource { name })
+        .map(|source| AudioSource {
+            name: source.node_name,
+            display_name: source.display_name,
+        })
         .collect()
 }
 
-pub fn set_mic_source(source: Option<String>, config: Arc<Mutex<Config>>) -> Result<(), String> {
-    use crate::pipewire::virtual_mic;
-
+pub fn set_mic_source(
+    source: Option<String>,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), String> {
+    player.set_mic_source(source.clone())?;
     with_config_mut(&config, |cfg| {
-        cfg.settings.mic_source = source.clone();
+        cfg.settings.mic_source = source;
         cfg.save().map_err(|e| e.to_string())
     })??;
-
-    let current_state = with_config_mut(&config, |cfg| cfg.settings.mic_passthrough)?;
-
-    if current_state {
-        let _ = virtual_mic::disable_mic_passthrough();
-        if let Err(e) = virtual_mic::enable_mic_passthrough_with_source(source) {
-            log::warn!("Failed to restart mic passthrough: {}", e);
-            return Err(e);
-        }
-    }
     Ok(())
+}
+
+pub fn set_default_source_mode(
+    mode: DefaultSourceMode,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), String> {
+    player.set_default_source_mode(mode)?;
+    with_config_mut(&config, |cfg| {
+        cfg.settings.default_source_mode = mode;
+        cfg.save().map_err(|e| e.to_string())
+    })??;
+    Ok(())
+}
+
+pub fn set_mic_latency_profile(
+    profile: MicLatencyProfile,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), String> {
+    player.set_mic_latency_profile(profile)?;
+    with_config_mut(&config, |cfg| {
+        cfg.settings.mic_latency_profile = profile;
+        cfg.save().map_err(|e| e.to_string())
+    })??;
+    Ok(())
+}
+
+pub fn set_mic_passthrough_enabled_async<F>(
+    enabled: bool,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<bool, String>) + 'static,
+{
+    dispatch_async_result(
+        "set_mic_passthrough_enabled",
+        move || set_mic_passthrough_enabled(enabled, config, player),
+        on_complete,
+    )
+}
+
+pub fn set_mic_source_async<F>(
+    source: Option<String>,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<(), String>) + 'static,
+{
+    dispatch_async_result(
+        "set_mic_source",
+        move || set_mic_source(source, config, player),
+        on_complete,
+    )
+}
+
+pub fn set_default_source_mode_async<F>(
+    mode: DefaultSourceMode,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<(), String>) + 'static,
+{
+    dispatch_async_result(
+        "set_default_source_mode",
+        move || set_default_source_mode(mode, config, player),
+        on_complete,
+    )
+}
+
+pub fn set_mic_latency_profile_async<F>(
+    profile: MicLatencyProfile,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<(), String>) + 'static,
+{
+    dispatch_async_result(
+        "set_mic_latency_profile",
+        move || set_mic_latency_profile(profile, config, player),
+        on_complete,
+    )
 }
 
 #[derive(serde::Serialize)]
 pub struct AudioSource {
     pub name: String,
+    pub display_name: String,
 }
 
 pub fn check_pipewire_status() -> PipeWireStatus {

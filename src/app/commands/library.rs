@@ -10,13 +10,77 @@ use crate::audio::file_link::{
     ValidationMode, ValidationReport, STARTUP_VALIDATION_CHUNK_SIZE,
 };
 use crate::audio::scanner;
-use crate::config::{Config, Sound, SoundTab};
+use crate::config::{Config, LoudnessAnalysisState, Sound, SoundTab};
 use crate::hotkeys::HotkeyManager;
 
 use super::shared::{
-    bounded_audio_analysis_threads, build_sound_with_metadata, default_sound_import_dir,
-    probe_duration_ms, with_config_mut, with_saved_config,
+    adaptive_audio_analysis_plan, build_sound_with_metadata, compute_sound_source_fingerprint,
+    default_sound_import_dir, probe_duration_ms, unregister_hotkeys_best_effort, with_config_mut,
+    with_saved_config,
 };
+
+fn maybe_schedule_missing_loudness_backfill(config: &Arc<Mutex<Config>>) {
+    match crate::commands::trigger_missing_loudness_analysis(Arc::clone(config), false, None) {
+        Ok(crate::commands::MissingLoudnessAnalysisTrigger::Started) => {
+            log::debug!("Scheduled background loudness backfill after library update");
+        }
+        Ok(_) => {}
+        Err(err) => {
+            log::warn!("Failed to schedule background loudness backfill: {}", err);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FingerprintRefreshOutcome {
+    changed: bool,
+    invalidated: bool,
+}
+
+fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRefreshOutcome {
+    let current_fingerprint =
+        compute_sound_source_fingerprint(&sound.path, sound.duration_ms);
+
+    let Some(mut fingerprint) = current_fingerprint else {
+        return FingerprintRefreshOutcome {
+            changed: false,
+            invalidated: false,
+        };
+    };
+
+    if sound.loudness_source_fingerprint.is_none() {
+        sound.loudness_source_fingerprint = Some(fingerprint);
+        return FingerprintRefreshOutcome {
+            changed: true,
+            invalidated: false,
+        };
+    }
+
+    if sound.loudness_source_fingerprint.as_deref() == Some(fingerprint.as_str()) {
+        return FingerprintRefreshOutcome {
+            changed: false,
+            invalidated: false,
+        };
+    }
+
+    let refreshed_duration = probe_duration_ms(&sound.path);
+    if sound.duration_ms != refreshed_duration {
+        sound.duration_ms = refreshed_duration;
+    }
+
+    if let Some(recomputed) = compute_sound_source_fingerprint(&sound.path, sound.duration_ms) {
+        fingerprint = recomputed;
+    }
+
+    sound.loudness_source_fingerprint = Some(fingerprint);
+    sound.loudness_lufs = None;
+    sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
+    sound.loudness_confidence = None;
+    FingerprintRefreshOutcome {
+        changed: true,
+        invalidated: true,
+    }
+}
 
 pub fn add_sound(name: String, path: String, config: Arc<Mutex<Config>>) -> Result<Sound, String> {
     if !Path::new(&path).exists() {
@@ -44,6 +108,7 @@ pub fn add_sound(name: String, path: String, config: Arc<Mutex<Config>>) -> Resu
     cfg.add_sound(sound);
     cfg.save().map_err(|e| e.to_string())?;
     drop(cfg);
+    maybe_schedule_missing_loudness_backfill(&config);
     Ok(sound_clone)
 }
 
@@ -122,16 +187,7 @@ pub fn remove_sounds(
         return Ok(());
     }
 
-    if !plan.hotkey_ids.is_empty() {
-        if let Ok(mut manager) = hotkeys.lock() {
-            let _ = manager.unregister_hotkeys_blocking(&plan.hotkey_ids);
-        } else {
-            log::warn!(
-                "Hotkeys lock poisoned, skipping unregister for {} sound(s)",
-                plan.hotkey_ids.len()
-            );
-        }
-    }
+    unregister_hotkeys_best_effort(&hotkeys, &plan.hotkey_ids, "remove_sounds");
 
     let mut cfg = config
         .lock()
@@ -185,16 +241,7 @@ pub fn remove_sound_folder(
     );
 
     // Unregister hotkeys for sounds being removed
-    if !sounds_to_remove.is_empty() {
-        if let Ok(mut manager) = hotkeys.lock() {
-            let _ = manager.unregister_hotkeys_blocking(&sounds_to_remove);
-        } else {
-            log::warn!(
-                "Hotkeys lock poisoned, skipping unregister for {} sounds",
-                sounds_to_remove.len()
-            );
-        }
-    }
+    unregister_hotkeys_best_effort(&hotkeys, &sounds_to_remove, "remove_sound_folder");
 
     // Remove folder and associated sounds
     with_saved_config(&config, |cfg| {
@@ -251,12 +298,22 @@ pub fn refresh_sounds(
         let build_sound = |file: &scanner::AudioFile| {
             build_sound_with_metadata(file.name.clone(), file.path.clone())
         };
-        let analysis_threads = bounded_audio_analysis_threads();
+        let analysis_plan = adaptive_audio_analysis_plan(new_files.len());
+        let analysis_threads = analysis_plan.threads;
         let pool_threads = if new_files.is_empty() {
             1
         } else {
             analysis_threads
         };
+        if analysis_plan.throttled {
+            log::info!(
+                "Adaptive refresh metadata throttling applied: threads={} base={} rss={}kB process_threads={}",
+                analysis_plan.threads,
+                analysis_plan.base_threads,
+                analysis_plan.rss_kb.unwrap_or(0),
+                analysis_plan.process_threads.unwrap_or(0)
+            );
+        }
         crate::diagnostics::set_work_runtime("refresh_metadata", new_files.len(), pool_threads);
         crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:before_metadata_pool");
         if let Ok(cfg) = config.lock() {
@@ -304,21 +361,39 @@ pub fn refresh_sounds(
         crate::diagnostics::record_phase("refresh_sounds:after_metadata_pool", None);
     }
 
-    if !work.removed_ids.is_empty() {
-        if let Ok(mut manager) = hotkeys.lock() {
-            let _ = manager.unregister_hotkeys_blocking(&work.removed_ids);
-        } else {
-            log::warn!(
-                "Hotkeys lock poisoned, skipping unregister for {} sounds",
-                work.removed_ids.len()
-            );
-        }
-    }
+    unregister_hotkeys_best_effort(&hotkeys, &work.removed_ids, "refresh_sounds");
 
     let mut cfg = config
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    if work.new_sounds.is_empty() && work.removed_paths.is_empty() {
+    let mut refreshed_existing = 0usize;
+    let mut invalidated_existing = 0usize;
+    for sound in &mut cfg.sounds {
+        if work.removed_paths.contains(&sound.path) {
+            continue;
+        }
+        if !Path::new(&sound.path).exists() {
+            continue;
+        }
+        let refresh = refresh_existing_sound_source_fingerprint(sound);
+        if refresh.changed {
+            refreshed_existing += 1;
+        }
+        if refresh.invalidated {
+            invalidated_existing += 1;
+        }
+    }
+
+    if invalidated_existing > 0 {
+        log::info!(
+            "Refresh invalidated loudness metadata for {} sound(s) due to source fingerprint drift",
+            invalidated_existing
+        );
+    }
+
+    let should_schedule_backfill = !work.new_sounds.is_empty() || invalidated_existing > 0;
+
+    if work.new_sounds.is_empty() && work.removed_paths.is_empty() && refreshed_existing == 0 {
         crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:end:no_changes");
         crate::diagnostics::record_phase_with_config("library:refresh_complete", &cfg);
         crate::diagnostics::clear_work_runtime();
@@ -335,6 +410,9 @@ pub fn refresh_sounds(
     crate::diagnostics::record_phase_with_config("library:refresh_complete", &cfg);
     crate::diagnostics::clear_work_runtime();
     drop(cfg);
+    if should_schedule_backfill {
+        maybe_schedule_missing_loudness_backfill(&config);
+    }
     crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:end:saved");
     Ok(sounds)
 }
@@ -416,6 +494,7 @@ pub fn import_dropped_files(
     }
     cfg.save().map_err(|e| e.to_string())?;
     drop(cfg);
+    maybe_schedule_missing_loudness_backfill(&config);
     Ok(imported_clones)
 }
 
@@ -479,6 +558,8 @@ pub fn import_files_to_tab(
 
     cfg.save().map_err(|e| e.to_string())?;
     drop(cfg);
+
+    maybe_schedule_missing_loudness_backfill(&config);
 
     Ok(new_sounds)
 }
@@ -573,18 +654,25 @@ pub fn update_sound_source(
         return Err("Not a supported audio file".to_string());
     }
 
-    let mut config = config
+    let mut cfg = config
         .lock()
         .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    let sound = config.sounds.iter_mut().find(|s| s.id == id);
+    let sound = cfg.sounds.iter_mut().find(|s| s.id == id);
 
     match sound {
         Some(s) => {
             s.source_path = Some(new_path.clone());
             s.path = new_path;
             s.duration_ms = probe_duration_ms(&s.path);
+            s.loudness_source_fingerprint =
+                compute_sound_source_fingerprint(&s.path, s.duration_ms);
+            s.loudness_lufs = None;
+            s.loudness_analysis_state = crate::config::LoudnessAnalysisState::Pending;
+            s.loudness_confidence = None;
             let updated_sound = s.clone();
-            config.save().map_err(|e| e.to_string())?;
+            cfg.save().map_err(|e| e.to_string())?;
+            drop(cfg);
+            maybe_schedule_missing_loudness_backfill(&config);
             Ok(updated_sound)
         }
         None => Err("Sound not found".to_string()),

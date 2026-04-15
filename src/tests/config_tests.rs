@@ -1,4 +1,4 @@
-use linux_soundboard::config::{Config, Theme};
+use linux_soundboard::config::{Config, Theme, CURRENT_SCHEMA_VERSION};
 
 #[test]
 fn test_config_default_has_correct_values() {
@@ -14,7 +14,7 @@ fn test_config_default_has_correct_values() {
 #[test]
 fn test_config_default_has_schema_version() {
     let config = Config::default();
-    assert_eq!(config.schema_version, 1);
+    assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
 }
 
 #[test]

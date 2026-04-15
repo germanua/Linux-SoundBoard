@@ -29,9 +29,7 @@ sudo apt install ./linux-soundboard_1.1.2-1_amd64.deb
 Runtime packages commonly involved on Debian-based systems:
 
 - `pipewire`
-- `pipewire-pulse`
 - `wireplumber`
-- `pulseaudio-utils`
 
 ### Fedora
 
@@ -44,9 +42,7 @@ sudo dnf install ./linux-soundboard-1.1.2-1.x86_64.rpm
 Runtime packages commonly involved on Fedora:
 
 - `pipewire`
-- `pipewire-pulseaudio`
 - `wireplumber`
-- `pulseaudio-utils`
 
 ### AppImage
 
@@ -119,11 +115,13 @@ Upstream installation notes:
 3. Confirm PipeWire is running:
 
 ```bash
-systemctl --user status pipewire pipewire-pulse wireplumber
+systemctl --user status pipewire wireplumber
+wpctl status -n
 ```
 
 4. In Discord, OBS, Zoom, or another target application, choose `Linux_Soundboard_Mic` as the input device.
-5. If you need your real microphone mixed in, enable mic passthrough in the app settings.
+5. For games that only read the system default microphone, set `Default Microphone` to `Auto While Running` before launching the game.
+6. If you need your real microphone mixed in, enable mic passthrough in the app settings.
 
 ## Build From Source
 
@@ -131,23 +129,23 @@ systemctl --user status pipewire pipewire-pulse wireplumber
 
 ```bash
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
-  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
-  libx11-dev libxi-dev pipewire pipewire-pulse wireplumber pulseaudio-utils
+  libgtk-4-dev libadwaita-1-dev libasound2-dev \
+  libx11-dev libxi-dev pipewire wireplumber
 ```
 
 ### Fedora
 
 ```bash
 sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
-  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
-  libX11-devel libXi-devel pipewire pipewire-pulseaudio wireplumber pulseaudio-utils
+  gtk4-devel libadwaita-devel alsa-lib-devel \
+  libX11-devel libXi-devel pipewire wireplumber
 ```
 
 ### Arch Linux
 
 ```bash
-sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita libpulse \
-  alsa-lib libx11 libxi pipewire pipewire-pulse wireplumber
+sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
+  alsa-lib libx11 libxi pipewire wireplumber
 ```
 
 ### Build and Run

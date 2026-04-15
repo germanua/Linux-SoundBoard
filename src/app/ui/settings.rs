@@ -1,6 +1,5 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
@@ -11,7 +10,10 @@ use libadwaita::prelude::*;
 use crate::app_meta::{APP_TITLE, APP_VERSION};
 use crate::app_state::AppState;
 use crate::commands;
-use crate::config::{AutoGainApplyTo, AutoGainMode, ControlHotkeyAction, ListStyle, Theme};
+use crate::config::{
+    AutoGainApplyTo, AutoGainMode, ControlHotkeyAction, DefaultSourceMode, ListStyle,
+    MicLatencyProfile, Theme,
+};
 
 use super::icons;
 
@@ -20,6 +22,37 @@ fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
         row.add_css_class("appearance-choice-selected");
     } else {
         row.remove_css_class("appearance-choice-selected");
+    }
+}
+
+fn format_loudness_status_subtitle(status: &commands::LoudnessStatusSummary) -> String {
+    format!(
+        "Pending {} | Estimated {} | Refined {} | Unavailable {}",
+        status.pending_count, status.estimated_count, status.refined_count, status.unavailable_count
+    )
+}
+
+fn loudness_activity_text(status: &commands::LoudnessStatusSummary) -> &'static str {
+    if status.in_flight_backfill && status.in_flight_refinement {
+        "Analyzing + Refining"
+    } else if status.in_flight_backfill {
+        "Analyzing"
+    } else if status.in_flight_refinement {
+        "Refining"
+    } else if status.estimated_count > 0 {
+        "Idle (Refine Available)"
+    } else {
+        "Idle"
+    }
+}
+
+fn mic_latency_profile_subtitle(profile: MicLatencyProfile) -> &'static str {
+    match profile {
+        MicLatencyProfile::Balanced => "Stable default for most systems",
+        MicLatencyProfile::Low => "Lower queueing delay with minimal extra CPU",
+        MicLatencyProfile::Ultra => {
+            "Lowest queue delay (may auto-fallback to Low if underruns occur)"
+        }
     }
 }
 
@@ -407,13 +440,17 @@ fn build_general_page(
             let state2 = Arc::clone(&state);
             let spinner2 = spinner.downgrade();
             analyze_btn.connect_clicked(move |btn| {
-                let (completion_tx, completion_rx) = std::sync::mpsc::channel();
+                let in_flight = commands::get_loudness_status_summary(Arc::clone(&state2.config))
+                    .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
+                    .unwrap_or(false);
+                if in_flight {
+                    commands::cancel_loudness_analysis();
+                    return;
+                }
                 match commands::trigger_missing_loudness_analysis(
                     Arc::clone(&state2.config),
                     true,
-                    Some(Box::new(move |result| {
-                        let _ = completion_tx.send(result);
-                    })),
+                    None,
                 ) {
                     Ok(commands::MissingLoudnessAnalysisTrigger::Started) => {
                         if let Some(spinner2) = spinner2.upgrade() {
@@ -421,38 +458,6 @@ fn build_general_page(
                             spinner2.start();
                         }
                         btn.set_sensitive(false);
-
-                        let spinner3 = spinner2.clone();
-                        let btn3 = btn.downgrade();
-                        gtk4::glib::timeout_add_local(
-                            std::time::Duration::from_millis(50),
-                            move || match completion_rx.try_recv() {
-                                Ok(result) => {
-                                    if let Err(e) = result {
-                                        log::warn!("Manual loudness analysis failed: {e}");
-                                    }
-                                    if let Some(spinner3) = spinner3.upgrade() {
-                                        spinner3.stop();
-                                        spinner3.set_visible(false);
-                                    }
-                                    if let Some(btn3) = btn3.upgrade() {
-                                        btn3.set_sensitive(true);
-                                    }
-                                    gtk4::glib::ControlFlow::Break
-                                }
-                                Err(TryRecvError::Empty) => gtk4::glib::ControlFlow::Continue,
-                                Err(TryRecvError::Disconnected) => {
-                                    if let Some(spinner3) = spinner3.upgrade() {
-                                        spinner3.stop();
-                                        spinner3.set_visible(false);
-                                    }
-                                    if let Some(btn3) = btn3.upgrade() {
-                                        btn3.set_sensitive(true);
-                                    }
-                                    gtk4::glib::ControlFlow::Break
-                                }
-                            },
-                        );
                     }
                     Ok(_) => {}
                     Err(e) => log::warn!("Failed to schedule manual loudness analysis: {e}"),
@@ -460,6 +465,147 @@ fn build_general_page(
             });
         }
         auto_gain_group.add(&analyze_row);
+
+        let refine_row = adw::ActionRow::builder()
+            .title("Refine Estimated Sounds")
+            .subtitle("Run full loudness analysis for sounds that are still estimated")
+            .build();
+        let refine_btn = gtk4::Button::builder()
+            .label("Refine")
+            .css_classes(vec!["settings-primary-btn"])
+            .valign(gtk4::Align::Center)
+            .build();
+        let refine_spinner = gtk4::Spinner::builder()
+            .valign(gtk4::Align::Center)
+            .visible(false)
+            .build();
+        refine_row.add_suffix(&refine_spinner);
+        refine_row.add_suffix(&refine_btn);
+        {
+            let state2 = Arc::clone(&state);
+            let refine_spinner2 = refine_spinner.downgrade();
+            refine_btn.connect_clicked(move |btn| {
+                let in_flight = commands::get_loudness_status_summary(Arc::clone(&state2.config))
+                    .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
+                    .unwrap_or(false);
+                if in_flight {
+                    commands::cancel_loudness_analysis();
+                    return;
+                }
+                match commands::trigger_estimated_loudness_refinement(Arc::clone(&state2.config), true)
+                {
+                    Ok(commands::EstimatedLoudnessRefinementTrigger::Started) => {
+                        if let Some(refine_spinner2) = refine_spinner2.upgrade() {
+                            refine_spinner2.set_visible(true);
+                            refine_spinner2.start();
+                        }
+                        btn.set_sensitive(false);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("Failed to schedule manual loudness refinement: {e}");
+                    }
+                }
+            });
+        }
+        auto_gain_group.add(&refine_row);
+
+        let status_row = adw::ActionRow::builder()
+            .title("Loudness Status")
+            .subtitle("Loading loudness state…")
+            .build();
+        let status_badge = gtk4::Label::builder()
+            .label("Checking…")
+            .valign(gtk4::Align::Center)
+            .build();
+        status_row.add_suffix(&status_badge);
+        auto_gain_group.add(&status_row);
+
+        {
+            let state2 = Arc::clone(&state);
+            let status_row_weak = status_row.downgrade();
+            let status_badge_weak = status_badge.downgrade();
+            let analyze_btn_weak = analyze_btn.downgrade();
+            let analyze_spinner_weak = spinner.downgrade();
+            let refine_btn_weak = refine_btn.downgrade();
+            let refine_spinner_weak = refine_spinner.downgrade();
+
+            gtk4::glib::timeout_add_local(
+                std::time::Duration::from_millis(250),
+                move || {
+                    let Some(status_row) = status_row_weak.upgrade() else {
+                        return gtk4::glib::ControlFlow::Break;
+                    };
+                    let Some(status_badge) = status_badge_weak.upgrade() else {
+                        return gtk4::glib::ControlFlow::Break;
+                    };
+
+                    let summary = match commands::get_loudness_status_summary(Arc::clone(&state2.config))
+                    {
+                        Ok(summary) => summary,
+                        Err(e) => {
+                            log::warn!("Failed to read loudness status summary: {e}");
+                            return gtk4::glib::ControlFlow::Continue;
+                        }
+                    };
+
+                    status_row.set_subtitle(&format_loudness_status_subtitle(&summary));
+                    status_badge.set_text(loudness_activity_text(&summary));
+                    for class_name in ["hotkey-badge", "dim-label", "warning-label"] {
+                        status_badge.remove_css_class(class_name);
+                    }
+                    if summary.in_flight_backfill || summary.in_flight_refinement {
+                        status_badge.add_css_class("hotkey-badge");
+                    } else if summary.unavailable_count > 0 {
+                        status_badge.add_css_class("warning-label");
+                    } else {
+                        status_badge.add_css_class("dim-label");
+                    }
+
+                    if let Some(analyze_btn) = analyze_btn_weak.upgrade() {
+                        if summary.in_flight_backfill || summary.in_flight_refinement {
+                            analyze_btn.set_label("Stop");
+                            analyze_btn.set_sensitive(true);
+                        } else {
+                            analyze_btn.set_label("Analyze");
+                            analyze_btn.set_sensitive(!summary.in_flight_backfill);
+                        }
+                    }
+                    if let Some(analyze_spinner) = analyze_spinner_weak.upgrade() {
+                        if summary.in_flight_backfill {
+                            analyze_spinner.set_visible(true);
+                            analyze_spinner.start();
+                        } else {
+                            analyze_spinner.stop();
+                            analyze_spinner.set_visible(false);
+                        }
+                    }
+
+                    if let Some(refine_btn) = refine_btn_weak.upgrade() {
+                        if summary.in_flight_backfill || summary.in_flight_refinement {
+                            refine_btn.set_label("Stop");
+                            refine_btn.set_sensitive(true);
+                        } else {
+                            refine_btn.set_label("Refine");
+                            refine_btn.set_sensitive(
+                                !summary.in_flight_refinement && summary.estimated_count > 0,
+                            );
+                        }
+                    }
+                    if let Some(refine_spinner) = refine_spinner_weak.upgrade() {
+                        if summary.in_flight_refinement {
+                            refine_spinner.set_visible(true);
+                            refine_spinner.start();
+                        } else {
+                            refine_spinner.stop();
+                            refine_spinner.set_visible(false);
+                        }
+                    }
+
+                    gtk4::glib::ControlFlow::Continue
+                },
+            );
+        }
 
         auto_gain_group.set_visible(auto_gain);
     }
@@ -472,18 +618,23 @@ fn build_general_page(
         .build();
 
     {
-        let sources = commands::list_audio_sources();
-        let current_mic = {
+        let sources = commands::list_audio_sources(Arc::clone(&state.player));
+        let (current_mic, current_default_source_mode, current_latency_profile) = {
             let cfg = state.config.lock().unwrap();
-            cfg.settings.mic_source.clone()
+            (
+                cfg.settings.mic_source.clone(),
+                cfg.settings.default_source_mode,
+                cfg.settings.mic_latency_profile,
+            )
         };
 
         let mic_row = adw::ComboRow::builder().title("Microphone").build();
 
         let mut items: Vec<&str> = vec!["Auto-detect (Default)"];
         let source_names: Vec<String> = sources.iter().map(|s| s.name.clone()).collect();
-        for name in &source_names {
-            items.push(name.as_str());
+        let source_labels: Vec<String> = sources.iter().map(|s| s.display_name.clone()).collect();
+        for label in &source_labels {
+            items.push(label.as_str());
         }
         let model = gtk4::StringList::new(&items);
         mic_row.set_model(Some(&model));
@@ -497,21 +648,208 @@ fn build_general_page(
             None => 0,
         };
         mic_row.set_selected(selected_idx);
+        let confirmed_mic_selection = Rc::new(RefCell::new(selected_idx));
+        let suppress_mic_selection = Rc::new(Cell::new(false));
 
         let state2 = Arc::clone(&state);
+        let confirmed_mic_selection2 = Rc::clone(&confirmed_mic_selection);
+        let suppress_mic_selection2 = Rc::clone(&suppress_mic_selection);
         mic_row.connect_selected_notify(move |row| {
+            if suppress_mic_selection2.get() {
+                return;
+            }
             let idx = row.selected();
+            let previous_selected = *confirmed_mic_selection2.borrow();
+            if idx == previous_selected {
+                return;
+            }
             let source = if idx == 0 {
                 None
             } else {
-                row.model()
-                    .and_then(|m| m.downcast::<gtk4::StringList>().ok())
-                    .and_then(|sl| sl.string(idx).map(|s| s.to_string()))
+                source_names.get(idx as usize - 1).cloned()
             };
-            let _ = commands::set_mic_source(source, Arc::clone(&state2.config));
+            row.set_sensitive(false);
+            let row_weak = row.downgrade();
+            let confirmed_mic_selection3 = Rc::clone(&confirmed_mic_selection2);
+            let suppress_mic_selection3 = Rc::clone(&suppress_mic_selection2);
+            if let Err(e) = commands::set_mic_source_async(
+                source,
+                Arc::clone(&state2.config),
+                Arc::clone(&state2.player),
+                move |result| {
+                    let Some(row) = row_weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(()) => {
+                            *confirmed_mic_selection3.borrow_mut() = idx;
+                        }
+                        Err(err) => {
+                            log::warn!("Set mic source failed: {err}");
+                            suppress_mic_selection3.set(true);
+                            row.set_selected(previous_selected);
+                            suppress_mic_selection3.set(false);
+                        }
+                    }
+                    row.set_sensitive(true);
+                },
+            ) {
+                log::warn!("Failed to dispatch mic source change: {e}");
+                suppress_mic_selection2.set(true);
+                row.set_selected(previous_selected);
+                suppress_mic_selection2.set(false);
+                row.set_sensitive(true);
+            }
         });
 
         mic_group.add(&mic_row);
+
+        let default_mode_row = adw::ComboRow::builder()
+            .title("Default Microphone")
+            .subtitle("Controls whether the app claims the system default mic for games")
+            .build();
+        let default_mode_items = gtk4::StringList::new(&["Manual", "Auto While Running"]);
+        default_mode_row.set_model(Some(&default_mode_items));
+        default_mode_row.set_selected(match current_default_source_mode {
+            DefaultSourceMode::Manual => 0,
+            DefaultSourceMode::AutoWhileRunning => 1,
+        });
+        let confirmed_default_mode_selection = Rc::new(RefCell::new(default_mode_row.selected()));
+        let suppress_default_mode_selection = Rc::new(Cell::new(false));
+
+        let state3 = Arc::clone(&state);
+        let confirmed_default_mode_selection2 = Rc::clone(&confirmed_default_mode_selection);
+        let suppress_default_mode_selection2 = Rc::clone(&suppress_default_mode_selection);
+        default_mode_row.connect_selected_notify(move |row| {
+            if suppress_default_mode_selection2.get() {
+                return;
+            }
+            let selected = row.selected();
+            let previous_selected = *confirmed_default_mode_selection2.borrow();
+            if selected == previous_selected {
+                return;
+            }
+            let mode = match row.selected() {
+                1 => DefaultSourceMode::AutoWhileRunning,
+                _ => DefaultSourceMode::Manual,
+            };
+            row.set_sensitive(false);
+            let row_weak = row.downgrade();
+            let confirmed_default_mode_selection3 = Rc::clone(&confirmed_default_mode_selection2);
+            let suppress_default_mode_selection3 = Rc::clone(&suppress_default_mode_selection2);
+            if let Err(e) = commands::set_default_source_mode_async(
+                mode,
+                Arc::clone(&state3.config),
+                Arc::clone(&state3.player),
+                move |result| {
+                    let Some(row) = row_weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(()) => {
+                            *confirmed_default_mode_selection3.borrow_mut() = selected;
+                        }
+                        Err(err) => {
+                            log::warn!("Set default source mode failed: {err}");
+                            suppress_default_mode_selection3.set(true);
+                            row.set_selected(previous_selected);
+                            suppress_default_mode_selection3.set(false);
+                        }
+                    }
+                    row.set_sensitive(true);
+                },
+            ) {
+                log::warn!("Failed to dispatch default source mode change: {e}");
+                suppress_default_mode_selection2.set(true);
+                row.set_selected(previous_selected);
+                suppress_default_mode_selection2.set(false);
+                row.set_sensitive(true);
+            }
+        });
+        mic_group.add(&default_mode_row);
+
+        let latency_profile_row = adw::ComboRow::builder()
+            .title("Mic Latency Profile")
+            .subtitle(mic_latency_profile_subtitle(current_latency_profile))
+            .build();
+        let latency_profile_items = gtk4::StringList::new(&[
+            "Balanced (recommended)",
+            "Low latency",
+            "Ultra latency (experimental)",
+        ]);
+        latency_profile_row.set_model(Some(&latency_profile_items));
+        latency_profile_row.set_selected(match current_latency_profile {
+            MicLatencyProfile::Balanced => 0,
+            MicLatencyProfile::Low => 1,
+            MicLatencyProfile::Ultra => 2,
+        });
+        let confirmed_latency_selection = Rc::new(RefCell::new(latency_profile_row.selected()));
+        let suppress_latency_selection = Rc::new(Cell::new(false));
+
+        let state4 = Arc::clone(&state);
+        let confirmed_latency_selection2 = Rc::clone(&confirmed_latency_selection);
+        let suppress_latency_selection2 = Rc::clone(&suppress_latency_selection);
+        latency_profile_row.connect_selected_notify(move |row| {
+            if suppress_latency_selection2.get() {
+                return;
+            }
+
+            let selected = row.selected();
+            let previous_selected = *confirmed_latency_selection2.borrow();
+            if selected == previous_selected {
+                return;
+            }
+
+            let profile = match selected {
+                1 => MicLatencyProfile::Low,
+                2 => MicLatencyProfile::Ultra,
+                _ => MicLatencyProfile::Balanced,
+            };
+            let previous_profile = match previous_selected {
+                1 => MicLatencyProfile::Low,
+                2 => MicLatencyProfile::Ultra,
+                _ => MicLatencyProfile::Balanced,
+            };
+
+            row.set_subtitle(mic_latency_profile_subtitle(profile));
+            row.set_sensitive(false);
+            let row_weak = row.downgrade();
+            let confirmed_latency_selection3 = Rc::clone(&confirmed_latency_selection2);
+            let suppress_latency_selection3 = Rc::clone(&suppress_latency_selection2);
+
+            if let Err(e) = commands::set_mic_latency_profile_async(
+                profile,
+                Arc::clone(&state4.config),
+                Arc::clone(&state4.player),
+                move |result| {
+                    let Some(row) = row_weak.upgrade() else {
+                        return;
+                    };
+                    match result {
+                        Ok(()) => {
+                            *confirmed_latency_selection3.borrow_mut() = selected;
+                            row.set_subtitle(mic_latency_profile_subtitle(profile));
+                        }
+                        Err(err) => {
+                            log::warn!("Set mic latency profile failed: {err}");
+                            suppress_latency_selection3.set(true);
+                            row.set_selected(previous_selected);
+                            suppress_latency_selection3.set(false);
+                            row.set_subtitle(mic_latency_profile_subtitle(previous_profile));
+                        }
+                    }
+                    row.set_sensitive(true);
+                },
+            ) {
+                log::warn!("Failed to dispatch mic latency profile change: {e}");
+                suppress_latency_selection2.set(true);
+                row.set_selected(previous_selected);
+                suppress_latency_selection2.set(false);
+                row.set_subtitle(mic_latency_profile_subtitle(previous_profile));
+                row.set_sensitive(true);
+            }
+        });
+        mic_group.add(&latency_profile_row);
     }
     page.add(&mic_group);
 

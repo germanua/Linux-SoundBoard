@@ -18,12 +18,10 @@ Linux Soundboard dynamically links against system-provided libraries on Linux. T
 
 - GTK 4 native library: LGPL-2.1-or-later. Project page: https://www.gtk.org/ . Source code: https://gitlab.gnome.org/GNOME/gtk
 - Libadwaita native library: LGPL-2.1-or-later. Source code: https://gitlab.gnome.org/GNOME/libadwaita
-- PulseAudio client library (`libpulse` / `libpulse-simple`): LGPL-2.1-or-later. Project page: https://www.freedesktop.org/wiki/Software/PulseAudio/ . Source code: https://gitlab.freedesktop.org/pulseaudio/pulseaudio
 
 Notes:
 
-- The Rust crates `gtk4`, `libadwaita`, `libpulse-binding`, and `libpulse-simple-binding` are separate bindings/wrappers with their own crate licenses listed below.
-- On PipeWire-based systems, PulseAudio compatibility may be provided by PipeWire while the client ABI remains `libpulse`-compatible.
+- The Rust crates `gtk4`, `libadwaita`, and `pipewire` are separate bindings/wrappers with their own crate licenses listed below.
 
 ## MIT-Only Rust Crates
 
@@ -46,10 +44,9 @@ The following direct dependencies are available under the MIT license or the Apa
 - `chrono` 0.4.44. Copyright held by Chrono contributors.
 - `dirs` 5.0.1. Copyright (c) 2018-2019 dirs-rs contributors.
 - `env_logger` 0.11.10. Copyright (c) Individual contributors.
-- `libpulse-binding` 2.30.1. Copyright (c) 2019 Lyndon Brown.
-- `libpulse-simple-binding` 2.29.0. Copyright (c) 2019 Lyndon Brown.
 - `log` 0.4.29. Copyright (c) 2014 The Rust Project Developers.
 - `parking_lot` 0.12.5. Copyright (c) 2016 The Rust Project Developers.
+- `pipewire` 0.9.2. Copyright held by the pipewire-rs contributors.
 - `rayon` 1.11.0. Copyright (c) 2010 The Rust Project Developers.
 - `rodio` 0.18.1. Copyright held by RustAudio contributors.
 - `serde` 1.0.228. Copyright held by Erick Tryzelaar, David Tolnay, and Serde contributors.

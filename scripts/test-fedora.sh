@@ -37,8 +37,8 @@ install_build_deps() {
     echo ""
     echo "📦 Installing build dependencies..."
     sudo dnf install -y rpm-build cargo rust gtk4-devel libadwaita-devel \
-        pulseaudio-libs-devel libX11-devel libXi-devel pkgconfig ImageMagick git \
-        pulseaudio-utils pipewire pipewire-pulseaudio wireplumber
+        libX11-devel libXi-devel pkgconfig ImageMagick git \
+        pipewire wireplumber
 }
 
 test_rpm() {

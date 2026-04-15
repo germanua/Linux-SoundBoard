@@ -210,23 +210,8 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 rm -rf "$APPDIR/usr/lib32"
 
-# Bundle pactl for virtual mic support.
-echo "Bundling pactl for virtual microphone support..."
-if command -v pactl >/dev/null 2>&1; then
-    PACTL_PATH="$(command -v pactl)"
-    cp "$PACTL_PATH" "$APPDIR/usr/bin/pactl"
-    chmod +x "$APPDIR/usr/bin/pactl"
-    
-    # Bundle pactl deps if they are missing.
-    ldd "$PACTL_PATH" | grep "=> /" | awk '{print $3}' | while read lib; do
-        if [ -f "$lib" ] && [ ! -f "$APPDIR/usr/lib/$(basename "$lib")" ]; then
-            cp "$lib" "$APPDIR/usr/lib/" 2>/dev/null || true
-        fi
-    done
-    echo "✓ pactl bundled successfully"
-else
-    echo "⚠ WARNING: pactl not found on build system. Virtual mic may not work."
-fi
+# The AppImage uses the host PipeWire and WirePlumber stack.
+echo "Skipping pactl bundling; the runtime now uses native PipeWire streams and host wpctl."
 
 # Trim unused libraries to keep the AppImage small.
 echo "Removing unnecessary libraries..."

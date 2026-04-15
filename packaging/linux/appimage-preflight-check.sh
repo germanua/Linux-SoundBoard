@@ -72,12 +72,12 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo "To enable virtual microphone:"
     echo ""
     echo "Ubuntu/Debian:"
-    echo "  sudo apt install pipewire pipewire-pulse wireplumber"
-    echo "  systemctl --user enable --now pipewire pipewire-pulse wireplumber"
+    echo "  sudo apt install pipewire wireplumber"
+    echo "  systemctl --user enable --now pipewire wireplumber"
     echo ""
     echo "Fedora:"
-    echo "  sudo dnf install pipewire pipewire-pulseaudio wireplumber"
-    echo "  systemctl --user enable --now pipewire pipewire-pulse wireplumber"
+    echo "  sudo dnf install pipewire wireplumber"
+    echo "  systemctl --user enable --now pipewire wireplumber"
     echo ""
 fi
 

@@ -313,42 +313,35 @@ impl SoundListInner {
                     log::warn!("invalid_ids lock poisoned: {}", e);
                     false
                 });
-            let is_missing_on_demand = if is_invalid {
-                true
-            } else {
-                match commands::validate_single_source(
-                    sound.id.clone(),
-                    Arc::clone(&inner.state.config),
-                ) {
-                    Ok(is_available) => !is_available,
-                    Err(e) => {
-                        log::warn!(
-                            "On-demand source validation failed for '{}': {}",
-                            sound.id,
-                            e
-                        );
-                        false
-                    }
-                }
-            };
+            let is_missing_on_demand = is_invalid;
 
             if !is_missing_on_demand {
-                if let Err(e) = commands::play_sound(
+                let sound_name = sound.name.clone();
+                let sound_id = sound.id.clone();
+                let invalid_ids_for_play = Arc::clone(&invalid_ids);
+                let inner_weak_for_play = Arc::downgrade(&inner);
+                if let Err(e) = commands::play_sound_async(
                     sound.id.clone(),
                     Arc::clone(&inner.state.config),
                     Arc::clone(&inner.state.player),
+                    move |result| {
+                        if let Err(e) = result {
+                            log::warn!("Play failed for '{}': {}", sound_name, e);
+                            if e.starts_with(commands::SOURCE_UNAVAILABLE_ERROR_PREFIX) {
+                                if let Ok(mut ids) = invalid_ids_for_play.lock() {
+                                    ids.insert(sound_id.clone());
+                                }
+                                if let Some(inner) = inner_weak_for_play.upgrade() {
+                                    let changed_ids = HashSet::from([sound_id.clone()]);
+                                    inner.rebind_rows_for_ids(&changed_ids);
+                                }
+                            }
+                        }
+                    },
                 ) {
-                    log::warn!("Play failed for '{}': {}", sound.name, e);
+                    log::warn!("Failed to dispatch play for '{}': {}", sound.name, e);
                 }
                 return;
-            }
-
-            if !is_invalid {
-                if let Ok(mut ids) = invalid_ids.lock() {
-                    ids.insert(sound.id.clone());
-                }
-                let changed_ids = HashSet::from([sound.id.clone()]);
-                inner.rebind_rows_for_ids(&changed_ids);
             }
 
             let Some(full_sound) = inner.lookup_sound(&sound.id) else {
@@ -1035,6 +1028,14 @@ impl SoundListInner {
             Some("sound-ctx.set-hotkey"),
         );
         section1.append(Some("Check file path"), Some("sound-ctx.check-path"));
+        section1.append(
+            Some(if target_count > 1 {
+                "Refine Loudness (Selected)"
+            } else {
+                "Refine Loudness Now"
+            }),
+            Some("sound-ctx.refine-loudness"),
+        );
         menu_model.append_section(Some(&display_name), &section1);
 
         let section2 = gio::Menu::new();
@@ -1148,6 +1149,49 @@ impl SoundListInner {
             action.connect_activate(move |_, _| {
                 let path = sound.source_path.as_deref().unwrap_or(&sound.path);
                 crate::ui::dialogs::show_path_info(&win, &sound.name, path);
+            });
+            action_group.add_action(&action);
+        }
+
+        {
+            let inner = Arc::clone(self);
+            let state = Arc::clone(&self.state);
+            let target_ids = target_ids.clone();
+            let win = win.clone();
+            let action = gio::SimpleAction::new("refine-loudness", None);
+            action.connect_activate(move |_, _| {
+                for sound_id in &target_ids {
+                    let inner_done = Arc::clone(&inner);
+                    let win_done = win.downgrade();
+                    let sound_id_for_err = sound_id.clone();
+                    if let Err(e) = commands::analyze_sound_loudness_async(
+                        sound_id.clone(),
+                        Arc::clone(&state.config),
+                        move |result| match result {
+                            Ok(_) => inner_done.refresh_from_state_inner(),
+                            Err(err) => {
+                                log::warn!(
+                                    "Loudness refine failed for '{}': {}",
+                                    sound_id_for_err,
+                                    err
+                                );
+                                if let Some(win_done) = win_done.upgrade() {
+                                    crate::ui::dialogs::show_error(
+                                        &win_done,
+                                        "Loudness Refinement Failed",
+                                        &err,
+                                    );
+                                }
+                            }
+                        },
+                    ) {
+                        log::warn!(
+                            "Failed to dispatch loudness refinement for '{}': {}",
+                            sound_id,
+                            e
+                        );
+                    }
+                }
             });
             action_group.add_action(&action);
         }

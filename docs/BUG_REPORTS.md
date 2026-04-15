@@ -27,7 +27,8 @@ cat /etc/os-release
 echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
 echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 echo "DISPLAY=$DISPLAY"
-systemctl --user status pipewire pipewire-pulse wireplumber
+systemctl --user status pipewire wireplumber
+wpctl status -n
 ```
 
 If the issue is packaging-related, include the package filename you installed and the exact command used to install it.

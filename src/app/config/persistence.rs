@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::defaults::{config_dir_name, default_auto_gain_target, CONFIG_FILE_NAME};
-use crate::config::{Config, SoundTab};
+use crate::config::defaults::{config_dir_name, CONFIG_FILE_NAME};
+use crate::config::{Config, LoudnessAnalysisState, SoundTab};
 
 impl Config {
     pub fn config_path() -> PathBuf {
@@ -117,6 +117,13 @@ impl Config {
             if sound.source_path.is_none() {
                 sound.source_path = Some(sound.path.clone());
             }
+            if sound
+                .loudness_source_fingerprint
+                .as_ref()
+                .is_some_and(|fingerprint| fingerprint.trim().is_empty())
+            {
+                sound.loudness_source_fingerprint = None;
+            }
             if matches!(sound.loudness_lufs, Some(v) if !v.is_finite()) {
                 log::warn!(
                     "Dropping non-finite loudness for sound '{}' [{}]",
@@ -124,14 +131,44 @@ impl Config {
                     sound.path
                 );
                 sound.loudness_lufs = None;
+                sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+            }
+
+            match sound.loudness_confidence {
+                Some(confidence) if !confidence.is_finite() => {
+                    sound.loudness_confidence = None;
+                }
+                Some(confidence) => {
+                    sound.loudness_confidence = Some(confidence.clamp(0.0, 1.0));
+                }
+                None => {}
+            }
+
+            if sound.loudness_lufs.is_some() {
+                if matches!(
+                    sound.loudness_analysis_state,
+                    LoudnessAnalysisState::Pending | LoudnessAnalysisState::Unavailable
+                ) {
+                    // Backward compatibility: old configs did not store loudness state.
+                    sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+                }
+                if sound.loudness_confidence.is_none() {
+                    sound.loudness_confidence = Some(1.0);
+                }
+            } else if matches!(
+                sound.loudness_analysis_state,
+                LoudnessAnalysisState::Estimated | LoudnessAnalysisState::Refined
+            ) {
+                sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
+                sound.loudness_confidence = None;
+            }
+
+            if sound.loudness_analysis_state == LoudnessAnalysisState::Unavailable {
+                sound.loudness_confidence = None;
             }
         }
 
-        if !self.settings.auto_gain_target_lufs.is_finite() {
-            self.settings.auto_gain_target_lufs = default_auto_gain_target();
-        }
-        self.settings.auto_gain_target_lufs = self.settings.auto_gain_target_lufs.clamp(-24.0, 0.0);
-        self.settings.allow_multiple_playbacks = false;
+        self.settings.normalize_for_persistence();
     }
 
     pub fn create_tab(&mut self, name: String) -> SoundTab {

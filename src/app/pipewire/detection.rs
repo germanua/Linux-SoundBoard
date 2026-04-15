@@ -79,23 +79,23 @@ pub fn get_setup_instructions() -> String {
 
 ### Ubuntu/Debian:
 ```bash
-sudo apt install pipewire pipewire-pulse wireplumber pulseaudio-utils
-systemctl --user enable pipewire pipewire-pulse wireplumber
-systemctl --user start pipewire pipewire-pulse wireplumber
+sudo apt install pipewire wireplumber
+systemctl --user enable pipewire wireplumber
+systemctl --user start pipewire wireplumber
 ```
 
 ### Fedora:
 ```bash
-sudo dnf install pipewire pipewire-pulseaudio wireplumber
-systemctl --user enable pipewire pipewire-pulse wireplumber
-systemctl --user start pipewire pipewire-pulse wireplumber
+sudo dnf install pipewire wireplumber
+systemctl --user enable pipewire wireplumber
+systemctl --user start pipewire wireplumber
 ```
 
 ### Arch Linux:
 ```bash
-sudo pacman -S pipewire pipewire-pulse wireplumber
-systemctl --user enable pipewire pipewire-pulse wireplumber
-systemctl --user start pipewire pipewire-pulse wireplumber
+sudo pacman -S pipewire wireplumber
+systemctl --user enable pipewire wireplumber
+systemctl --user start pipewire wireplumber
 ```
 
 After installation, log out and log back in for changes to take effect.

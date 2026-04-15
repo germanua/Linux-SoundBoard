@@ -40,7 +40,7 @@ Linux Soundboard routes sound effects into a virtual microphone so they can be u
 
 Core capabilities:
 
-- Virtual microphone output via PipeWire and PulseAudio tools
+- Native PipeWire virtual microphone output with optional default-mic takeover for games
 - Mic passthrough so your voice and soundboard audio share one input device
 - LUFS normalization for consistent playback loudness
 - Global hotkeys with `swhkd` on Wayland and a native X11 backend on X11/XWayland
@@ -84,8 +84,9 @@ For a complete map of the app UI, user actions, right-click menus, hotkeys, tab 
 1. Install the application from a release package, AppImage, or the AUR.
 2. Launch `linux-soundboard`.
 3. In Discord, OBS, Zoom, or another target app, select `Linux_Soundboard_Mic` as the input device.
-4. Add a folder or drag audio files into the library.
-5. If you are on Wayland, make sure `swhkd` is installed so global hotkeys can work outside the app window.
+4. For games that only read the system default microphone, switch the app setting `Default Microphone` to `Auto While Running`.
+5. Add a folder or drag audio files into the library.
+6. If you are on Wayland, make sure `swhkd` is installed so global hotkeys can work outside the app window.
 
 ## Display Server Support
 
@@ -133,6 +134,6 @@ Linux Soundboard is licensed under the PolyForm Noncommercial 1.0.0 license. Com
 
 ## Acknowledgments
 
-Linux Soundboard relies on open-source work across the Rust and Linux desktop audio ecosystem. Major pieces include Symphonia for audio decoding, GTK4 and Libadwaita for the native interface, and PulseAudio-compatible Linux audio plumbing.
+Linux Soundboard relies on open-source work across the Rust and Linux desktop audio ecosystem. Major pieces include Symphonia for audio decoding, GTK4 and Libadwaita for the native interface, and PipeWire/WirePlumber for native Linux audio routing.
 
 Full third-party license notices, upstream source links, and additional LGPL/MPL/MIT/Apache details are collected in [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md).

@@ -8,7 +8,6 @@ Build-Depends: debhelper-compat (= 13),
                libgtk-4-dev,
                libadwaita-1-dev,
                libasound2-dev,
-               libpulse-dev,
                libx11-dev,
                libxi-dev,
                pkg-config,
@@ -24,13 +23,10 @@ Depends: ${shlibs:Depends},
          ${misc:Depends},
          libgtk-4-1,
          libadwaita-1-0,
-         libpulse0,
          libx11-6,
          libxi6,
          pipewire,
-         pipewire-pulse,
-         wireplumber,
-         pulseaudio-utils
+         wireplumber
 Recommends: xwayland
 Description: Native Linux soundboard with virtual microphone support
  A high-performance, native Linux soundboard built with Rust, GTK4, and
@@ -40,4 +36,4 @@ Description: Native Linux soundboard with virtual microphone support
   * LUFS normalization for consistent volume levels
   * Native Wayland hotkeys via host-installed swhkd with full native X11/XWayland support
   * Modern GTK4/Libadwaita UI with dark mode support
-  * PipeWire/PulseAudio integration
+  * Native PipeWire virtual microphone routing
