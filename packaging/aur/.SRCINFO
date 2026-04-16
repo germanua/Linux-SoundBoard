@@ -18,6 +18,7 @@ pkgbase = linux-soundboard
 	depends = libxtst
 	depends = libxkbcommon
 	depends = hicolor-icon-theme
+	depends = polkit
 	optdepends = pipewire-pulse: PipeWire-backed PulseAudio server for virtual microphone routing
 	optdepends = pulseaudio: PulseAudio server for virtual microphone routing
 	optdepends = wireplumber: recommended PipeWire session manager

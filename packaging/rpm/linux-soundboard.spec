@@ -22,6 +22,7 @@ Requires:       libX11
 Requires:       libXi
 Requires:       pipewire
 Requires:       wireplumber
+Requires:       polkit
 
 Recommends:     xorg-x11-server-Xwayland
 
@@ -62,6 +63,12 @@ done
 install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
     %{buildroot}%{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 
+# Install one-click Wayland hotkey installer helper and policy
+install -Dm755 packaging/linux/install-swhkd-helper.sh \
+    %{buildroot}%{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
+install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
+    %{buildroot}%{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
+
 %files
 %license LICENSE
 %{_bindir}/linux-soundboard
@@ -69,6 +76,8 @@ install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
 %{_datadir}/icons/hicolor/*/apps/com.linuxsoundboard.app.png
 %{_datadir}/icons/hicolor/*/apps/linux-soundboard.png
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
+%{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
+%{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 
 %post
 echo "Configuring LinuxSoundBoard..."

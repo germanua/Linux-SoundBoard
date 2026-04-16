@@ -25,6 +25,7 @@ Depends: ${shlibs:Depends},
          libadwaita-1-0,
          libx11-6,
          libxi6,
+         policykit-1,
          pipewire,
          wireplumber
 Recommends: xwayland

@@ -69,11 +69,14 @@ pub fn build_settings_dialog(
         .build();
     prefs.add_css_class("lsb-settings-dialog");
 
+    let prefs_weak = prefs.downgrade();
+
     prefs.add(&build_general_page(
         Arc::clone(&state),
         parent,
         on_library_changed,
         on_list_style_changed,
+        prefs_weak,
     ));
     prefs.add(&build_hotkeys_page(Arc::clone(&state)));
 
@@ -95,6 +98,7 @@ fn build_general_page(
     parent: &Window,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
+    dialog_weak: gtk4::glib::WeakRef<adw::PreferencesDialog>,
 ) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title("General")
@@ -105,7 +109,6 @@ fn build_general_page(
         .title("Sound Folders")
         .description("Folders scanned for audio files on startup")
         .build();
-    let folder_rows: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::new(RefCell::new(Vec::new()));
 
     let add_folder_row = adw::ActionRow::builder()
         .title("Add Folder…")
@@ -113,18 +116,11 @@ fn build_general_page(
         .build();
     add_folder_row.add_prefix(&icons::image(icons::ADD));
 
-    // Store folder_rows in the folders_group to keep it alive
-    // This prevents the Rc from being dropped when the function returns
-    unsafe {
-        folders_group.set_data("folder_rows", Rc::clone(&folder_rows));
-    }
-
     {
         let state2 = Arc::clone(&state);
         let parent = parent.clone();
         let folders_group_weak = folders_group.downgrade();
         let add_folder_row_weak = add_folder_row.downgrade();
-        let folder_rows_clone = Rc::clone(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
@@ -134,7 +130,6 @@ fn build_general_page(
             let parent_for_dialog = parent.clone();
             let folders_group_weak2 = folders_group_weak.clone();
             let add_folder_row_weak2 = add_folder_row_weak.clone();
-            let folder_rows_clone2 = Rc::clone(&folder_rows_clone);
             let on_library_changed3 = on_library_changed2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
@@ -166,12 +161,10 @@ fn build_general_page(
                                 log::warn!("add_folder_row3 weak ref failed to upgrade");
                                 return;
                             };
-                            log::info!("Using strong Rc reference for folder_rows");
                             schedule_rebuild_sound_folder_rows(
                                 &folders_group3,
                                 &add_folder_row3,
                                 Arc::clone(&state3),
-                                Rc::clone(&folder_rows_clone2),
                                 on_library_changed3.clone(),
                             );
                             if let Some(cb) = on_library_changed3.as_ref() {
@@ -187,7 +180,6 @@ fn build_general_page(
         &folders_group,
         &add_folder_row,
         Arc::clone(&state),
-        Rc::clone(&folder_rows),
         on_library_changed.clone(),
     );
     page.add(&folders_group);
@@ -533,6 +525,13 @@ fn build_general_page(
             gtk4::glib::timeout_add_local(
                 std::time::Duration::from_millis(250),
                 move || {
+                    let Some(dialog) = dialog_weak.upgrade() else {
+                        return gtk4::glib::ControlFlow::Break;
+                    };
+                    if !dialog.is_visible() {
+                        return gtk4::glib::ControlFlow::Continue;
+                    }
+
                     let Some(status_row) = status_row_weak.upgrade() else {
                         return gtk4::glib::ControlFlow::Break;
                     };
@@ -1067,7 +1066,6 @@ fn build_sound_folder_row(
     state: Arc<AppState>,
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
-    folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(&folder).build();
@@ -1083,7 +1081,6 @@ fn build_sound_folder_row(
         let state2 = Arc::clone(&state);
         let folders_group2 = folders_group.downgrade();
         let add_folder_row2 = add_folder_row.downgrade();
-        let folder_rows2 = Rc::clone(&folder_rows);
         let on_library_changed2 = on_library_changed.clone();
         remove_btn.connect_clicked(move |_| {
             log::info!("Remove folder button clicked: {}", folder_owned);
@@ -1104,12 +1101,10 @@ fn build_sound_folder_row(
                 log::warn!("add_folder_row2 weak ref failed to upgrade");
                 return;
             };
-            log::info!("Using strong Rc reference for folder_rows");
             schedule_rebuild_sound_folder_rows(
                 &folders_group2,
                 &add_folder_row2,
                 Arc::clone(&state2),
-                Rc::clone(&folder_rows2),
                 on_library_changed2.clone(),
             );
             if let Some(cb) = on_library_changed2.as_ref() {
@@ -1126,7 +1121,6 @@ fn schedule_rebuild_sound_folder_rows(
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
     state: Arc<AppState>,
-    folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
     log::info!("schedule_rebuild_sound_folder_rows: Scheduling rebuild");
@@ -1140,7 +1134,6 @@ fn schedule_rebuild_sound_folder_rows(
             &folders_group,
             &add_folder_row,
             state,
-            folder_rows,
             on_library_changed,
         );
     });
@@ -1150,21 +1143,24 @@ fn rebuild_sound_folder_rows(
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
     state: Arc<AppState>,
-    folder_rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
     log::info!("rebuild_sound_folder_rows: Starting rebuild");
-    let existing_rows = std::mem::take(&mut *folder_rows.borrow_mut());
+
+    let mut existing_rows: Vec<gtk4::Widget> = Vec::new();
+    let mut child = folders_group.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if widget.is::<adw::PreferencesRow>() {
+            existing_rows.push(widget);
+        }
+    }
     log::info!(
         "rebuild_sound_folder_rows: Removing {} existing rows",
         existing_rows.len()
     );
-    for row in existing_rows {
-        folders_group.remove(&row);
-    }
-
-    if add_folder_row.parent().is_some() {
-        folders_group.remove(add_folder_row);
+    for widget in existing_rows {
+        folders_group.remove(&widget);
     }
 
     let folders = {
@@ -1177,28 +1173,24 @@ fn rebuild_sound_folder_rows(
         cfg.sound_folders.clone()
     };
 
-    let mut new_rows = Vec::new();
+    let mut added_rows = 0usize;
     for folder in folders {
         let row = build_sound_folder_row(
             folder,
             Arc::clone(&state),
             folders_group,
             add_folder_row,
-            Rc::clone(&folder_rows),
             on_library_changed.clone(),
         );
         folders_group.add(&row);
-        new_rows.push(row);
+        added_rows = added_rows.saturating_add(1);
     }
 
     folders_group.add(add_folder_row);
 
-    // Update the folder_rows RefCell with the new rows
-    *folder_rows.borrow_mut() = new_rows;
-
     log::info!(
         "rebuild_sound_folder_rows: Rebuild complete, {} rows added",
-        folder_rows.borrow().len()
+        added_rows
     );
 }
 
@@ -1208,25 +1200,59 @@ fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
         .icon_name(icons::name(icons::KEYBOARD))
         .build();
 
-    let description = {
+    let unavailable_reason = {
         let hotkeys = state.hotkeys.lock().unwrap();
-        hotkeys
-            .availability_message()
-            .map(|reason| {
-                format!(
-                    "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
-                    reason
-                )
-            })
-            .unwrap_or_else(|| {
-                "These global hotkeys work from anywhere on your desktop using the native backend for your session".to_string()
-            })
+        hotkeys.availability_message()
     };
+
+    let description = unavailable_reason
+        .as_ref()
+        .map(|reason| {
+            format!(
+                "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
+                reason
+            )
+        })
+        .unwrap_or_else(|| {
+            "These global hotkeys work from anywhere on your desktop using the native backend for your session".to_string()
+        });
 
     let group = adw::PreferencesGroup::builder()
         .title("Global Control Hotkeys")
         .description(&description)
         .build();
+
+    if let Some(reason) = unavailable_reason {
+        if crate::hotkeys::should_offer_swhkd_install(&reason) {
+            let row = adw::ActionRow::builder()
+                .title("Install Wayland hotkey support")
+                .subtitle("One-click install for missing swhkd requirements")
+                .build();
+
+            let install_btn = gtk4::Button::builder()
+                .label("Install")
+                .css_classes(vec!["suggested-action"])
+                .valign(gtk4::Align::Center)
+                .build();
+
+            let hotkeys = Arc::clone(&state.hotkeys);
+            let config = Arc::clone(&state.config);
+            let reason_text = reason.clone();
+            install_btn.connect_clicked(move |btn| {
+                if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
+                    crate::ui::dialogs::prompt_swhkd_install(
+                        &win,
+                        Arc::clone(&config),
+                        Arc::clone(&hotkeys),
+                        &reason_text,
+                    );
+                }
+            });
+
+            row.add_suffix(&install_btn);
+            group.add(&row);
+        }
+    }
 
     for meta in ControlHotkeyAction::all() {
         let row = build_hotkey_row(Arc::clone(&state), meta.action);
@@ -1314,11 +1340,21 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                                     log::warn!("Set control hotkey failed: {e}");
                                     let message = crate::hotkeys::format_hotkey_error(&e);
                                     if let Some(error_window) = error_window.upgrade() {
-                                        crate::ui::dialogs::show_error(
-                                            &error_window,
-                                            "Failed to Set Control Hotkey",
-                                            &message,
-                                        );
+                                        if crate::hotkeys::should_offer_swhkd_install(&e) {
+                                            crate::ui::dialogs::show_hotkey_error_with_install_option(
+                                                &error_window,
+                                                "Failed to Set Control Hotkey",
+                                                &message,
+                                                Arc::clone(&state3.config),
+                                                Arc::clone(&state3.hotkeys),
+                                            );
+                                        } else {
+                                            crate::ui::dialogs::show_error(
+                                                &error_window,
+                                                "Failed to Set Control Hotkey",
+                                                &message,
+                                            );
+                                        }
                                     }
                                 }
                             }

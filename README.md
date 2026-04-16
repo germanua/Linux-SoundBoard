@@ -86,7 +86,7 @@ For a complete map of the app UI, user actions, right-click menus, hotkeys, tab 
 3. In Discord, OBS, Zoom, or another target app, select `Linux_Soundboard_Mic` as the input device.
 4. For games that only read the system default microphone, switch the app setting `Default Microphone` to `Auto While Running`.
 5. Add a folder or drag audio files into the library.
-6. If you are on Wayland, make sure `swhkd` is installed so global hotkeys can work outside the app window.
+6. If you are on Wayland and hotkeys are unavailable, click the in-app `Install` button in the warning banner or hotkey settings to install `swhkd`.
 
 ## Display Server Support
 
@@ -95,6 +95,8 @@ For a complete map of the app UI, user actions, right-click menus, hotkeys, tab 
 | Wayland | Native GTK Wayland | `swhkd` |
 | X11 | Native GTK X11 | Built-in X11/XInput2 backend |
 | XWayland | Native GTK X11 when forced | Built-in X11/XInput2 backend |
+
+On native host installs (DEB/RPM/AUR/AppImage host), Linux Soundboard can guide and run a one-click `swhkd` install flow via PolicyKit when Wayland hotkeys are missing.
 
 If you run the app inside VMware and the UI becomes unresponsive or RAM spikes, see the renderer notes in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 

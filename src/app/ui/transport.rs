@@ -122,7 +122,7 @@ struct TransportInner {
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     on_library_changed: RefCell<Option<LibraryChangedCallback>>,
     on_list_style_changed: RefCell<Option<ListStyleChangedCallback>>,
-    settings_dialog: RefCell<Option<glib::WeakRef<adw::PreferencesDialog>>>,
+    settings_dialog: RefCell<Option<adw::PreferencesDialog>>,
 }
 
 impl TransportBar {
@@ -896,11 +896,7 @@ impl TransportBar {
                     .root()
                     .and_then(|root| root.downcast::<gtk4::Window>().ok())
                 {
-                    if let Some(existing_dialog) = inner_settings
-                        .settings_dialog
-                        .borrow()
-                        .as_ref()
-                        .and_then(|dialog| dialog.upgrade())
+                    if let Some(existing_dialog) = inner_settings.settings_dialog.borrow().as_ref()
                     {
                         existing_dialog.present(Some(&win));
                         crate::diagnostics::memory::log_memory_snapshot("ui:settings:reused");
@@ -918,13 +914,8 @@ impl TransportBar {
                         on_library_changed,
                         on_list_style_changed,
                     );
-                    let prefs_weak = prefs.downgrade();
-                    *inner_settings.settings_dialog.borrow_mut() = Some(prefs_weak);
-                    let inner_close_weak = inner_weak.clone();
+                    *inner_settings.settings_dialog.borrow_mut() = Some(prefs.clone());
                     prefs.connect_closed(move |_| {
-                        if let Some(inner_close) = inner_close_weak.upgrade() {
-                            inner_close.settings_dialog.borrow_mut().take();
-                        }
                         crate::diagnostics::memory::log_memory_snapshot("ui:settings:closed");
                         crate::diagnostics::record_phase("ui:settings_closed", None);
                     });

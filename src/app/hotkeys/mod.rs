@@ -16,3 +16,9 @@ pub use model::{
     canonicalize_hotkey_string, normalize_capture_key, parse_hotkey_spec, HotkeyCode,
     HotkeyModifier, HotkeySpec,
 };
+pub use swhkd_install::{
+    install_swhkd_native, install_swhkd_native_detailed, manual_swhkd_install_commands,
+    should_offer_swhkd_install,
+    SwhkdInstallError, SwhkdInstallErrorKind, SwhkdInstallReport, SwhkdInstallState,
+    INSTALLED_SWHKD_HELPER_PATH, SWHKD_UPSTREAM_INSTALL_URL,
+};

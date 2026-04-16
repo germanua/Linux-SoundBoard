@@ -64,7 +64,7 @@ copyright = "2026, germanua"
 section = "sound"
 priority = "optional"
 revision = "1"
-depends = "$auto, pipewire, wireplumber"
+depends = "$auto, pipewire, wireplumber, policykit-1"
 recommends = "xwayland"
 extended-description = """\
 A high-performance, native Linux soundboard built with Rust, GTK4, and \
@@ -83,6 +83,8 @@ assets = [
     ["resources/icons/256x256/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/256x256/apps/com.linuxsoundboard.app.png", "644"],
     ["resources/icons/512x512/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/512x512/apps/com.linuxsoundboard.app.png", "644"],
     ["../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", "usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", "644"],
+    ["../packaging/linux/install-swhkd-helper.sh", "usr/libexec/linux-soundboard/install-swhkd-helper.sh", "755"],
+    ["../packaging/linux/com.linuxsoundboard.install-swhkd.policy", "usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -101,6 +103,8 @@ assets = [
     { source = "resources/icons/256x256/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/256x256/apps/com.linuxsoundboard.app.png", mode = "644" },
     { source = "resources/icons/512x512/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/512x512/apps/com.linuxsoundboard.app.png", mode = "644" },
     { source = "../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", dest = "/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", mode = "644" },
+    { source = "../packaging/linux/install-swhkd-helper.sh", dest = "/usr/libexec/linux-soundboard/install-swhkd-helper.sh", mode = "755" },
+    { source = "../packaging/linux/com.linuxsoundboard.install-swhkd.policy", dest = "/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.requires]
@@ -108,3 +112,4 @@ gtk4 = "*"
 libadwaita = "*"
 pipewire = "*"
 wireplumber = "*"
+polkit = "*"

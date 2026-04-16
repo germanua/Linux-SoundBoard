@@ -7,6 +7,7 @@ source "$SCRIPT_DIR/app-meta.sh"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/linux-soundboard}"
 INSTALL_BINARY="$INSTALL_ROOT/$APP_BINARY"
+INSTALL_HELPER="$INSTALL_ROOT/install-swhkd-helper.sh"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 DESKTOP_DIR="$XDG_DATA_HOME/applications"
 ICON_THEME_DIR="$XDG_DATA_HOME/icons/hicolor"
@@ -33,6 +34,10 @@ else
 fi
 
 install -Dm755 "$BINARY_SOURCE" "$INSTALL_BINARY"
+
+if [[ -x "$SCRIPT_DIR/install-swhkd-helper.sh" ]]; then
+    install -Dm755 "$SCRIPT_DIR/install-swhkd-helper.sh" "$INSTALL_HELPER"
+fi
 
 while IFS= read -r icon_path; do
     size_dir="$(basename "$(dirname "$(dirname "$icon_path")")")"

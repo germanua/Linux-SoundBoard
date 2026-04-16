@@ -1109,7 +1109,7 @@ impl SoundListInner {
                 let inner_confirm = Arc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
-                let error_window = win.clone();
+                let error_window = win.downgrade();
                 let hotkeys_for_capture = Arc::clone(&state.hotkeys);
                 crate::ui::dialogs::show_hotkey_capture(
                     &win,
@@ -1130,11 +1130,23 @@ impl SoundListInner {
                         Err(e) => {
                             log::warn!("Set hotkey failed: {e}");
                             let message = crate::hotkeys::format_hotkey_error(&e);
-                            crate::ui::dialogs::show_error(
-                                &error_window,
-                                "Failed to Set Hotkey",
-                                &message,
-                            );
+                            if let Some(error_window) = error_window.upgrade() {
+                                if crate::hotkeys::should_offer_swhkd_install(&e) {
+                                    crate::ui::dialogs::show_hotkey_error_with_install_option(
+                                        &error_window,
+                                        "Failed to Set Hotkey",
+                                        &message,
+                                        Arc::clone(&state_confirm.config),
+                                        Arc::clone(&state_confirm.hotkeys),
+                                    );
+                                } else {
+                                    crate::ui::dialogs::show_error(
+                                        &error_window,
+                                        "Failed to Set Hotkey",
+                                        &message,
+                                    );
+                                }
+                            }
                         }
                     },
                 );

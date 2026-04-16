@@ -51,8 +51,9 @@ impl HotkeyManager {
                 Self {
                     backend: None,
                     disabled_reason: Some(reason),
-                    deferred_sender: None,
-                    deferred_start: false,
+                    // Preserve sender so backend can be retried after remediation.
+                    deferred_sender: Some(sender),
+                    deferred_start: true,
                 }
             }
         }
@@ -105,9 +106,6 @@ impl HotkeyManager {
     }
 
     pub fn availability_message(&self) -> Option<String> {
-        if self.deferred_start {
-            return None;
-        }
         self.disabled_reason.clone()
     }
 
@@ -139,7 +137,9 @@ impl HotkeyManager {
             Err(reason) => {
                 warn!("Global hotkeys unavailable: {}", reason);
                 self.disabled_reason = Some(reason.clone());
-                self.deferred_start = false;
+                // Keep deferred sender/state so install remediation can retry startup.
+                self.deferred_sender = Some(sender);
+                self.deferred_start = true;
                 Err(format!("Global hotkeys unavailable: {}", reason))
             }
         }
@@ -191,7 +191,7 @@ impl HotkeyManager {
 
     /// Format a status message for the UI.
     pub fn status_message(&self) -> String {
-        if self.deferred_start {
+        if self.deferred_start && self.disabled_reason.is_none() {
             return "Hotkeys: Idle (no bindings)".to_string();
         }
         match self.backend {

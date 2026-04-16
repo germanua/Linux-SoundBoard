@@ -40,3 +40,9 @@ override_dh_auto_install:
 	# Install metainfo
 	install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
 		debian/linux-soundboard/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml
+
+	# Install one-click Wayland hotkey installer helper and policy
+	install -Dm755 packaging/linux/install-swhkd-helper.sh \
+		debian/linux-soundboard/usr/libexec/linux-soundboard/install-swhkd-helper.sh
+	install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
+		debian/linux-soundboard/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy

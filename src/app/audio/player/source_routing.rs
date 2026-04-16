@@ -1,5 +1,8 @@
 use super::*;
 
+const WPCTL_COMMAND_TIMEOUT: Duration = Duration::from_millis(900);
+const WPCTL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
 pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), String> {
     clear_virtual_mic_queues(&state.queues);
 
@@ -138,26 +141,91 @@ pub(super) fn resolve_source_id_by_name(
 }
 
 fn set_default_source(source_id: u32) -> Result<(), String> {
-    let output = Command::new("wpctl")
-        .args(["set-default", &source_id.to_string()])
-        .output()
-        .map_err(|e| format!("Failed to run wpctl set-default: {e}"))?;
+    let source_id = source_id.to_string();
+    let output = run_wpctl_with_timeout(["set-default", source_id.as_str()])?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        let detail = command_output_detail(&output);
+        if detail.is_empty() {
+            Err("wpctl set-default failed without stderr output".to_string())
+        } else {
+            Err(detail)
+        }
     }
 }
 
 fn current_default_source_name() -> Option<String> {
-    let output = Command::new("wpctl")
-        .args(["inspect", "@DEFAULT_SOURCE@"]) 
-        .output()
-        .ok()?;
+    let output = match run_wpctl_with_timeout(["inspect", "@DEFAULT_SOURCE@"]) {
+        Ok(output) => output,
+        Err(err) => {
+            warn!("Failed to inspect default source via wpctl: {}", err);
+            return None;
+        }
+    };
     if !output.status.success() {
+        let detail = command_output_detail(&output);
+        if !detail.is_empty() {
+            warn!("wpctl inspect @DEFAULT_SOURCE@ failed: {}", detail);
+        }
         return None;
     }
     parse_wpctl_node_name(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn run_wpctl_with_timeout<const N: usize>(args: [&str; N]) -> Result<std::process::Output, String> {
+    run_command_with_timeout("wpctl", &args, WPCTL_COMMAND_TIMEOUT)
+}
+
+fn run_command_with_timeout(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run {} {}: {e}", program, args.join(" ")))?;
+
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child
+                    .wait_with_output()
+                    .map_err(|e| format!("Failed to collect {} output: {e}", program));
+            }
+            Ok(None) => {
+                if started_at.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{} {} timed out after {} ms",
+                        program,
+                        args.join(" "),
+                        timeout.as_millis()
+                    ));
+                }
+                thread::sleep(WPCTL_POLL_INTERVAL);
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Failed while waiting for {}: {e}", program));
+            }
+        }
+    }
+}
+
+fn command_output_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
 pub(super) fn parse_wpctl_node_name(output: &str) -> Option<String> {

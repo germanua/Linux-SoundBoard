@@ -15,6 +15,7 @@ depends=(
   'libxtst'
   'libxkbcommon'
   'hicolor-icon-theme'
+  'polkit'
   'pipewire'
   'wireplumber'
 )
@@ -67,4 +68,9 @@ package() {
           "$pkgdir/usr/share/icons/hicolor/${size}/apps/${icon_name}"
       done
     done
+
+    install -Dm755 packaging/linux/install-swhkd-helper.sh \
+      "$pkgdir/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
+    install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
+      "$pkgdir/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy"
 }

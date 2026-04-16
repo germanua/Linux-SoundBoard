@@ -60,9 +60,28 @@ pub fn build_window(
         };
         if let Some(reason) = hotkey_message {
             let banner = adw::Banner::new(&format!("Global hotkeys unavailable — {}", reason));
-            banner.set_button_label(Some("Dismiss"));
+            let can_install = crate::hotkeys::should_offer_swhkd_install(&reason);
+            banner.set_button_label(Some(if can_install { "Install" } else { "Dismiss" }));
             banner.set_revealed(true);
-            banner.connect_button_clicked(|b| b.set_revealed(false));
+            if can_install {
+                let window_weak = window.downgrade();
+                let config = Arc::clone(&state.config);
+                let hotkeys = Arc::clone(&state.hotkeys);
+                let reason_text = reason.clone();
+                banner.connect_button_clicked(move |b| {
+                    if let Some(window) = window_weak.upgrade() {
+                        crate::ui::dialogs::prompt_swhkd_install(
+                            window.upcast_ref::<gtk4::Window>(),
+                            Arc::clone(&config),
+                            Arc::clone(&hotkeys),
+                            &reason_text,
+                        );
+                    }
+                    b.set_revealed(false);
+                });
+            } else {
+                banner.connect_button_clicked(|b| b.set_revealed(false));
+            }
             root_box.append(&banner);
         }
     }

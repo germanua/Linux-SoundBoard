@@ -10,6 +10,7 @@ MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
 ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
+SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
 DIST_ROOT="$REPO_ROOT/dist"
 TOOLS_ROOT="$DIST_ROOT/.appimage-tools"
 
@@ -150,7 +151,11 @@ rm -rf "$APPDIR"
 rm -f "$versioned_path" "$stable_path"
 mkdir -p \
     "$APPDIR/usr/share/applications" \
-    "$APPDIR/usr/share/metainfo"
+    "$APPDIR/usr/share/metainfo" \
+    "$APPDIR/usr/libexec/linux-soundboard"
+
+install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
+install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/bin/install-swhkd-helper.sh"
 
 cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]

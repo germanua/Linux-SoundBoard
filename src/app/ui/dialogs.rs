@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use gtk4::gdk::prelude::DisplayExtManual;
 use gtk4::prelude::WidgetExt;
@@ -105,6 +106,22 @@ pub fn show_error(parent: &Window, title: &str, message: &str) {
     dialog.present(Some(parent));
 }
 
+pub fn show_message(parent: &Window, title: &str, message: &str) {
+    let dialog = adw::AlertDialog::new(Some(title), Some(message));
+    dialog.add_responses(&[("ok", "OK")]);
+    dialog.connect_response(None, |d, _| d.force_close());
+    dialog.present(Some(parent));
+}
+
+fn copy_text_to_clipboard(text: &str) -> bool {
+    if let Some(display) = gtk4::gdk::Display::default() {
+        display.clipboard().set_text(text);
+        true
+    } else {
+        false
+    }
+}
+
 pub fn show_confirm<F>(
     parent: &Window,
     title: &str,
@@ -122,6 +139,152 @@ pub fn show_confirm<F>(
         }
         d.force_close();
     });
+    dialog.present(Some(parent));
+}
+
+pub fn show_hotkey_error_with_install_option(
+    parent: &Window,
+    title: &str,
+    message: &str,
+    config: Arc<Mutex<crate::config::Config>>,
+    hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+) {
+    let dialog = adw::AlertDialog::new(Some(title), Some(message));
+    dialog.add_responses(&[("close", "Close"), ("install", "Install swhkd")]);
+    let install_window = parent.clone();
+    let message_text = message.to_string();
+    dialog.connect_response(None, move |d, response| {
+        if response == "install" {
+            prompt_swhkd_install(
+                &install_window,
+                Arc::clone(&config),
+                Arc::clone(&hotkeys),
+                &message_text,
+            );
+        }
+        d.force_close();
+    });
+    dialog.present(Some(parent));
+}
+
+pub fn prompt_swhkd_install(
+    parent: &Window,
+    config: Arc<Mutex<crate::config::Config>>,
+    hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+    reason: &str,
+) {
+    let prompt = format!(
+        "Native Wayland hotkeys require swhkd.\n\nCurrent issue:\n{}\n\nInstall now?",
+        reason
+    );
+    let dialog = adw::AlertDialog::new(Some("Install Wayland Hotkey Support"), Some(&prompt));
+    dialog.add_responses(&[("cancel", "Cancel"), ("install", "Install")]);
+
+    let parent_weak = parent.downgrade();
+    dialog.connect_response(None, move |d, response| {
+        if response == "install" {
+            if let Some(parent) = parent_weak.upgrade() {
+                show_message(
+                    &parent,
+                    "Installing swhkd",
+                    "Installation started. This can take a few minutes.",
+                );
+
+                let result_parent = parent.downgrade();
+                if let Err(err) = crate::commands::install_swhkd_async(
+                    Arc::clone(&config),
+                    Arc::clone(&hotkeys),
+                    move |result| {
+                        if let Some(result_parent) = result_parent.upgrade() {
+                            match result {
+                                Ok(report) => {
+                                    let state_labels = report
+                                        .states
+                                        .iter()
+                                        .map(|state| format!("- {:?}", state))
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    let body = format!(
+                                        "{}\n\n{}\n\nLifecycle:\n{}",
+                                        report.summary, report.details, state_labels
+                                    );
+                                    show_message(&result_parent, "Hotkey Support Installed", &body);
+                                }
+                                Err(err) => {
+                                    show_swhkd_install_failed_dialog(&result_parent, &err);
+                                }
+                            }
+                        }
+                    },
+                ) {
+                    show_error(&parent, "Failed to Start Installer", &err);
+                }
+            }
+        }
+        d.force_close();
+    });
+    dialog.present(Some(parent));
+}
+
+fn show_swhkd_install_failed_dialog(parent: &Window, err: &crate::hotkeys::SwhkdInstallError) {
+    let manual_guide = crate::hotkeys::SWHKD_UPSTREAM_INSTALL_URL.to_string();
+    let manual_commands = crate::hotkeys::manual_swhkd_install_commands();
+
+    let body = format!(
+        "{}\n\n{}\n\nFailure kind: {:?}\nFailure state: {:?}\n\nManual guide:\n{}",
+        err.summary, err.details, err.kind, err.state, manual_guide
+    );
+
+    let dialog = adw::AlertDialog::new(Some("swhkd Installation Failed"), Some(&body));
+    let commands_label = Label::builder()
+        .label(&format!("Console commands:\n{}", manual_commands))
+        .selectable(true)
+        .wrap(true)
+        .xalign(0.0)
+        .css_classes(vec!["monospace"])
+        .build();
+    dialog.set_extra_child(Some(&commands_label));
+    dialog.add_responses(&[
+        ("close", "Close"),
+        ("copy_link", "Copy Manual Link"),
+        ("copy_commands", "Copy Commands"),
+    ]);
+
+    let parent_for_copy = parent.clone();
+    dialog.connect_response(None, move |d, response| match response {
+        "copy_link" => {
+            if copy_text_to_clipboard(&manual_guide) {
+                show_message(
+                    &parent_for_copy,
+                    "Copied",
+                    "Manual guide link copied to clipboard.",
+                );
+            } else {
+                show_error(
+                    &parent_for_copy,
+                    "Copy Failed",
+                    "Clipboard is unavailable on this display.",
+                );
+            }
+        }
+        "copy_commands" => {
+            if copy_text_to_clipboard(&manual_commands) {
+                show_message(
+                    &parent_for_copy,
+                    "Copied",
+                    "Console commands copied to clipboard.",
+                );
+            } else {
+                show_error(
+                    &parent_for_copy,
+                    "Copy Failed",
+                    "Clipboard is unavailable on this display.",
+                );
+            }
+        }
+        _ => d.force_close(),
+    });
+
     dialog.present(Some(parent));
 }
 
@@ -264,10 +427,16 @@ pub fn show_hotkey_capture<F, V>(
         Rc::new(RefCell::new(current_hotkey.map(|s| s.to_string())));
 
     let key_ctrl = EventControllerKey::new();
+    let key_ctrl_for_response = key_ctrl.clone();
+    let capture_box_for_response = capture_box.downgrade();
     let captured_for_key = Rc::clone(&captured);
-    let preview_for_key = preview_label.clone();
-    let status_for_key = status_label.clone();
+    let preview_for_key = preview_label.downgrade();
+    let status_for_key = status_label.downgrade();
     key_ctrl.connect_key_pressed(move |_, keyval, keycode, modifier_state| {
+        let Some(status_for_key) = status_for_key.upgrade() else {
+            return glib::Propagation::Stop;
+        };
+
         let key_name = keyval.name().unwrap_or_default().to_string();
         if matches!(
             key_name.as_str(),
@@ -321,7 +490,9 @@ pub fn show_hotkey_capture<F, V>(
                 return glib::Propagation::Stop;
             }
         };
-        preview_for_key.set_text(&combo);
+        if let Some(preview_for_key) = preview_for_key.upgrade() {
+            preview_for_key.set_text(&combo);
+        }
         status_for_key.set_text("Captured! Press Save or try again.");
         *captured_for_key.borrow_mut() = Some(combo);
 
@@ -336,6 +507,9 @@ pub fn show_hotkey_capture<F, V>(
 
     let captured_for_resp = Rc::clone(&captured);
     dialog.connect_response(None, move |d, response| {
+        if let Some(capture_box_for_response) = capture_box_for_response.upgrade() {
+            capture_box_for_response.remove_controller(&key_ctrl_for_response);
+        }
         match response {
             "save" => on_confirm(captured_for_resp.borrow().clone()),
             "clear" => on_confirm(None),

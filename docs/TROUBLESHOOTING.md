@@ -159,6 +159,12 @@ wpctl status -n
 
 Wayland global hotkeys depend on `swhkd`.
 
+Try the in-app one-click flow first:
+
+1. Open Linux Soundboard.
+2. Click `Install` from the hotkey banner, hotkey settings page, or failed hotkey dialog.
+3. Approve the privilege prompt.
+
 Confirm it is installed and running:
 
 ```bash
@@ -177,6 +183,12 @@ If needed:
 ```bash
 sudo chmod u+s "$(command -v swhkd)"
 ```
+
+If one-click install fails:
+
+- Ensure PolicyKit is installed (`policykit-1` on Debian/Ubuntu, `polkit` on Fedora/Arch/openSUSE).
+- Ensure network access is available (installer clones upstream `swhkd` sources).
+- Retry from the app and review the detailed failure output shown in the dialog.
 
 Installation paths:
 

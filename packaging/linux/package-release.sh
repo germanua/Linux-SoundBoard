@@ -11,6 +11,7 @@ ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
 DIST_ROOT="$REPO_ROOT/dist"
+SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
 
 version="$(
     sed -n 's/^version = "\(.*\)"$/\1/p' "$MANIFEST_PATH" | head -n 1
@@ -34,6 +35,7 @@ rm -rf "$bundle_dir"
 mkdir -p "$bundle_dir/icons"
 
 install -Dm755 "$BINARY_SOURCE" "$bundle_dir/$APP_BINARY"
+install -Dm755 "$SWHKD_HELPER_SOURCE" "$bundle_dir/install-swhkd-helper.sh"
 install -Dm755 "$SCRIPT_DIR/install-user.sh" "$bundle_dir/install-user.sh"
 install -Dm755 "$SCRIPT_DIR/app-meta.sh" "$bundle_dir/app-meta.sh"
 install -Dm644 "$REPO_ROOT/README.md" "$bundle_dir/README.md"

@@ -96,8 +96,22 @@ What the script currently does:
 
 Hotkeys depend on the session type:
 
-- Wayland: install `swhkd`
+- Wayland: install `swhkd` (the app now offers a one-click `Install` button in hotkey warnings and settings)
 - X11 / XWayland: use the built-in X11 backend
+
+### One-Click Install in the App
+
+When Linux Soundboard detects missing Wayland hotkey support, it can start an in-app installer flow:
+
+1. Click `Install` in the startup hotkey banner, hotkey settings page, or hotkey error dialog.
+2. Authorize the system prompt (`pkexec` / PolicyKit).
+3. Wait for build + install + verification to complete.
+
+Requirements for one-click install:
+
+- Native host install (DEB/RPM/AUR/AppImage host), not Flatpak sandbox install
+- `pkexec` available via PolicyKit (`policykit-1` / `polkit`)
+- Network access to clone `swhkd` sources
 
 `swhkd` packaging differs by distro:
 
