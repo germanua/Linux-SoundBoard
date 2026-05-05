@@ -135,9 +135,9 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
         DistroFamily::OpenSuse => "sudo zypper --non-interactive install polkit",
         DistroFamily::Other => {
             return format!(
-                "# Unsupported distro family for built-in command recipe.\n# Follow manual guide:\n{}",
-                SWHKD_UPSTREAM_INSTALL_URL
-            )
+            "# Unsupported distro family for built-in command recipe.\n# Follow manual guide:\n{}",
+            SWHKD_UPSTREAM_INSTALL_URL
+        )
         }
     };
 
@@ -291,8 +291,8 @@ pub fn install_swhkd_native_detailed() -> Result<SwhkdInstallReport, SwhkdInstal
         return Err(SwhkdInstallError {
             kind: SwhkdInstallErrorKind::VerificationFailed,
             summary: "Installer finished but verification failed.".to_string(),
-            details:
-                "swhkd still appears unavailable or unconfigured after installation.".to_string(),
+            details: "swhkd still appears unavailable or unconfigured after installation."
+                .to_string(),
             state: SwhkdInstallState::Failed,
         });
     }
@@ -459,8 +459,7 @@ pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
 mod tests {
     use super::{
         detect_distro_family_from_os_release, distro_id, manual_install_commands_for,
-        should_offer_swhkd_install,
-        SwhkdInstallState, DistroFamily,
+        should_offer_swhkd_install, DistroFamily, SwhkdInstallState,
     };
 
     #[test]

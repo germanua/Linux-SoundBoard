@@ -597,12 +597,14 @@ pub fn record_phase(name: &str, inventory: Option<AppMemoryInventory>) {
     }
 
     info!(
-        "RAM_PHASE [{}] RSS={}kB PSS={}kB PrivDirty={}kB RssFile={}kB Threads={}{}",
+        "RAM_PHASE [{}] RSS={}kB PSS={}kB PrivDirty={}kB RssFile={}kB RssShmem={}kB ShDirty={}kB Threads={}{}",
         phase.name,
         snapshot.vm_rss_kb.unwrap_or(0),
         snapshot.pss_kb.unwrap_or(0),
         snapshot.private_dirty_kb.unwrap_or(0),
         snapshot.rss_file_kb.unwrap_or(0),
+        snapshot.rss_shmem_kb.unwrap_or(0),
+        snapshot.shared_dirty_kb.unwrap_or(0),
         snapshot.threads.unwrap_or(0),
         phase
             .inventory
@@ -905,8 +907,8 @@ mod tests {
         assert!(inventory.sound_string_bytes > 0);
         assert!(inventory.tab_string_bytes > 0);
         assert!(inventory.settings_string_bytes > 0);
-        assert_eq!(inventory.hotkey_binding_count, 4); // 2 sound hotkeys + 2 control hotkeys
-        assert_eq!(inventory.ui_row_count_estimate, 3); // 2 sounds + 1 tab
+        assert_eq!(inventory.hotkey_binding_count, 4);
+        assert_eq!(inventory.ui_row_count_estimate, 3);
     }
 
     #[test]

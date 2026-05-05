@@ -1,6 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{Button, Image, ToggleButton};
 
+use super::theme::ensure_app_resources;
+
 #[derive(Clone, Copy)]
 pub struct IconPair {
     name: &'static str,
@@ -21,6 +23,8 @@ pub const PAUSE: IconPair = IconPair::new("lsb-pause-symbolic");
 pub const STOP: IconPair = IconPair::new("lsb-stop-symbolic");
 pub const PREVIOUS: IconPair = IconPair::new("lsb-previous-symbolic");
 pub const NEXT: IconPair = IconPair::new("lsb-next-symbolic");
+pub const LOCAL_AUDIO: IconPair = IconPair::new("lsb-speaker-symbolic");
+pub const LOCAL_AUDIO_MUTED: IconPair = IconPair::new("lsb-speaker-off-symbolic");
 pub const HEADPHONES: IconPair = IconPair::new("lsb-headphones-symbolic");
 pub const HEADPHONES_MUTED: IconPair = IconPair::new("lsb-headphone-off-symbolic");
 pub const MICROPHONE: IconPair = IconPair::new("lsb-mic-symbolic");
@@ -34,6 +38,7 @@ pub const KEYBOARD: IconPair = IconPair::new("lsb-keyboard-symbolic");
 pub const DROP_ZONE: IconPair = IconPair::new("lsb-drop-zone-symbolic");
 
 pub fn image(icon: IconPair) -> Image {
+    ensure_app_resources();
     Image::from_icon_name(icon.name)
 }
 
@@ -42,6 +47,7 @@ pub fn name(icon: IconPair) -> &'static str {
 }
 
 pub fn apply_button_icon(button: &impl IsA<gtk4::Button>, icon: IconPair) {
+    ensure_app_resources();
     button.set_icon_name(icon.name);
 }
 

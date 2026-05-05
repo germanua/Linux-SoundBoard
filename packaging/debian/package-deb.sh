@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
 DEBIAN_DIR="$REPO_ROOT/debian"
@@ -11,16 +12,8 @@ cd "$REPO_ROOT"
 
 echo "Building Debian package..."
 
-# Check for required tools
-if ! command -v dpkg-buildpackage >/dev/null 2>&1; then
-    echo "Error: dpkg-buildpackage not found. Install with: sudo apt install dpkg-dev"
-    exit 1
-fi
-
-if ! command -v dh >/dev/null 2>&1; then
-    echo "Error: dh not found. Install with: sudo apt install debhelper"
-    exit 1
-fi
+require_cmd dpkg-buildpackage "Install with: sudo apt install dpkg-dev" || exit 1
+require_cmd dh "Install with: sudo apt install debhelper" || exit 1
 
 cleanup() {
     rm -rf "$DEBIAN_DIR"

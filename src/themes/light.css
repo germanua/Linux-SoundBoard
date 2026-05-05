@@ -151,7 +151,7 @@ headerbar:backdrop,
 }
 
 .transport-playmode-btn image {
-  -gtk-icon-size: 18px;
+  -gtk-icon-size: 16px;
 }
 
 .transport-refresh-btn image {

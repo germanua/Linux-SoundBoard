@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
 
@@ -10,14 +11,9 @@ cd "$REPO_ROOT"
 
 echo "Building RPM package..."
 
-# Check for required tools
-if ! command -v rpmbuild >/dev/null 2>&1; then
-    echo "Error: rpmbuild not found. Install with: sudo dnf install rpm-build"
-    exit 1
-fi
+require_cmd rpmbuild "Install with: sudo dnf install rpm-build" || exit 1
 
-# Get version from Cargo.toml
-VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' src/Cargo.toml | head -n 1)
+VERSION="$(cargo_version_from_manifest "$REPO_ROOT/src/Cargo.toml")" || exit 1
 
 # Setup RPM build directory
 RPMBUILD_DIR="$HOME/rpmbuild"

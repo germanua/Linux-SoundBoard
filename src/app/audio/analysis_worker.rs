@@ -205,7 +205,10 @@ mod tests {
     use std::sync::mpsc::TryRecvError;
     use std::time::{Duration, Instant};
 
-    fn recv_event_with_timeout(worker: &AnalysisWorker, timeout: Duration) -> Option<AnalysisEvent> {
+    fn recv_event_with_timeout(
+        worker: &AnalysisWorker,
+        timeout: Duration,
+    ) -> Option<AnalysisEvent> {
         let deadline = Instant::now() + timeout;
         loop {
             match worker.try_recv_event() {

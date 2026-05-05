@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/app-meta.sh"
+source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
@@ -16,9 +17,7 @@ TOOLS_ROOT="$DIST_ROOT/.appimage-tools"
 
 TAURI_GTK_PLUGIN_COMMIT="f0381b4bdf607bbf5fc5dfe3a60a64609a26ff23"
 
-version="$(
-    sed -n 's/^version = "\(.*\)"$/\1/p' "$MANIFEST_PATH" | head -n 1
-)"
+version="$(cargo_version_from_manifest "$MANIFEST_PATH")" || exit 1
 
 arch="$(uname -m)"
 case "$arch" in

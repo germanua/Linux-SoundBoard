@@ -46,7 +46,10 @@ impl V2ToV3Migration {
         let mut migrated = config;
         if let Some(obj) = migrated.as_object_mut() {
             obj.insert("schema_version".to_string(), serde_json::json!(3));
-            if let Some(sounds) = obj.get_mut("sounds").and_then(|sounds| sounds.as_array_mut()) {
+            if let Some(sounds) = obj
+                .get_mut("sounds")
+                .and_then(|sounds| sounds.as_array_mut())
+            {
                 for sound in sounds {
                     if let Some(sound_obj) = sound.as_object_mut() {
                         sound_obj
@@ -165,7 +168,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(migrated["schema_version"], json!(3));
-        assert!(migrated["sounds"][0].get("loudness_source_fingerprint").is_some());
+        assert!(migrated["sounds"][0]
+            .get("loudness_source_fingerprint")
+            .is_some());
     }
 
     #[test]
@@ -188,7 +193,10 @@ mod tests {
 
         assert_eq!(migrated["schema_version"], json!(4));
         assert_eq!(migrated["settings"]["default_source_mode"], json!("manual"));
-        assert_eq!(migrated["settings"]["mic_latency_profile"], json!("balanced"));
+        assert_eq!(
+            migrated["settings"]["mic_latency_profile"],
+            json!("balanced")
+        );
     }
 
     #[test]
@@ -208,7 +216,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(migrated["schema_version"], json!(4));
-        assert_eq!(migrated["settings"]["mic_latency_profile"], json!("balanced"));
+        assert_eq!(
+            migrated["settings"]["mic_latency_profile"],
+            json!("balanced")
+        );
     }
 
     #[test]

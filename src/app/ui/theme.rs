@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::Once;
 
 use gio::resources_register_include;
@@ -9,6 +10,9 @@ use crate::config::Theme;
 
 const ICON_RESOURCE_PATH: &str = "/com/linuxsoundboard/icons";
 static RESOURCE_INIT: Once = Once::new();
+thread_local! {
+    static CURRENT_CSS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
 
 pub fn apply_theme(theme: Theme) {
     ensure_app_resources();
@@ -27,15 +31,21 @@ pub fn apply_theme(theme: Theme) {
     let provider = CssProvider::new();
     provider.load_from_data(css);
     if let Some(display) = Display::default() {
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+        CURRENT_CSS_PROVIDER.with(|current| {
+            if let Some(old_provider) = current.borrow_mut().take() {
+                gtk4::style_context_remove_provider_for_display(&display, &old_provider);
+            }
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            *current.borrow_mut() = Some(provider);
+        });
     }
 }
 
-fn ensure_app_resources() {
+pub(crate) fn ensure_app_resources() {
     RESOURCE_INIT.call_once(|| {
         resources_register_include!("compiled.gresource")
             .expect("Failed to register bundled GTK resources");

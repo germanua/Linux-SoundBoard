@@ -22,7 +22,7 @@ pub fn build_window(
     timers: &TimerRegistry,
 ) -> (ApplicationWindow, TransportBar) {
     {
-        let cfg = state.config.lock().unwrap();
+        let cfg = state.config.lock().expect("config lock poisoned");
         apply_theme(cfg.settings.theme);
     }
 
@@ -40,7 +40,10 @@ pub fn build_window(
     let root_box = GtkBox::new(Orientation::Vertical, 0);
 
     {
-        let pw = state.pipewire_status.lock().unwrap();
+        let pw = state
+            .pipewire_status
+            .lock()
+            .expect("pipewire_status lock poisoned");
         if !pw.available {
             let banner = adw::Banner::new(
                 "PipeWire not detected — virtual mic unavailable. \
@@ -55,7 +58,7 @@ pub fn build_window(
 
     {
         let hotkey_message = {
-            let hotkeys = state.hotkeys.lock().unwrap();
+            let hotkeys = state.hotkeys.lock().expect("hotkeys lock poisoned");
             hotkeys.availability_message()
         };
         if let Some(reason) = hotkey_message {
@@ -188,12 +191,8 @@ pub fn build_window(
     }
 
     // `AdwApplicationWindow` does not expose `set_content`; use `set_child` here.
-    let drop_overlay = dnd_import::build_and_attach_drop_overlay(
-        &window,
-        &toast_overlay,
-        &sound_list,
-        &state,
-    );
+    let drop_overlay =
+        dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
     window.set_child(Some(&drop_overlay));
 
     let transport_cleanup = transport.clone();

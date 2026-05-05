@@ -11,7 +11,9 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Strin
     };
 
     if let Some(backend) = state.backend.as_mut() {
-        backend.capture_stream = None;
+        if let Some(capture_stream) = backend.capture_stream.take() {
+            drop(capture_stream);
+        }
     }
     if !state.runtime.mic_passthrough {
         return Ok(());

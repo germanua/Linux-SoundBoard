@@ -187,9 +187,8 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 
         let state_hk = Arc::clone(&state);
         let window_hk = window.clone();
-        let hotkey_timer_id = glib::timeout_add_local(
-            Duration::from_millis(HOTKEY_POLL_INTERVAL_MS),
-            move || {
+        let hotkey_timer_id =
+            glib::timeout_add_local(Duration::from_millis(HOTKEY_POLL_INTERVAL_MS), move || {
                 if let Ok(guard) = hotkey_receiver.try_lock() {
                     while let Ok(sound_id) = guard.try_recv() {
                         crate::ui::app_window::handle_hotkey(
@@ -200,8 +199,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
                     warn!("Hotkey receiver lock unavailable, skipping poll");
                 }
                 glib::ControlFlow::Continue
-            },
-        );
+            });
         register_timer_with_diagnostics(&timer_registry, hotkey_timer_id);
 
         let state_close = Arc::clone(&state);
@@ -317,7 +315,10 @@ fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &Ti
                 }
 
                 if let Ok(cfg) = config_for_complete.lock() {
-                    crate::diagnostics::record_phase_with_config("startup:loudness_bg:complete", &cfg);
+                    crate::diagnostics::record_phase_with_config(
+                        "startup:loudness_bg:complete",
+                        &cfg,
+                    );
                 } else {
                     crate::diagnostics::record_phase("startup:loudness_bg:complete", None);
                 }

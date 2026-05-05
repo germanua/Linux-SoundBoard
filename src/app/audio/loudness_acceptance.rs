@@ -40,7 +40,9 @@ pub struct LoudnessAcceptanceIssue {
     pub message: String,
 }
 
-pub fn run_loudness_acceptance_harness(corpus_paths: &[String]) -> Result<LoudnessAcceptanceMetrics, String> {
+pub fn run_loudness_acceptance_harness(
+    corpus_paths: &[String],
+) -> Result<LoudnessAcceptanceMetrics, String> {
     if corpus_paths.is_empty() {
         return Err("Acceptance harness requires at least one input path".to_string());
     }
@@ -75,7 +77,9 @@ pub fn run_loudness_acceptance_harness(corpus_paths: &[String]) -> Result<Loudne
     })
 }
 
-pub fn evaluate_loudness_acceptance(metrics: &LoudnessAcceptanceMetrics) -> Vec<LoudnessAcceptanceIssue> {
+pub fn evaluate_loudness_acceptance(
+    metrics: &LoudnessAcceptanceMetrics,
+) -> Vec<LoudnessAcceptanceIssue> {
     let mut issues = Vec::new();
 
     if metrics.track_count > 0 {
@@ -134,8 +138,7 @@ pub fn evaluate_loudness_acceptance(metrics: &LoudnessAcceptanceMetrics) -> Vec<
             metric: "median_abs_error_lu",
             message: format!(
                 "Median absolute LUFS error {:.3} exceeded target {:.3}",
-                metrics.median_abs_error_lu,
-                ACCEPTANCE_MEDIAN_ABS_ERROR_TARGET_LU
+                metrics.median_abs_error_lu, ACCEPTANCE_MEDIAN_ABS_ERROR_TARGET_LU
             ),
         });
     }
@@ -150,8 +153,7 @@ pub fn evaluate_loudness_acceptance(metrics: &LoudnessAcceptanceMetrics) -> Vec<
             metric: "p90_abs_error_lu",
             message: format!(
                 "p90 absolute LUFS error {:.3} exceeded target {:.3}",
-                metrics.p90_abs_error_lu,
-                ACCEPTANCE_P90_ABS_ERROR_TARGET_LU
+                metrics.p90_abs_error_lu, ACCEPTANCE_P90_ABS_ERROR_TARGET_LU
             ),
         });
     }
@@ -322,8 +324,10 @@ mod tests {
         evaluate_loudness_acceptance, percentile_sorted, run_loudness_acceptance_harness,
         LoudnessAcceptanceMetrics,
     };
+    use crate::test_support::audio_fixtures::{
+        cleanup_test_audio_path, create_test_audio_file_with_duration,
+    };
     use std::collections::HashSet;
-    use crate::test_support::audio_fixtures::{cleanup_test_audio_path, create_test_audio_file_with_duration};
 
     #[test]
     fn percentile_sorted_interpolates_expected_values() {

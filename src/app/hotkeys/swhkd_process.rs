@@ -7,6 +7,9 @@ use std::thread;
 use std::time::Duration;
 
 use super::swhkd_install::missing_swhkd_message;
+use super::{
+    SWHKD_MONITOR_INTERVAL_SECS, SWHKD_SOCKET_POLL_INTERVAL_MS, SWHKD_STARTUP_VERIFY_WAIT_MS,
+};
 
 pub struct SwhkdProcesses {
     pub swhks_child: Option<Child>,
@@ -95,7 +98,7 @@ impl SwhkdProcesses {
                 info!("swhks socket ready after {} attempts", attempt);
                 return Ok(());
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(SWHKD_SOCKET_POLL_INTERVAL_MS));
         }
 
         Err("Timeout waiting for swhks socket to be created".to_string())
@@ -110,7 +113,7 @@ impl SwhkdProcesses {
         let swhkd_child = Self::spawn_swhkd()?;
         let swhkd_pid = swhkd_child.id() as i32;
 
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(SWHKD_STARTUP_VERIFY_WAIT_MS));
 
         let pid = nix::unistd::Pid::from_raw(swhkd_pid);
         match nix::sys::signal::kill(pid, None) {
@@ -174,7 +177,7 @@ impl SwhkdProcesses {
         thread::spawn(move || {
             info!("swhkd monitor thread started for PID {}", pid);
             while monitor_running.load(Ordering::SeqCst) {
-                thread::sleep(Duration::from_secs(30));
+                thread::sleep(Duration::from_secs(SWHKD_MONITOR_INTERVAL_SECS));
 
                 if !monitor_running.load(Ordering::SeqCst) {
                     break;

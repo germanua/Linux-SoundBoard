@@ -3,29 +3,7 @@ use std::sync::{Arc, Mutex};
 use crate::config::{Config, ControlHotkeyAction};
 use crate::hotkeys::HotkeyManager;
 
-use super::shared::dispatch_async_result;
-
-/// Lock config and surface poison errors.
-fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
-where
-    F: FnOnce(&Config) -> R,
-{
-    config
-        .lock()
-        .map(|guard| f(&guard))
-        .map_err(|e| format!("Config lock poisoned: {}", e))
-}
-
-/// Lock config mutably and surface poison errors.
-fn with_config_mut<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
-where
-    F: FnOnce(&mut Config) -> R,
-{
-    config
-        .lock()
-        .map(|mut guard| f(&mut guard))
-        .map_err(|e| format!("Config lock poisoned: {}", e))
-}
+use super::shared::{dispatch_async_result, with_config, with_config_mut};
 
 /// Lock hotkeys and surface poison errors.
 fn with_hotkeys<F, R>(hotkeys: &Arc<Mutex<HotkeyManager>>, f: F) -> Result<R, String>

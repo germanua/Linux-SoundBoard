@@ -1,6 +1,6 @@
 pub mod app_window;
-mod dnd_import;
 pub mod dialogs;
+mod dnd_import;
 pub mod icons;
 pub mod menu;
 pub mod settings;

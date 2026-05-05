@@ -4,6 +4,18 @@ pub const PORTAL_UNAVAILABLE: &str = "PORTAL_UNAVAILABLE";
 pub const PORTAL_REJECTED_BY_COMPOSITOR: &str = "PORTAL_REJECTED_BY_COMPOSITOR";
 pub const X11_BACKEND_UNAVAILABLE: &str = "X11_BACKEND_UNAVAILABLE";
 
+pub fn failed_lock(lock_name: &str, err: impl std::fmt::Display) -> String {
+    format!("Failed to lock {lock_name}: {err}")
+}
+
+pub fn failed_acquire_poisoned_lock(lock_name: &str, err: impl std::fmt::Display) -> String {
+    format!("Failed to acquire {lock_name} lock (poisoned): {err}")
+}
+
+pub fn poisoned_lock(lock_name: &str, err: impl std::fmt::Display) -> String {
+    format!("{lock_name} lock poisoned: {err}")
+}
+
 pub fn hotkey_conflict(existing_id: &str) -> String {
     coded_error(HOTKEY_CONFLICT, existing_id)
 }

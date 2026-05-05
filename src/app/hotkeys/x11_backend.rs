@@ -11,7 +11,8 @@ use x11::xinput2;
 use x11::xlib;
 
 use super::backend_runtime::HotkeyBackend;
-use super::error::hotkey_conflict;
+use super::error::{hotkey_conflict, poisoned_lock};
+use super::HOTKEYS_POLL_INTERVAL_MS;
 use super::{normalize_capture_key, parse_hotkey_spec, HotkeyCode, HotkeyModifier};
 
 /// X11 hotkey backend with cleanup tracking.
@@ -26,10 +27,15 @@ pub struct X11Backend {
 #[derive(Debug)]
 struct NonNullXDisplay(*mut xlib::Display);
 
+// SAFETY: Xlib permits a Display pointer to be used from multiple threads as long as only
+// one thread makes Xlib calls on it at a time. Callers enforce that via the surrounding
+// `Mutex<Option<NonNullXDisplay>>` that owns the pointer.
 unsafe impl Send for NonNullXDisplay {}
 unsafe impl Sync for NonNullXDisplay {}
 
 impl NonNullXDisplay {
+    // SAFETY: caller must guarantee the inner pointer has not already been passed to
+    // XCloseDisplay and that no other thread is making Xlib calls on it.
     unsafe fn close(self) {
         xlib::XCloseDisplay(self.0);
     }
@@ -52,6 +58,8 @@ impl X11Backend {
             return Err("DISPLAY not set; X11 backend unavailable".to_string());
         }
 
+        // SAFETY: the display pointer is scoped to this block; XCloseDisplay is called on
+        // every exit path (success and failure) and the pointer is never stored or shared.
         unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -88,6 +96,9 @@ impl X11Backend {
         expected.len() == active.len() && expected.iter().all(|modifier| active.contains(modifier))
     }
 
+    // SAFETY: `display` must be a live Xlib display pointer. XKeysymToString returns a
+    // pointer owned by Xlib; it is read via CStr and copied into an owned String before
+    // this function returns, so no reference outlives the call.
     unsafe fn keycode_to_name(display: *mut xlib::Display, keycode: u32) -> Option<String> {
         let keysym = xlib::XKeycodeToKeysym(display, keycode as u8, 0);
         if keysym == 0 {
@@ -132,6 +143,9 @@ impl Drop for X11Backend {
 
         if let Ok(mut display_guard) = self.display_ptr.lock() {
             if let Some(display) = display_guard.take() {
+                // SAFETY: `display` was just taken out of the mutex-guarded Option, so no
+                // other code can observe or call Xlib functions on it. XCloseDisplay runs
+                // exactly once per backend instance on this Drop path.
                 unsafe {
                     display.close();
                     debug!("X11 display closed via Drop");
@@ -162,7 +176,7 @@ impl HotkeyBackend for X11Backend {
         let mut bindings = self
             .bindings
             .lock()
-            .map_err(|e| format!("Bindings lock poisoned: {}", e))?;
+            .map_err(|e| poisoned_lock("Bindings", e))?;
         for (id, existing) in bindings.iter() {
             if id != sound_id && existing.key == spec.key && existing.modifiers == spec.modifiers {
                 return Err(hotkey_conflict(id));
@@ -182,7 +196,7 @@ impl HotkeyBackend for X11Backend {
     fn unregister(&self, sound_id: &str) -> Result<(), String> {
         self.bindings
             .lock()
-            .map_err(|e| format!("Bindings lock poisoned: {}", e))?
+            .map_err(|e| poisoned_lock("Bindings", e))?
             .remove(sound_id);
         Ok(())
     }
@@ -195,7 +209,7 @@ impl HotkeyBackend for X11Backend {
         let mut bindings = self
             .bindings
             .lock()
-            .map_err(|e| format!("Bindings lock poisoned: {}", e))?;
+            .map_err(|e| poisoned_lock("Bindings", e))?;
         for sound_id in sound_ids {
             bindings.remove(sound_id);
         }
@@ -211,6 +225,10 @@ impl HotkeyBackend for X11Backend {
         let stop_flag = self.stop_flag();
         let display_ptr = self.display_ptr();
 
+        // SAFETY: the spawned thread opens its own Xlib display and is the sole user of
+        // that pointer until it hands ownership to `display_ptr` (mutex-guarded) for Drop
+        // to close. All Xlib/XInput2 calls inside the thread operate on this thread-local
+        // display pointer, which is non-null (checked immediately after XOpenDisplay).
         thread::spawn(move || unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -253,7 +271,7 @@ impl HotkeyBackend for X11Backend {
                         info!("X11 listener received stop signal (in pending loop)");
                         break;
                     }
-                    thread::sleep(std::time::Duration::from_millis(10));
+                    thread::sleep(std::time::Duration::from_millis(HOTKEYS_POLL_INTERVAL_MS));
                 }
 
                 if stop_flag.load(Ordering::SeqCst) {
@@ -303,7 +321,10 @@ impl HotkeyBackend for X11Backend {
                                             .map(|(id, binding)| (id.clone(), binding.clone()))
                                             .collect(),
                                         Err(e) => {
-                                            warn!("Bindings lock poisoned in X11 listener: {}", e);
+                                            warn!(
+                                                "{} in X11 listener",
+                                                poisoned_lock("Bindings", e)
+                                            );
                                             Vec::new()
                                         }
                                     };

@@ -43,6 +43,10 @@ where
             };
 
             glib::MainContext::default().spawn_local(async move {
+                // SAFETY: `surface` and `display` are moved into this async block and
+                // outlive the `.await`; the raw wl_surface/wl_display pointers returned
+                // by the gdk4-wayland FFI getters are valid for the lifetime of those
+                // GDK objects, which satisfies WindowIdentifier::from_wayland_raw.
                 let identifier = unsafe {
                     WindowIdentifier::from_wayland_raw(
                         gdk4_wayland::ffi::gdk_wayland_surface_get_wl_surface(

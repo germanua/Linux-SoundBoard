@@ -10,11 +10,15 @@ use std::thread;
 use std::time::Duration;
 
 use super::backend_runtime::HotkeyBackend;
-use super::error::unsupported_key_for_backend;
+use super::error::{failed_acquire_poisoned_lock, failed_lock, unsupported_key_for_backend};
 use super::parse_hotkey_spec;
 use super::swhkd_config::SwhkdConfig;
 use super::swhkd_install::missing_swhkd_message;
 use super::swhkd_process::SwhkdProcesses;
+use super::{
+    SWHKD_PIPE_OPEN_RETRY_SECS, SWHKD_PIPE_REOPEN_DELAY_MS, SWHKD_RELOAD_POST_SIGNAL_WAIT_MS,
+    SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS,
+};
 
 /// Clears the flag when dropped.
 struct DropFlag {
@@ -68,7 +72,7 @@ impl SwhkdBackend {
         {
             let processes_guard = processes_arc
                 .lock()
-                .map_err(|e| format!("Failed to lock processes: {}", e))?;
+                .map_err(|e| failed_lock("processes", e))?;
             processes_guard.start_monitor();
         }
 
@@ -118,13 +122,13 @@ impl SwhkdBackend {
         let processes = self
             .processes
             .lock()
-            .map_err(|e| format!("Failed to acquire processes lock (poisoned): {}", e))?;
+            .map_err(|e| failed_acquire_poisoned_lock("processes", e))?;
 
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS));
 
         SwhkdConfig::reload_swhkd(processes.swhkd_pid)?;
 
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(SWHKD_RELOAD_POST_SIGNAL_WAIT_MS));
 
         info!("swhkd config reload complete");
         Ok(())
@@ -135,7 +139,7 @@ impl SwhkdBackend {
         thread::spawn(move || {
             let swhkd_pid = match processes
                 .lock()
-                .map_err(|e| format!("Failed to acquire processes lock (poisoned): {}", e))
+                .map_err(|e| failed_acquire_poisoned_lock("processes", e))
             {
                 Ok(processes) => processes.swhkd_pid,
                 Err(e) => {
@@ -144,7 +148,7 @@ impl SwhkdBackend {
                 }
             };
 
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS));
             if let Err(e) = SwhkdConfig::reload_swhkd(swhkd_pid) {
                 warn!(
                     "Failed to reload swhkd config: {}. Hotkeys will be unregistered on next app restart.",
@@ -153,7 +157,7 @@ impl SwhkdBackend {
                 return;
             }
 
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(SWHKD_RELOAD_POST_SIGNAL_WAIT_MS));
             info!("swhkd config reload complete");
         });
     }
@@ -166,7 +170,7 @@ impl SwhkdBackend {
         let mut config = self
             .config
             .lock()
-            .map_err(|e| format!("Failed to acquire config lock (poisoned): {}", e))?;
+            .map_err(|e| failed_acquire_poisoned_lock("config", e))?;
         let removed = config.remove_hotkeys(sound_ids);
         if removed == 0 {
             return Ok(());
@@ -204,7 +208,7 @@ impl SwhkdBackend {
         let processes = self
             .processes
             .lock()
-            .map_err(|e| format!("Failed to acquire processes lock (poisoned): {}", e))?;
+            .map_err(|e| failed_acquire_poisoned_lock("processes", e))?;
 
         let pid = nix::unistd::Pid::from_raw(processes.swhkd_pid);
         match nix::sys::signal::kill(pid, None) {
@@ -256,7 +260,7 @@ impl HotkeyBackend for SwhkdBackend {
         let mut config = self
             .config
             .lock()
-            .map_err(|e| format!("Failed to acquire config lock (poisoned): {}", e))?;
+            .map_err(|e| failed_acquire_poisoned_lock("config", e))?;
         config.add_hotkey(sound_id, hotkey)?;
 
         config.write_to_file()?;
@@ -315,7 +319,7 @@ impl HotkeyBackend for SwhkdBackend {
                     Ok(f) => f,
                     Err(e) => {
                         warn!("Failed to open hotkey pipe: {}", e);
-                        thread::sleep(Duration::from_secs(1));
+                        thread::sleep(Duration::from_secs(SWHKD_PIPE_OPEN_RETRY_SECS));
                         continue;
                     }
                 };
@@ -341,7 +345,7 @@ impl HotkeyBackend for SwhkdBackend {
                 }
 
                 debug!("Hotkey pipe closed, reopening...");
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(SWHKD_PIPE_REOPEN_DELAY_MS));
             }
         });
     }

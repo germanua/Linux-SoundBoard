@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/app-meta.sh"
+source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
@@ -13,9 +14,7 @@ BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
 DIST_ROOT="$REPO_ROOT/dist"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
 
-version="$(
-    sed -n 's/^version = "\(.*\)"$/\1/p' "$MANIFEST_PATH" | head -n 1
-)"
+version="$(cargo_version_from_manifest "$MANIFEST_PATH")" || exit 1
 arch="$(uname -m)"
 bundle_name="${APP_BINARY}-${version}-linux-${arch}"
 bundle_dir="$DIST_ROOT/$bundle_name"

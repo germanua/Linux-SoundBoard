@@ -19,6 +19,11 @@ const ANALYSIS_THREAD_ELEVATED: u64 = 28;
 const ANALYSIS_THREAD_HIGH: u64 = 36;
 const ANALYSIS_THREAD_CRITICAL: u64 = 48;
 
+pub const ERR_FILE_DOES_NOT_EXIST: &str = "File does not exist";
+pub const ERR_UNSUPPORTED_AUDIO_FILE: &str = "Not a supported audio file";
+pub const ERR_SOUND_ALREADY_EXISTS: &str = "Sound already exists";
+pub const ERR_SOUND_NOT_FOUND: &str = "Sound not found";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdaptiveAnalysisPlan {
     pub threads: usize,
@@ -26,6 +31,17 @@ pub struct AdaptiveAnalysisPlan {
     pub rss_kb: Option<u64>,
     pub process_threads: Option<u64>,
     pub throttled: bool,
+}
+
+/// Lock config immutably and surface poison errors.
+pub fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, String>
+where
+    F: FnOnce(&Config) -> R,
+{
+    config
+        .lock()
+        .map(|guard| f(&guard))
+        .map_err(|e| format!("Config lock poisoned: {}", e))
 }
 
 /// Lock config mutably and surface poison errors.
@@ -187,11 +203,7 @@ pub(crate) fn compute_sound_source_fingerprint(
     duration_ms: Option<u64>,
 ) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
 
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);

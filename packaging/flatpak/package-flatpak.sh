@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
 
@@ -10,13 +11,7 @@ cd "$SCRIPT_DIR"
 
 echo "Building Flatpak package..."
 
-# Check for required tools
-if ! command -v flatpak-builder >/dev/null 2>&1; then
-    echo "Error: flatpak-builder not found."
-    echo "Install with: sudo apt install flatpak-builder (Ubuntu/Debian)"
-    echo "           or: sudo dnf install flatpak-builder (Fedora)"
-    exit 1
-fi
+require_cmd flatpak-builder "Install with: sudo apt install flatpak-builder (Ubuntu/Debian) or sudo dnf install flatpak-builder (Fedora)" || exit 1
 
 # Ensure Flathub repo is added
 if ! flatpak remote-list | grep -q flathub; then
@@ -59,7 +54,7 @@ fi
 # Build Flatpak
 BUILD_DIR="$REPO_ROOT/flatpak-build"
 REPO_DIR="$REPO_ROOT/flatpak-repo"
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/src/Cargo.toml" | head -n 1)"
+VERSION="$(cargo_version_from_manifest "$REPO_ROOT/src/Cargo.toml")" || exit 1
 
 echo "Building Flatpak with flatpak-builder..."
 rm -rf "$BUILD_DIR" "$REPO_DIR"

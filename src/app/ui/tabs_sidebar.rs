@@ -126,7 +126,10 @@ impl TabsSidebar {
                 };
                 if let Some(row) = row {
                     let id = row.widget_name().to_string();
-                    *inner_sel.active_tab_id.lock().unwrap() = id.clone();
+                    *inner_sel
+                        .active_tab_id
+                        .lock()
+                        .expect("active_tab_id lock poisoned") = id.clone();
                     if let Some(ref cb) = *inner_sel.on_tab_selected.borrow() {
                         cb(id);
                     }
@@ -171,13 +174,21 @@ impl TabsSidebar {
     }
 
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
-        *self.inner.toast_sender.lock().unwrap() = Some(sender);
+        *self
+            .inner
+            .toast_sender
+            .lock()
+            .expect("toast_sender lock poisoned") = Some(sender);
     }
 
     pub fn cleanup(&self) {
         *self.inner.on_tab_selected.borrow_mut() = None;
         *self.inner.on_tab_membership_changed.borrow_mut() = None;
-        *self.inner.toast_sender.lock().unwrap() = None;
+        *self
+            .inner
+            .toast_sender
+            .lock()
+            .expect("toast_sender lock poisoned") = None;
     }
 }
 
@@ -213,7 +224,10 @@ impl TabsInner {
                 };
                 match commands::create_tab(name, Arc::clone(&inner.state.config)) {
                     Ok(tab) => {
-                        *inner.active_tab_id.lock().unwrap() = tab.id.clone();
+                        *inner
+                            .active_tab_id
+                            .lock()
+                            .expect("active_tab_id lock poisoned") = tab.id.clone();
                         inner.queue_reload_tabs_and_emit(Some(tab.id));
                     }
                     Err(e) => log::warn!("Failed to create tab: {e}"),
@@ -240,10 +254,13 @@ impl TabsInner {
         }
 
         let (tabs, active_id, total_sounds) = {
-            let cfg = self.state.config.lock().unwrap();
+            let cfg = self.state.config.lock().expect("config lock poisoned");
             (
                 cfg.tabs.clone(),
-                self.active_tab_id.lock().unwrap().clone(),
+                self.active_tab_id
+                    .lock()
+                    .expect("active_tab_id lock poisoned")
+                    .clone(),
                 cfg.sounds.len(),
             )
         };
@@ -398,7 +415,11 @@ impl TabsInner {
             return gtk4::gdk::DragAction::empty();
         }
 
-        let source_tab_id = self.active_tab_id.lock().unwrap().clone();
+        let source_tab_id = self
+            .active_tab_id
+            .lock()
+            .expect("active_tab_id lock poisoned")
+            .clone();
         let intent = resolve_sidebar_drop_intent(&source_tab_id, &target_tab_id);
         drag_action_for_intent(intent)
     }
@@ -408,7 +429,7 @@ impl TabsInner {
             return "General".to_string();
         }
 
-        let cfg = self.state.config.lock().unwrap();
+        let cfg = self.state.config.lock().expect("config lock poisoned");
         cfg.tabs
             .iter()
             .find(|tab| tab.id == tab_id)
@@ -455,7 +476,11 @@ impl TabsInner {
             }
         };
 
-        if let Some(tx) = &*self.toast_sender.lock().unwrap() {
+        if let Some(tx) = &*self
+            .toast_sender
+            .lock()
+            .expect("toast_sender lock poisoned")
+        {
             let _ = tx.send(message);
         }
     }
@@ -748,8 +773,10 @@ impl TabsInner {
                         Arc::clone(&inner_confirm.state.config),
                     ) {
                         Ok(_) => {
-                            *inner_confirm.active_tab_id.lock().unwrap() =
-                                GENERAL_TAB_ID.to_string();
+                            *inner_confirm
+                                .active_tab_id
+                                .lock()
+                                .expect("active_tab_id lock poisoned") = GENERAL_TAB_ID.to_string();
                             inner_confirm
                                 .queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
                         }

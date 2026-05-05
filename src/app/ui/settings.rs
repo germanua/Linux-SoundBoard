@@ -17,6 +17,29 @@ use crate::config::{
 
 use super::icons;
 
+type FolderRowRefs = Rc<RefCell<Vec<gtk4::glib::WeakRef<adw::ActionRow>>>>;
+type RebuildPending = Rc<Cell<bool>>;
+
+fn should_poll_loudness_summary(dialog_visible: bool) -> bool {
+    dialog_visible
+}
+
+fn try_set_rebuild_pending(rebuild_pending: &Cell<bool>) -> bool {
+    if rebuild_pending.get() {
+        return false;
+    }
+    rebuild_pending.set(true);
+    true
+}
+
+fn clear_rebuild_pending(rebuild_pending: &Cell<bool>) {
+    rebuild_pending.set(false);
+}
+
+fn should_attach_add_folder_row(has_parent: bool) -> bool {
+    !has_parent
+}
+
 fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
     if selected {
         row.add_css_class("appearance-choice-selected");
@@ -28,7 +51,10 @@ fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
 fn format_loudness_status_subtitle(status: &commands::LoudnessStatusSummary) -> String {
     format!(
         "Pending {} | Estimated {} | Refined {} | Unavailable {}",
-        status.pending_count, status.estimated_count, status.refined_count, status.unavailable_count
+        status.pending_count,
+        status.estimated_count,
+        status.refined_count,
+        status.unavailable_count
     )
 }
 
@@ -71,14 +97,16 @@ pub fn build_settings_dialog(
 
     let prefs_weak = prefs.downgrade();
 
-    prefs.add(&build_general_page(
+    let general_page = build_general_page(
         Arc::clone(&state),
         parent,
         on_library_changed,
         on_list_style_changed,
         prefs_weak,
-    ));
-    prefs.add(&build_hotkeys_page(Arc::clone(&state)));
+    );
+    prefs.add(&general_page);
+    let hotkeys_page = build_hotkeys_page(Arc::clone(&state));
+    prefs.add(&hotkeys_page);
 
     prefs
 }
@@ -116,11 +144,16 @@ fn build_general_page(
         .build();
     add_folder_row.add_prefix(&icons::image(icons::ADD));
 
+    let folder_rows: FolderRowRefs = Rc::new(RefCell::new(Vec::new()));
+    let rebuild_pending: RebuildPending = Rc::new(Cell::new(false));
+
     {
         let state2 = Arc::clone(&state);
         let parent = parent.clone();
         let folders_group_weak = folders_group.downgrade();
         let add_folder_row_weak = add_folder_row.downgrade();
+        let folder_rows2 = Rc::clone(&folder_rows);
+        let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
         add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
@@ -130,6 +163,8 @@ fn build_general_page(
             let parent_for_dialog = parent.clone();
             let folders_group_weak2 = folders_group_weak.clone();
             let add_folder_row_weak2 = add_folder_row_weak.clone();
+            let folder_rows3 = Rc::clone(&folder_rows2);
+            let rebuild_pending3 = Rc::clone(&rebuild_pending2);
             let on_library_changed3 = on_library_changed2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
@@ -165,6 +200,8 @@ fn build_general_page(
                                 &folders_group3,
                                 &add_folder_row3,
                                 Arc::clone(&state3),
+                                Rc::clone(&folder_rows3),
+                                Rc::clone(&rebuild_pending3),
                                 on_library_changed3.clone(),
                             );
                             if let Some(cb) = on_library_changed3.as_ref() {
@@ -180,6 +217,8 @@ fn build_general_page(
         &folders_group,
         &add_folder_row,
         Arc::clone(&state),
+        Rc::clone(&folder_rows),
+        Rc::clone(&rebuild_pending),
         on_library_changed.clone(),
     );
     page.add(&folders_group);
@@ -206,7 +245,7 @@ fn build_general_page(
             attack_ms,
             release_ms,
         ) = {
-            let cfg = state.config.lock().unwrap();
+            let cfg = state.config.lock().expect("config lock poisoned");
             let s = &cfg.settings;
             (
                 s.auto_gain,
@@ -484,8 +523,10 @@ fn build_general_page(
                     commands::cancel_loudness_analysis();
                     return;
                 }
-                match commands::trigger_estimated_loudness_refinement(Arc::clone(&state2.config), true)
-                {
+                match commands::trigger_estimated_loudness_refinement(
+                    Arc::clone(&state2.config),
+                    true,
+                ) {
                     Ok(commands::EstimatedLoudnessRefinementTrigger::Started) => {
                         if let Some(refine_spinner2) = refine_spinner2.upgrade() {
                             refine_spinner2.set_visible(true);
@@ -513,23 +554,45 @@ fn build_general_page(
         status_row.add_suffix(&status_badge);
         auto_gain_group.add(&status_row);
 
-        {
-            let state2 = Arc::clone(&state);
-            let status_row_weak = status_row.downgrade();
-            let status_badge_weak = status_badge.downgrade();
-            let analyze_btn_weak = analyze_btn.downgrade();
-            let analyze_spinner_weak = spinner.downgrade();
-            let refine_btn_weak = refine_btn.downgrade();
-            let refine_spinner_weak = refine_spinner.downgrade();
+        let state2 = Arc::clone(&state);
+        let status_row_weak = status_row.downgrade();
+        let status_badge_weak = status_badge.downgrade();
+        let analyze_btn_weak = analyze_btn.downgrade();
+        let analyze_spinner_weak = spinner.downgrade();
+        let refine_btn_weak = refine_btn.downgrade();
+        let refine_spinner_weak = refine_spinner.downgrade();
 
-            gtk4::glib::timeout_add_local(
-                std::time::Duration::from_millis(250),
-                move || {
+        // Shared slot for the currently-running timer SourceId.
+        let timer_slot: Rc<std::cell::RefCell<Option<gtk4::glib::SourceId>>> =
+            Rc::new(std::cell::RefCell::new(None));
+
+        // Factory: creates a fresh 250 ms polling timer, returns its SourceId.
+        // The timer breaks itself when the dialog becomes invisible.
+        let make_timer: Rc<dyn Fn() -> gtk4::glib::SourceId> = Rc::new({
+            let state2 = Arc::clone(&state2);
+            let status_row_weak = status_row_weak.clone();
+            let status_badge_weak = status_badge_weak.clone();
+            let analyze_btn_weak = analyze_btn_weak.clone();
+            let analyze_spinner_weak = analyze_spinner_weak.clone();
+            let refine_btn_weak = refine_btn_weak.clone();
+            let refine_spinner_weak = refine_spinner_weak.clone();
+            let dialog_weak = dialog_weak.clone();
+            move || {
+                let state2 = Arc::clone(&state2);
+                let status_row_weak = status_row_weak.clone();
+                let status_badge_weak = status_badge_weak.clone();
+                let analyze_btn_weak = analyze_btn_weak.clone();
+                let analyze_spinner_weak = analyze_spinner_weak.clone();
+                let refine_btn_weak = refine_btn_weak.clone();
+                let refine_spinner_weak = refine_spinner_weak.clone();
+                let dialog_weak = dialog_weak.clone();
+                gtk4::glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
                     let Some(dialog) = dialog_weak.upgrade() else {
                         return gtk4::glib::ControlFlow::Break;
                     };
-                    if !dialog.is_visible() {
-                        return gtk4::glib::ControlFlow::Continue;
+                    if !should_poll_loudness_summary(dialog.is_visible()) {
+                        // Dialog hidden — self-terminate so no timer accumulates.
+                        return gtk4::glib::ControlFlow::Break;
                     }
 
                     let Some(status_row) = status_row_weak.upgrade() else {
@@ -539,14 +602,14 @@ fn build_general_page(
                         return gtk4::glib::ControlFlow::Break;
                     };
 
-                    let summary = match commands::get_loudness_status_summary(Arc::clone(&state2.config))
-                    {
-                        Ok(summary) => summary,
-                        Err(e) => {
-                            log::warn!("Failed to read loudness status summary: {e}");
-                            return gtk4::glib::ControlFlow::Continue;
-                        }
-                    };
+                    let summary =
+                        match commands::get_loudness_status_summary(Arc::clone(&state2.config)) {
+                            Ok(summary) => summary,
+                            Err(e) => {
+                                log::warn!("Failed to read loudness status summary: {e}");
+                                return gtk4::glib::ControlFlow::Continue;
+                            }
+                        };
 
                     status_row.set_subtitle(&format_loudness_status_subtitle(&summary));
                     status_badge.set_text(loudness_activity_text(&summary));
@@ -602,8 +665,24 @@ fn build_general_page(
                     }
 
                     gtk4::glib::ControlFlow::Continue
-                },
-            );
+                })
+            }
+        });
+
+        // Start a new timer whenever the dialog becomes visible.
+        {
+            let make_timer = Rc::clone(&make_timer);
+            let timer_slot = Rc::clone(&timer_slot);
+            if let Some(dialog) = dialog_weak.upgrade() {
+                dialog.connect_visible_notify(move |d| {
+                    if d.is_visible() {
+                        if let Some(id) = timer_slot.borrow_mut().take() {
+                            crate::timer_registry::remove_source_id_safe(id);
+                        }
+                        *timer_slot.borrow_mut() = Some(make_timer());
+                    }
+                });
+            }
         }
 
         auto_gain_group.set_visible(auto_gain);
@@ -619,7 +698,7 @@ fn build_general_page(
     {
         let sources = commands::list_audio_sources(Arc::clone(&state.player));
         let (current_mic, current_default_source_mode, current_latency_profile) = {
-            let cfg = state.config.lock().unwrap();
+            let cfg = state.config.lock().expect("config lock poisoned");
             (
                 cfg.settings.mic_source.clone(),
                 cfg.settings.default_source_mode,
@@ -856,7 +935,7 @@ fn build_general_page(
 
     {
         let current_theme = {
-            let cfg = state.config.lock().unwrap();
+            let cfg = state.config.lock().expect("config lock poisoned");
             cfg.settings.theme
         };
 
@@ -879,9 +958,9 @@ fn build_general_page(
                 .height_request(16)
                 .css_classes(vec!["theme-swatch"])
                 .build();
-            let color_str = color.to_string();
+            let rgba = gtk4::gdk::RGBA::parse(*color)
+                .expect("hardcoded dark swatch color failed to parse");
             da.set_draw_func(move |_, cr, w, h| {
-                let rgba = gtk4::gdk::RGBA::parse(&color_str).unwrap();
                 cr.set_source_rgba(
                     rgba.red() as f64,
                     rgba.green() as f64,
@@ -917,9 +996,9 @@ fn build_general_page(
                 .height_request(16)
                 .css_classes(vec!["theme-swatch"])
                 .build();
-            let color_str = color.to_string();
+            let rgba = gtk4::gdk::RGBA::parse(*color)
+                .expect("hardcoded light swatch color failed to parse");
             da.set_draw_func(move |_, cr, w, h| {
-                let rgba = gtk4::gdk::RGBA::parse(&color_str).unwrap();
                 cr.set_source_rgba(
                     rgba.red() as f64,
                     rgba.green() as f64,
@@ -977,7 +1056,7 @@ fn build_general_page(
 
     {
         let current_style = {
-            let cfg = state.config.lock().unwrap();
+            let cfg = state.config.lock().expect("config lock poisoned");
             cfg.settings.list_style
         };
 
@@ -1066,6 +1145,8 @@ fn build_sound_folder_row(
     state: Arc<AppState>,
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
+    folder_rows: FolderRowRefs,
+    rebuild_pending: RebuildPending,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(&folder).build();
@@ -1081,6 +1162,8 @@ fn build_sound_folder_row(
         let state2 = Arc::clone(&state);
         let folders_group2 = folders_group.downgrade();
         let add_folder_row2 = add_folder_row.downgrade();
+        let folder_rows2 = Rc::clone(&folder_rows);
+        let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
         remove_btn.connect_clicked(move |_| {
             log::info!("Remove folder button clicked: {}", folder_owned);
@@ -1105,6 +1188,8 @@ fn build_sound_folder_row(
                 &folders_group2,
                 &add_folder_row2,
                 Arc::clone(&state2),
+                Rc::clone(&folder_rows2),
+                Rc::clone(&rebuild_pending2),
                 on_library_changed2.clone(),
             );
             if let Some(cb) = on_library_changed2.as_ref() {
@@ -1121,11 +1206,20 @@ fn schedule_rebuild_sound_folder_rows(
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
     state: Arc<AppState>,
+    folder_rows: FolderRowRefs,
+    rebuild_pending: RebuildPending,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
+    if !try_set_rebuild_pending(rebuild_pending.as_ref()) {
+        log::debug!("schedule_rebuild_sound_folder_rows: Rebuild already pending");
+        return;
+    }
+
     log::info!("schedule_rebuild_sound_folder_rows: Scheduling rebuild");
     let folders_group = folders_group.clone();
     let add_folder_row = add_folder_row.clone();
+    let folder_rows = Rc::clone(&folder_rows);
+    let rebuild_pending = Rc::clone(&rebuild_pending);
 
     // Use idle_add to ensure this runs after the current event is processed
     gtk4::glib::idle_add_local_once(move || {
@@ -1134,8 +1228,12 @@ fn schedule_rebuild_sound_folder_rows(
             &folders_group,
             &add_folder_row,
             state,
+            folder_rows,
+            Rc::clone(&rebuild_pending),
             on_library_changed,
         );
+
+        clear_rebuild_pending(rebuild_pending.as_ref());
     });
 }
 
@@ -1143,28 +1241,35 @@ fn rebuild_sound_folder_rows(
     folders_group: &adw::PreferencesGroup,
     add_folder_row: &adw::ActionRow,
     state: Arc<AppState>,
+    folder_rows: FolderRowRefs,
+    rebuild_pending: RebuildPending,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
     log::info!("rebuild_sound_folder_rows: Starting rebuild");
 
-    let mut existing_rows: Vec<gtk4::Widget> = Vec::new();
-    let mut child = folders_group.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        if widget.is::<adw::PreferencesRow>() {
-            existing_rows.push(widget);
-        }
-    }
+    let existing_rows = {
+        let mut tracked = folder_rows.borrow_mut();
+        std::mem::take(&mut *tracked)
+    };
     log::info!(
         "rebuild_sound_folder_rows: Removing {} existing rows",
         existing_rows.len()
     );
-    for widget in existing_rows {
-        folders_group.remove(&widget);
+    for row_weak in existing_rows {
+        let Some(row) = row_weak.upgrade() else {
+            continue;
+        };
+
+        if row.parent().is_none() {
+            continue;
+        }
+
+        // PreferencesGroup manages internal wrappers; remove via the group API.
+        folders_group.remove(&row);
     }
 
     let folders = {
-        let cfg = state.config.lock().unwrap();
+        let cfg = state.config.lock().expect("config lock poisoned");
         log::info!(
             "rebuild_sound_folder_rows: Config has {} folders: {:?}",
             cfg.sound_folders.len(),
@@ -1180,13 +1285,20 @@ fn rebuild_sound_folder_rows(
             Arc::clone(&state),
             folders_group,
             add_folder_row,
+            Rc::clone(&folder_rows),
+            Rc::clone(&rebuild_pending),
             on_library_changed.clone(),
         );
         folders_group.add(&row);
+        folder_rows.borrow_mut().push(row.downgrade());
         added_rows = added_rows.saturating_add(1);
     }
 
-    folders_group.add(add_folder_row);
+    if should_attach_add_folder_row(add_folder_row.parent().is_some()) {
+        folders_group.add(add_folder_row);
+    } else {
+        log::debug!("rebuild_sound_folder_rows: Add Folder row already attached");
+    }
 
     log::info!(
         "rebuild_sound_folder_rows: Rebuild complete, {} rows added",
@@ -1201,7 +1313,7 @@ fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
         .build();
 
     let unavailable_reason = {
-        let hotkeys = state.hotkeys.lock().unwrap();
+        let hotkeys = state.hotkeys.lock().expect("hotkeys lock poisoned");
         hotkeys.availability_message()
     };
 
@@ -1265,7 +1377,7 @@ fn build_hotkeys_page(state: Arc<AppState>) -> adw::PreferencesPage {
 
 fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::ActionRow {
     let current_hotkey = {
-        let cfg = state.config.lock().unwrap();
+        let cfg = state.config.lock().expect("config lock poisoned");
         cfg.settings.control_hotkeys.get_cloned(action)
     };
 
@@ -1303,7 +1415,7 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
         record_btn.connect_clicked(move |btn| {
             if let Some(win) = btn.root().and_then(|r| r.downcast::<gtk4::Window>().ok()) {
                 let current = {
-                    let cfg = state2.config.lock().unwrap();
+                    let cfg = state2.config.lock().expect("config lock poisoned");
                     cfg.settings.control_hotkeys.get_cloned(action)
                 };
                 let state3 = Arc::clone(&state2);
@@ -1419,4 +1531,38 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
     }
 
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebuild_pending_coalesces_duplicate_schedules() {
+        let pending = Cell::new(false);
+
+        assert!(try_set_rebuild_pending(&pending));
+        assert!(!try_set_rebuild_pending(&pending));
+    }
+
+    #[test]
+    fn rebuild_pending_can_be_rearmed_after_clear() {
+        let pending = Cell::new(false);
+
+        assert!(try_set_rebuild_pending(&pending));
+        clear_rebuild_pending(&pending);
+        assert!(try_set_rebuild_pending(&pending));
+    }
+
+    #[test]
+    fn add_folder_row_attach_is_idempotent() {
+        assert!(should_attach_add_folder_row(false));
+        assert!(!should_attach_add_folder_row(true));
+    }
+
+    #[test]
+    fn loudness_poll_pauses_when_dialog_hidden() {
+        assert!(should_poll_loudness_summary(true));
+        assert!(!should_poll_loudness_summary(false));
+    }
 }

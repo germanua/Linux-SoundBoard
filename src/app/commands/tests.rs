@@ -188,6 +188,82 @@ fn test_remove_sound_folder() {
 }
 
 #[test]
+fn test_remove_sound_folder_removes_matching_sounds_and_tab_membership() {
+    let removed_folder = "/tmp/Завантажене".to_string();
+    let kept_folder = "/tmp/other".to_string();
+
+    let mut config = create_test_config();
+    config.sound_folders.push(removed_folder.clone());
+    config.sound_folders.push(kept_folder.clone());
+
+    let removed_sound_1 = Sound::new(
+        "Removed 1".to_string(),
+        format!("{}/one.mp3", removed_folder),
+    );
+    let removed_sound_2 = Sound::new(
+        "Removed 2".to_string(),
+        format!("{}/nested/two.wav", removed_folder),
+    );
+    let kept_sound = Sound::new("Kept".to_string(), format!("{}/keep.ogg", kept_folder));
+
+    let kept_id = kept_sound.id.clone();
+    let removed_id_1 = removed_sound_1.id.clone();
+    let removed_id_2 = removed_sound_2.id.clone();
+
+    let mut tab = SoundTab::new("Custom".to_string(), 1);
+    tab.sound_ids = vec![removed_id_1.clone(), kept_id.clone(), removed_id_2.clone()];
+
+    config.sounds = vec![removed_sound_1, removed_sound_2, kept_sound];
+    config.tabs.push(tab);
+
+    let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
+
+    let result = commands::remove_sound_folder(removed_folder.clone(), config.clone(), hotkeys);
+    assert!(result.is_ok());
+
+    let cfg = config.lock().unwrap();
+    assert!(!cfg.sound_folders.contains(&removed_folder));
+    assert!(cfg.sound_folders.contains(&kept_folder));
+    assert_eq!(cfg.sounds.len(), 1);
+    assert_eq!(cfg.sounds[0].id, kept_id);
+    assert_eq!(cfg.tabs[0].sound_ids, vec![kept_id]);
+}
+
+#[test]
+fn test_remove_sound_folder_matches_non_ascii_source_path() {
+    let removed_folder = "/tmp/Тести".to_string();
+
+    let mut config = create_test_config();
+    config.sound_folders.push(removed_folder.clone());
+
+    let mut removed_via_source = Sound::new(
+        "Removed via source".to_string(),
+        "/tmp/cache/removed.mp3".to_string(),
+    );
+    removed_via_source.source_path = Some(format!("{}/orig.mp3", removed_folder));
+
+    let mut kept_sound = Sound::new("Kept".to_string(), "/tmp/cache/kept.mp3".to_string());
+    kept_sound.source_path = Some("/tmp/another-folder/kept.mp3".to_string());
+
+    let removed_id = removed_via_source.id.clone();
+    let kept_id = kept_sound.id.clone();
+
+    config.sounds = vec![removed_via_source, kept_sound];
+
+    let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
+
+    let result = commands::remove_sound_folder(removed_folder, config.clone(), hotkeys);
+    assert!(result.is_ok());
+
+    let cfg = config.lock().unwrap();
+    assert_eq!(cfg.sounds.len(), 1);
+    assert_eq!(cfg.sounds[0].id, kept_id);
+    assert!(cfg.get_sound(&removed_id).is_none());
+}
+
+#[test]
 fn test_remove_sound_removes_tab_membership() {
     let mut config = create_test_config();
     let sound_a = Sound::new("A".to_string(), "/tmp/a.wav".to_string());
@@ -354,7 +430,7 @@ fn test_update_sound_source_refreshes_duration_metadata() {
             .expect("update succeeds");
 
     assert!(updated.duration_ms.is_some());
-            assert!(updated.loudness_source_fingerprint.is_some());
+    assert!(updated.loudness_source_fingerprint.is_some());
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -440,7 +516,10 @@ fn test_set_mic_latency_profile_low() {
     assert!(result.is_ok());
 
     let cfg = config.lock().unwrap();
-    assert_eq!(cfg.settings.mic_latency_profile, crate::config::MicLatencyProfile::Low);
+    assert_eq!(
+        cfg.settings.mic_latency_profile,
+        crate::config::MicLatencyProfile::Low
+    );
 }
 
 #[test]
@@ -954,7 +1033,10 @@ fn test_trigger_missing_loudness_analysis_skips_unavailable_sounds() {
     let mut config = create_test_config();
     config.settings.auto_gain = true;
 
-    let mut sound = Sound::new("Unavailable Sound".to_string(), "/tmp/missing.wav".to_string());
+    let mut sound = Sound::new(
+        "Unavailable Sound".to_string(),
+        "/tmp/missing.wav".to_string(),
+    );
     sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
     sound.loudness_lufs = None;
     config.sounds.push(sound);
@@ -993,13 +1075,19 @@ fn test_trigger_missing_loudness_analysis_starts_refinement_for_estimated_sounds
         Ok(commands::MissingLoudnessAnalysisTrigger::SkippedNoMissingSounds)
     ));
     assert_eq!(super::playback::missing_loudness_analysis_start_count(), 0);
-    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 1);
+    assert_eq!(
+        super::playback::estimated_loudness_refinement_start_count(),
+        1
+    );
 
     wait_for_background_analysis_idle();
 
     let cfg = config.lock().expect("config lock");
     let stored = cfg.get_sound(&sound_id).expect("sound exists");
-    assert_ne!(stored.loudness_analysis_state, LoudnessAnalysisState::Unavailable);
+    assert_ne!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Unavailable
+    );
     assert!(stored.loudness_confidence.unwrap_or(0.0) >= 0.5);
     drop(cfg);
 
@@ -1029,13 +1117,19 @@ fn test_trigger_estimated_loudness_refinement_force_refines_high_confidence_soun
         result,
         Ok(commands::EstimatedLoudnessRefinementTrigger::Started)
     ));
-    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 1);
+    assert_eq!(
+        super::playback::estimated_loudness_refinement_start_count(),
+        1
+    );
 
     wait_for_background_analysis_idle();
 
     let cfg = config.lock().expect("config lock");
     let stored = cfg.get_sound(&sound_id).expect("sound exists");
-    assert_eq!(stored.loudness_analysis_state, LoudnessAnalysisState::Refined);
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Refined
+    );
     assert_eq!(stored.loudness_confidence, Some(1.0));
     assert!(stored.loudness_lufs.is_some());
     drop(cfg);
@@ -1062,7 +1156,10 @@ fn test_trigger_estimated_loudness_refinement_skips_high_confidence_without_forc
         result,
         Ok(commands::EstimatedLoudnessRefinementTrigger::SkippedNoCandidates)
     ));
-    assert_eq!(super::playback::estimated_loudness_refinement_start_count(), 0);
+    assert_eq!(
+        super::playback::estimated_loudness_refinement_start_count(),
+        0
+    );
 }
 
 #[test]
@@ -1203,7 +1300,10 @@ fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
     .expect("update succeeds");
 
     assert!(updated.loudness_lufs.is_none());
-    assert_eq!(updated.loudness_analysis_state, LoudnessAnalysisState::Pending);
+    assert_eq!(
+        updated.loudness_analysis_state,
+        LoudnessAnalysisState::Pending
+    );
     assert!(updated.loudness_confidence.is_none());
     assert!(updated.loudness_source_fingerprint.is_some());
     assert_eq!(super::playback::missing_loudness_analysis_start_count(), 1);
@@ -1212,7 +1312,10 @@ fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
     let cfg = config.lock().expect("config lock");
     let stored = cfg.get_sound(&sound_id).expect("updated sound exists");
     assert!(stored.loudness_lufs.is_none());
-    assert_ne!(stored.loudness_analysis_state, LoudnessAnalysisState::Estimated);
+    assert_ne!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Estimated
+    );
     assert!(stored.loudness_confidence.is_none());
     assert!(stored.loudness_source_fingerprint.is_some());
     drop(cfg);
@@ -1249,13 +1352,17 @@ fn test_refresh_sounds_invalidates_stale_loudness_fingerprint() {
     let config = Arc::new(Mutex::new(config));
     let hotkeys = create_mock_hotkey_manager();
 
-    let refreshed = commands::refresh_sounds(Arc::clone(&config), hotkeys).expect("refresh succeeds");
+    let refreshed =
+        commands::refresh_sounds(Arc::clone(&config), hotkeys).expect("refresh succeeds");
     assert_eq!(refreshed.len(), 1);
 
     let cfg = config.lock().expect("config lock");
     let stored = cfg.get_sound(&sound_id).expect("sound exists");
     assert!(stored.loudness_lufs.is_none());
-    assert_eq!(stored.loudness_analysis_state, LoudnessAnalysisState::Pending);
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Pending
+    );
     assert!(stored.loudness_confidence.is_none());
     assert!(stored.loudness_source_fingerprint.is_some());
     assert_ne!(

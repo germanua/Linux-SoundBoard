@@ -1,0 +1,85 @@
+❯ RUST_LOG=linux_soundboard::audio::player=debug,linux_soundboard::commands::shared=debug,linux_soundboard::ui::app_window=debug,linux_soundboard::ui::transport=debug,linux_soundboard=info \
+      /home/flinux/opencode/LinuxSoundBoardv1/src/target/release/linux-soundboard \
+      2>&1 | tee /tmp/linux-soundboard-ui.log
+[2026-05-05T13:42:33Z INFO  linux_soundboard::bootstrap] Keeping GTK backend unchanged because GDK_BACKEND is already set: Some("wayland")
+[2026-05-05T13:42:33Z INFO  linux_soundboard::bootstrap] Starting Linux Soundboard (GTK4)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::bootstrap] Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager
+[2026-05-05T13:42:33Z INFO  linux_soundboard::bootstrap] Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager
+
+(linux-soundboard:141764): Adwaita-WARNING **: 16:42:33.733: Using GtkSettings:gtk-application-prefer-dark-theme with libadwaita is unsupported. Please use AdwStyleManager:color-scheme instead.
+[2026-05-05T13:42:33Z INFO  linux_soundboard::bootstrap] GTK display backend: Wayland
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:config_loaded] VmRSS=52024kB VmHWM=52024kB VmData=56884kB VmSize=587448kB VmSwap=0kB RssAnon=9524kB RssFile=42492kB RssShmem=8kB Threads=7 Pss=21672kB PrivClean=10392kB PrivDirty=9524kB ShClean=32100kB ShDirty=8kB
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:config_loaded] RSS=52024kB PSS=21672kB PrivDirty=9524kB RssFile=42492kB RssShmem=8kB ShDirty=8kB Threads=7 timers=0 hotkeys="" playback=0 validation=0(,0) work=none(0,0)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::hotkeys::manager_runtime] Initializing hotkey backend manager
+[2026-05-05T13:42:33Z INFO  linux_soundboard::hotkeys::manager_runtime] Deferring hotkey backend startup until the first binding is added
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:hotkeys_ready] VmRSS=52088kB VmHWM=52088kB VmData=56884kB VmSize=587448kB VmSwap=0kB RssAnon=9524kB RssFile=42556kB RssShmem=8kB Threads=7 Pss=21736kB PrivClean=10456kB PrivDirty=9524kB ShClean=32100kB ShDirty=8kB
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:hotkeys_ready] RSS=52088kB PSS=21736kB PrivDirty=9524kB RssFile=42556kB RssShmem=8kB ShDirty=8kB Threads=7 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(,0) work=none(0,0)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:player_initialized] VmRSS=52164kB VmHWM=52164kB VmData=58936kB VmSize=655036kB VmSwap=0kB RssAnon=9536kB RssFile=42620kB RssShmem=8kB Threads=8 Pss=21851kB PrivClean=10520kB PrivDirty=9544kB ShClean=32356kB ShDirty=8kB
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:player_initialized] RSS=52972kB PSS=22107kB PrivDirty=9664kB RssFile=43304kB RssShmem=8kB ShDirty=8kB Threads=8 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(,0) work=none(0,0)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::pipewire::detection] PipeWire detected via pw-cli
+[2026-05-05T13:42:33Z INFO  linux_soundboard::ui::sound_list::interaction] Drag & drop handlers installed on sound list
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:window_built] VmRSS=68696kB VmHWM=68696kB VmData=73104kB VmSize=669268kB VmSwap=0kB RssAnon=21444kB RssFile=47072kB RssShmem=180kB Threads=8 Pss=36614kB PrivClean=12908kB PrivDirty=21452kB ShClean=34292kB ShDirty=44kB
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:window_built] RSS=68696kB PSS=36614kB PrivDirty=21452kB RssFile=47072kB RssShmem=180kB ShDirty=44kB Threads=8 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:window_presented] RSS=117288kB PSS=54059kB PrivDirty=31780kB RssFile=85216kB RssShmem=300kB ShDirty=164kB Threads=26 timers=3 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:loudness_bg:check] VmRSS=129152kB VmHWM=129152kB VmData=236596kB VmSize=2061772kB VmSwap=0kB RssAnon=38240kB RssFile=90612kB RssShmem=300kB Threads=26 Pss=62978kB PrivClean=17204kB PrivDirty=38248kB ShClean=73536kB ShDirty=164kB
+[2026-05-05T13:42:33Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:loudness_check] RSS=129152kB PSS=62978kB PrivDirty=38248kB RssFile=90612kB RssShmem=300kB ShDirty=164kB Threads=26 timers=3 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
+[2026-05-05T13:42:34Z INFO  linux_soundboard::ui::settings] rebuild_sound_folder_rows: Starting rebuild
+[2026-05-05T13:42:34Z INFO  linux_soundboard::ui::settings] rebuild_sound_folder_rows: Removing 0 existing rows
+[2026-05-05T13:42:34Z INFO  linux_soundboard::ui::settings] rebuild_sound_folder_rows: Config has 1 folders: ["/home/flinux/Завантажене"]
+[2026-05-05T13:42:34Z INFO  linux_soundboard::ui::settings] rebuild_sound_folder_rows: Rebuild complete, 1 rows added
+[2026-05-05T13:42:34Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:opened] VmRSS=133204kB VmHWM=133204kB VmData=273876kB VmSize=2490436kB VmSwap=0kB RssAnon=41336kB RssFile=91292kB RssShmem=576kB Threads=30 Pss=66361kB PrivClean=17292kB PrivDirty=41344kB ShClean=74252kB ShDirty=316kB
+[2026-05-05T13:42:34Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_opened] RSS=133204kB PSS=66361kB PrivDirty=41344kB RssFile=91292kB RssShmem=576kB ShDirty=316kB Threads=30
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:35.628: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:35Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=136688kB VmHWM=136688kB VmData=277052kB VmSize=2493904kB VmSwap=0kB RssAnon=44512kB RssFile=91484kB RssShmem=692kB Threads=29 Pss=69622kB PrivClean=17292kB PrivDirty=44520kB ShClean=74444kB ShDirty=432kB
+[2026-05-05T13:42:35Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=136688kB PSS=69622kB PrivDirty=44520kB RssFile=91484kB RssShmem=692kB ShDirty=432kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:36.290: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:36Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137000kB VmHWM=137000kB VmData=277244kB VmSize=2494212kB VmSwap=0kB RssAnon=44708kB RssFile=91484kB RssShmem=808kB Threads=29 Pss=69879kB PrivClean=17292kB PrivDirty=44716kB ShClean=74444kB ShDirty=548kB
+[2026-05-05T13:42:36Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137000kB PSS=69879kB PrivDirty=44716kB RssFile=91484kB RssShmem=808kB ShDirty=548kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:36.819: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:36Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137244kB VmHWM=137244kB VmData=277372kB VmSize=2494456kB VmSwap=0kB RssAnon=44836kB RssFile=91484kB RssShmem=924kB Threads=29 Pss=70065kB PrivClean=17292kB PrivDirty=44844kB ShClean=74444kB ShDirty=664kB
+[2026-05-05T13:42:36Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137244kB PSS=70065kB PrivDirty=44844kB RssFile=91484kB RssShmem=924kB ShDirty=664kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:37.216: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:37Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137364kB VmHWM=137364kB VmData=277372kB VmSize=2494584kB VmSwap=0kB RssAnon=44840kB RssFile=91484kB RssShmem=1040kB Threads=29 Pss=70127kB PrivClean=17292kB PrivDirty=44848kB ShClean=74444kB ShDirty=780kB
+[2026-05-05T13:42:37Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137364kB PSS=70127kB PrivDirty=44848kB RssFile=91484kB RssShmem=1040kB ShDirty=780kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:37.644: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:37Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137480kB VmHWM=137480kB VmData=277372kB VmSize=2494700kB VmSwap=0kB RssAnon=44840kB RssFile=91484kB RssShmem=1156kB Threads=29 Pss=70185kB PrivClean=17292kB PrivDirty=44848kB ShClean=74444kB ShDirty=896kB
+[2026-05-05T13:42:37Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137480kB PSS=70185kB PrivDirty=44848kB RssFile=91484kB RssShmem=1156kB ShDirty=896kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:38.047: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137596kB VmHWM=137596kB VmData=277372kB VmSize=2494816kB VmSwap=0kB RssAnon=44840kB RssFile=91484kB RssShmem=1272kB Threads=29 Pss=70243kB PrivClean=17292kB PrivDirty=44848kB ShClean=74444kB ShDirty=1012kB
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137596kB PSS=70243kB PrivDirty=44848kB RssFile=91484kB RssShmem=1272kB ShDirty=1012kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:38.425: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137712kB VmHWM=137712kB VmData=277372kB VmSize=2494932kB VmSwap=0kB RssAnon=44840kB RssFile=91484kB RssShmem=1388kB Threads=29 Pss=70301kB PrivClean=17292kB PrivDirty=44848kB ShClean=74444kB ShDirty=1128kB
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137712kB PSS=70301kB PrivDirty=44848kB RssFile=91484kB RssShmem=1388kB ShDirty=1128kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:38.823: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=137932kB VmHWM=137932kB VmData=277476kB VmSize=2495152kB VmSwap=0kB RssAnon=44944kB RssFile=91484kB RssShmem=1504kB Threads=29 Pss=70463kB PrivClean=17292kB PrivDirty=44952kB ShClean=74444kB ShDirty=1244kB
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=137932kB PSS=70463kB PrivDirty=44952kB RssFile=91484kB RssShmem=1504kB ShDirty=1244kB Threads=29
+[2026-05-05T13:42:38Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [idle:5s] RSS=137932kB PSS=70463kB PrivDirty=44952kB RssFile=91484kB RssShmem=1504kB ShDirty=1244kB Threads=29 timers=3 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:39.288: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:39Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=138048kB VmHWM=138048kB VmData=277476kB VmSize=2495268kB VmSwap=0kB RssAnon=44944kB RssFile=91484kB RssShmem=1620kB Threads=29 Pss=70518kB PrivClean=17292kB PrivDirty=44952kB ShClean=74444kB ShDirty=1360kB
+[2026-05-05T13:42:39Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=138048kB PSS=70518kB PrivDirty=44952kB RssFile=91484kB RssShmem=1620kB ShDirty=1360kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:39.822: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:39Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=138316kB VmHWM=138316kB VmData=277616kB VmSize=2495524kB VmSwap=0kB RssAnon=45096kB RssFile=91484kB RssShmem=1736kB Threads=29 Pss=70728kB PrivClean=17292kB PrivDirty=45104kB ShClean=74444kB ShDirty=1476kB
+[2026-05-05T13:42:39Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=138316kB PSS=70728kB PrivDirty=45104kB RssFile=91484kB RssShmem=1736kB ShDirty=1476kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:40.277: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:40Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=138332kB VmHWM=138332kB VmData=277512kB VmSize=2495536kB VmSwap=0kB RssAnon=44996kB RssFile=91484kB RssShmem=1852kB Threads=29 Pss=70689kB PrivClean=17292kB PrivDirty=45004kB ShClean=74444kB ShDirty=1592kB
+[2026-05-05T13:42:40Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=138332kB PSS=70689kB PrivDirty=45004kB RssFile=91484kB RssShmem=1852kB ShDirty=1592kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:40.728: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:40Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=138512kB VmHWM=138512kB VmData=277576kB VmSize=2495716kB VmSwap=0kB RssAnon=45060kB RssFile=91484kB RssShmem=1968kB Threads=29 Pss=70811kB PrivClean=17292kB PrivDirty=45068kB ShClean=74444kB ShDirty=1708kB
+[2026-05-05T13:42:40Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=138512kB PSS=70811kB PrivDirty=45068kB RssFile=91484kB RssShmem=1968kB ShDirty=1708kB Threads=29
+
+(linux-soundboard:141764): Gtk-CRITICAL **: 16:42:41.175: gtk_widget_set_parent: assertion '_gtk_widget_get_parent (widget) == NULL' failed
+[2026-05-05T13:42:41Z INFO  linux_soundboard::diagnostics::memory] RAM [ui:settings:reused] VmRSS=138564kB VmHWM=138564kB VmData=277512kB VmSize=2495768kB VmSwap=0kB RssAnon=44996kB RssFile=91484kB RssShmem=2084kB Threads=29 Pss=70804kB PrivClean=17292kB PrivDirty=45004kB ShClean=74444kB ShDirty=1824kB
+[2026-05-05T13:42:41Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [ui:settings_reused] RSS=138564kB PSS=70804kB PrivDirty=45004kB RssFile=91484kB RssShmem=2084kB ShDirty=1824kB Threads=29
+[2026-05-05T13:42:43Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [shutdown:close_request] RSS=137796kB PSS=70040kB PrivDirty=44176kB RssFile=91548kB RssShmem=2080kB ShDirty=1820kB Threads=28 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)

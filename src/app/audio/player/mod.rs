@@ -1,6 +1,6 @@
 //! PipeWire-backed audio playback with a persistent virtual microphone.
 
-use log::{debug, error, warn};
+use log::{debug, error, trace, warn};
 use pipewire as pw;
 use pw::channel as pw_channel;
 use pw::properties::properties;
@@ -34,19 +34,19 @@ use crate::app_meta::{
 };
 use crate::config::{DefaultSourceMode, MicLatencyProfile};
 
-mod queues;
-mod limiter;
-mod playback;
 mod command_handlers;
+mod limiter;
 mod mixing;
-mod streams;
+mod playback;
+mod queues;
 mod source_routing;
+mod streams;
 
 use command_handlers::{audio_command_kind, handle_audio_command};
 use limiter::LookAheadLimiter;
 use mixing::{clear_all_queues, clear_output_queues, clear_virtual_mic_queues, mix_tick};
 #[cfg(test)]
-use mixing::fill_output_queues;
+use mixing::{enqueue_passthrough_chunk, fill_output_queues};
 use playback::ActivePlayback;
 use queues::ProcessQueues;
 use source_routing::{
@@ -174,7 +174,11 @@ impl RuntimeConfig {
         self.latency_tuning().virtual_target_frames * TARGET_OUTPUT_CHANNELS as usize
     }
 
-    fn max_fill_batches_per_tick(&self, wants_local_output: bool, wants_virtual_output: bool) -> usize {
+    fn max_fill_batches_per_tick(
+        &self,
+        wants_local_output: bool,
+        wants_virtual_output: bool,
+    ) -> usize {
         let mut target_frames = 0usize;
         if wants_local_output {
             target_frames = target_frames.max(LOCAL_OUTPUT_QUEUE_TARGET_FRAMES);
@@ -783,6 +787,14 @@ impl Drop for AudioPlayer {
 struct StreamHandle {
     _stream: pw::stream::StreamRc,
     _listener: pw::stream::StreamListener<()>,
+}
+
+impl Drop for StreamHandle {
+    fn drop(&mut self) {
+        if let Err(err) = self._stream.disconnect() {
+            debug!("PipeWire stream disconnect during drop failed: {err}");
+        }
+    }
 }
 
 struct BackendState {
@@ -1576,6 +1588,19 @@ id 72, type PipeWire:Interface:Node
         let queues = state.queues.lock().expect("lock queues");
         assert_eq!(queues.local.len(), 0);
         assert_eq!(queues.virtual_out.len(), 0);
+    }
+
+    #[test]
+    fn passthrough_chunk_pads_short_mic_input_with_silence() {
+        let mut queues = ProcessQueues::new(8, 8, 8);
+        queues.mic_in.push_slice(&[0.25, -0.5]);
+
+        enqueue_passthrough_chunk(&mut queues, 6);
+
+        let mut output = vec![1.0; 6];
+        let dequeued = queues.virtual_out.pop_into(&mut output);
+        assert_eq!(dequeued, 6);
+        assert_eq!(output, vec![0.25, -0.5, 0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

@@ -164,10 +164,7 @@ fn seek_context_to_ms(
         return Ok(());
     }
 
-    let time = Time::new(
-        start_ms / 1000,
-        (start_ms % 1000) as f64 / 1000.0, // fractional seconds
-    );
+    let time = Time::new(start_ms / 1000, (start_ms % 1000) as f64 / 1000.0);
 
     context
         .format
@@ -557,8 +554,7 @@ pub fn analyze_loudness_path_preview_smart_with_metrics(
             continue;
         }
 
-        let preview_frames =
-            ((context.rate as u64).saturating_mul(window.window_ms) / 1000).max(1);
+        let preview_frames = ((context.rate as u64).saturating_mul(window.window_ms) / 1000).max(1);
         requested_total_frames = requested_total_frames.saturating_add(preview_frames);
 
         match analyze_context_with_stats(context, Some(path), Some(preview_frames)) {
@@ -743,15 +739,21 @@ mod tests {
     fn test_build_smart_preview_windows_medium_track_spreads_windows() {
         let windows = build_smart_preview_windows(8_000, Some(60_000));
         assert_eq!(windows.len(), PREVIEW_ANCHORS_MEDIUM_PCT.len());
-        assert!(windows.iter().all(|window| window.start_ms >= PREVIEW_INTRO_GUARD_MS));
-        assert!(windows.windows(2).all(|pair| pair[0].start_ms < pair[1].start_ms));
+        assert!(windows
+            .iter()
+            .all(|window| window.start_ms >= PREVIEW_INTRO_GUARD_MS));
+        assert!(windows
+            .windows(2)
+            .all(|pair| pair[0].start_ms < pair[1].start_ms));
     }
 
     #[test]
     fn test_build_smart_preview_windows_long_track_uses_long_anchor_profile() {
         let windows = build_smart_preview_windows(12_000, Some(180_000));
         assert_eq!(windows.len(), PREVIEW_ANCHORS_LONG_PCT.len());
-        assert!(windows.windows(2).all(|pair| pair[0].start_ms < pair[1].start_ms));
+        assert!(windows
+            .windows(2)
+            .all(|pair| pair[0].start_ms < pair[1].start_ms));
     }
 
     #[test]

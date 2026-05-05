@@ -74,11 +74,8 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
     let fill_started_at = Instant::now();
     let mut batches = 0usize;
     while batches < max_fill_batches {
-        let Some((local_deficit, virtual_deficit)) = current_queue_deficits(
-            &state.queues,
-            local_target_samples,
-            virtual_target_samples,
-        )
+        let Some((local_deficit, virtual_deficit)) =
+            current_queue_deficits(&state.queues, local_target_samples, virtual_target_samples)
         else {
             return;
         };
@@ -92,17 +89,14 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         batches = batches.saturating_add(1);
     }
 
-    if let Some((local_deficit, virtual_deficit)) = current_queue_deficits(
-        &state.queues,
-        local_target_samples,
-        virtual_target_samples,
-    )
+    if let Some((local_deficit, virtual_deficit)) =
+        current_queue_deficits(&state.queues, local_target_samples, virtual_target_samples)
     {
         let needs_more_audio = local_deficit > 0 || virtual_deficit > 0;
         if needs_more_audio {
             let elapsed_ms = fill_started_at.elapsed().as_millis();
             if batches >= max_fill_batches {
-                debug!(
+                trace!(
                     "Mix fill budget exhausted: batches={} elapsed_ms={} local_deficit_samples={} virtual_deficit_samples={}",
                     batches,
                     elapsed_ms,
@@ -110,7 +104,7 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
                     virtual_deficit
                 );
             }
-            debug!(
+            trace!(
                 "Output queues remain short after fill: batches={} elapsed_ms={} local_deficit_samples={} virtual_deficit_samples={}",
                 batches,
                 elapsed_ms,
@@ -149,7 +143,9 @@ fn trim_latency_backlog(state: &mut LoopState, wants_virtual_output: bool) {
     let max_mic_backlog_samples = state.stream_runtime.max_mic_backlog_samples();
 
     if let Ok(mut queues) = state.queues.lock() {
-        let dropped_virtual = queues.virtual_out.trim_oldest_to(max_virtual_backlog_samples);
+        let dropped_virtual = queues
+            .virtual_out
+            .trim_oldest_to(max_virtual_backlog_samples);
         let dropped_mic = queues.mic_in.trim_oldest_to(max_mic_backlog_samples);
         if dropped_virtual > 0 || dropped_mic > 0 {
             debug!(
@@ -185,21 +181,17 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) {
 
     if passthrough_active && !playback_active {
         if let Ok(mut queues) = state.queues.lock() {
-            let mut passthrough_samples = vec![0.0; chunk_samples];
-            let dequeued = queues.mic_in.pop_into(&mut passthrough_samples);
-            if dequeued > 0 {
-                queues.virtual_out.push_slice(&passthrough_samples[..dequeued]);
-            }
+            enqueue_passthrough_chunk(&mut queues, chunk_samples);
         }
         return;
     }
 
-    let (local_samples, mut virtual_samples) = if let Some(playback) = state.active_playback.as_mut()
-    {
-        playback.render(chunk_samples, &runtime)
-    } else {
-        (vec![0.0; chunk_samples], vec![0.0; chunk_samples])
-    };
+    let (local_samples, mut virtual_samples) =
+        if let Some(playback) = state.active_playback.as_mut() {
+            playback.render(chunk_samples, &runtime)
+        } else {
+            (vec![0.0; chunk_samples], vec![0.0; chunk_samples])
+        };
 
     if let Ok(mut queues) = state.queues.lock() {
         if passthrough_active {
@@ -218,6 +210,12 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) {
     }
 }
 
+pub(super) fn enqueue_passthrough_chunk(queues: &mut ProcessQueues, chunk_samples: usize) {
+    let mut passthrough_samples = vec![0.0; chunk_samples];
+    let _ = queues.mic_in.pop_into(&mut passthrough_samples);
+    queues.virtual_out.push_slice(&passthrough_samples);
+}
+
 pub(super) fn clear_output_queues(queues: &std::sync::Arc<std::sync::Mutex<ProcessQueues>>) {
     if let Ok(mut queues) = queues.lock() {
         queues.local.samples.clear();
@@ -225,9 +223,7 @@ pub(super) fn clear_output_queues(queues: &std::sync::Arc<std::sync::Mutex<Proce
     }
 }
 
-pub(super) fn clear_virtual_mic_queues(
-    queues: &std::sync::Arc<std::sync::Mutex<ProcessQueues>>,
-) {
+pub(super) fn clear_virtual_mic_queues(queues: &std::sync::Arc<std::sync::Mutex<ProcessQueues>>) {
     if let Ok(mut queues) = queues.lock() {
         queues.mic_in.samples.clear();
         queues.virtual_out.samples.clear();

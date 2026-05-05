@@ -15,8 +15,9 @@ use crate::hotkeys::HotkeyManager;
 
 use super::shared::{
     adaptive_audio_analysis_plan, build_sound_with_metadata, compute_sound_source_fingerprint,
-    default_sound_import_dir, probe_duration_ms, unregister_hotkeys_best_effort, with_config_mut,
-    with_saved_config,
+    default_sound_import_dir, probe_duration_ms, unregister_hotkeys_best_effort, with_config,
+    with_config_mut, with_saved_config, ERR_FILE_DOES_NOT_EXIST, ERR_SOUND_ALREADY_EXISTS,
+    ERR_SOUND_NOT_FOUND, ERR_UNSUPPORTED_AUDIO_FILE,
 };
 
 fn maybe_schedule_missing_loudness_backfill(config: &Arc<Mutex<Config>>) {
@@ -38,8 +39,7 @@ struct FingerprintRefreshOutcome {
 }
 
 fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRefreshOutcome {
-    let current_fingerprint =
-        compute_sound_source_fingerprint(&sound.path, sound.duration_ms);
+    let current_fingerprint = compute_sound_source_fingerprint(&sound.path, sound.duration_ms);
 
     let Some(mut fingerprint) = current_fingerprint else {
         return FingerprintRefreshOutcome {
@@ -82,32 +82,29 @@ fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRe
     }
 }
 
+fn effective_source_path(sound: &Sound) -> &str {
+    sound.source_path.as_deref().unwrap_or(&sound.path)
+}
+
 pub fn add_sound(name: String, path: String, config: Arc<Mutex<Config>>) -> Result<Sound, String> {
     if !Path::new(&path).exists() {
-        return Err("File does not exist".to_string());
+        return Err(ERR_FILE_DOES_NOT_EXIST.to_string());
     }
     if !scanner::is_audio_file(&path) {
-        return Err("Not a supported audio file".to_string());
+        return Err(ERR_UNSUPPORTED_AUDIO_FILE.to_string());
     }
 
-    {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        if cfg.sounds.iter().any(|s| s.path == path) {
-            return Err("Sound already exists".to_string());
-        }
+    let duplicate = with_config(&config, |cfg| cfg.sounds.iter().any(|s| s.path == path))?;
+    if duplicate {
+        return Err(ERR_SOUND_ALREADY_EXISTS.to_string());
     }
 
     let sound = build_sound_with_metadata(name, path);
-
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
     let sound_clone = sound.clone();
-    cfg.add_sound(sound);
-    cfg.save().map_err(|e| e.to_string())?;
-    drop(cfg);
+    with_config_mut(&config, move |cfg| {
+        cfg.add_sound(sound);
+        cfg.save().map_err(|e| e.to_string())
+    })??;
     maybe_schedule_missing_loudness_backfill(&config);
     Ok(sound_clone)
 }
@@ -117,18 +114,17 @@ pub fn rename_sound(id: String, name: String, config: Arc<Mutex<Config>>) -> Res
     if new_name.is_empty() {
         return Err("Name cannot be empty".to_string());
     }
-    let mut config = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    if config.get_sound(&id).is_none() {
-        return Err("Sound not found".to_string());
-    }
-    config.set_sound_name(&id, new_name);
-    config.save().map_err(|e| e.to_string())?;
-    config
-        .get_sound(&id)
-        .cloned()
-        .ok_or_else(|| "Sound not found".to_string())
+    let sound = with_config_mut(&config, |cfg| {
+        if cfg.get_sound(&id).is_none() {
+            return Err(ERR_SOUND_NOT_FOUND.to_string());
+        }
+        cfg.set_sound_name(&id, new_name);
+        cfg.save().map_err(|e| e.to_string())?;
+        cfg.get_sound(&id)
+            .cloned()
+            .ok_or_else(|| ERR_SOUND_NOT_FOUND.to_string())
+    })??;
+    Ok(sound)
 }
 
 pub fn remove_sound(
@@ -154,26 +150,24 @@ fn build_sound_removal_plan(
     }
 
     let requested_ids: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    let cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    with_config(config, |cfg| {
+        let mut existing_ids = Vec::new();
+        let mut hotkey_ids = Vec::new();
+        for sound in &cfg.sounds {
+            if !requested_ids.contains(sound.id.as_str()) {
+                continue;
+            }
 
-    let mut existing_ids = Vec::new();
-    let mut hotkey_ids = Vec::new();
-    for sound in &cfg.sounds {
-        if !requested_ids.contains(sound.id.as_str()) {
-            continue;
+            existing_ids.push(sound.id.clone());
+            if sound.hotkey.is_some() {
+                hotkey_ids.push(sound.id.clone());
+            }
         }
 
-        existing_ids.push(sound.id.clone());
-        if sound.hotkey.is_some() {
-            hotkey_ids.push(sound.id.clone());
+        SoundRemovalPlan {
+            existing_ids,
+            hotkey_ids,
         }
-    }
-
-    Ok(SoundRemovalPlan {
-        existing_ids,
-        hotkey_ids,
     })
 }
 
@@ -189,11 +183,10 @@ pub fn remove_sounds(
 
     unregister_hotkeys_best_effort(&hotkeys, &plan.hotkey_ids, "remove_sounds");
 
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    cfg.remove_sounds(&plan.existing_ids);
-    cfg.save().map_err(|e| e.to_string())
+    with_config_mut(&config, |cfg| {
+        cfg.remove_sounds(&plan.existing_ids);
+        cfg.save().map_err(|e| e.to_string())
+    })?
 }
 
 pub fn add_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<(), String> {
@@ -212,27 +205,19 @@ pub fn remove_sound_folder(
 ) -> Result<(), String> {
     let folder_path = Path::new(&folder);
 
-    // Cancel any ongoing loudness analysis to stop processing sounds from this folder
     log::info!(
         "Cancelling loudness analysis before removing folder: {}",
         folder
     );
     crate::commands::cancel_loudness_analysis();
 
-    // Collect sounds to remove whose effective source path is under this folder
-    let sounds_to_remove: Vec<String> = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let sounds_to_remove: Vec<String> = with_config(&config, |cfg| {
         cfg.sounds
             .iter()
-            .filter(|sound| {
-                let effective_path = sound.source_path.as_ref().unwrap_or(&sound.path);
-                Path::new(effective_path).starts_with(folder_path)
-            })
+            .filter(|sound| Path::new(effective_source_path(sound)).starts_with(folder_path))
             .map(|s| s.id.clone())
             .collect()
-    };
+    })?;
 
     log::info!(
         "Removing {} sounds from folder: {}",
@@ -240,10 +225,8 @@ pub fn remove_sound_folder(
         folder
     );
 
-    // Unregister hotkeys for sounds being removed
     unregister_hotkeys_best_effort(&hotkeys, &sounds_to_remove, "remove_sound_folder");
 
-    // Remove folder and associated sounds
     with_saved_config(&config, |cfg| {
         cfg.remove_sound_folder(&folder);
         cfg.remove_sounds(&sounds_to_remove);
@@ -267,10 +250,7 @@ pub fn refresh_sounds(
         removed_paths: HashSet<String>,
     }
 
-    let (folders, existing_paths, known_sounds) = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let (folders, existing_paths, known_sounds) = with_config(&config, |cfg| {
         let folders = cfg.sound_folders.clone();
         let existing_paths = cfg
             .sounds
@@ -283,7 +263,7 @@ pub fn refresh_sounds(
             .map(|s| (s.id.clone(), s.path.clone()))
             .collect::<Vec<_>>();
         (folders, existing_paths, known_sounds)
-    };
+    })?;
 
     let work: RefreshWork = {
         let files = scanner::scan_folders(&folders);
@@ -421,28 +401,26 @@ pub fn import_dropped_files(
     paths: Vec<String>,
     config: Arc<Mutex<Config>>,
 ) -> Result<Vec<Sound>, String> {
-    let (target_folder, existing_paths, added_default_folder): (String, HashSet<String>, bool) = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        let added_default_folder = cfg.sound_folders.is_empty();
-        let existing = cfg
-            .sounds
-            .iter()
-            .map(|s| s.path.clone())
-            .collect::<HashSet<_>>();
+    let (target_folder, existing_paths, added_default_folder): (String, HashSet<String>, bool) =
+        with_config(&config, |cfg| {
+            let added_default_folder = cfg.sound_folders.is_empty();
+            let existing = cfg
+                .sounds
+                .iter()
+                .map(|s| s.path.clone())
+                .collect::<HashSet<_>>();
 
-        let target_folder = if cfg.sound_folders.is_empty() {
-            let default_folder = default_sound_import_dir(dirs::audio_dir(), dirs::home_dir())
-                .to_string_lossy()
-                .to_string();
-            default_folder
-        } else {
-            cfg.sound_folders[0].clone()
-        };
+            let target_folder = if cfg.sound_folders.is_empty() {
+                let default_folder = default_sound_import_dir(dirs::audio_dir(), dirs::home_dir())
+                    .to_string_lossy()
+                    .to_string();
+                default_folder
+            } else {
+                cfg.sound_folders[0].clone()
+            };
 
-        (target_folder, existing, added_default_folder)
-    };
+            (target_folder, existing, added_default_folder)
+        })?;
 
     let mut imported = Vec::new();
 
@@ -485,15 +463,13 @@ pub fn import_dropped_files(
         return Ok(imported);
     }
 
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
     let imported_clones = imported.clone();
-    for sound in imported {
-        cfg.add_sound(sound);
-    }
-    cfg.save().map_err(|e| e.to_string())?;
-    drop(cfg);
+    with_config_mut(&config, move |cfg| {
+        for sound in imported {
+            cfg.add_sound(sound);
+        }
+        cfg.save().map_err(|e| e.to_string())
+    })??;
     maybe_schedule_missing_loudness_backfill(&config);
     Ok(imported_clones)
 }
@@ -510,12 +486,9 @@ pub fn import_files_to_tab(
     tab_id: Option<String>,
     config: Arc<Mutex<Config>>,
 ) -> Result<Vec<Sound>, String> {
-    let existing_paths: HashSet<String> = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let existing_paths: HashSet<String> = with_config(&config, |cfg| {
         cfg.sounds.iter().map(|s| s.path.clone()).collect()
-    };
+    })?;
 
     let mut new_sounds = Vec::new();
 
@@ -543,21 +516,19 @@ pub fn import_files_to_tab(
         return Ok(new_sounds);
     }
 
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    let mut sound_ids = Vec::new();
-    for sound in &new_sounds {
-        cfg.add_sound(sound.clone());
-        sound_ids.push(sound.id.clone());
-    }
+    with_config_mut(&config, |cfg| {
+        let mut sound_ids = Vec::new();
+        for sound in &new_sounds {
+            cfg.add_sound(sound.clone());
+            sound_ids.push(sound.id.clone());
+        }
 
-    if let Some(tab_id) = tab_id {
-        cfg.add_sounds_to_tab(&tab_id, sound_ids);
-    }
+        if let Some(tab_id) = tab_id.as_deref() {
+            cfg.add_sounds_to_tab(tab_id, sound_ids);
+        }
 
-    cfg.save().map_err(|e| e.to_string())?;
-    drop(cfg);
+        cfg.save().map_err(|e| e.to_string())
+    })??;
 
     maybe_schedule_missing_loudness_backfill(&config);
 
@@ -583,15 +554,7 @@ pub fn validate_all_sources_chunked(
     config: Arc<Mutex<Config>>,
     chunk_size: usize,
 ) -> Result<Vec<String>, String> {
-    let config = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-
-    let sounds: Vec<(String, Option<String>, String)> = config
-        .sounds
-        .iter()
-        .map(|s| (s.id.clone(), s.source_path.clone(), s.path.clone()))
-        .collect();
+    let sounds = source_validation_inputs(config)?;
 
     let report = crate::audio::file_link::validate_sounds_chunked_with_report(&sounds, chunk_size);
     crate::diagnostics::set_validation_runtime(
@@ -609,15 +572,12 @@ pub fn validate_all_sources_chunked(
 pub fn source_validation_inputs(
     config: Arc<Mutex<Config>>,
 ) -> Result<Vec<(String, Option<String>, String)>, String> {
-    let config = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-
-    Ok(config
-        .sounds
-        .iter()
-        .map(|s| (s.id.clone(), s.source_path.clone(), s.path.clone()))
-        .collect())
+    with_config(&config, |cfg| {
+        cfg.sounds
+            .iter()
+            .map(|s| (s.id.clone(), s.source_path.clone(), s.path.clone()))
+            .collect()
+    })
 }
 
 pub fn validate_sources_for_startup(
@@ -627,18 +587,14 @@ pub fn validate_sources_for_startup(
 }
 
 pub fn validate_single_source(id: String, config: Arc<Mutex<Config>>) -> Result<bool, String> {
-    let config = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    let sound = config.sounds.iter().find(|s| s.id == id);
+    let exists = with_config(&config, |cfg| {
+        cfg.sounds
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| check_file_exists(effective_source_path(s)))
+    })?;
 
-    match sound {
-        Some(s) => match &s.source_path {
-            Some(path) => Ok(check_file_exists(path)),
-            None => Ok(check_file_exists(&s.path)),
-        },
-        None => Err("Sound not found".to_string()),
-    }
+    exists.ok_or_else(|| ERR_SOUND_NOT_FOUND.to_string())
 }
 
 pub fn update_sound_source(
@@ -651,32 +607,32 @@ pub fn update_sound_source(
     }
 
     if !scanner::is_audio_file(&new_path) {
-        return Err("Not a supported audio file".to_string());
+        return Err(ERR_UNSUPPORTED_AUDIO_FILE.to_string());
     }
 
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    let sound = cfg.sounds.iter_mut().find(|s| s.id == id);
+    let updated_sound = with_config_mut(&config, |cfg| {
+        let sound = cfg.sounds.iter_mut().find(|s| s.id == id);
 
-    match sound {
-        Some(s) => {
-            s.source_path = Some(new_path.clone());
-            s.path = new_path;
-            s.duration_ms = probe_duration_ms(&s.path);
-            s.loudness_source_fingerprint =
-                compute_sound_source_fingerprint(&s.path, s.duration_ms);
-            s.loudness_lufs = None;
-            s.loudness_analysis_state = crate::config::LoudnessAnalysisState::Pending;
-            s.loudness_confidence = None;
-            let updated_sound = s.clone();
-            cfg.save().map_err(|e| e.to_string())?;
-            drop(cfg);
-            maybe_schedule_missing_loudness_backfill(&config);
-            Ok(updated_sound)
+        match sound {
+            Some(s) => {
+                s.source_path = Some(new_path.clone());
+                s.path = new_path;
+                s.duration_ms = probe_duration_ms(&s.path);
+                s.loudness_source_fingerprint =
+                    compute_sound_source_fingerprint(&s.path, s.duration_ms);
+                s.loudness_lufs = None;
+                s.loudness_analysis_state = crate::config::LoudnessAnalysisState::Pending;
+                s.loudness_confidence = None;
+                let updated_sound = s.clone();
+                cfg.save().map_err(|e| e.to_string())?;
+                Ok(updated_sound)
+            }
+            None => Err(ERR_SOUND_NOT_FOUND.to_string()),
         }
-        None => Err("Sound not found".to_string()),
-    }
+    })??;
+
+    maybe_schedule_missing_loudness_backfill(&config);
+    Ok(updated_sound)
 }
 
 fn _keep_soundtab_in_module_tree(_: &SoundTab) {}

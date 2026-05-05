@@ -13,15 +13,16 @@ use crate::config::{Config, LoudnessAnalysisState, Sound};
 
 use super::shared::{
     adaptive_audio_analysis_plan, dispatch_async_result, parse_auto_gain_apply_to,
-    parse_auto_gain_mode, validate_play_mode, with_saved_config,
+    parse_auto_gain_mode, validate_play_mode, with_config, with_config_mut, with_saved_config,
+    ERR_SOUND_NOT_FOUND,
 };
 
-static MISSING_LOUDNESS_ANALYSIS_COORDINATOR:
-    LazyLock<crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator> =
-    LazyLock::new(crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator::new);
-static ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR:
-    LazyLock<crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator> =
-    LazyLock::new(crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator::new);
+static MISSING_LOUDNESS_ANALYSIS_COORDINATOR: LazyLock<
+    crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator,
+> = LazyLock::new(crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator::new);
+static ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR: LazyLock<
+    crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator,
+> = LazyLock::new(crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator::new);
 pub const SOURCE_UNAVAILABLE_ERROR_PREFIX: &str = "Source file unavailable:";
 
 const FAST_LUFS_FULL_SCAN_THRESHOLD_MS: u64 = 12_000;
@@ -105,10 +106,7 @@ fn maybe_trigger_estimated_loudness_refinement(
     config: Arc<Mutex<Config>>,
     force: bool,
 ) -> Result<EstimatedLoudnessRefinementTrigger, String> {
-    let trigger = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let trigger = with_config(&config, |cfg| {
         estimated_loudness_refinement_trigger(
             cfg.settings.auto_gain,
             cfg.sounds
@@ -117,7 +115,7 @@ fn maybe_trigger_estimated_loudness_refinement(
             force,
             ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR.is_in_flight(),
         )
-    };
+    })?;
 
     if trigger != EstimatedLoudnessRefinementTrigger::Started {
         return Ok(trigger);
@@ -143,35 +141,35 @@ pub fn trigger_estimated_loudness_refinement(
     maybe_trigger_estimated_loudness_refinement(config, force)
 }
 
-pub fn get_loudness_status_summary(config: Arc<Mutex<Config>>) -> Result<LoudnessStatusSummary, String> {
-    let cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
+pub fn get_loudness_status_summary(
+    config: Arc<Mutex<Config>>,
+) -> Result<LoudnessStatusSummary, String> {
+    with_config(&config, |cfg| {
+        let mut summary = LoudnessStatusSummary {
+            total_sounds: cfg.sounds.len(),
+            pending_count: 0,
+            estimated_count: 0,
+            refined_count: 0,
+            unavailable_count: 0,
+            missing_loudness_count: 0,
+            in_flight_backfill: MISSING_LOUDNESS_ANALYSIS_COORDINATOR.is_in_flight(),
+            in_flight_refinement: ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR.is_in_flight(),
+        };
 
-    let mut summary = LoudnessStatusSummary {
-        total_sounds: cfg.sounds.len(),
-        pending_count: 0,
-        estimated_count: 0,
-        refined_count: 0,
-        unavailable_count: 0,
-        missing_loudness_count: 0,
-        in_flight_backfill: MISSING_LOUDNESS_ANALYSIS_COORDINATOR.is_in_flight(),
-        in_flight_refinement: ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR.is_in_flight(),
-    };
-
-    for sound in &cfg.sounds {
-        if sound.loudness_lufs.is_none() {
-            summary.missing_loudness_count += 1;
+        for sound in &cfg.sounds {
+            if sound.loudness_lufs.is_none() {
+                summary.missing_loudness_count += 1;
+            }
+            match sound.loudness_analysis_state {
+                LoudnessAnalysisState::Pending => summary.pending_count += 1,
+                LoudnessAnalysisState::Estimated => summary.estimated_count += 1,
+                LoudnessAnalysisState::Refined => summary.refined_count += 1,
+                LoudnessAnalysisState::Unavailable => summary.unavailable_count += 1,
+            }
         }
-        match sound.loudness_analysis_state {
-            LoudnessAnalysisState::Pending => summary.pending_count += 1,
-            LoudnessAnalysisState::Estimated => summary.estimated_count += 1,
-            LoudnessAnalysisState::Refined => summary.refined_count += 1,
-            LoudnessAnalysisState::Unavailable => summary.unavailable_count += 1,
-        }
-    }
 
-    Ok(summary)
+        summary
+    })
 }
 
 pub fn trigger_missing_loudness_analysis(
@@ -179,21 +177,19 @@ pub fn trigger_missing_loudness_analysis(
     force: bool,
     on_complete: Option<LoudnessAnalysisCompletion>,
 ) -> Result<MissingLoudnessAnalysisTrigger, String> {
-    let trigger = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let trigger = with_config(&config, |cfg| {
         missing_loudness_analysis_trigger(
             cfg.settings.auto_gain,
             cfg.sounds.iter().any(sound_needs_loudness_backfill),
             force,
             MISSING_LOUDNESS_ANALYSIS_COORDINATOR.is_in_flight(),
         )
-    };
+    })?;
 
     if trigger != MissingLoudnessAnalysisTrigger::Started {
         if trigger == MissingLoudnessAnalysisTrigger::SkippedNoMissingSounds {
-            if let Err(err) = maybe_trigger_estimated_loudness_refinement(Arc::clone(&config), force)
+            if let Err(err) =
+                maybe_trigger_estimated_loudness_refinement(Arc::clone(&config), force)
             {
                 log::warn!("Failed to schedule estimated loudness refinement: {}", err);
             }
@@ -262,14 +258,11 @@ pub fn play_sound(
     config: Arc<Mutex<Config>>,
     player: Arc<AudioPlayer>,
 ) -> Result<String, String> {
-    let sound = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let sound = with_config(&config, |cfg| {
         cfg.get_sound(&id)
             .cloned()
-            .ok_or_else(|| "Sound not found".to_string())?
-    };
+            .ok_or_else(|| ERR_SOUND_NOT_FOUND.to_string())
+    })??;
 
     if !sound.enabled {
         return Err("Sound is disabled".to_string());
@@ -478,7 +471,8 @@ fn fast_loudness_preview_budget_ms(duration_hint_ms: Option<u64>) -> u32 {
 }
 
 fn sound_needs_loudness_backfill(sound: &Sound) -> bool {
-    sound.loudness_lufs.is_none() && sound.loudness_analysis_state != LoudnessAnalysisState::Unavailable
+    sound.loudness_lufs.is_none()
+        && sound.loudness_analysis_state != LoudnessAnalysisState::Unavailable
 }
 
 fn sound_needs_loudness_refinement(sound: &Sound, force: bool) -> bool {
@@ -563,14 +557,8 @@ enum BackfillOutcome {
 }
 
 enum RefinementOutcome {
-    Refined {
-        id: String,
-        lufs: f64,
-    },
-    Deferred {
-        id: String,
-        backoff_confidence: f32,
-    },
+    Refined { id: String, lufs: f64 },
+    Deferred { id: String, backoff_confidence: f32 },
 }
 
 #[derive(Debug, Clone)]
@@ -619,12 +607,7 @@ fn collect_refinement_candidates(config: &Config, force: bool) -> Vec<Refinement
 fn refine_estimated_loudness(config: Arc<Mutex<Config>>, force: bool) -> Result<u32, String> {
     crate::diagnostics::memory::log_memory_snapshot("refine_estimated_loudness:start");
 
-    let candidates = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        collect_refinement_candidates(&cfg, force)
-    };
+    let candidates = with_config(&config, |cfg| collect_refinement_candidates(cfg, force))?;
 
     if candidates.is_empty() {
         return Ok(0);
@@ -694,34 +677,30 @@ fn refine_estimated_loudness(config: Arc<Mutex<Config>>, force: bool) -> Result<
         .filter(|outcome| matches!(outcome, RefinementOutcome::Refined { .. }))
         .count() as u32;
     if !outcomes.is_empty() {
-        let mut cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        for outcome in outcomes {
-            match outcome {
-                RefinementOutcome::Refined { id, lufs } => {
-                    if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
-                        sound.loudness_lufs = Some(lufs);
-                        sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
-                        sound.loudness_confidence = Some(FAST_LUFS_REFINED_CONFIDENCE);
+        with_config_mut(&config, |cfg| {
+            for outcome in outcomes {
+                match outcome {
+                    RefinementOutcome::Refined { id, lufs } => {
+                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
+                            sound.loudness_lufs = Some(lufs);
+                            sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+                            sound.loudness_confidence = Some(FAST_LUFS_REFINED_CONFIDENCE);
+                        }
                     }
-                }
-                RefinementOutcome::Deferred {
-                    id,
-                    backoff_confidence,
-                } => {
-                    if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
-                        let current_confidence = sound.loudness_confidence.unwrap_or(0.0);
-                        sound.loudness_confidence = Some(
-                            current_confidence
-                                .max(backoff_confidence)
-                                .clamp(0.0, 1.0),
-                        );
+                    RefinementOutcome::Deferred {
+                        id,
+                        backoff_confidence,
+                    } => {
+                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
+                            let current_confidence = sound.loudness_confidence.unwrap_or(0.0);
+                            sound.loudness_confidence =
+                                Some(current_confidence.max(backoff_confidence).clamp(0.0, 1.0));
+                        }
                     }
                 }
             }
-        }
-        cfg.save().map_err(|e| e.to_string())?;
+            cfg.save().map_err(|e| e.to_string())
+        })??;
     }
 
     crate::diagnostics::memory::log_memory_snapshot("refine_estimated_loudness:end");
@@ -730,16 +709,13 @@ fn refine_estimated_loudness(config: Arc<Mutex<Config>>, force: bool) -> Result<
 
 pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
     crate::diagnostics::memory::log_memory_snapshot("analyze_all_loudness:start");
-    let sounds_to_analyze: Vec<(String, String, Option<u64>)> = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
+    let sounds_to_analyze: Vec<(String, String, Option<u64>)> = with_config(&config, |cfg| {
         cfg.sounds
             .iter()
             .filter(|s| sound_needs_loudness_backfill(s))
             .map(|s| (s.id.clone(), s.path.clone(), s.duration_ms))
             .collect()
-    };
+    })?;
     if let Ok(cfg) = config.lock() {
         crate::diagnostics::record_phase_with_config("analyze_all_loudness:start", &cfg);
     } else {
@@ -752,41 +728,43 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
 
     let analyze_entry =
         |(id, path, duration_hint_ms): &(String, String, Option<u64>)| -> Option<BackfillOutcome> {
-        if loudness::is_loudness_analysis_cancelled() {
-            return None;
-        }
-        if !Path::new(path).exists() {
-            return None;
-        }
-        match analyze_loudness_for_backfill(Path::new(path), *duration_hint_ms) {
-            Ok((lufs, state, confidence)) if lufs.is_finite() => Some(BackfillOutcome::Analyzed {
-                id: id.clone(),
-                lufs,
-                state,
-                confidence,
-            }),
-            Ok((lufs, _, _)) => {
-                log::warn!(
+            if loudness::is_loudness_analysis_cancelled() {
+                return None;
+            }
+            if !Path::new(path).exists() {
+                return None;
+            }
+            match analyze_loudness_for_backfill(Path::new(path), *duration_hint_ms) {
+                Ok((lufs, state, confidence)) if lufs.is_finite() => {
+                    Some(BackfillOutcome::Analyzed {
+                        id: id.clone(),
+                        lufs,
+                        state,
+                        confidence,
+                    })
+                }
+                Ok((lufs, _, _)) => {
+                    log::warn!(
                     "Marking sound as unavailable due to non-finite loudness result for '{}': {}",
                     path,
                     lufs
                 );
-                Some(BackfillOutcome::Unavailable { id: id.clone() })
-            }
-            Err(e) => {
-                if should_mark_unavailable_loudness_error(&e) {
-                    log::warn!(
+                    Some(BackfillOutcome::Unavailable { id: id.clone() })
+                }
+                Err(e) => {
+                    if should_mark_unavailable_loudness_error(&e) {
+                        log::warn!(
                         "Marking sound as unavailable due to terminal loudness analysis error for '{}': {}",
                         path,
                         e
                     );
-                    return Some(BackfillOutcome::Unavailable { id: id.clone() });
+                        return Some(BackfillOutcome::Unavailable { id: id.clone() });
+                    }
+                    log::warn!("Failed to analyze loudness for '{}': {}", path, e);
+                    None
                 }
-                log::warn!("Failed to analyze loudness for '{}': {}", path, e);
-                None
             }
-        }
-    };
+        };
 
     let analysis_plan = adaptive_audio_analysis_plan(sounds_to_analyze.len());
     let analysis_threads = analysis_plan.threads;
@@ -853,34 +831,37 @@ pub fn analyze_all_loudness(config: Arc<Mutex<Config>>) -> Result<u32, String> {
         .filter(|result| matches!(result, BackfillOutcome::Analyzed { .. }))
         .count() as u32;
     if has_updates {
-        let mut cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        for result in results {
-            match result {
-                BackfillOutcome::Analyzed {
-                    id,
-                    lufs,
-                    state,
-                    confidence,
-                } => {
-                    if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
-                        sound.loudness_lufs = Some(lufs);
-                        sound.loudness_analysis_state = state;
-                        sound.loudness_confidence = confidence;
+        with_config_mut(&config, |cfg| {
+            for result in results {
+                match result {
+                    BackfillOutcome::Analyzed {
+                        id,
+                        lufs,
+                        state,
+                        confidence,
+                    } => {
+                        if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+                            sound.loudness_lufs = Some(lufs);
+                            sound.loudness_analysis_state = state;
+                            sound.loudness_confidence = confidence;
+                        }
                     }
-                }
-                BackfillOutcome::Unavailable { id } => {
-                    if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
-                        sound.loudness_lufs = None;
-                        sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
-                        sound.loudness_confidence = None;
+                    BackfillOutcome::Unavailable { id } => {
+                        if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+                            sound.loudness_lufs = None;
+                            sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+                            sound.loudness_confidence = None;
+                        }
                     }
                 }
             }
-        }
-        cfg.save().map_err(|e| e.to_string())?;
-        crate::diagnostics::record_phase_with_config("playback:loudness_analysis_complete", &cfg);
+            cfg.save().map_err(|e| e.to_string())?;
+            crate::diagnostics::record_phase_with_config(
+                "playback:loudness_analysis_complete",
+                cfg,
+            );
+            Ok::<(), String>(())
+        })??;
     } else if let Ok(cfg) = config.lock() {
         crate::diagnostics::record_phase_with_config("playback:loudness_analysis_complete", &cfg);
     } else {
@@ -907,17 +888,13 @@ pub fn analyze_sound_loudness(
     id: String,
     config: Arc<Mutex<Config>>,
 ) -> Result<Option<f64>, String> {
-    let path = {
-        let cfg = config
-            .lock()
-            .map_err(|e| format!("Config lock poisoned: {}", e))?;
-        let sound = cfg
-            .sounds
+    let path = with_config(&config, |cfg| {
+        cfg.sounds
             .iter()
             .find(|s| s.id == id)
-            .ok_or_else(|| "Sound not found".to_string())?;
-        sound.path.clone()
-    };
+            .map(|sound| sound.path.clone())
+            .ok_or_else(|| ERR_SOUND_NOT_FOUND.to_string())
+    })??;
     let lufs = loudness::analyze_loudness_path(Path::new(&path))?;
     let (lufs, state, confidence) = if lufs.is_finite() {
         (
@@ -933,15 +910,14 @@ pub fn analyze_sound_loudness(
         );
         (None, LoudnessAnalysisState::Unavailable, None)
     };
-    let mut cfg = config
-        .lock()
-        .map_err(|e| format!("Config lock poisoned: {}", e))?;
-    if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
-        sound.loudness_lufs = lufs;
-        sound.loudness_analysis_state = state;
-        sound.loudness_confidence = confidence;
-    }
-    cfg.save().map_err(|e| e.to_string())?;
+    with_config_mut(&config, |cfg| {
+        if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+            sound.loudness_lufs = lufs;
+            sound.loudness_analysis_state = state;
+            sound.loudness_confidence = confidence;
+        }
+        cfg.save().map_err(|e| e.to_string())
+    })??;
     Ok(lufs)
 }
 
@@ -1046,14 +1022,13 @@ pub struct AudioStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_refinement_candidates,
-        estimated_loudness_refinement_trigger, fast_loudness_preview_budget_ms,
-        get_loudness_status_summary,
+        collect_refinement_candidates, estimated_loudness_refinement_trigger,
+        fast_loudness_preview_budget_ms, get_loudness_status_summary,
         missing_loudness_analysis_trigger, sound_needs_loudness_backfill,
         sound_needs_loudness_refinement, EstimatedLoudnessRefinementTrigger,
+        MissingLoudnessAnalysisTrigger, FAST_LUFS_PREVIEW_TOTAL_MS_LONG,
+        FAST_LUFS_PREVIEW_TOTAL_MS_MEDIUM, FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD,
         FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN,
-        FAST_LUFS_PREVIEW_TOTAL_MS_LONG, FAST_LUFS_PREVIEW_TOTAL_MS_MEDIUM,
-        FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD, MissingLoudnessAnalysisTrigger,
     };
     use crate::config::{Config, LoudnessAnalysisState, Sound};
     use std::sync::{Arc, Mutex};
@@ -1170,8 +1145,7 @@ mod tests {
 
         cfg.sounds = (0..(FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN + 4))
             .map(|idx| {
-                let mut sound =
-                    Sound::new(format!("sound-{idx}"), format!("/tmp/sound-{idx}.wav"));
+                let mut sound = Sound::new(format!("sound-{idx}"), format!("/tmp/sound-{idx}.wav"));
                 sound.id = format!("sound-{idx:03}");
                 sound.loudness_lufs = Some(-14.0);
                 sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
@@ -1193,8 +1167,7 @@ mod tests {
 
         cfg.sounds = (0..(FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN + 4))
             .map(|idx| {
-                let mut sound =
-                    Sound::new(format!("sound-{idx}"), format!("/tmp/sound-{idx}.wav"));
+                let mut sound = Sound::new(format!("sound-{idx}"), format!("/tmp/sound-{idx}.wav"));
                 sound.id = format!("sound-{idx:03}");
                 sound.loudness_lufs = Some(-14.0);
                 sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
@@ -1205,7 +1178,10 @@ mod tests {
 
         let candidates = collect_refinement_candidates(&cfg, true);
 
-        assert_eq!(candidates.len(), FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN + 4);
+        assert_eq!(
+            candidates.len(),
+            FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN + 4
+        );
     }
 
     #[test]
@@ -1265,8 +1241,10 @@ mod tests {
         refined.loudness_lufs = Some(-14.0);
         refined.loudness_confidence = Some(1.0);
 
-        let mut unavailable =
-            Sound::new("unavailable".to_string(), "/tmp/unavailable.wav".to_string());
+        let mut unavailable = Sound::new(
+            "unavailable".to_string(),
+            "/tmp/unavailable.wav".to_string(),
+        );
         unavailable.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
         unavailable.loudness_lufs = None;
 

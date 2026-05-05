@@ -103,7 +103,10 @@ mod tests {
         assert_eq!(cfg.settings.play_mode, PlayMode::Default);
         assert_eq!(cfg.settings.list_style, ListStyle::Compact);
         assert_eq!(cfg.settings.default_source_mode, DefaultSourceMode::Manual);
-        assert_eq!(cfg.settings.mic_latency_profile, MicLatencyProfile::Balanced);
+        assert_eq!(
+            cfg.settings.mic_latency_profile,
+            MicLatencyProfile::Balanced
+        );
     }
 
     #[test]

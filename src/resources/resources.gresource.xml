@@ -29,6 +29,8 @@
     <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-headphones-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-mic-off-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-mic-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-speaker-off-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/devices/lsb-speaker-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/places/lsb-folder-open-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/places/lsb-folder-symbolic.svg</file>
   </gresource>

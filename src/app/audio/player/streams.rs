@@ -196,7 +196,7 @@ fn write_output_buffer(
         };
         let callback_samples = requested_samples.min(max_callback_samples);
         if callback_samples < requested_samples {
-            debug!(
+            trace!(
                 "PipeWire callback request capped: target={} requested_samples={} callback_samples={}",
                 target_name,
                 requested_samples,
@@ -228,7 +228,7 @@ fn write_output_buffer(
                 };
 
                 if dequeued > 0 && dequeued < callback_samples {
-                    debug!(
+                    trace!(
                         "PipeWire output underrun: target={} dequeued_samples={} requested_samples={} mapped_samples={}",
                         target_name,
                         dequeued,
