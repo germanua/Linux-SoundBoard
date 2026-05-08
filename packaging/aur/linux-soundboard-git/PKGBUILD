@@ -11,11 +11,13 @@ license=('custom:PolyForm-Noncommercial-1.0.0')
 depends=(
   'gtk4'
   'libadwaita'
+  'libpulse'
   'libx11'
   'libxi'
   'libxtst'
   'libxkbcommon'
   'hicolor-icon-theme'
+  'polkit'
   'pipewire'
   'wireplumber'
 )
@@ -83,6 +85,11 @@ package() {
         "${pkgdir}/usr/share/icons/hicolor/${size}/apps/${icon_name}"
     done
   done
+
+  install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
+    "${pkgdir}/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf"
+  install -Dm644 packaging/linux/linux-soundboard-engine.service \
+    "${pkgdir}/usr/lib/systemd/user/linux-soundboard-engine.service"
 
   install -Dm644 /dev/stdin "${pkgdir}/usr/share/applications/com.linuxsoundboard.app.desktop" <<'EOF'
 [Desktop Entry]

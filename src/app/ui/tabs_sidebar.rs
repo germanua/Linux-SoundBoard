@@ -86,11 +86,9 @@ impl TabsSidebar {
             .xalign(0.0)
             .build();
 
-        let new_tab_btn = Button::builder()
-            .tooltip_text("New Tab")
-            .css_classes(vec!["flat", "circular"])
-            .build();
-        icons::apply_button_icon(&new_tab_btn, icons::ADD);
+        let new_tab_btn = icons::button(icons::ADD, "New Tab");
+        new_tab_btn.add_css_class("sidebar-new-tab-btn");
+        new_tab_btn.set_size_request(28, 28);
 
         header.append(&title_lbl);
         header.append(&new_tab_btn);

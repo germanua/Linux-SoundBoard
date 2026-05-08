@@ -1,9 +1,23 @@
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::defaults::{config_dir_name, CONFIG_FILE_NAME};
 use crate::config::{Config, LoudnessAnalysisState, SoundTab};
+
+static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn save_temp_path(path: &Path) -> PathBuf {
+    let sequence = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        "{}.tmp.{}.{}",
+        CONFIG_FILE_NAME,
+        std::process::id(),
+        sequence
+    ))
+}
 
 impl Config {
     pub fn config_path() -> PathBuf {
@@ -43,10 +57,18 @@ impl Config {
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut sanitized = self.clone();
         sanitized.sanitize_for_persistence();
         let content = serde_json::to_string_pretty(&sanitized)?;
-        fs::write(path, content)?;
+        let tmp_path = save_temp_path(&path);
+        fs::write(&tmp_path, content)?;
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Box::new(err));
+        }
         Ok(())
     }
 
@@ -237,5 +259,27 @@ impl Config {
         tab.sound_ids
             .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_temp_path_is_unique_per_call() {
+        let path = PathBuf::from("/tmp/linux-soundboard/config.json");
+
+        let first = save_temp_path(&path);
+        let second = save_temp_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("config.json.tmp."));
     }
 }

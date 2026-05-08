@@ -15,9 +15,10 @@ use crate::hotkeys::HotkeyManager;
 
 use super::shared::{
     adaptive_audio_analysis_plan, build_sound_with_metadata, compute_sound_source_fingerprint,
-    default_sound_import_dir, probe_duration_ms, unregister_hotkeys_best_effort, with_config,
-    with_config_mut, with_saved_config, ERR_FILE_DOES_NOT_EXIST, ERR_SOUND_ALREADY_EXISTS,
-    ERR_SOUND_NOT_FOUND, ERR_UNSUPPORTED_AUDIO_FILE,
+    default_sound_import_dir, dispatch_async_result, probe_duration_ms,
+    unregister_hotkeys_best_effort, with_config, with_config_mut, with_saved_config,
+    ERR_FILE_DOES_NOT_EXIST, ERR_SOUND_ALREADY_EXISTS, ERR_SOUND_NOT_FOUND,
+    ERR_UNSUPPORTED_AUDIO_FILE,
 };
 
 fn maybe_schedule_missing_loudness_backfill(config: &Arc<Mutex<Config>>) {
@@ -397,6 +398,21 @@ pub fn refresh_sounds(
     Ok(sounds)
 }
 
+pub fn refresh_sounds_async<F>(
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<Vec<Sound>, String>) + 'static,
+{
+    dispatch_async_result(
+        "refresh_sounds",
+        move || refresh_sounds(config, hotkeys),
+        on_complete,
+    )
+}
+
 pub fn import_dropped_files(
     paths: Vec<String>,
     config: Arc<Mutex<Config>>,
@@ -535,6 +551,22 @@ pub fn import_files_to_tab(
     Ok(new_sounds)
 }
 
+pub fn import_files_to_tab_async<F>(
+    paths: Vec<String>,
+    tab_id: Option<String>,
+    config: Arc<Mutex<Config>>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<Vec<Sound>, String>) + 'static,
+{
+    dispatch_async_result(
+        "import_files_to_tab",
+        move || import_files_to_tab(paths, tab_id, config),
+        on_complete,
+    )
+}
+
 pub fn validate_all_sources(config: Arc<Mutex<Config>>) -> Result<Vec<String>, String> {
     let sounds = source_validation_inputs(config)?;
     let report = validate_sounds_batch_with_report(&sounds);
@@ -633,6 +665,22 @@ pub fn update_sound_source(
 
     maybe_schedule_missing_loudness_backfill(&config);
     Ok(updated_sound)
+}
+
+pub fn update_sound_source_async<F>(
+    id: String,
+    new_path: String,
+    config: Arc<Mutex<Config>>,
+    on_complete: F,
+) -> Result<(), String>
+where
+    F: FnOnce(Result<Sound, String>) + 'static,
+{
+    dispatch_async_result(
+        "update_sound_source",
+        move || update_sound_source(id, new_path, config),
+        on_complete,
+    )
 }
 
 fn _keep_soundtab_in_module_tree(_: &SoundTab) {}

@@ -2,14 +2,14 @@
 
 use crate::audio::player::AudioPlayer;
 use crate::commands;
-use crate::config::{Config, LoudnessAnalysisState, Sound, SoundTab};
+use crate::config::{Config, ControlHotkeyAction, LoudnessAnalysisState, Sound, SoundTab};
 use crate::hotkeys::HotkeyManager;
 use crate::test_support::audio_fixtures::{
     cleanup_test_audio_path, create_test_audio_file, create_test_audio_file_with_duration,
 };
 use std::fs;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const BACKGROUND_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -58,6 +58,28 @@ fn wait_for_background_analysis_idle() {
         ),
         "timed out waiting for loudness refinement to become idle"
     );
+}
+
+fn wait_for_async_result<T>(context: &glib::MainContext, rx: std::sync::mpsc::Receiver<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        while context.pending() {
+            context.iteration(false);
+        }
+
+        match rx.try_recv() {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                panic!("timed out waiting for async command completion");
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("async command callback disconnected");
+            }
+        }
+    }
 }
 
 #[test]
@@ -410,6 +432,33 @@ fn test_import_files_to_tab_populates_duration_metadata() {
     assert_eq!(imported.len(), 1);
     assert!(imported[0].duration_ms.is_some());
     assert!(imported[0].loudness_source_fingerprint.is_some());
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_import_files_to_tab_async_completes_and_updates_config() {
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let audio_path = create_test_audio_file("mp3");
+    let config = create_test_config_state();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::import_files_to_tab_async(
+        vec![audio_path.to_string_lossy().to_string()],
+        None,
+        Arc::clone(&config),
+        move |result| {
+            tx.send(result.map(|sounds| sounds.len()))
+                .expect("send async import result");
+        },
+    )
+    .expect("dispatch async import");
+
+    let imported_count = wait_for_async_result(&context, rx).expect("async import succeeds");
+
+    assert_eq!(imported_count, 1);
+    assert_eq!(config.lock().unwrap().sounds.len(), 1);
 
     cleanup_test_audio_path(&audio_path);
 }
@@ -785,6 +834,74 @@ fn test_set_hotkey_clear() {
             println!("Hotkey clear failed: {}", e);
         }
     }
+}
+
+#[test]
+fn test_set_control_hotkey_rejects_duplicate_control_binding() {
+    let config = create_test_config_state();
+    let hotkeys = create_mock_hotkey_manager();
+
+    config.lock().unwrap().settings.control_hotkeys.set_action(
+        ControlHotkeyAction::PlayPause,
+        Some("Ctrl+Alt+KeyP".to_string()),
+    );
+
+    let result = commands::set_control_hotkey(
+        ControlHotkeyAction::StopAll.id().to_string(),
+        Some("Ctrl+Alt+KeyP".to_string()),
+        config,
+        hotkeys,
+    );
+
+    let err = result.expect_err("duplicate control hotkey must be rejected");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&err),
+        "That shortcut is already assigned to control action \"Play / Pause\"."
+    );
+}
+
+#[test]
+fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
+    let config = create_test_config_state();
+    let hotkeys = create_mock_hotkey_manager();
+
+    let mut sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    sound.hotkey = Some("Ctrl+Alt+KeyP".to_string());
+    config.lock().unwrap().sounds.push(sound);
+
+    let result = commands::set_control_hotkey(
+        ControlHotkeyAction::StopAll.id().to_string(),
+        Some("Ctrl+Alt+KeyP".to_string()),
+        config,
+        hotkeys,
+    );
+
+    let err = result.expect_err("duplicate sound hotkey must be rejected");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&err),
+        "That shortcut is already assigned to sound \"Airhorn\"."
+    );
+}
+
+#[test]
+fn test_validate_hotkey_available_reports_duplicate_before_save() {
+    let mut config = Config::default();
+    config.settings.control_hotkeys.set_action(
+        ControlHotkeyAction::PlayPause,
+        Some("Ctrl+Alt+KeyP".to_string()),
+    );
+
+    let err = commands::validate_hotkey_available(
+        &config,
+        ControlHotkeyAction::StopAll.binding_id(),
+        "Ctrl+Alt+KeyP",
+    )
+    .expect_err("duplicate hotkey must be reported during capture validation");
+
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&err),
+        "That shortcut is already assigned to control action \"Play / Pause\"."
+    );
 }
 
 #[test]

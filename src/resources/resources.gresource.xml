@@ -11,6 +11,7 @@
     <file>icons/512x512/apps/com.linuxsoundboard.app.png</file>
     <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-add-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-check-symbolic.svg</file>
+    <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-delete-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-drop-zone-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-keyboard-symbolic.svg</file>
     <file preprocess="xml-stripblanks">icons/scalable/actions/lsb-list-end-symbolic.svg</file>

@@ -1,0 +1,7 @@
+# managed-by: linux-soundboard
+.ifexists module-null-sink.so
+.nofail
+load-module module-null-sink media.class=Audio/Source/Virtual sink_name=linuxsoundboard.virtual_mic sink_properties=device.description='Linux\ Soundboard\ Mic'
+.fail
+.endif
+# end-managed-by: linux-soundboard

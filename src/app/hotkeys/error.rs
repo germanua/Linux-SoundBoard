@@ -43,9 +43,7 @@ pub fn format_hotkey_error(raw: &str) -> String {
     };
 
     match code {
-        HOTKEY_CONFLICT => {
-            "That shortcut is already assigned to another sound or control action.".to_string()
-        }
+        HOTKEY_CONFLICT => format_hotkey_conflict(detail),
         UNSUPPORTED_KEY_FOR_BACKEND => append_detail(
             "This shortcut is not supported by the active hotkey backend.",
             simplify_backend_detail(detail),
@@ -76,6 +74,25 @@ fn append_detail(prefix: &str, detail: &str) -> String {
         prefix.to_string()
     } else {
         format!("{prefix} {detail}")
+    }
+}
+
+fn format_hotkey_conflict(detail: &str) -> String {
+    if detail.is_empty() {
+        return "That shortcut is already assigned to another sound or control action.".to_string();
+    }
+
+    if let Some(action) = crate::config::ControlHotkeyAction::from_binding_id(detail) {
+        return format!(
+            "That shortcut is already assigned to control action \"{}\".",
+            action.title()
+        );
+    }
+
+    if detail.starts_with("sound \"") || detail.starts_with("control action \"") {
+        format!("That shortcut is already assigned to {detail}.")
+    } else {
+        "That shortcut is already assigned to another sound or control action.".to_string()
     }
 }
 

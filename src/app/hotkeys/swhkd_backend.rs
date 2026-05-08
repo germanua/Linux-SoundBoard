@@ -203,6 +203,21 @@ impl SwhkdBackend {
             .map_err(|detail| unsupported_key_for_backend("swhkd", detail))
     }
 
+    fn add_validated_hotkey_batch(
+        config: &mut SwhkdConfig,
+        bindings: &[(String, String)],
+    ) -> Result<(), String> {
+        for (_, hotkey) in bindings {
+            Self::validate_hotkey_binding(hotkey)?;
+        }
+
+        for (sound_id, hotkey) in bindings {
+            config.add_hotkey(sound_id, hotkey)?;
+        }
+
+        Ok(())
+    }
+
     /// Check that `swhkd` is still running.
     fn verify_swhkd_running(&self) -> Result<(), String> {
         let processes = self
@@ -270,6 +285,34 @@ impl HotkeyBackend for SwhkdBackend {
         if let Err(e) = self.reload_swhkd() {
             warn!(
                 "Failed to reload swhkd config: {}. Hotkey will be registered on next app restart.",
+                e
+            );
+        }
+
+        if let Err(e) = self.verify_swhkd_running() {
+            warn!("swhkd verification warning: {}", e);
+        }
+
+        Ok(())
+    }
+
+    fn register_many(&self, bindings: &[(String, String)]) -> Result<(), String> {
+        if bindings.is_empty() {
+            return Ok(());
+        }
+
+        let mut config = self
+            .config
+            .lock()
+            .map_err(|e| failed_acquire_poisoned_lock("config", e))?;
+        Self::add_validated_hotkey_batch(&mut config, bindings)?;
+
+        config.write_to_file()?;
+        drop(config);
+
+        if let Err(e) = self.reload_swhkd() {
+            warn!(
+                "Failed to reload swhkd config: {}. Hotkeys will be registered on next app restart.",
                 e
             );
         }
@@ -409,5 +452,50 @@ mod tests {
         assert!(SwhkdBackend::validate_hotkey_binding("").is_err());
         assert!(SwhkdBackend::validate_hotkey_binding("   ").is_err());
         assert!(SwhkdBackend::validate_hotkey_binding("Ctrl++KeyA").is_err());
+    }
+
+    #[test]
+    fn register_many_batch_adds_all_bindings() {
+        let pipe_path = PathBuf::from("/tmp/test.pipe");
+        let mut config = SwhkdConfig {
+            hotkeys: Default::default(),
+            config_path: PathBuf::from("/tmp/test_swhkdrc"),
+            pipe_path,
+        };
+        let bindings = vec![
+            ("sound-1".to_string(), "Ctrl+KeyA".to_string()),
+            ("sound-2".to_string(), "Alt+KeyB".to_string()),
+        ];
+
+        SwhkdBackend::add_validated_hotkey_batch(&mut config, &bindings).unwrap();
+
+        assert_eq!(config.hotkeys.len(), 2);
+        assert_eq!(
+            config.hotkeys.get("sound-1").map(String::as_str),
+            Some("ctrl + ~a")
+        );
+        assert_eq!(
+            config.hotkeys.get("sound-2").map(String::as_str),
+            Some("alt + ~b")
+        );
+    }
+
+    #[test]
+    fn register_many_batch_validates_before_mutating_config() {
+        let pipe_path = PathBuf::from("/tmp/test.pipe");
+        let mut config = SwhkdConfig {
+            hotkeys: Default::default(),
+            config_path: PathBuf::from("/tmp/test_swhkdrc"),
+            pipe_path,
+        };
+        let bindings = vec![
+            ("sound-1".to_string(), "Ctrl+KeyA".to_string()),
+            ("sound-2".to_string(), "Ctrl+NumpadDivide".to_string()),
+        ];
+
+        let err = SwhkdBackend::add_validated_hotkey_batch(&mut config, &bindings).unwrap_err();
+
+        assert!(err.contains("UNSUPPORTED_KEY_FOR_BACKEND:swhkd"));
+        assert!(config.hotkeys.is_empty());
     }
 }

@@ -19,7 +19,7 @@ pub(super) const SWHKD_MONITOR_INTERVAL_SECS: u64 = 30;
 pub(super) const SWHKD_PIPE_OPEN_RETRY_SECS: u64 = 1;
 pub(super) const SWHKD_PIPE_REOPEN_DELAY_MS: u64 = 100;
 
-pub use error::format_hotkey_error;
+pub use error::{format_hotkey_error, hotkey_conflict};
 pub use manager_runtime::HotkeyManager;
 pub use model::{
     canonicalize_hotkey_string, normalize_capture_key, parse_hotkey_spec, HotkeyCode,

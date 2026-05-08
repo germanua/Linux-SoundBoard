@@ -10,35 +10,55 @@ use super::helpers::should_clear_continue_suppression;
 use super::{TransportBar, TransportInner};
 use crate::ui::icons;
 
+fn set_active_if_changed(button: &ToggleButton, active: bool) {
+    if button.is_active() != active {
+        button.set_active(active);
+    }
+}
+
+fn set_active_class<W: IsA<gtk4::Widget>>(widget: &W, active: bool) {
+    let widget = widget.as_ref();
+    let has_class = widget.has_css_class("btn-active");
+    if active && !has_class {
+        widget.add_css_class("btn-active");
+    } else if !active && has_class {
+        widget.remove_css_class("btn-active");
+    }
+}
+
+fn set_tooltip_if_changed<W: IsA<gtk4::Widget>>(widget: &W, tooltip: &str) {
+    let widget = widget.as_ref();
+    if widget.tooltip_text().as_deref() != Some(tooltip) {
+        widget.set_tooltip_text(Some(tooltip));
+    }
+}
+
 pub(super) fn update_play_pause_button(button: &ToggleButton, is_playing: bool) {
-    button.set_active(is_playing);
+    set_active_if_changed(button, is_playing);
+    set_active_class(button, is_playing);
     if is_playing {
-        button.add_css_class("btn-active");
         icons::apply_button_icon(button, icons::PAUSE);
-        button.set_tooltip_text(Some("Pause"));
+        set_tooltip_if_changed(button, "Pause");
     } else {
-        button.remove_css_class("btn-active");
         icons::apply_button_icon(button, icons::PLAY);
-        button.set_tooltip_text(Some("Play"));
+        set_tooltip_if_changed(button, "Play");
     }
 }
 
 pub(super) fn update_mic_button(button: &ToggleButton, enabled: bool) {
+    set_active_class(button, enabled);
     if enabled {
-        button.add_css_class("btn-active");
         icons::apply_button_icon(button, icons::MICROPHONE);
     } else {
-        button.remove_css_class("btn-active");
         icons::apply_button_icon(button, icons::MICROPHONE_DISABLED);
     }
 }
 
 pub(super) fn update_headphones_button(button: &ToggleButton, enabled: bool) {
+    set_active_class(button, enabled);
     if enabled {
-        button.add_css_class("btn-active");
         icons::apply_button_icon(button, icons::HEADPHONES);
     } else {
-        button.remove_css_class("btn-active");
         icons::apply_button_icon(button, icons::HEADPHONES_MUTED);
     }
 }
@@ -51,16 +71,13 @@ pub(super) fn play_mode_icon(mode: PlayMode) -> icons::IconPair {
     }
 }
 
-pub(super) fn update_play_mode_button(button: &impl IsA<gtk4::Button>, mode: PlayMode) {
+pub(super) fn update_play_mode_button<T>(button: &T, mode: PlayMode)
+where
+    T: IsA<gtk4::Button> + IsA<gtk4::Widget>,
+{
     icons::apply_button_icon(button, play_mode_icon(mode));
-    button
-        .as_ref()
-        .set_tooltip_text(Some(play_mode_tooltip(mode)));
-    if mode == PlayMode::Default {
-        button.as_ref().remove_css_class("btn-active");
-    } else {
-        button.as_ref().add_css_class("btn-active");
-    }
+    set_tooltip_if_changed(button, play_mode_tooltip(mode));
+    set_active_class(button, mode != PlayMode::Default);
 }
 
 pub(super) fn play_mode_tooltip(mode: PlayMode) -> &'static str {
@@ -173,14 +190,14 @@ impl TransportBar {
 
     pub(super) fn apply_headphones_state(&self, local_mute: bool) {
         self.inner.suppress_headphones_toggle.set(true);
-        self.inner.headphones_btn.set_active(!local_mute);
+        set_active_if_changed(&self.inner.headphones_btn, !local_mute);
         self.inner.suppress_headphones_toggle.set(false);
         update_headphones_button(&self.inner.headphones_btn, !local_mute);
     }
 
     pub(super) fn apply_mic_state(&self, enabled: bool) {
         self.inner.suppress_mic_toggle.set(true);
-        self.inner.mic_btn.set_active(enabled);
+        set_active_if_changed(&self.inner.mic_btn, enabled);
         self.inner.suppress_mic_toggle.set(false);
         update_mic_button(&self.inner.mic_btn, enabled);
     }
@@ -189,11 +206,11 @@ impl TransportBar {
 impl TransportInner {
     pub(super) fn has_navigation_sounds(&self) -> bool {
         let guard = self
-            .sound_list_provider
+            .has_sounds_checker
             .lock()
-            .expect("sound_list_provider lock poisoned");
+            .expect("has_sounds_checker lock poisoned");
         match guard.as_ref() {
-            Some(provider) => !provider().is_empty(),
+            Some(checker) => checker(),
             None => false,
         }
     }

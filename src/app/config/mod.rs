@@ -60,7 +60,10 @@ mod tests {
         assert_eq!(value["settings"]["auto_gain_apply_to"], "mic_only");
         assert_eq!(value["settings"]["play_mode"], "default");
         assert_eq!(value["settings"]["list_style"], "compact");
-        assert_eq!(value["settings"]["default_source_mode"], "manual");
+        assert_eq!(
+            value["settings"]["default_source_mode"],
+            "auto_while_running"
+        );
         assert_eq!(value["settings"]["mic_latency_profile"], "balanced");
     }
 

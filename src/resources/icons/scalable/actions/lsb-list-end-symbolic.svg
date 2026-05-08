@@ -1,1 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M2.5 2.5v11L9.5 8 2.5 2.5z"/><path fill="currentColor" d="M8.5 2.5v11L14.5 8 8.5 2.5z"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path class="foreground-fill" fill="currentColor" d="M2.5 2.5v11L9.5 8 2.5 2.5z"/><path class="foreground-fill" fill="currentColor" d="M8.5 2.5v11L14.5 8 8.5 2.5z"/></svg>

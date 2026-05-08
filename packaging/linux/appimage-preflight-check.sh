@@ -5,6 +5,7 @@ set -e
 
 MISSING_DEPS=()
 WARNINGS=()
+PIPEWIRE_RUNNING=0
 
 # Check for FUSE (Type 2 AppImage requirement)
 check_fuse() {
@@ -18,7 +19,34 @@ check_fuse() {
 # Check for PipeWire daemon
 check_pipewire() {
     if ! pgrep -x pipewire >/dev/null 2>&1; then
-        WARNINGS+=("PipeWire daemon not running")
+        return 1
+    fi
+    PIPEWIRE_RUNNING=1
+    return 0
+}
+
+# Check for PulseAudio daemon or socket
+check_pulseaudio() {
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [ -S "$runtime_dir/pulse/native" ] || pgrep -x pulseaudio >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# Check for a supported audio server
+check_audio_server() {
+    if check_pipewire || check_pulseaudio; then
+        return 0
+    fi
+    WARNINGS+=("No PipeWire or PulseAudio daemon detected")
+    return 1
+}
+
+# Check for pactl, needed for live PulseAudio virtual mic setup
+check_pactl() {
+    if ! command -v pactl >/dev/null 2>&1; then
+        WARNINGS+=("pactl not found; pure PulseAudio setup may require restarting the audio session after first launch")
         return 1
     fi
     return 0
@@ -35,8 +63,11 @@ check_wireplumber() {
 
 # Run checks
 check_fuse
-check_pipewire
-check_wireplumber
+check_audio_server
+check_pactl
+if [ "$PIPEWIRE_RUNNING" -eq 1 ]; then
+    check_wireplumber
+fi
 
 # Display results
 if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
@@ -72,11 +103,15 @@ if [ ${#WARNINGS[@]} -gt 0 ]; then
     echo "To enable virtual microphone:"
     echo ""
     echo "Ubuntu/Debian:"
-    echo "  sudo apt install pipewire wireplumber"
+    echo "  sudo apt install pipewire wireplumber pulseaudio-utils"
     echo "  systemctl --user enable --now pipewire wireplumber"
     echo ""
     echo "Fedora:"
-    echo "  sudo dnf install pipewire wireplumber"
+    echo "  sudo dnf install pipewire wireplumber pulseaudio-utils"
+    echo "  systemctl --user enable --now pipewire wireplumber"
+    echo ""
+    echo "Arch:"
+    echo "  sudo pacman -S pipewire wireplumber libpulse"
     echo "  systemctl --user enable --now pipewire wireplumber"
     echo ""
 fi

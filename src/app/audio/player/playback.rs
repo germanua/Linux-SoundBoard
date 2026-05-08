@@ -138,15 +138,18 @@ impl ActivePlayback {
         Ok(())
     }
 
-    pub(super) fn render(
+    pub(super) fn render_into(
         &mut self,
-        wanted_samples: usize,
+        local: &mut [f32],
+        virtual_out: &mut [f32],
         config: &RuntimeConfig,
-    ) -> (Vec<f32>, Vec<f32>) {
-        let mut local = vec![0.0; wanted_samples];
-        let mut virtual_out = vec![0.0; wanted_samples];
+    ) {
+        debug_assert_eq!(local.len(), virtual_out.len());
+        local.fill(0.0);
+        virtual_out.fill(0.0);
+        let wanted_samples = local.len();
         if self.finished || self.paused {
-            return (local, virtual_out);
+            return;
         }
 
         if self.last_dynamic_enabled != config.auto_gain.enabled
@@ -218,6 +221,5 @@ impl ActivePlayback {
 
         self.position_ms = (self.fallback_samples_written * 1000)
             / (TARGET_OUTPUT_SAMPLE_RATE as u64 * TARGET_OUTPUT_CHANNELS as u64);
-        (local, virtual_out)
     }
 }

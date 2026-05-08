@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{Adjustment, Entry, EventControllerFocus, EventControllerKey, Label};
@@ -8,23 +6,12 @@ use crate::config::PlayMode;
 
 use super::{
     ScrubInput, ScrubInteraction, DEFAULT_SCRUB_DURATION_MS, PENDING_SEEK_TIMEOUT_MS,
-    SEEK_SETTLE_TOLERANCE_MS, SLOW_GTK_CALLBACK_THRESHOLD_MS,
+    SEEK_SETTLE_TOLERANCE_MS,
 };
 
 pub(super) fn format_duration(ms: u64) -> String {
     let secs = ms / 1000;
     format!("{}:{:02}", secs / 60, secs % 60)
-}
-
-pub(super) fn log_slow_ui_callback(name: &str, started_at: Instant) {
-    let elapsed_ms = started_at.elapsed().as_millis();
-    if elapsed_ms >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
-        log::debug!(
-            "GTK callback latency exceeded threshold: name={} elapsed_ms={}",
-            name,
-            elapsed_ms
-        );
-    }
 }
 
 pub(super) fn scrub_position_ms(value: f64, duration_ms: u64) -> u64 {

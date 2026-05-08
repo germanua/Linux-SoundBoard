@@ -68,8 +68,18 @@ impl SwhkdConfig {
     }
 
     /// Convert a canonical hotkey to `swhkd` syntax.
+    ///
+    /// `~` (don't-swallow / pass-through) must be placed immediately before the
+    /// final key token, not before the modifiers.  swhkd 1.3.x rejects `~ctrl + l`
+    /// but accepts `ctrl + ~l`.
     fn convert_to_swhkd_format(hotkey: &str) -> Result<String, String> {
-        Ok(format!("~{}", parse_hotkey_spec(hotkey)?.swhkd_string()?))
+        let swhkd = parse_hotkey_spec(hotkey)?.swhkd_string()?;
+        if let Some(last_plus) = swhkd.rfind(" + ") {
+            let (mods, key) = swhkd.split_at(last_plus + 3);
+            Ok(format!("{}~{}", mods, key))
+        } else {
+            Ok(format!("~{}", swhkd))
+        }
     }
 
     /// Write the config file.
@@ -137,51 +147,51 @@ mod tests {
     fn test_convert_to_swhkd_format() {
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+Alt+KeyP").unwrap(),
-            "~ctrl + alt + p"
+            "ctrl + alt + ~p"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Super+Shift+Digit1").unwrap(),
-            "~shift + super + 1"
+            "shift + super + ~1"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+ArrowUp").unwrap(),
-            "~ctrl + up"
+            "ctrl + ~up"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Alt+NumpadAdd").unwrap(),
-            "~alt + plus"
+            "alt + ~plus"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Alt+NumpadSubtract").unwrap(),
-            "~alt + kpminus"
+            "alt + ~kpminus"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Alt+NumpadMultiply").unwrap(),
-            "~alt + kpasterisk"
+            "alt + ~kpasterisk"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Alt+NumpadEnter").unwrap(),
-            "~alt + kpenter"
+            "alt + ~kpenter"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Alt+NumpadDecimal").unwrap(),
-            "~alt + kpdot"
+            "alt + ~kpdot"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+Quote").unwrap(),
-            "~ctrl + apostrophe"
+            "ctrl + ~apostrophe"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+Backquote").unwrap(),
-            "~ctrl + grave"
+            "ctrl + ~grave"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+Numpad0").unwrap(),
-            "~ctrl + kp0"
+            "ctrl + ~kp0"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Ctrl+Numpad8").unwrap(),
-            "~ctrl + kp8"
+            "ctrl + ~kp8"
         );
         assert_eq!(
             SwhkdConfig::convert_to_swhkd_format("Numpad1").unwrap(),

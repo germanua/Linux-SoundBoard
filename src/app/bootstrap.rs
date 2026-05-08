@@ -1,4 +1,6 @@
+use std::path::PathBuf;
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use gtk4::gdk::prelude::DisplayExtManual;
@@ -9,14 +11,18 @@ use log::{info, warn};
 
 use crate::app_meta::{
     APP_BINARY, APP_ICON_NAME, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FALLBACK_RENDERER,
-    FORCE_X11_ENV_VAR, HOTKEY_POLL_INTERVAL_MS, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
+    FORCE_X11_ENV_VAR, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
 use crate::timer_registry::TimerRegistry;
 
 pub fn run() {
-    env_logger::init();
+    init_logging();
+    if std::env::args().any(|arg| arg == "--audio-engine") {
+        std::process::exit(crate::audio_engine::run());
+    }
+
     configure_preferred_backend();
     configure_preferred_renderer();
     glib::set_prgname(Some(APP_BINARY));
@@ -32,6 +38,18 @@ pub fn run() {
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_activate_handler());
     app.run();
+}
+
+fn init_logging() {
+    let env = env_logger::Env::default().default_filter_or(
+        "warn,\
+linux_soundboard::audio_engine=info,\
+linux_soundboard::init::audio=info,\
+linux_soundboard::audio::player=info,\
+linux_soundboard::audio::player::source_routing=info,\
+linux_soundboard::pipewire::persistent_mic=info",
+    );
+    env_logger::Builder::from_env(env).init();
 }
 
 fn normalize_legacy_dark_theme_setting() {
@@ -155,7 +173,6 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 
         let prebound_hotkeys = prebound_hotkeys(&config);
         let (hotkey_sender, hotkey_receiver) = mpsc::channel::<String>();
-        let hotkey_receiver = Arc::new(Mutex::new(hotkey_receiver));
 
         let hotkey_manager =
             crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
@@ -187,20 +204,20 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 
         let state_hk = Arc::clone(&state);
         let window_hk = window.clone();
-        let hotkey_timer_id =
-            glib::timeout_add_local(Duration::from_millis(HOTKEY_POLL_INTERVAL_MS), move || {
-                if let Ok(guard) = hotkey_receiver.try_lock() {
-                    while let Ok(sound_id) = guard.try_recv() {
-                        crate::ui::app_window::handle_hotkey(
-                            &window_hk, &state_hk, &transport, &sound_id,
-                        );
-                    }
-                } else {
-                    warn!("Hotkey receiver lock unavailable, skipping poll");
+        let transport_hk = transport.clone();
+        crate::ui_event_bridge::set_hotkey_handler(move |sound_id| {
+            crate::ui::app_window::handle_hotkey(&window_hk, &state_hk, &transport_hk, &sound_id);
+        });
+        if let Err(err) = thread::Builder::new()
+            .name("hotkey-ui-bridge".to_string())
+            .spawn(move || {
+                while let Ok(sound_id) = hotkey_receiver.recv() {
+                    crate::ui_event_bridge::post_hotkey(sound_id);
                 }
-                glib::ControlFlow::Continue
-            });
-        register_timer_with_diagnostics(&timer_registry, hotkey_timer_id);
+            })
+        {
+            warn!("Failed to start hotkey UI bridge: {}", err);
+        }
 
         let state_close = Arc::clone(&state);
         let timers_close = timer_registry.clone();
@@ -209,6 +226,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
             crate::diagnostics::set_timer_count(0);
             crate::diagnostics::set_playback_registry_count(0);
             record_state_phase("shutdown:close_request", &state_close);
+            state_close.player.stop_all();
             state_close.player.shutdown();
             if let Err(e) = crate::diagnostics::write_memory_report() {
                 log::warn!("Failed to write memory report: {}", e);
@@ -218,6 +236,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 
         window.present();
         record_state_phase("startup:window_presented", &state);
+
         schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
 
         {
@@ -261,11 +280,6 @@ fn record_state_phase(name: &str, state: &Arc<AppState>) {
     record_config_phase(name, &state.config);
 }
 
-fn register_timer_with_diagnostics(timer_registry: &TimerRegistry, source_id: glib::SourceId) {
-    timer_registry.register(source_id);
-    crate::diagnostics::set_timer_count(timer_registry.count());
-}
-
 fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &TimerRegistry) {
     glib::idle_add_local_once(move || {
         crate::diagnostics::memory::log_memory_snapshot("startup:loudness_bg:check");
@@ -291,49 +305,10 @@ fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &Ti
         }
 
         log::info!(
-            "Starting background loudness analysis: {} sounds missing LUFS",
+            "Deferring startup loudness analysis: {} sounds missing LUFS",
             missing_count
         );
-        if let Ok(cfg) = state.config.lock() {
-            crate::diagnostics::record_phase_with_config("startup:loudness_bg:starting", &cfg);
-        } else {
-            crate::diagnostics::record_phase("startup:loudness_bg:starting", None);
-        }
-
-        let config_for_complete = Arc::clone(&state.config);
-        match crate::commands::trigger_missing_loudness_analysis(
-            Arc::clone(&state.config),
-            false,
-            Some(Box::new(move |result| {
-                match result {
-                    Ok(analyzed) => {
-                        log::info!("Loudness analysis complete: {} sounds analyzed", analyzed);
-                    }
-                    Err(err) => {
-                        log::warn!("Loudness analysis failed: {}", err);
-                    }
-                }
-
-                if let Ok(cfg) = config_for_complete.lock() {
-                    crate::diagnostics::record_phase_with_config(
-                        "startup:loudness_bg:complete",
-                        &cfg,
-                    );
-                } else {
-                    crate::diagnostics::record_phase("startup:loudness_bg:complete", None);
-                }
-            })),
-        ) {
-            Ok(crate::commands::MissingLoudnessAnalysisTrigger::Started) => {
-                log::info!("Loudness analysis started: {} sounds", missing_count);
-            }
-            Ok(trigger) => {
-                log::debug!("Startup loudness analysis not started: {:?}", trigger);
-            }
-            Err(err) => {
-                log::warn!("Failed to schedule startup loudness analysis: {}", err);
-            }
-        }
+        crate::diagnostics::record_phase("startup:loudness_bg:deferred", None);
     });
 }
 
@@ -398,7 +373,148 @@ fn prebound_hotkeys(config: &Config) -> Vec<(String, String)> {
 }
 
 fn initialize_player(config: &Config) -> crate::audio::player::AudioPlayer {
-    crate::audio::player::AudioPlayer::new_with_config(config)
+    use crate::audio::player::AudioBackendKind;
+    use crate::pipewire::persistent_mic::AudioServer;
+
+    if let Some(player) = crate::audio::player::AudioPlayer::connect_to_engine() {
+        log::info!("Connected UI to existing Linux Soundboard audio engine");
+        return player;
+    }
+    ensure_audio_engine_service_started();
+    if let Some(player) = crate::audio::player::AudioPlayer::connect_to_engine() {
+        log::info!("Started and connected UI to Linux Soundboard audio engine");
+        return player;
+    }
+
+    let outcome = crate::pipewire::persistent_mic::ensure_persistent_virtual_mic();
+    log::info!("Persistent virtual mic setup: {:?}", outcome);
+    let backend = match outcome.audio_server().unwrap_or(AudioServer::PipeWire) {
+        AudioServer::PulseAudio => AudioBackendKind::PulseAudio,
+        AudioServer::PipeWire | AudioServer::Unsupported => AudioBackendKind::PipeWire,
+    };
+    crate::audio::player::AudioPlayer::new_with_config_and_audio_backend(
+        config,
+        backend,
+        outcome.node_available(),
+    )
+}
+
+fn ensure_audio_engine_service_started() {
+    let service = "linux-soundboard-engine.service";
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", service])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if matches!(status, Ok(status) if status.success()) {
+        return;
+    }
+
+    ensure_user_audio_engine_service_file(service);
+
+    let status = std::process::Command::new("systemctl")
+        .args(["--user", "enable", "--now", service])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if !matches!(status, Ok(status) if status.success()) {
+        return;
+    }
+
+    let started_at = std::time::Instant::now();
+    while started_at.elapsed() < Duration::from_secs(2) {
+        if crate::audio::engine_ipc::engine_running() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn ensure_user_audio_engine_service_file(service: &str) {
+    let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
+    else {
+        return;
+    };
+    let service_path = config_home.join("systemd").join("user").join(service);
+    if service_path.exists()
+        || systemd_user_unit_exists(service)
+        || packaged_audio_engine_service_exists(service)
+    {
+        return;
+    }
+
+    let executable = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok());
+    let Some(executable) = executable else {
+        return;
+    };
+    let Some(parent) = service_path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+
+    let body = render_audio_engine_service(&executable);
+    if std::fs::write(&service_path, body).is_err() {
+        return;
+    }
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+fn packaged_audio_engine_service_exists(service: &str) -> bool {
+    [
+        PathBuf::from("/etc/systemd/user").join(service),
+        PathBuf::from("/usr/local/share/systemd/user").join(service),
+        PathBuf::from("/usr/share/systemd/user").join(service),
+        PathBuf::from("/usr/local/lib/systemd/user").join(service),
+        PathBuf::from("/usr/lib/systemd/user").join(service),
+        PathBuf::from("/usr/lib64/systemd/user").join(service),
+        PathBuf::from("/lib/systemd/user").join(service),
+    ]
+    .iter()
+    .any(|path| path.exists())
+}
+
+fn systemd_user_unit_exists(service: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["--user", "cat", service])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn render_audio_engine_service(executable: &std::path::Path) -> String {
+    format!(
+        "[Unit]\n\
+Description=Linux Soundboard audio engine\n\
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service\n\
+\n\
+[Service]\n\
+Type=simple\n\
+ExecStart={} --audio-engine\n\
+Restart=on-failure\n\
+RestartSec=2\n\
+\n\
+[Install]\n\
+WantedBy=default.target\n",
+        systemd_quote(executable)
+    )
+}
+
+fn systemd_quote(path: &std::path::Path) -> String {
+    let raw = path.to_string_lossy();
+    let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 #[cfg(test)]
@@ -494,5 +610,15 @@ mod tests {
         assert_eq!(cfg.sounds[2].duration_ms, None);
 
         cleanup_test_audio_path(&audio_path);
+    }
+
+    #[test]
+    fn audio_engine_service_renders_quoted_exec() {
+        let service = render_audio_engine_service(Path::new("/tmp/Linux Soundboard.AppImage"));
+        assert!(service.contains("ExecStart=\"/tmp/Linux Soundboard.AppImage\" --audio-engine"));
+        assert!(service.contains(
+            "After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service"
+        ));
+        assert!(service.contains("WantedBy=default.target"));
     }
 }

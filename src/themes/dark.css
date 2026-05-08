@@ -199,6 +199,35 @@ headerbar:backdrop,
   color: #dfd0b8;
 }
 
+.tabs-sidebar button image {
+  color: #dfd0b8;
+  -gtk-icon-size: 16px;
+}
+
+.sidebar-new-tab-btn {
+  border-radius: 50%;
+  padding: 4px;
+  min-width: 28px;
+  min-height: 28px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #dfd0b8;
+}
+
+.sidebar-new-tab-btn:hover {
+  background-color: rgba(223, 208, 184, 0.12);
+}
+
+.sidebar-new-tab-btn:active {
+  background-color: rgba(223, 208, 184, 0.2);
+}
+
+.sidebar-new-tab-btn image {
+  color: #dfd0b8;
+  -gtk-icon-size: 16px;
+}
+
 /* Column view text */
 columnview {
   color: #dfd0b8;
@@ -360,7 +389,106 @@ columnview header button:checked {
   border: 1px solid rgba(148, 137, 121, 0.5);
 }
 
-/* Settings dialog controls should keep the app palette instead of the system accent */
+/* Settings controls should keep the app palette instead of the system accent */
+.lsb-settings-overlay {
+  background-color: transparent;
+}
+
+.settings-overlay-backdrop {
+  background-color: rgba(9, 12, 16, 0.52);
+  background-image: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.settings-overlay-backdrop:hover,
+.settings-overlay-backdrop:active {
+  background-color: rgba(9, 12, 16, 0.58);
+  background-image: none;
+}
+
+.settings-overlay-panel {
+  background-color: #202832;
+  border: 1px solid rgba(148, 137, 121, 0.34);
+  border-radius: 18px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  color: #dfd0b8;
+}
+
+.settings-overlay-header {
+  min-height: 60px;
+  padding: 0 12px;
+  background-color: #383f49;
+  border-bottom: 1px solid rgba(9, 12, 16, 0.3);
+  border-radius: 18px 18px 0 0;
+}
+
+.settings-overlay-close-btn {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  background-color: rgba(223, 208, 184, 0.12);
+  border-radius: 999px;
+}
+
+.settings-overlay-close-btn image {
+  -gtk-icon-size: 15px;
+}
+
+.settings-overlay-close-btn:hover {
+  background-color: rgba(223, 208, 184, 0.2);
+}
+
+.settings-overlay-content {
+  min-height: 0;
+}
+
+.settings-overlay-switcher {
+  border-spacing: 8px;
+  padding: 0;
+}
+
+.settings-overlay-tab {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 16px;
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: none;
+  color: #dfd0b8;
+}
+
+.settings-overlay-tab box {
+  border-spacing: 8px;
+}
+
+.settings-overlay-tab label {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.settings-overlay-tab image {
+  -gtk-icon-size: 15px;
+}
+
+.settings-overlay-tab:checked {
+  background-color: #4b5158;
+  color: #dfd0b8;
+  box-shadow: none;
+}
+
+.settings-overlay-tab:hover {
+  background-color: rgba(223, 208, 184, 0.08);
+}
+
+.settings-overlay-tab:checked:hover {
+  background-color: #4b5158;
+}
+
 .lsb-settings-dialog switch {
   color: #dfd0b8;
 }
@@ -396,6 +524,34 @@ columnview header button:checked {
 
 .lsb-settings-dialog button.settings-danger-btn:hover {
   background-color: rgba(217, 141, 122, 0.1);
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn,
+.lsb-settings-dialog button.settings-folder-remove-btn image {
+  color: #d98d7a;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn image {
+  -gtk-icon-size: 16px;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn:hover {
+  background-color: rgba(217, 141, 122, 0.15);
+  border-color: rgba(217, 141, 122, 0.6);
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn:active {
+  background-color: rgba(217, 141, 122, 0.22);
 }
 
 /* Refresh button spinning indicator */

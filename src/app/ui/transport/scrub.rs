@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use gtk4::prelude::*;
 
+use crate::audio::player::PlayerSnapshot;
 use crate::commands;
+use crate::timer_registry::remove_source_id_safe;
 
 use super::helpers::{
     begin_scrub_interaction_state, clear_scrub_interaction_state, displayed_scrub_position_ms,
@@ -74,10 +76,13 @@ impl TransportInner {
 
     pub(super) fn cancel_scrub_interaction(&self) {
         clear_scrub_interaction_state(&mut self.scrub_interaction.borrow_mut());
+        if let Some(id) = self.scrub_commit_timeout.borrow_mut().take() {
+            let _ = remove_source_id_safe(id);
+        }
     }
 
-    pub(super) fn update_scrub(&self) {
-        let positions = commands::get_playback_positions(Arc::clone(&self.state.player));
+    pub(crate) fn handle_snapshot(&self, snapshot: PlayerSnapshot) {
+        let positions = snapshot.playback_positions;
         let now_ms = glib::monotonic_time() as u64 / 1_000;
 
         if positions.is_empty() {
@@ -98,24 +103,30 @@ impl TransportInner {
                 self.is_continue_suppressed(),
             );
             if should_continue {
+                // If a user-initiated play was just dispatched, this empty snapshot
+                // is the transient gap between stop_all() and play() in the worker
+                // thread — not a natural end-of-track.  Skip this cycle; the new
+                // sound will appear in the next snapshot.
+                if crate::playback_bridge::is_explicit_play_pending() {
+                    return;
+                }
                 self.play_adjacent_sound(1);
                 return;
             }
 
+            crate::playback_bridge::clear_explicit_play_pending();
             self.clear_continue_suppression();
             self.reset_idle_playback_ui();
             return;
         }
 
-        let has_provider = self
-            .sound_list_provider
-            .lock()
-            .expect("sound_list_provider lock poisoned")
-            .is_some();
+        let has_provider = self.has_sound_list_provider.get();
         self.prev_btn.set_sensitive(has_provider);
         self.next_btn.set_sensitive(has_provider);
 
         if let Some(position) = positions.iter().find(|position| !position.finished) {
+            // New sound is active — any pending explicit play has now landed.
+            crate::playback_bridge::clear_explicit_play_pending();
             self.clear_continue_suppression_for_playback(&position.play_id);
             self.stop_btn.set_sensitive(true);
             self.play_btn.set_sensitive(true);
@@ -131,14 +142,27 @@ impl TransportInner {
                 interaction.clone()
             };
 
-            let sound_snapshot = {
-                let cfg = self.state.config.lock().expect("config lock poisoned");
-                cfg.get_sound(&position.sound_id)
-                    .map(|sound| (sound.id.clone(), sound.name.clone(), sound.duration_ms))
-            };
-            let track_duration_ms = sound_snapshot
+            // Check cache: only lock config when the play_id changes (new sound started)
+            let same_play = self
+                .active_track
+                .borrow()
                 .as_ref()
-                .and_then(|(_, _, duration_ms)| *duration_ms);
+                .map(|t| t.play_id == position.play_id)
+                .unwrap_or(false);
+
+            let (sound_name, track_duration_ms) = if same_play {
+                let cached = self.active_track.borrow();
+                let t = cached.as_ref().unwrap();
+                (t.sound_name.clone(), t.sound_duration_ms)
+            } else {
+                let cfg = self.state.config.lock().expect("config lock poisoned");
+                let entry = cfg.get_sound(&position.sound_id);
+                (
+                    entry.map(|s| s.name.clone()),
+                    entry.and_then(|s| s.duration_ms),
+                )
+            };
+
             let duration_ms = resolve_scrub_duration_ms(position.duration_ms, track_duration_ms);
 
             self.scrub.set_sensitive(true);
@@ -159,23 +183,21 @@ impl TransportInner {
                     position.position_ms,
                 )));
 
-            if let Some((sound_id, sound_name, _)) = sound_snapshot {
-                self.track_name_label.set_label(&sound_name);
-                self.track_name_label.set_visible(true);
-                *self.active_track.borrow_mut() = Some(super::ActiveTrack {
-                    sound_id: sound_id.clone(),
-                    sound_duration_ms: Some(duration_ms),
-                    play_id: position.play_id.clone(),
-                });
-                *self.last_track_sound_id.borrow_mut() = Some(sound_id);
-            } else {
-                self.track_name_label.set_visible(false);
+            if !same_play {
+                match &sound_name {
+                    Some(name) => {
+                        self.track_name_label.set_label(name);
+                        self.track_name_label.set_visible(true);
+                    }
+                    None => self.track_name_label.set_visible(false),
+                }
+                *self.last_track_sound_id.borrow_mut() = Some(position.sound_id.clone());
                 *self.active_track.borrow_mut() = Some(super::ActiveTrack {
                     sound_id: position.sound_id.clone(),
+                    sound_name: sound_name.clone(),
                     sound_duration_ms: Some(duration_ms),
                     play_id: position.play_id.clone(),
                 });
-                *self.last_track_sound_id.borrow_mut() = Some(position.sound_id.clone());
             }
         } else if positions.iter().all(|position| position.finished) {
             let play_mode = {
@@ -193,8 +215,12 @@ impl TransportInner {
                 has_navigation_sounds,
                 self.is_continue_suppressed(),
             ) {
+                if crate::playback_bridge::is_explicit_play_pending() {
+                    return;
+                }
                 self.play_adjacent_sound(1);
             } else {
+                crate::playback_bridge::clear_explicit_play_pending();
                 self.clear_continue_suppression();
                 self.reset_idle_playback_ui();
             }

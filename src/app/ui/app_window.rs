@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use glib;
@@ -11,6 +13,7 @@ use crate::commands;
 use crate::timer_registry::TimerRegistry;
 
 use super::dnd_import;
+use super::settings;
 use super::sound_list::SoundList;
 use super::tabs_sidebar::TabsSidebar;
 use super::theme::apply_theme;
@@ -19,7 +22,7 @@ use super::transport::TransportBar;
 pub fn build_window(
     app: &Application,
     state: Arc<AppState>,
-    timers: &TimerRegistry,
+    _timers: &TimerRegistry,
 ) -> (ApplicationWindow, TransportBar) {
     {
         let cfg = state.config.lock().expect("config lock poisoned");
@@ -104,6 +107,38 @@ pub fn build_window(
     let sound_list = SoundList::new(Arc::clone(&state));
 
     {
+        let transport_snapshot = transport.clone();
+        let sl_snapshot = sound_list.clone();
+        let last_playing: Rc<std::cell::RefCell<Vec<String>>> =
+            Rc::new(std::cell::RefCell::new(Vec::new()));
+        let last_active: Rc<std::cell::RefCell<Option<String>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        crate::playback_bridge::set_snapshot_handler(move |snapshot| {
+            let active_id_now: Option<String> = snapshot
+                .playback_positions
+                .iter()
+                .find(|p| !p.finished)
+                .map(|p| p.sound_id.clone());
+
+            let playing_changed = *last_playing.borrow() != snapshot.playing_ids;
+            if playing_changed {
+                *last_playing.borrow_mut() = snapshot.playing_ids.clone();
+                let ids: std::collections::HashSet<String> =
+                    snapshot.playing_ids.iter().cloned().collect();
+                sl_snapshot.set_playing_ids(ids);
+            }
+
+            let active_changed = *last_active.borrow() != active_id_now;
+            if active_changed {
+                *last_active.borrow_mut() = active_id_now.clone();
+                sl_snapshot.set_active_sound_id(active_id_now);
+            }
+
+            transport_snapshot.handle_snapshot(snapshot);
+        });
+    }
+
+    {
         let sl = sound_list.clone();
         tabs.connect_tab_selected(move |tab_id| {
             sl.set_active_tab(tab_id);
@@ -127,6 +162,11 @@ pub fn build_window(
     {
         let sl_nav = sound_list.clone();
         transport.set_sound_list_provider(move || sl_nav.get_navigation_sounds());
+    }
+
+    {
+        let sl_has = sound_list.clone();
+        transport.set_has_sounds_checker(move || sl_has.has_navigation_sounds());
     }
 
     {
@@ -157,43 +197,77 @@ pub fn build_window(
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root_box));
+    {
+        let toast_overlay = toast_overlay.clone();
+        crate::ui_event_bridge::set_toast_handler(move |message| {
+            show_toast(&toast_overlay, &message);
+        });
+    }
 
     {
         let (toast_tx, toast_rx) = std::sync::mpsc::channel::<String>();
         let toast_tx_tabs = toast_tx.clone();
         transport.set_toast_sender(toast_tx);
         tabs.set_toast_sender(toast_tx_tabs);
-        let toast_poll = toast_overlay.clone();
-        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            while let Ok(msg) = toast_rx.try_recv() {
-                show_toast(&toast_poll, &msg);
-            }
-            glib::ControlFlow::Continue
-        });
-        timers.register(source_id);
-    }
-
-    {
-        let sl_playing = sound_list.clone();
-        let state_playing = Arc::clone(&state);
-        let source_id = glib::timeout_add_local(std::time::Duration::from_millis(150), move || {
-            let positions = commands::get_playback_positions(Arc::clone(&state_playing.player));
-            let active: Vec<&crate::audio::player::PlaybackPosition> =
-                positions.iter().filter(|p| !p.finished).collect();
-            let ids: std::collections::HashSet<String> =
-                active.iter().map(|p| p.sound_id.clone()).collect();
-            let active_id = active.first().map(|p| p.sound_id.clone());
-            sl_playing.set_playing_ids(ids);
-            sl_playing.set_active_sound_id(active_id);
-            glib::ControlFlow::Continue
-        });
-        timers.register(source_id);
+        if let Err(err) = std::thread::Builder::new()
+            .name("toast-ui-bridge".to_string())
+            .spawn(move || {
+                while let Ok(message) = toast_rx.recv() {
+                    crate::ui_event_bridge::post_toast(message);
+                }
+            })
+        {
+            log::warn!("Failed to start toast UI bridge: {}", err);
+        }
     }
 
     // `AdwApplicationWindow` does not expose `set_content`; use `set_child` here.
     let drop_overlay =
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
     window.set_child(Some(&drop_overlay));
+
+    {
+        let settings_overlay: Rc<RefCell<Option<gtk4::Overlay>>> = Rc::new(RefCell::new(None));
+        let drop_overlay = drop_overlay.clone();
+        let parent_window = window.clone();
+        let state_settings = Arc::clone(&state);
+        let sl_settings = sound_list.clone();
+        let tabs_settings = tabs.clone();
+        let sl_style_settings = sound_list.clone();
+        transport.connect_settings_requested(move || {
+            if settings_overlay.borrow().is_none() {
+                let on_library_changed: Rc<dyn Fn() + 'static> = {
+                    let sl_settings = sl_settings.clone();
+                    let tabs_settings = tabs_settings.clone();
+                    Rc::new(move || {
+                        sl_settings.refresh_from_state();
+                        tabs_settings.reload_tabs();
+                    })
+                };
+                let on_list_style_changed: Rc<dyn Fn(String) + 'static> = {
+                    let sl_style_settings = sl_style_settings.clone();
+                    Rc::new(move |style| {
+                        sl_style_settings.set_list_style(&style);
+                    })
+                };
+
+                let overlay = settings::build_settings_overlay(
+                    parent_window.upcast_ref::<gtk4::Window>(),
+                    Arc::clone(&state_settings),
+                    Some(on_library_changed),
+                    Some(on_list_style_changed),
+                );
+                drop_overlay.add_overlay(&overlay);
+                *settings_overlay.borrow_mut() = Some(overlay);
+                log::debug!("Settings overlay built lazily");
+            }
+
+            if let Some(overlay) = settings_overlay.borrow().as_ref() {
+                overlay.set_visible(true);
+                overlay.grab_focus();
+            }
+        });
+    }
 
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
@@ -219,16 +293,19 @@ pub fn handle_hotkey(
     } else {
         let sound_id = id.to_string();
         let sound_id_for_log = sound_id.clone();
+        crate::playback_bridge::mark_explicit_play_pending();
         if let Err(e) = commands::play_sound_async(
             sound_id,
             Arc::clone(&state.config),
             Arc::clone(&state.player),
             move |result| {
                 if let Err(err) = result {
+                    crate::playback_bridge::clear_explicit_play_pending();
                     log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
                 }
             },
         ) {
+            crate::playback_bridge::clear_explicit_play_pending();
             log::warn!("Failed to dispatch hotkey playback '{}': {}", id, e);
         }
     }

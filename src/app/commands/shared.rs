@@ -1,6 +1,9 @@
-use std::sync::mpsc::{self, TryRecvError};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
@@ -10,8 +13,8 @@ use std::{
 use crate::config::{Config, PlayMode, Sound};
 use crate::hotkeys::HotkeyManager;
 
-const ASYNC_COMMAND_POLL_INTERVAL_MS: u64 = 10;
 const SLOW_GTK_CALLBACK_THRESHOLD_MS: u128 = 16;
+const UI_WORKER_THREADS: usize = 4;
 const ANALYSIS_RSS_ELEVATED_KB: u64 = 650 * 1024;
 const ANALYSIS_RSS_HIGH_KB: u64 = 800 * 1024;
 const ANALYSIS_RSS_CRITICAL_KB: u64 = 1_000 * 1024;
@@ -259,6 +262,32 @@ pub fn unregister_hotkeys_best_effort(
     }
 }
 
+type PendingCallback = Box<dyn FnOnce(Box<dyn Any + Send>) + 'static>;
+
+thread_local! {
+    static PENDING_UI_CALLBACKS: RefCell<HashMap<u64, PendingCallback>> =
+        RefCell::new(HashMap::new());
+}
+
+static NEXT_DISPATCH_ID: AtomicU64 = AtomicU64::new(0);
+
+fn ui_worker_pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(UI_WORKER_THREADS)
+            .thread_name(|i| format!("ui-worker-{i}"))
+            .build()
+            .expect("failed to build UI worker thread pool")
+    })
+}
+
+/// Dispatch a Send task on a worker thread and run `on_complete` on the GTK main thread
+/// when it finishes. Completion is event-driven via `MainContext::invoke` — there is no
+/// per-call polling timer and no per-call OS thread.
+///
+/// Must be called from the GTK main thread (the thread that owns the default `MainContext`),
+/// because `on_complete` is `!Send` and is stashed in a thread-local until the result lands.
 pub fn dispatch_async_result<T, F, C>(
     task_name: &'static str,
     task: F,
@@ -269,46 +298,51 @@ where
     F: FnOnce() -> T + Send + 'static,
     C: FnOnce(T) + 'static,
 {
-    let (result_tx, result_rx) = mpsc::channel::<(T, Duration)>();
+    let dispatch_id = NEXT_DISPATCH_ID.fetch_add(1, Ordering::Relaxed);
+
+    PENDING_UI_CALLBACKS.with(|m| {
+        m.borrow_mut().insert(
+            dispatch_id,
+            Box::new(move |any: Box<dyn Any + Send>| match any.downcast::<T>() {
+                Ok(value) => on_complete(*value),
+                Err(_) => log::error!(
+                    "dispatch_async_result type mismatch: name={} id={}",
+                    task_name,
+                    dispatch_id
+                ),
+            }),
+        );
+    });
+
     log::debug!("Async UI command started: name={}", task_name);
 
-    std::thread::Builder::new()
-        .name(format!("ui-{task_name}"))
-        .spawn(move || {
-            let started_at = Instant::now();
-            let result = task();
-            let _ = result_tx.send((result, started_at.elapsed()));
-        })
-        .map_err(|e| format!("Failed to spawn async UI command '{task_name}': {e}"))?;
-
-    let mut on_complete = Some(on_complete);
-    glib::timeout_add_local(
-        Duration::from_millis(ASYNC_COMMAND_POLL_INTERVAL_MS),
-        move || match result_rx.try_recv() {
-            Ok((result, elapsed)) => {
-                log::debug!(
-                    "Async UI command finished: name={} elapsed_ms={}",
-                    task_name,
-                    elapsed.as_millis()
-                );
-                if let Some(on_complete) = on_complete.take() {
-                    let callback_started_at = Instant::now();
-                    on_complete(result);
-                    let callback_elapsed = callback_started_at.elapsed().as_millis();
-                    if callback_elapsed >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
-                        log::debug!(
-                            "GTK callback latency exceeded threshold: name={} elapsed_ms={}",
-                            task_name,
-                            callback_elapsed
-                        );
-                    }
+    ui_worker_pool().spawn(move || {
+        let started_at = Instant::now();
+        let result = task();
+        let elapsed = started_at.elapsed();
+        let result_any: Box<dyn Any + Send> = Box::new(result);
+        glib::MainContext::default().invoke(move || {
+            log::debug!(
+                "Async UI command finished: name={} elapsed_ms={}",
+                task_name,
+                elapsed.as_millis()
+            );
+            let cb_started_at = Instant::now();
+            PENDING_UI_CALLBACKS.with(|m| {
+                if let Some(cb) = m.borrow_mut().remove(&dispatch_id) {
+                    cb(result_any);
                 }
-                glib::ControlFlow::Break
+            });
+            let cb_elapsed = cb_started_at.elapsed().as_millis();
+            if cb_elapsed >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
+                log::debug!(
+                    "GTK callback latency exceeded threshold: name={} elapsed_ms={}",
+                    task_name,
+                    cb_elapsed
+                );
             }
-            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
-        },
-    );
+        });
+    });
 
     Ok(())
 }

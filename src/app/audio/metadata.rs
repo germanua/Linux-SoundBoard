@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use symphonia::core::codecs::CODEC_TYPE_NULL;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -46,7 +46,7 @@ fn estimate_duration_from_file(path: &str, sample_rate: u32, channels: u8) -> Op
             }
             return None;
         }
-        "aac" | "m4a" => 192_000,
+        "aac" | "m4a" | "mp4" => 192_000,
         _ => 192_000,
     };
 
@@ -58,6 +58,20 @@ fn estimate_duration_from_file(path: &str, sample_rate: u32, channels: u8) -> Op
     }
 
     Some(duration_ms)
+}
+
+fn is_strict_audio_container(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(ext.as_str(), "aac" | "m4a" | "mp4")
+    )
+}
+
+fn is_audio_track(track: &Track) -> bool {
+    track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
 }
 
 pub fn probe_duration_ms(path: &str) -> Option<u64> {
@@ -80,12 +94,30 @@ pub fn probe_duration_ms(path: &str) -> Option<u64> {
         .ok()?;
 
     let format = probed.format;
-    let track = format.default_track().or_else(|| {
-        format
-            .tracks()
-            .iter()
-            .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
-    })?;
+    let strict_audio_container = is_strict_audio_container(path);
+    let track = format
+        .tracks()
+        .iter()
+        .find(|track| is_audio_track(track))
+        .or_else(|| {
+            (!strict_audio_container)
+                .then(|| {
+                    format
+                        .default_track()
+                        .filter(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            (!strict_audio_container)
+                .then(|| {
+                    format
+                        .tracks()
+                        .iter()
+                        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+                })
+                .flatten()
+        })?;
 
     let params = &track.codec_params;
 

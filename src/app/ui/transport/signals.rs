@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use gtk4::prelude::*;
 use gtk4::EventControllerKey;
-use libadwaita::prelude::*;
 
 use crate::commands;
 use crate::timer_registry::remove_source_id_safe;
@@ -14,31 +13,22 @@ use super::helpers::{format_duration, install_volume_editor, is_seek_key};
 use super::playback::{
     update_headphones_button, update_mic_button, update_play_mode_button, update_play_pause_button,
 };
-use super::{LibraryChangedCallback, ListStyleChangedCallback, ScrubInput, TransportBar};
+use super::{ScrubInput, TransportBar};
 
-fn weak_library_changed_callback(
-    callback: &RefCell<Option<LibraryChangedCallback>>,
-) -> Option<Rc<dyn Fn() + 'static>> {
-    let weak = Rc::downgrade(callback.borrow().as_ref()?);
-    Some(Rc::new(move || {
-        if let Some(callback) = weak.upgrade() {
-            callback();
-        }
-    }))
-}
+const VOLUME_SAVE_DEBOUNCE_MS: u64 = 350;
 
-fn weak_list_style_changed_callback(
-    callback: &RefCell<Option<ListStyleChangedCallback>>,
-) -> Option<Rc<dyn Fn(String) + 'static>> {
-    let weak = Rc::downgrade(callback.borrow().as_ref()?);
-    Some(Rc::new(move |style| {
-        if let Some(callback) = weak.upgrade() {
-            callback(style);
-        }
-    }))
+fn replace_debounce_timeout(slot: &RefCell<Option<glib::SourceId>>, timeout_id: glib::SourceId) {
+    if let Some(previous) = slot.borrow_mut().take() {
+        let _ = remove_source_id_safe(previous);
+    }
+    *slot.borrow_mut() = Some(timeout_id);
 }
 
 impl TransportBar {
+    pub fn handle_snapshot(&self, snapshot: crate::audio::player::PlayerSnapshot) {
+        self.inner.handle_snapshot(snapshot);
+    }
+
     pub fn connect_search_changed<F: Fn(String) + 'static>(&self, f: F) {
         self.inner
             .search_entry
@@ -58,6 +48,15 @@ impl TransportBar {
             .sound_list_provider
             .lock()
             .expect("sound_list_provider lock poisoned") = Some(Box::new(f));
+        self.inner.has_sound_list_provider.set(true);
+    }
+
+    pub fn set_has_sounds_checker<F: Fn() -> bool + Send + Sync + 'static>(&self, f: F) {
+        *self
+            .inner
+            .has_sounds_checker
+            .lock()
+            .expect("has_sounds_checker lock poisoned") = Some(Box::new(f));
     }
 
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
@@ -76,17 +75,44 @@ impl TransportBar {
         *self.inner.on_list_style_changed.borrow_mut() = Some(Rc::new(f));
     }
 
+    pub fn connect_settings_requested<F: Fn() + 'static>(&self, f: F) {
+        *self.inner.on_settings_requested.borrow_mut() = Some(Rc::new(f));
+    }
+
     pub fn cleanup(&self) {
         if let Some(timeout_id) = self.inner.scrub_commit_timeout.borrow_mut().take() {
             let _ = remove_source_id_safe(timeout_id);
         }
-        if let Some(timer_id) = self.inner.scrub_timer_id.borrow_mut().take() {
-            let _ = remove_source_id_safe(timer_id);
+        if let Some(timeout_id) = self.inner.local_volume_save_timeout.borrow_mut().take() {
+            let _ = remove_source_id_safe(timeout_id);
+            let volume = self
+                .inner
+                .local_vol
+                .adjustment()
+                .value()
+                .round()
+                .clamp(0.0, 100.0) as u8;
+            if let Err(e) =
+                commands::save_local_volume(volume, Arc::clone(&self.inner.state.config))
+            {
+                log::warn!("Save local volume during cleanup failed: {e}");
+            }
         }
-        let settings_dialog = self.inner.settings_dialog.borrow_mut().take();
-        if let Some(settings_dialog) = settings_dialog {
-            settings_dialog.force_close();
+        if let Some(timeout_id) = self.inner.mic_volume_save_timeout.borrow_mut().take() {
+            let _ = remove_source_id_safe(timeout_id);
+            let volume = self
+                .inner
+                .mic_vol
+                .adjustment()
+                .value()
+                .round()
+                .clamp(0.0, 100.0) as u8;
+            if let Err(e) = commands::save_mic_volume(volume, Arc::clone(&self.inner.state.config))
+            {
+                log::warn!("Save mic volume during cleanup failed: {e}");
+            }
         }
+        self.inner.has_sound_list_provider.set(false);
         *self
             .inner
             .sound_list_provider
@@ -94,11 +120,17 @@ impl TransportBar {
             .expect("sound_list_provider lock poisoned") = None;
         *self
             .inner
+            .has_sounds_checker
+            .lock()
+            .expect("has_sounds_checker lock poisoned") = None;
+        *self
+            .inner
             .toast_sender
             .lock()
             .expect("toast_sender lock poisoned") = None;
         *self.inner.on_library_changed.borrow_mut() = None;
         *self.inner.on_list_style_changed.borrow_mut() = None;
+        *self.inner.on_settings_requested.borrow_mut() = None;
     }
 
     pub(super) fn connect_signals(&self) {
@@ -153,11 +185,27 @@ impl TransportBar {
                 if !gtk4::prelude::WidgetExt::is_visible(&local_entry) {
                     local_entry.set_text(&format!("{volume}"));
                 }
-                let _ = commands::set_local_volume(
+                let _ = commands::set_local_volume_live(
                     volume,
                     Arc::clone(&inner.state.config),
                     Arc::clone(&inner.state.player),
                 );
+                let state_save = Arc::clone(&inner.state);
+                let inner_done_weak = Rc::downgrade(&inner);
+                let timeout_id = glib::timeout_add_local_once(
+                    Duration::from_millis(VOLUME_SAVE_DEBOUNCE_MS),
+                    move || {
+                        if let Err(e) =
+                            commands::save_local_volume(volume, Arc::clone(&state_save.config))
+                        {
+                            log::warn!("Save local volume failed: {e}");
+                        }
+                        if let Some(inner_done) = inner_done_weak.upgrade() {
+                            *inner_done.local_volume_save_timeout.borrow_mut() = None;
+                        }
+                    },
+                );
+                replace_debounce_timeout(&inner.local_volume_save_timeout, timeout_id);
             });
         }
 
@@ -175,11 +223,27 @@ impl TransportBar {
                 if !gtk4::prelude::WidgetExt::is_visible(&mic_entry) {
                     mic_entry.set_text(&format!("{volume}"));
                 }
-                let _ = commands::set_mic_volume(
+                let _ = commands::set_mic_volume_live(
                     volume,
                     Arc::clone(&inner.state.config),
                     Arc::clone(&inner.state.player),
                 );
+                let state_save = Arc::clone(&inner.state);
+                let inner_done_weak = Rc::downgrade(&inner);
+                let timeout_id = glib::timeout_add_local_once(
+                    Duration::from_millis(VOLUME_SAVE_DEBOUNCE_MS),
+                    move || {
+                        if let Err(e) =
+                            commands::save_mic_volume(volume, Arc::clone(&state_save.config))
+                        {
+                            log::warn!("Save mic volume failed: {e}");
+                        }
+                        if let Some(inner_done) = inner_done_weak.upgrade() {
+                            *inner_done.mic_volume_save_timeout.borrow_mut() = None;
+                        }
+                    },
+                );
+                replace_debounce_timeout(&inner.mic_volume_save_timeout, timeout_id);
             });
         }
 
@@ -357,75 +421,53 @@ impl TransportBar {
                 let state_refresh = Arc::clone(&inner_refresh.state);
                 let inner_weak_done = Rc::downgrade(&inner_refresh);
                 let btn_done = btn.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    match commands::refresh_sounds(
-                        Arc::clone(&state_refresh.config),
-                        Arc::clone(&state_refresh.hotkeys),
-                    ) {
-                        Ok(_) => {
-                            if let Some(inner_refresh_done) = inner_weak_done.upgrade() {
-                                if let Some(tx) = &*inner_refresh_done
-                                    .toast_sender
-                                    .lock()
-                                    .expect("toast_sender lock poisoned")
-                                {
-                                    let _ = tx.send("Sounds refreshed".to_string());
-                                }
-                                if let Some(cb) =
-                                    inner_refresh_done.on_library_changed.borrow().as_ref()
-                                {
-                                    cb();
+                btn.set_sensitive(false);
+                if let Err(e) = commands::refresh_sounds_async(
+                    Arc::clone(&state_refresh.config),
+                    Arc::clone(&state_refresh.hotkeys),
+                    move |result| {
+                        match result {
+                            Ok(_) => {
+                                if let Some(inner_refresh_done) = inner_weak_done.upgrade() {
+                                    if let Some(tx) = &*inner_refresh_done
+                                        .toast_sender
+                                        .lock()
+                                        .expect("toast_sender lock poisoned")
+                                    {
+                                        let _ = tx.send("Sounds refreshed".to_string());
+                                    }
+                                    if let Some(cb) =
+                                        inner_refresh_done.on_library_changed.borrow().as_ref()
+                                    {
+                                        cb();
+                                    }
                                 }
                             }
+                            Err(e) => log::warn!("Refresh failed: {e}"),
                         }
-                        Err(e) => log::warn!("Refresh failed: {e}"),
-                    }
-                    btn_done.remove_css_class("spinning");
-                });
+                        btn_done.remove_css_class("spinning");
+                        btn_done.set_sensitive(true);
+                    },
+                ) {
+                    log::warn!("Failed to dispatch refresh: {e}");
+                    btn.remove_css_class("spinning");
+                    btn.set_sensitive(true);
+                }
             });
         }
 
         {
             let inner_weak = inner_weak.clone();
-            self.inner.settings_btn.connect_clicked(move |btn| {
+            self.inner.settings_btn.connect_clicked(move |_| {
                 let Some(inner_settings) = inner_weak.upgrade() else {
                     return;
                 };
-                let Some(win) = btn
-                    .root()
-                    .and_then(|root| root.downcast::<gtk4::Window>().ok())
-                else {
-                    return;
-                };
-
-                // Reuse: dialog is cached, hidden but still parented — no new Wayland surface.
-                if let Some(existing) = inner_settings.settings_dialog.borrow().as_ref() {
-                    existing.present(Some(&win));
-                    crate::diagnostics::memory::log_memory_snapshot("ui:settings:reused");
-                    crate::diagnostics::record_phase("ui:settings_reused", None);
-                    return;
+                let callback = inner_settings.on_settings_requested.borrow().clone();
+                if let Some(callback) = callback {
+                    callback();
+                } else {
+                    log::warn!("Settings button clicked before settings overlay was installed");
                 }
-
-                // First open: build once, cache, intercept close to hide instead of destroy.
-                let on_library_changed =
-                    weak_library_changed_callback(&inner_settings.on_library_changed);
-                let on_list_style_changed =
-                    weak_list_style_changed_callback(&inner_settings.on_list_style_changed);
-                let prefs = crate::ui::settings::build_settings_dialog(
-                    &win,
-                    Arc::clone(&inner_settings.state),
-                    on_library_changed,
-                    on_list_style_changed,
-                );
-                // Hide instead of destroy on close — stops signal before adw_dialog_close() runs.
-                prefs.connect_close_attempt(|d| {
-                    d.set_visible(false);
-                    d.stop_signal_emission_by_name("close-attempt");
-                });
-                *inner_settings.settings_dialog.borrow_mut() = Some(prefs.clone());
-                prefs.present(Some(&win));
-                crate::diagnostics::memory::log_memory_snapshot("ui:settings:opened");
-                crate::diagnostics::record_phase("ui:settings_opened", None);
             });
         }
 

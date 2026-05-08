@@ -18,8 +18,15 @@ pub(super) fn create_local_output_stream(
     )
     .map_err(|e| e.to_string())?;
 
+    let stream_state = Rc::new(RefCell::new(ManagedStreamState::from_pipewire(
+        stream.state(),
+    )));
+    let listener_state = Rc::clone(&stream_state);
     let listener = stream
         .add_local_listener_with_user_data(())
+        .state_changed(move |_stream, _, _old, new| {
+            *listener_state.borrow_mut() = ManagedStreamState::from_pipewire(new);
+        })
         .process(move |stream, _| {
             write_output_buffer(stream, &queues, &stream_runtime, OutputTarget::Local);
         })
@@ -27,13 +34,65 @@ pub(super) fn create_local_output_stream(
         .map_err(|e| e.to_string())?;
 
     connect_output_stream(&stream)?;
-    Ok(StreamHandle {
-        _stream: stream,
-        _listener: listener,
-    })
+    *stream_state.borrow_mut() = ManagedStreamState::from_pipewire(stream.state());
+    Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
-pub(super) fn create_virtual_source_stream(
+/// Feeds the persistent `Linux Soundboard Mic` node. The stream intentionally
+/// does not autoconnect; `explicit_links` creates raw graph links from this
+/// feeder's output ports to the virtual mic's input ports.
+pub(super) fn create_virtual_feeder_stream(
+    core: pw::core::CoreRc,
+    queues: std::sync::Arc<std::sync::Mutex<ProcessQueues>>,
+    stream_runtime: std::sync::Arc<StreamRuntimeShared>,
+    latency_hint: &str,
+) -> Result<StreamHandle, String> {
+    let stream = pw::stream::StreamRc::new(
+        core,
+        VIRTUAL_FEEDER_NODE_NAME,
+        properties! {
+            *pw::keys::MEDIA_TYPE => "Audio",
+            *pw::keys::MEDIA_CATEGORY => "Playback",
+            *pw::keys::MEDIA_ROLE => "Communication",
+            *pw::keys::NODE_NAME => VIRTUAL_FEEDER_NODE_NAME,
+            "node.dont-fallback" => "true",
+            "node.dont-move" => "true",
+            "node.dont-reconnect" => "true",
+            "state.restore-target" => "false",
+            "node.latency" => latency_hint,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    let stream_state = Rc::new(RefCell::new(ManagedStreamState::from_pipewire(
+        stream.state(),
+    )));
+    let listener_state = Rc::clone(&stream_state);
+    let listener = stream
+        .add_local_listener_with_user_data(())
+        .state_changed(move |_stream, _, _old, new| {
+            let next = ManagedStreamState::from_pipewire(new);
+            if next == ManagedStreamState::Error {
+                warn!("PipeWire virtual mic feeder stream entered error state");
+            }
+            *listener_state.borrow_mut() = next;
+        })
+        .process(move |stream, _| {
+            write_output_buffer(stream, &queues, &stream_runtime, OutputTarget::Virtual);
+        })
+        .register()
+        .map_err(|e| e.to_string())?;
+
+    connect_output_stream_without_autoconnect(&stream)?;
+    *stream_state.borrow_mut() = ManagedStreamState::from_pipewire(stream.state());
+    Ok(StreamHandle::new(stream, listener, stream_state))
+}
+
+/// Legacy in-process virtual source — only used when the persistent
+/// node could not be installed/registered (e.g. PulseAudio-only systems,
+/// containers without user systemd). Carries the historical "must launch
+/// soundboard before game" caveat.
+pub(super) fn create_legacy_virtual_source_stream(
     core: pw::core::CoreRc,
     queues: std::sync::Arc<std::sync::Mutex<ProcessQueues>>,
     stream_runtime: std::sync::Arc<StreamRuntimeShared>,
@@ -56,8 +115,15 @@ pub(super) fn create_virtual_source_stream(
     )
     .map_err(|e| e.to_string())?;
 
+    let stream_state = Rc::new(RefCell::new(ManagedStreamState::from_pipewire(
+        stream.state(),
+    )));
+    let listener_state = Rc::clone(&stream_state);
     let listener = stream
         .add_local_listener_with_user_data(())
+        .state_changed(move |_stream, _, _old, new| {
+            *listener_state.borrow_mut() = ManagedStreamState::from_pipewire(new);
+        })
         .process(move |stream, _| {
             write_output_buffer(stream, &queues, &stream_runtime, OutputTarget::Virtual);
         })
@@ -65,10 +131,8 @@ pub(super) fn create_virtual_source_stream(
         .map_err(|e| e.to_string())?;
 
     connect_output_stream(&stream)?;
-    Ok(StreamHandle {
-        _stream: stream,
-        _listener: listener,
-    })
+    *stream_state.borrow_mut() = ManagedStreamState::from_pipewire(stream.state());
+    Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
 pub(super) fn create_capture_stream(
@@ -88,13 +152,27 @@ pub(super) fn create_capture_stream(
             *pw::keys::NODE_NAME => MIC_CAPTURE_NODE_NAME,
             "target.object" => target_node_name,
             "node.dont-fallback" => "true",
+            "node.dont-move" => "true",
+            "node.dont-reconnect" => "true",
+            "state.restore-target" => "false",
             "node.latency" => latency_hint,
         },
     )
     .map_err(|e| e.to_string())?;
 
+    let stream_state = Rc::new(RefCell::new(ManagedStreamState::from_pipewire(
+        stream.state(),
+    )));
+    let listener_state = Rc::clone(&stream_state);
     let listener = stream
         .add_local_listener_with_user_data(())
+        .state_changed(move |_stream, _, _old, new| {
+            let next = ManagedStreamState::from_pipewire(new);
+            if next == ManagedStreamState::Error {
+                warn!("PipeWire mic capture stream entered error state");
+            }
+            *listener_state.borrow_mut() = next;
+        })
         .process(move |stream, _| {
             read_capture_buffer(stream, &queues, &stream_runtime);
         })
@@ -112,22 +190,29 @@ pub(super) fn create_capture_stream(
         )
         .map_err(|e| e.to_string())?;
 
-    Ok(StreamHandle {
-        _stream: stream,
-        _listener: listener,
-    })
+    *stream_state.borrow_mut() = ManagedStreamState::from_pipewire(stream.state());
+    Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
 fn connect_output_stream(stream: &pw::stream::StreamRc) -> Result<(), String> {
+    connect_output_stream_with_flags(
+        stream,
+        pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
+    )
+}
+
+fn connect_output_stream_without_autoconnect(stream: &pw::stream::StreamRc) -> Result<(), String> {
+    connect_output_stream_with_flags(stream, pw::stream::StreamFlags::MAP_BUFFERS)
+}
+
+fn connect_output_stream_with_flags(
+    stream: &pw::stream::StreamRc,
+    flags: pw::stream::StreamFlags,
+) -> Result<(), String> {
     let format = build_audio_format_pod()?;
     let mut params = [spa::pod::Pod::from_bytes(&format).ok_or("Invalid PipeWire format pod")?];
     stream
-        .connect(
-            spa::utils::Direction::Output,
-            None,
-            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
-            &mut params,
-        )
+        .connect(spa::utils::Direction::Output, None, flags, &mut params)
         .map_err(|e| e.to_string())
 }
 

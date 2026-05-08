@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Once;
 
 use gio::resources_register_include;
@@ -12,6 +12,7 @@ const ICON_RESOURCE_PATH: &str = "/com/linuxsoundboard/icons";
 static RESOURCE_INIT: Once = Once::new();
 thread_local! {
     static CURRENT_CSS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static ICON_RESOURCE_PATH_ADDED: Cell<bool> = const { Cell::new(false) };
 }
 
 pub fn apply_theme(theme: Theme) {
@@ -51,8 +52,14 @@ pub(crate) fn ensure_app_resources() {
             .expect("Failed to register bundled GTK resources");
     });
 
-    if let Some(display) = Display::default() {
-        let theme = gtk4::IconTheme::for_display(&display);
-        theme.add_resource_path(ICON_RESOURCE_PATH);
-    }
+    ICON_RESOURCE_PATH_ADDED.with(|added| {
+        if added.get() {
+            return;
+        }
+        if let Some(display) = Display::default() {
+            let theme = gtk4::IconTheme::for_display(&display);
+            theme.add_resource_path(ICON_RESOURCE_PATH);
+            added.set(true);
+        }
+    });
 }

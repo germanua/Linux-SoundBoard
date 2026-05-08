@@ -1,15 +1,13 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-use glib::timeout_add_local;
 use gtk4::prelude::*;
 use gtk4::{Adjustment, Align, Box as GtkBox, Entry, Label, Orientation, Scale, SearchEntry};
 
 use crate::app_state::AppState;
 
-use super::helpers::{begin_volume_edit, log_slow_ui_callback};
+use super::helpers::begin_volume_edit;
 use super::playback::{
     play_mode_icon, play_mode_tooltip, update_play_mode_button, update_play_pause_button,
 };
@@ -218,9 +216,9 @@ impl TransportBar {
 
         let headphones_btn = icons::toggle_button(
             if local_mute {
-                icons::LOCAL_AUDIO_MUTED
+                icons::HEADPHONES_MUTED
             } else {
-                icons::LOCAL_AUDIO
+                icons::HEADPHONES
             },
             "Toggle Local Sound",
         );
@@ -311,36 +309,24 @@ impl TransportBar {
             active_track: RefCell::new(None),
             scrub_interaction: RefCell::new(ScrubInteraction::default()),
             scrub_commit_timeout: RefCell::new(None),
-            scrub_timer_id: RefCell::new(None),
+            local_volume_save_timeout: RefCell::new(None),
+            mic_volume_save_timeout: RefCell::new(None),
             suppress_headphones_toggle: Cell::new(false),
             suppress_mic_toggle: Cell::new(false),
             continue_suppressed_play_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
             state,
+            has_sound_list_provider: Cell::new(false),
             sound_list_provider: Mutex::new(None),
+            has_sounds_checker: Mutex::new(None),
             toast_sender: Mutex::new(None),
             on_library_changed: RefCell::new(None),
             on_list_style_changed: RefCell::new(None),
-            settings_dialog: RefCell::new(None),
+            on_settings_requested: RefCell::new(None),
         });
 
         let tb = Self { inner };
         tb.connect_signals();
-
-        {
-            let inner_weak = Rc::downgrade(&tb.inner);
-            let timer_id = timeout_add_local(Duration::from_millis(150), move || {
-                let Some(inner_poll) = inner_weak.upgrade() else {
-                    return glib::ControlFlow::Break;
-                };
-                let started_at = Instant::now();
-                inner_poll.update_scrub();
-                log_slow_ui_callback("transport.update_scrub", started_at);
-                glib::ControlFlow::Continue
-            });
-            *tb.inner.scrub_timer_id.borrow_mut() = Some(timer_id);
-        }
-
         tb
     }
 }

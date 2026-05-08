@@ -32,11 +32,8 @@ impl HotkeyManager {
             Ok(backend) => {
                 info!("Selected hotkey backend: {}", backend.name());
                 info!("Prebound hotkeys to register: {}", sounds.len());
-                for (id, hk) in sounds {
-                    info!("Registering hotkey binding: id='{}' hotkey='{}'", id, hk);
-                    if let Err(e) = backend.register(id, hk) {
-                        warn!("Failed to register hotkey '{}' for '{}': {}", hk, id, e);
-                    }
+                if let Err(e) = backend.register_many(sounds) {
+                    warn!("Failed to register prebound hotkeys: {}", e);
                 }
                 backend.start_listener(sender);
                 Self {

@@ -1,6 +1,7 @@
 //! Audio helpers.
 
 pub mod analysis_worker;
+pub mod engine_ipc;
 pub mod file_link;
 pub mod loudness;
 pub mod loudness_acceptance;

@@ -20,6 +20,7 @@ use super::icons;
 type FolderRowRefs = Rc<RefCell<Vec<gtk4::glib::WeakRef<adw::ActionRow>>>>;
 type RebuildPending = Rc<Cell<bool>>;
 
+#[cfg(test)]
 fn should_poll_loudness_summary(dialog_visible: bool) -> bool {
     dialog_visible
 }
@@ -72,6 +73,57 @@ fn loudness_activity_text(status: &commands::LoudnessStatusSummary) -> &'static 
     }
 }
 
+fn set_spinner_running(spinner: &gtk4::Spinner, running: bool) {
+    if running {
+        spinner.set_visible(true);
+        spinner.start();
+    } else {
+        spinner.stop();
+        spinner.set_visible(false);
+    }
+}
+
+fn apply_loudness_status_summary(
+    summary: &commands::LoudnessStatusSummary,
+    status_row: &adw::ActionRow,
+    status_badge: &gtk4::Label,
+    analyze_btn: &gtk4::Button,
+    analyze_spinner: &gtk4::Spinner,
+    refine_btn: &gtk4::Button,
+    refine_spinner: &gtk4::Spinner,
+) {
+    status_row.set_subtitle(&format_loudness_status_subtitle(summary));
+    status_badge.set_text(loudness_activity_text(summary));
+    for class_name in ["hotkey-badge", "dim-label", "warning-label"] {
+        status_badge.remove_css_class(class_name);
+    }
+    if summary.in_flight_backfill || summary.in_flight_refinement {
+        status_badge.add_css_class("hotkey-badge");
+    } else if summary.unavailable_count > 0 {
+        status_badge.add_css_class("warning-label");
+    } else {
+        status_badge.add_css_class("dim-label");
+    }
+
+    if summary.in_flight_backfill || summary.in_flight_refinement {
+        analyze_btn.set_label("Stop");
+        analyze_btn.set_sensitive(true);
+    } else {
+        analyze_btn.set_label("Analyze");
+        analyze_btn.set_sensitive(true);
+    }
+    set_spinner_running(analyze_spinner, summary.in_flight_backfill);
+
+    if summary.in_flight_backfill || summary.in_flight_refinement {
+        refine_btn.set_label("Stop");
+        refine_btn.set_sensitive(true);
+    } else {
+        refine_btn.set_label("Refine");
+        refine_btn.set_sensitive(summary.estimated_count > 0);
+    }
+    set_spinner_running(refine_spinner, summary.in_flight_refinement);
+}
+
 fn mic_latency_profile_subtitle(profile: MicLatencyProfile) -> &'static str {
     match profile {
         MicLatencyProfile::Balanced => "Stable default for most systems",
@@ -82,43 +134,189 @@ fn mic_latency_profile_subtitle(profile: MicLatencyProfile) -> &'static str {
     }
 }
 
-pub fn build_settings_dialog(
+pub fn build_settings_overlay(
     parent: &Window,
     state: Arc<AppState>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
-) -> adw::PreferencesDialog {
-    let prefs = adw::PreferencesDialog::builder()
-        .title("Settings")
-        .content_width(600)
-        .content_height(700)
+) -> gtk4::Overlay {
+    let overlay = gtk4::Overlay::builder()
+        .visible(false)
+        .can_focus(true)
+        .focusable(true)
         .build();
-    prefs.add_css_class("lsb-settings-dialog");
+    overlay.add_css_class("lsb-settings-dialog");
+    overlay.add_css_class("lsb-settings-overlay");
 
-    let prefs_weak = prefs.downgrade();
+    let backdrop = gtk4::Button::builder()
+        .can_focus(false)
+        .css_classes(vec!["settings-overlay-backdrop"])
+        .build();
+    backdrop.set_hexpand(true);
+    backdrop.set_vexpand(true);
+    overlay.set_child(Some(&backdrop));
+
+    let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    panel.add_css_class("settings-overlay-panel");
+    panel.set_halign(gtk4::Align::Center);
+    panel.set_valign(gtk4::Align::Center);
+    panel.set_size_request(600, 700);
+
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    header.add_css_class("settings-overlay-header");
+
+    let stack = gtk4::Stack::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .transition_type(gtk4::StackTransitionType::None)
+        .build();
+    let selector = gtk4::Box::builder()
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .homogeneous(true)
+        .css_classes(vec!["settings-overlay-switcher"])
+        .build();
+    let general_tab = build_settings_selector_button(icons::SETTINGS, "General");
+    let hotkeys_tab = build_settings_selector_button(icons::KEYBOARD, "Control Hotkeys");
+    hotkeys_tab.set_group(Some(&general_tab));
+    selector.append(&general_tab);
+    selector.append(&hotkeys_tab);
+
+    let header_start = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    header_start.set_hexpand(true);
+    let header_end = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    header_end.set_hexpand(true);
+    header_end.set_halign(gtk4::Align::End);
+
+    let close_btn = gtk4::Button::builder()
+        .icon_name("window-close-symbolic")
+        .tooltip_text("Close settings")
+        .css_classes(vec!["flat", "settings-overlay-close-btn"])
+        .valign(gtk4::Align::Center)
+        .build();
+    header_end.append(&close_btn);
+    header.append(&header_start);
+    header.append(&selector);
+    header.append(&header_end);
+    panel.append(&header);
+
+    let overlay_widget: gtk4::Widget = overlay.clone().upcast();
+    let content = build_settings_content(
+        &stack,
+        Arc::clone(&state),
+        parent,
+        on_library_changed,
+        on_list_style_changed,
+        overlay_widget.downgrade(),
+    );
+    panel.append(&content);
+    {
+        let stack = stack.clone();
+        general_tab.connect_toggled(move |button| {
+            if button.is_active() {
+                stack.set_visible_child_name("general");
+            }
+        });
+    }
+    {
+        let stack = stack.clone();
+        hotkeys_tab.connect_toggled(move |button| {
+            if button.is_active() {
+                stack.set_visible_child_name("hotkeys");
+            }
+        });
+    }
+    general_tab.set_active(true);
+    overlay.add_overlay(&panel);
+
+    {
+        let overlay = overlay.clone();
+        backdrop.connect_clicked(move |_| {
+            overlay.set_visible(false);
+        });
+    }
+    {
+        let overlay = overlay.clone();
+        close_btn.connect_clicked(move |_| {
+            overlay.set_visible(false);
+        });
+    }
+    {
+        let overlay_for_key = overlay.clone();
+        let key = gtk4::EventControllerKey::new();
+        key.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        key.connect_key_pressed(move |_, keyval, _, _| {
+            if keyval.name().as_deref() == Some("Escape") {
+                overlay_for_key.set_visible(false);
+                return gtk4::glib::Propagation::Stop;
+            }
+            gtk4::glib::Propagation::Proceed
+        });
+        overlay.add_controller(key);
+    }
+
+    overlay
+}
+
+fn build_settings_selector_button(icon: icons::IconPair, label: &str) -> gtk4::ToggleButton {
+    let button = gtk4::ToggleButton::builder()
+        .tooltip_text(label)
+        .css_classes(vec!["settings-overlay-tab"])
+        .build();
+    let content = gtk4::Box::new(gtk4::Orientation::Horizontal, 10);
+    content.set_halign(gtk4::Align::Center);
+    content.set_valign(gtk4::Align::Center);
+
+    let image = icons::image(icon);
+    let label = gtk4::Label::builder().label(label).build();
+    content.append(&image);
+    content.append(&label);
+    button.set_child(Some(&content));
+    button
+}
+
+fn build_settings_content(
+    stack: &gtk4::Stack,
+    state: Arc<AppState>,
+    parent: &Window,
+    on_library_changed: Option<Rc<dyn Fn() + 'static>>,
+    on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
+    visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
+) -> gtk4::Box {
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    content.add_css_class("settings-overlay-content");
+    content.set_vexpand(true);
 
     let general_page = build_general_page(
         Arc::clone(&state),
         parent,
         on_library_changed,
         on_list_style_changed,
-        prefs_weak,
+        visibility_weak,
     );
-    prefs.add(&general_page);
+    let general_scroll = gtk4::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .build();
+    general_scroll.set_child(Some(&general_page));
+    let general_stack_page = stack.add_titled(&general_scroll, Some("general"), "General");
+    general_stack_page.set_icon_name(icons::name(icons::SETTINGS));
+
     let hotkeys_page = build_hotkeys_page(Arc::clone(&state));
-    prefs.add(&hotkeys_page);
+    let hotkeys_scroll = gtk4::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .build();
+    hotkeys_scroll.set_child(Some(&hotkeys_page));
+    let hotkeys_stack_page = stack.add_titled(&hotkeys_scroll, Some("hotkeys"), "Control Hotkeys");
+    hotkeys_stack_page.set_icon_name(icons::name(icons::KEYBOARD));
 
-    prefs
-}
-
-pub fn show_settings(
-    parent: &Window,
-    state: Arc<AppState>,
-    on_library_changed: Option<Rc<dyn Fn() + 'static>>,
-    on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
-) {
-    let prefs = build_settings_dialog(parent, state, on_library_changed, on_list_style_changed);
-    prefs.present(Some(parent));
+    content.append(stack);
+    content
 }
 
 fn build_general_page(
@@ -126,7 +324,7 @@ fn build_general_page(
     parent: &Window,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
-    dialog_weak: gtk4::glib::WeakRef<adw::PreferencesDialog>,
+    visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
 ) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title("General")
@@ -181,31 +379,37 @@ fn build_general_page(
                                 return;
                             }
                             log::info!("Add folder command succeeded");
-                            if let Err(e) = commands::refresh_sounds(
+                            if let Err(e) = commands::refresh_sounds_async(
                                 Arc::clone(&state3.config),
                                 Arc::clone(&state3.hotkeys),
+                                move |result| {
+                                    if let Err(e) = result {
+                                        log::warn!("Refresh after adding folder failed: {e}");
+                                    }
+                                    log::info!("Refresh sounds completed");
+                                    let Some(folders_group3) = folders_group_weak2.upgrade() else {
+                                        log::warn!("folders_group3 weak ref failed to upgrade");
+                                        return;
+                                    };
+                                    let Some(add_folder_row3) = add_folder_row_weak2.upgrade()
+                                    else {
+                                        log::warn!("add_folder_row3 weak ref failed to upgrade");
+                                        return;
+                                    };
+                                    schedule_rebuild_sound_folder_rows(
+                                        &folders_group3,
+                                        &add_folder_row3,
+                                        Arc::clone(&state3),
+                                        Rc::clone(&folder_rows3),
+                                        Rc::clone(&rebuild_pending3),
+                                        on_library_changed3.clone(),
+                                    );
+                                    if let Some(cb) = on_library_changed3.as_ref() {
+                                        cb();
+                                    }
+                                },
                             ) {
-                                log::warn!("Refresh after adding folder failed: {e}");
-                            }
-                            log::info!("Refresh sounds completed");
-                            let Some(folders_group3) = folders_group_weak2.upgrade() else {
-                                log::warn!("folders_group3 weak ref failed to upgrade");
-                                return;
-                            };
-                            let Some(add_folder_row3) = add_folder_row_weak2.upgrade() else {
-                                log::warn!("add_folder_row3 weak ref failed to upgrade");
-                                return;
-                            };
-                            schedule_rebuild_sound_folder_rows(
-                                &folders_group3,
-                                &add_folder_row3,
-                                Arc::clone(&state3),
-                                Rc::clone(&folder_rows3),
-                                Rc::clone(&rebuild_pending3),
-                                on_library_changed3.clone(),
-                            );
-                            if let Some(cb) = on_library_changed3.as_ref() {
-                                cb();
+                                log::warn!("Failed to dispatch refresh after adding folder: {e}");
                             }
                         }
                     }
@@ -476,12 +680,15 @@ fn build_general_page(
                     .unwrap_or(false);
                 if in_flight {
                     commands::cancel_loudness_analysis();
+                    crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
                 match commands::trigger_missing_loudness_analysis(
                     Arc::clone(&state2.config),
                     true,
-                    None,
+                    Some(Box::new(|_| {
+                        crate::ui_event_bridge::post_loudness_status_refresh();
+                    })),
                 ) {
                     Ok(commands::MissingLoudnessAnalysisTrigger::Started) => {
                         if let Some(spinner2) = spinner2.upgrade() {
@@ -521,6 +728,7 @@ fn build_general_page(
                     .unwrap_or(false);
                 if in_flight {
                     commands::cancel_loudness_analysis();
+                    crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
                 match commands::trigger_estimated_loudness_refinement(
@@ -562,13 +770,7 @@ fn build_general_page(
         let refine_btn_weak = refine_btn.downgrade();
         let refine_spinner_weak = refine_spinner.downgrade();
 
-        // Shared slot for the currently-running timer SourceId.
-        let timer_slot: Rc<std::cell::RefCell<Option<gtk4::glib::SourceId>>> =
-            Rc::new(std::cell::RefCell::new(None));
-
-        // Factory: creates a fresh 250 ms polling timer, returns its SourceId.
-        // The timer breaks itself when the dialog becomes invisible.
-        let make_timer: Rc<dyn Fn() -> gtk4::glib::SourceId> = Rc::new({
+        let refresh_loudness_status: Rc<dyn Fn()> = Rc::new({
             let state2 = Arc::clone(&state2);
             let status_row_weak = status_row_weak.clone();
             let status_badge_weak = status_badge_weak.clone();
@@ -576,110 +778,62 @@ fn build_general_page(
             let analyze_spinner_weak = analyze_spinner_weak.clone();
             let refine_btn_weak = refine_btn_weak.clone();
             let refine_spinner_weak = refine_spinner_weak.clone();
-            let dialog_weak = dialog_weak.clone();
             move || {
-                let state2 = Arc::clone(&state2);
-                let status_row_weak = status_row_weak.clone();
-                let status_badge_weak = status_badge_weak.clone();
-                let analyze_btn_weak = analyze_btn_weak.clone();
-                let analyze_spinner_weak = analyze_spinner_weak.clone();
-                let refine_btn_weak = refine_btn_weak.clone();
-                let refine_spinner_weak = refine_spinner_weak.clone();
-                let dialog_weak = dialog_weak.clone();
-                gtk4::glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
-                    let Some(dialog) = dialog_weak.upgrade() else {
-                        return gtk4::glib::ControlFlow::Break;
+                let Some(status_row) = status_row_weak.upgrade() else {
+                    return;
+                };
+                let Some(status_badge) = status_badge_weak.upgrade() else {
+                    return;
+                };
+                let Some(analyze_btn) = analyze_btn_weak.upgrade() else {
+                    return;
+                };
+                let Some(analyze_spinner) = analyze_spinner_weak.upgrade() else {
+                    return;
+                };
+                let Some(refine_btn) = refine_btn_weak.upgrade() else {
+                    return;
+                };
+                let Some(refine_spinner) = refine_spinner_weak.upgrade() else {
+                    return;
+                };
+
+                let summary =
+                    match commands::get_loudness_status_summary(Arc::clone(&state2.config)) {
+                        Ok(summary) => summary,
+                        Err(e) => {
+                            log::warn!("Failed to read loudness status summary: {e}");
+                            return;
+                        }
                     };
-                    if !should_poll_loudness_summary(dialog.is_visible()) {
-                        // Dialog hidden — self-terminate so no timer accumulates.
-                        return gtk4::glib::ControlFlow::Break;
-                    }
 
-                    let Some(status_row) = status_row_weak.upgrade() else {
-                        return gtk4::glib::ControlFlow::Break;
-                    };
-                    let Some(status_badge) = status_badge_weak.upgrade() else {
-                        return gtk4::glib::ControlFlow::Break;
-                    };
-
-                    let summary =
-                        match commands::get_loudness_status_summary(Arc::clone(&state2.config)) {
-                            Ok(summary) => summary,
-                            Err(e) => {
-                                log::warn!("Failed to read loudness status summary: {e}");
-                                return gtk4::glib::ControlFlow::Continue;
-                            }
-                        };
-
-                    status_row.set_subtitle(&format_loudness_status_subtitle(&summary));
-                    status_badge.set_text(loudness_activity_text(&summary));
-                    for class_name in ["hotkey-badge", "dim-label", "warning-label"] {
-                        status_badge.remove_css_class(class_name);
-                    }
-                    if summary.in_flight_backfill || summary.in_flight_refinement {
-                        status_badge.add_css_class("hotkey-badge");
-                    } else if summary.unavailable_count > 0 {
-                        status_badge.add_css_class("warning-label");
-                    } else {
-                        status_badge.add_css_class("dim-label");
-                    }
-
-                    if let Some(analyze_btn) = analyze_btn_weak.upgrade() {
-                        if summary.in_flight_backfill || summary.in_flight_refinement {
-                            analyze_btn.set_label("Stop");
-                            analyze_btn.set_sensitive(true);
-                        } else {
-                            analyze_btn.set_label("Analyze");
-                            analyze_btn.set_sensitive(!summary.in_flight_backfill);
-                        }
-                    }
-                    if let Some(analyze_spinner) = analyze_spinner_weak.upgrade() {
-                        if summary.in_flight_backfill {
-                            analyze_spinner.set_visible(true);
-                            analyze_spinner.start();
-                        } else {
-                            analyze_spinner.stop();
-                            analyze_spinner.set_visible(false);
-                        }
-                    }
-
-                    if let Some(refine_btn) = refine_btn_weak.upgrade() {
-                        if summary.in_flight_backfill || summary.in_flight_refinement {
-                            refine_btn.set_label("Stop");
-                            refine_btn.set_sensitive(true);
-                        } else {
-                            refine_btn.set_label("Refine");
-                            refine_btn.set_sensitive(
-                                !summary.in_flight_refinement && summary.estimated_count > 0,
-                            );
-                        }
-                    }
-                    if let Some(refine_spinner) = refine_spinner_weak.upgrade() {
-                        if summary.in_flight_refinement {
-                            refine_spinner.set_visible(true);
-                            refine_spinner.start();
-                        } else {
-                            refine_spinner.stop();
-                            refine_spinner.set_visible(false);
-                        }
-                    }
-
-                    gtk4::glib::ControlFlow::Continue
-                })
+                apply_loudness_status_summary(
+                    &summary,
+                    &status_row,
+                    &status_badge,
+                    &analyze_btn,
+                    &analyze_spinner,
+                    &refine_btn,
+                    &refine_spinner,
+                );
             }
         });
 
-        // Start a new timer whenever the dialog becomes visible.
+        refresh_loudness_status();
         {
-            let make_timer = Rc::clone(&make_timer);
-            let timer_slot = Rc::clone(&timer_slot);
-            if let Some(dialog) = dialog_weak.upgrade() {
-                dialog.connect_visible_notify(move |d| {
-                    if d.is_visible() {
-                        if let Some(id) = timer_slot.borrow_mut().take() {
-                            crate::timer_registry::remove_source_id_safe(id);
-                        }
-                        *timer_slot.borrow_mut() = Some(make_timer());
+            let refresh_loudness_status = Rc::clone(&refresh_loudness_status);
+            crate::ui_event_bridge::set_loudness_status_refresh_handler(move || {
+                refresh_loudness_status();
+            });
+        }
+
+        // Refresh once when the settings overlay opens; completion callbacks refresh explicitly.
+        {
+            let refresh_loudness_status = Rc::clone(&refresh_loudness_status);
+            if let Some(visibility_widget) = visibility_weak.upgrade() {
+                visibility_widget.connect_visible_notify(move |widget| {
+                    if widget.is_visible() {
+                        refresh_loudness_status();
                     }
                 });
             }
@@ -928,8 +1082,54 @@ fn build_general_page(
             }
         });
         mic_group.add(&latency_profile_row);
+
+        let active_target = commands::active_capture_target(Arc::clone(&state.player));
+        let active_target_label = match active_target.as_deref() {
+            Some(name) => {
+                let display = sources
+                    .iter()
+                    .find(|s| s.name == name)
+                    .map(|s| s.display_name.as_str())
+                    .unwrap_or(name);
+                format!("Active: {display}")
+            }
+            None => "Waiting for microphone…".to_string(),
+        };
+        let status_row = adw::ActionRow::builder()
+            .title("Passthrough Status")
+            .subtitle(&active_target_label)
+            .build();
+        mic_group.add(&status_row);
     }
     page.add(&mic_group);
+
+    let app_hints_group = adw::PreferencesGroup::builder()
+        .title("App Setup")
+        .description(
+            "The soundboard mic is your system default. \
+            For apps where you previously chose a specific mic, \
+            switch them to \"Default\" or select \"Linux Soundboard Mic\" directly.",
+        )
+        .build();
+
+    for (app_name, hint) in [
+        (
+            "Discord",
+            "Settings → Voice & Video → Input Device → Default",
+        ),
+        ("OBS Studio", "Audio → Mic/Aux → Default or Linux Soundboard Mic"),
+        (
+            "Steam Voice",
+            "Steam → Settings → Voice → Microphone Device → Default Device",
+        ),
+    ] {
+        let row = adw::ActionRow::builder()
+            .title(app_name)
+            .subtitle(hint)
+            .build();
+        app_hints_group.add(&row);
+    }
+    page.add(&app_hints_group);
 
     let theme_group = adw::PreferencesGroup::builder().title("Appearance").build();
 
@@ -1152,10 +1352,14 @@ fn build_sound_folder_row(
     let row = adw::ActionRow::builder().title(&folder).build();
 
     let remove_btn = gtk4::Button::builder()
-        .css_classes(vec!["flat", "settings-danger-btn"])
+        .css_classes(vec!["flat", "settings-folder-remove-btn"])
+        .has_frame(false)
+        .width_request(28)
+        .height_request(28)
         .valign(gtk4::Align::Center)
+        .tooltip_text("Remove folder")
         .build();
-    icons::apply_button_icon(&remove_btn, icons::REMOVE);
+    icons::apply_button_icon(&remove_btn, icons::DELETE);
 
     {
         let folder_owned = folder.clone();
@@ -1422,11 +1626,18 @@ fn build_hotkey_row(state: Arc<AppState>, action: ControlHotkeyAction) -> adw::A
                 let lbl2 = lbl.clone();
                 let clear3 = clear2.clone();
                 let error_window = win.downgrade();
+                let config_for_capture = Arc::clone(&state2.config);
                 let hotkeys_for_capture = Arc::clone(&state2.hotkeys);
                 crate::ui::dialogs::show_hotkey_capture(
                     &win,
                     current.as_deref(),
                     move |hotkey| {
+                        {
+                            let cfg = config_for_capture
+                                .lock()
+                                .map_err(|e| format!("Config lock poisoned: {}", e))?;
+                            commands::validate_hotkey_available(&cfg, action.binding_id(), hotkey)?;
+                        }
                         hotkeys_for_capture
                             .lock()
                             .map_err(|e| format!("Hotkeys lock poisoned: {}", e))?

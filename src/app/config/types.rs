@@ -295,7 +295,7 @@ impl FromStr for LoudnessAnalysisState {
 impl_string_serde_enum!(LoudnessAnalysisState);
 
 fn default_default_source_mode() -> DefaultSourceMode {
-    DefaultSourceMode::Manual
+    DefaultSourceMode::AutoWhileRunning
 }
 
 impl ListStyle {
@@ -684,7 +684,7 @@ impl Default for Settings {
             allow_multiple_playbacks: false,
             mic_passthrough: true,
             mic_source: None,
-            default_source_mode: DefaultSourceMode::Manual,
+            default_source_mode: DefaultSourceMode::AutoWhileRunning,
             mic_latency_profile: MicLatencyProfile::Balanced,
             skip_delete_confirm: false,
             auto_gain: false,

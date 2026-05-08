@@ -8,7 +8,7 @@ use ebur128::{EbuR128, Mode};
 use log::{debug, warn};
 use symphonia::core::audio::{Channels, SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -98,6 +98,7 @@ fn loudness_format_options() -> FormatOptions {
 fn build_decoder_context(
     hint: &Hint,
     media_source: MediaSourceStream,
+    strict_audio_container: bool,
 ) -> Result<AnalysisDecoderContext, String> {
     let probed = symphonia::default::get_probe()
         .format(
@@ -109,10 +110,7 @@ fn build_decoder_context(
         .map_err(|e| format!("Failed to probe audio for loudness analysis: {e}"))?;
 
     let format = probed.format;
-    let track = format
-        .tracks()
-        .iter()
-        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+    let track = select_audio_track(&*format, strict_audio_container)
         .ok_or("No audio tracks found for loudness analysis")?;
 
     let track_id = track.id;
@@ -139,6 +137,36 @@ fn build_decoder_context(
     })
 }
 
+fn is_strict_audio_container(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(ext.as_str(), "aac" | "m4a" | "mp4")
+    )
+}
+
+fn is_audio_track(track: &Track) -> bool {
+    track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
+}
+
+fn select_audio_track(format: &dyn FormatReader, strict_audio_container: bool) -> Option<&Track> {
+    format
+        .tracks()
+        .iter()
+        .find(|track| is_audio_track(track))
+        .or_else(|| {
+            (!strict_audio_container)
+                .then(|| {
+                    format
+                        .tracks()
+                        .iter()
+                        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+                })
+                .flatten()
+        })
+}
+
 fn build_decoder_context_for_path(
     path: &Path,
     purpose: &'static str,
@@ -152,7 +180,7 @@ fn build_decoder_context_for_path(
     }
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    build_decoder_context(&hint, mss)
+    build_decoder_context(&hint, mss, is_strict_audio_container(path))
 }
 
 fn seek_context_to_ms(
@@ -318,7 +346,7 @@ pub fn analyze_loudness(file_data: &[u8]) -> Result<f64, String> {
     let cursor = Cursor::new(file_data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
     let hint = Hint::new();
-    let context = build_decoder_context(&hint, mss)?;
+    let context = build_decoder_context(&hint, mss, false)?;
     analyze_context(context, None, None)
 }
 

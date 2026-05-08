@@ -1,0 +1,12 @@
+[Unit]
+Description=Linux Soundboard audio engine
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+
+[Service]
+Type=simple
+ExecStart=linux-soundboard --audio-engine
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

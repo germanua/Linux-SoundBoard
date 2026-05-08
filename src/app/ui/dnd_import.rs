@@ -237,27 +237,50 @@ fn handle_drop_import(
         Some(active_tab)
     };
 
-    match commands::import_files_to_tab(valid_paths, tab_id_opt, Arc::clone(&state.config)) {
-        Ok(new_sounds) => {
-            let imported_count = new_sounds.len();
-            if imported_count > 0 {
-                sound_list.append_sounds(new_sounds);
+    let sound_list_done = sound_list.clone();
+    let toast_done = toast_overlay.clone();
+    let drop_zone_done = drop_zone.clone();
+    let title_done = title.clone();
+    let subtitle_done = subtitle.clone();
+    if let Err(e) = commands::import_files_to_tab_async(
+        valid_paths,
+        tab_id_opt,
+        Arc::clone(&state.config),
+        move |result| {
+            match result {
+                Ok(new_sounds) => {
+                    let imported_count = new_sounds.len();
+                    if imported_count > 0 {
+                        sound_list_done.append_sounds(new_sounds);
+                    }
+                    let message = match (imported_count, skipped_paths) {
+                        (0, 0) => "Dropped files were already in the soundboard".to_string(),
+                        (0, skipped) => format!("Skipped {skipped} unsupported files"),
+                        (count, 0) => format!("Added {count} sounds"),
+                        (count, skipped) => {
+                            format!("Added {count} sounds, skipped {skipped} files")
+                        }
+                    };
+                    show_toast(&toast_done, &message);
+                }
+                Err(e) => {
+                    log::warn!("Drop import failed: {e}");
+                    show_toast(&toast_done, "Failed to import dropped files");
+                }
             }
-            let message = match (imported_count, skipped_paths) {
-                (0, 0) => "Dropped files were already in the soundboard".to_string(),
-                (0, skipped) => format!("Skipped {skipped} unsupported files"),
-                (count, 0) => format!("Added {count} sounds"),
-                (count, skipped) => format!("Added {count} sounds, skipped {skipped} files"),
-            };
-            show_toast(toast_overlay, &message);
-        }
-        Err(e) => {
-            log::warn!("Drop import failed: {e}");
-            show_toast(toast_overlay, "Failed to import dropped files");
-        }
-    }
 
-    set_drop_state(drop_zone, title, subtitle, DropState::Hidden);
+            set_drop_state(
+                &drop_zone_done,
+                &title_done,
+                &subtitle_done,
+                DropState::Hidden,
+            );
+        },
+    ) {
+        log::warn!("Failed to dispatch drop import: {e}");
+        show_toast(toast_overlay, "Failed to import dropped files");
+        set_drop_state(drop_zone, title, subtitle, DropState::Hidden);
+    }
     true
 }
 
@@ -287,7 +310,7 @@ fn set_drop_state(
             drop_zone.set_visible(true);
             drop_zone.add_css_class("drop-zone-ready");
             title.set_label("Drop Audio Files Here");
-            subtitle.set_label("Supported: MP3, OGG, FLAC, M4A, AAC");
+            subtitle.set_label("Supported: MP3, OGG, FLAC, M4A, AAC, MP4");
         }
         DropState::Importing => {
             drop_zone.set_visible(true);
@@ -299,7 +322,7 @@ fn set_drop_state(
             drop_zone.set_visible(true);
             drop_zone.add_css_class("drop-zone-rejected");
             title.set_label("Unsupported Drop");
-            subtitle.set_label("Drop audio files in MP3, OGG, FLAC, M4A, or AAC format");
+            subtitle.set_label("Drop audio files in MP3, OGG, FLAC, M4A, AAC, or MP4 format");
         }
     }
 }

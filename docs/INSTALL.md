@@ -1,180 +1,271 @@
 # Installation Guide
 
-Linux Soundboard supports native Linux packaging, portable AppImage usage, and source builds. This guide is for end users who want to install and run the application on a real system.
+## Quick install — one command
 
-## Choose a Path
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
+```
 
-| System | Recommended path | Result |
-| --- | --- | --- |
-| Arch Linux / CachyOS / EndeavourOS | AUR | Managed package |
-| Ubuntu / Debian | GitHub release `.deb` | Native package |
-| Fedora | GitHub release `.rpm` | Native package |
-| openSUSE / other x86_64 distributions | AppImage | Portable package |
-| Development workstation | Source build | Local binary |
+`install.sh` detects your distro and installs the right way for your system:
 
-## GitHub Release Packages
+| Distro | What happens |
+|---|---|
+| Arch / CachyOS / EndeavourOS | Installs `linux-soundboard-git` from the AUR via yay/paru |
+| Debian / Ubuntu | Downloads and installs the `.deb` package |
+| Fedora | Downloads and installs the `.rpm` package |
+| Everything else | Downloads the release tarball and runs `install-user.sh install` |
 
-The release page is the canonical source for packaged builds:
+On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automatically.
 
-- https://github.com/germanua/Linux-SoundBoard/releases/latest
+---
+
+## Two scripts, different jobs
+
+| Script | Who runs it | What it does |
+|---|---|---|
+| `install.sh` | You, via the one-liner above | Detects distro, installs via package manager or tarball, handles swhkd on Wayland |
+| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user system state: virtual mic, engine service, desktop entry, icons |
+
+`install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
+
+---
+
+## Manual install (tarball)
+
+For source builds or when you want to manage the download yourself:
+
+### Step-by-step install
+
+```bash
+# 1. Download the latest release tarball from the Releases page
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.2-linux-x86_64.tar.gz
+
+# 2. Extract it
+tar -xzf linux-soundboard-1.1.2-linux-x86_64.tar.gz
+cd linux-soundboard-1.1.2-linux-x86_64
+
+# 3. Run the installer — an interactive menu guides you through the install
+./install-user.sh
+```
+
+Or install non-interactively, skipping the menu:
+
+```bash
+./install-user.sh install
+```
+
+### What the installer configures
+
+| Item | Path | Effect |
+|---|---|---|
+| Binary | `~/.local/opt/linux-soundboard/linux-soundboard` | The main executable |
+| Desktop entry | `~/.local/share/applications/com.linuxsoundboard.app.desktop` | App appears in launcher |
+| Icons | `~/.local/share/icons/hicolor/*/apps/linux-soundboard.*` | Icon set for all sizes |
+| PipeWire config | `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` | Registers the virtual mic permanently |
+| PulseAudio fallback | `~/.config/pulse/default.pa` | Loads the virtual source when WirePlumber is absent |
+| Engine service | `~/.config/systemd/user/linux-soundboard-engine.service` | Starts the audio engine at login |
+| Default mic policy | Written to `~/.config/linux-soundboard/config.json` | Sets default microphone takeover mode |
+
+The PipeWire config sets `priority.session = 1010` so WirePlumber automatically presents `Linux Soundboard Mic` as the preferred input source for new apps.  The virtual microphone exists and is visible to other apps even when the soundboard UI is not running.
+
+### Installer commands
+
+```bash
+# Interactive menu (runs automatically when called with no arguments in a terminal)
+./install-user.sh
+
+# Install, pointing to a specific binary
+./install-user.sh install /path/to/linux-soundboard
+
+# Re-apply system configuration without touching library data
+./install-user.sh repair
+
+# Show what is currently installed and service status
+./install-user.sh status
+
+# Uninstall with interactive prompt about mic default restoration
+./install-user.sh remove
+
+# Uninstall without any prompts, keep library/config data
+./install-user.sh remove --yes --keep-data
+
+# Uninstall and restore the microphone that was default before install
+./install-user.sh remove --yes --restore-default-source
+```
+
+---
+
+## Package managers
+
+### Arch Linux, CachyOS, EndeavourOS
+
+```bash
+yay -S linux-soundboard-git
+# or
+paru -S linux-soundboard-git
+```
+
+The AUR package installs a system PipeWire config at `/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` and handles everything else as a managed package.
 
 ### Ubuntu and Debian
 
-Download the current `.deb` package from the release page, then install it with APT so dependencies are resolved automatically:
+Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
 
 ```bash
 sudo apt install ./linux-soundboard_1.1.2-1_amd64.deb
 ```
 
-Runtime packages commonly involved on Debian-based systems:
+Required runtime packages (usually already present on modern Ubuntu/Debian):
 
-- `pipewire`
-- `wireplumber`
+```
+pipewire  wireplumber  libpulse0
+```
+
+After a DEB install, run `install-user.sh repair` once without a binary argument to set up the engine service and write the user-level PipeWire config for your account:
+
+```bash
+./install-user.sh repair
+```
 
 ### Fedora
-
-Download the current `.rpm` package from the release page, then install it with DNF:
 
 ```bash
 sudo dnf install ./linux-soundboard-1.1.2-1.x86_64.rpm
 ```
 
-Runtime packages commonly involved on Fedora:
+Required runtime packages:
 
-- `pipewire`
-- `wireplumber`
+```
+pipewire  wireplumber  pulseaudio-libs
+```
 
-### AppImage
+Same as Debian: run `./install-user.sh repair` after the RPM install to configure the engine service and user-level audio routing for your account.
 
-Use the AppImage when you want a portable build or your distro is not covered by a native package release:
+---
+
+## AppImage (portable, no install)
+
+The AppImage can run without any installation:
 
 ```bash
 chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-If the AppImage reports a FUSE error, install the matching host package:
+The AppImage writes `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` automatically on first launch and restarts PipeWire/WirePlumber.  However it does **not** install the engine service or register a desktop entry.  Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
 
-- Ubuntu / Debian: `sudo apt install libfuse2`
-- Fedora: `sudo dnf install fuse-libs`
-- Arch Linux: `sudo pacman -S fuse2`
-- openSUSE: `sudo zypper install fuse`
-
-## Arch Linux
-
-Install from the AUR:
+If AppImage reports a FUSE error:
 
 ```bash
-yay -S linux-soundboard-git
+# Ubuntu / Debian
+sudo apt install libfuse2
+# Fedora
+sudo dnf install fuse-libs
+# Arch
+sudo pacman -S fuse2
+# openSUSE
+sudo zypper install fuse
 ```
 
-If you use `paru`:
+---
 
+## Wayland and global hotkeys
+
+On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
+
+**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button.  Clicking it runs a PolicyKit-authorized build and install flow entirely within the app.  No terminal required.
+
+Requirements for the in-app install:
+- Native install (DEB / RPM / AUR / AppImage on host), not a Flatpak sandbox
+- `pkexec` available (provided by `policykit-1` / `polkit`)
+- Network access to clone `swhkd` sources from GitHub
+
+**Manual install:**
+- Arch family: `yay -S swhkd-bin` or `yay -S swhkd-git`
+- Other distros: see [upstream install notes](https://github.com/waycrate/swhkd/blob/main/INSTALL.md)
+
+On **X11 and XWayland**, the app uses a native XInput2 backend.  No `swhkd` needed.
+
+---
+
+## Build from source
+
+### Install build dependencies
+
+**Arch:**
 ```bash
-paru -S linux-soundboard-git
+sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
+  libpulse alsa-lib libx11 libxi pipewire wireplumber
 ```
 
-## One-Command Bootstrap
-
-If you have the repository checked out locally, `scripts/install.sh` can detect the current distro, install missing runtime packages, and provision `swhkd` for Wayland sessions:
-
-```bash
-cd LinuxSoundBoardv1
-./scripts/install.sh
-```
-
-What the script currently does:
-
-- Arch family: installs `linux-soundboard-git` from the AUR
-- Debian and Ubuntu: installs the latest published `.deb`, or falls back to the AppImage plus runtime packages if no `.deb` is available
-- Fedora: installs the latest published `.rpm`, or falls back to the AppImage plus runtime packages if no `.rpm` is available
-- openSUSE and SUSE family: installs the AppImage plus the host runtime packages it needs
-- Wayland sessions: installs and configures `swhkd`
-- X11 sessions: skips `swhkd` because the native X11 backend is used instead
-
-## Wayland, X11, and Hotkeys
-
-Hotkeys depend on the session type:
-
-- Wayland: install `swhkd` (the app now offers a one-click `Install` button in hotkey warnings and settings)
-- X11 / XWayland: use the built-in X11 backend
-
-### One-Click Install in the App
-
-When Linux Soundboard detects missing Wayland hotkey support, it can start an in-app installer flow:
-
-1. Click `Install` in the startup hotkey banner, hotkey settings page, or hotkey error dialog.
-2. Authorize the system prompt (`pkexec` / PolicyKit).
-3. Wait for build + install + verification to complete.
-
-Requirements for one-click install:
-
-- Native host install (DEB/RPM/AUR/AppImage host), not Flatpak sandbox install
-- `pkexec` available via PolicyKit (`policykit-1` / `polkit`)
-- Network access to clone `swhkd` sources
-
-`swhkd` packaging differs by distro:
-
-- Arch family: `swhkd-bin` or `swhkd-git` from the AUR
-- Debian, Ubuntu, Fedora, openSUSE: build or install `swhkd` from upstream
-
-Upstream installation notes:
-
-- https://github.com/waycrate/swhkd/blob/main/INSTALL.md
-
-## First Launch Checklist
-
-1. Launch `linux-soundboard`.
-2. Add a sound folder or drag files into the window.
-3. Confirm PipeWire is running:
-
-```bash
-systemctl --user status pipewire wireplumber
-wpctl status -n
-```
-
-4. In Discord, OBS, Zoom, or another target application, choose `Linux_Soundboard_Mic` as the input device.
-5. For games that only read the system default microphone, set `Default Microphone` to `Auto While Running` before launching the game.
-6. If you need your real microphone mixed in, enable mic passthrough in the app settings.
-
-## Build From Source
-
-### Debian and Ubuntu
-
+**Debian / Ubuntu:**
 ```bash
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
-  libgtk-4-dev libadwaita-1-dev libasound2-dev \
+  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
   libx11-dev libxi-dev pipewire wireplumber
 ```
 
-### Fedora
-
+**Fedora:**
 ```bash
 sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
-  gtk4-devel libadwaita-devel alsa-lib-devel \
+  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
   libX11-devel libXi-devel pipewire wireplumber
 ```
 
-### Arch Linux
-
-```bash
-sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
-  alsa-lib libx11 libxi pipewire wireplumber
-```
-
-### Build and Run
+### Build and install
 
 ```bash
 git clone https://github.com/germanua/Linux-SoundBoard.git
 cd Linux-SoundBoard/src
 cargo build --release
-./target/release/linux-soundboard
+
+# Install using the user installer, pointing it at the freshly built binary
+cd ..
+./packaging/linux/install-user.sh install ./src/target/release/linux-soundboard
 ```
+
+The installer detects the binary next to the script automatically when run from the repository root.
+
+After rebuilding, run `./packaging/linux/install-user.sh repair` to copy the new binary into place and restart the engine service.
+
+---
+
+## After install: first launch checklist
+
+1. Launch Linux Soundboard from your application menu or run `linux-soundboard` in a terminal.
+2. Confirm PipeWire sees the virtual microphone:
+   ```bash
+   wpctl status -n | grep Soundboard
+   ```
+3. In Discord, OBS, Zoom, or your target application, select **Linux Soundboard Mic** as the input device.
+4. For games that only read the system default mic, set **Default Microphone → Auto While Running** in the app settings.
+5. Add a sound folder or drag audio files into the library.
+6. On Wayland, click **Install** in the hotkey warning banner if global hotkeys are not working.
+
+---
+
+## Troubleshooting
+
+If anything goes wrong after install, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+Common quick fixes:
+
+```bash
+# Re-run system configuration without reinstalling
+./install-user.sh repair
+
+# Manually restart audio services
+systemctl --user restart pipewire wireplumber
+
+# Manually restart the engine service
+systemctl --user restart linux-soundboard-engine.service
+
+# Check engine service logs
+journalctl --user -u linux-soundboard-engine.service -n 50
+```
+
+---
 
 ## Flatpak
 
-The repository contains Flatpak packaging files, but the project does not currently publish an end-user Flathub install target.
-
-## Next Step
-
-If the app installs but does not behave correctly on your system, go to [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+The repository contains Flatpak packaging files, but no Flathub submission is published yet.  Flatpak sandboxes also restrict PipeWire and systemd access so `install-user.sh` does not apply inside a Flatpak sandbox.

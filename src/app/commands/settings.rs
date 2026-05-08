@@ -34,6 +34,29 @@ pub fn set_local_volume(
     Ok(())
 }
 
+pub fn set_local_volume_live(
+    volume: u8,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), String> {
+    let (clamped_volume, local_muted) = with_config_mut(&config, |cfg| {
+        let clamped = volume.min(100);
+        cfg.settings.local_volume = clamped;
+        (clamped, cfg.settings.local_mute)
+    })?;
+
+    if !local_muted {
+        player.set_local_volume(clamped_volume as f32 / 100.0);
+    }
+    Ok(())
+}
+
+pub fn save_local_volume(volume: u8, config: Arc<Mutex<Config>>) -> Result<(), String> {
+    with_saved_config(&config, |cfg| {
+        cfg.settings.local_volume = volume.min(100);
+    })
+}
+
 pub fn toggle_local_mute(
     config: Arc<Mutex<Config>>,
     player: Arc<AudioPlayer>,
@@ -64,6 +87,27 @@ pub fn set_mic_volume(
 
     player.set_mic_volume(clamped as f32 / 100.0);
     Ok(())
+}
+
+pub fn set_mic_volume_live(
+    volume: u8,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), String> {
+    let clamped = with_config_mut(&config, |cfg| {
+        let clamped = volume.min(100);
+        cfg.settings.mic_volume = clamped;
+        clamped
+    })?;
+
+    player.set_mic_volume(clamped as f32 / 100.0);
+    Ok(())
+}
+
+pub fn save_mic_volume(volume: u8, config: Arc<Mutex<Config>>) -> Result<(), String> {
+    with_saved_config(&config, |cfg| {
+        cfg.settings.mic_volume = volume.min(100);
+    })
 }
 
 pub fn get_config(config: Arc<Mutex<Config>>) -> Config {
@@ -124,6 +168,10 @@ pub fn list_audio_sources(player: Arc<AudioPlayer>) -> Vec<AudioSource> {
             display_name: source.display_name,
         })
         .collect()
+}
+
+pub fn active_capture_target(player: Arc<AudioPlayer>) -> Option<String> {
+    player.active_capture_target()
 }
 
 pub fn set_mic_source(

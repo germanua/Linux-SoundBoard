@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Button, Entry, Label, Scale, SearchEntry, ToggleButton, Widget};
-use libadwaita as adw;
 
 use crate::app_state::AppState;
 
@@ -17,14 +16,16 @@ mod scrub;
 mod signals;
 
 type SoundListProvider = Box<dyn Fn() -> Vec<NavigationSound> + Send + Sync>;
+type HasSoundsChecker = Box<dyn Fn() -> bool + Send + Sync>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;
+type SettingsRequestedCallback = Rc<dyn Fn() + 'static>;
 const TRANSPORT_BUTTON_SIZE: i32 = 31;
-const SLOW_GTK_CALLBACK_THRESHOLD_MS: u128 = 16;
 
 #[derive(Clone)]
 struct ActiveTrack {
     sound_id: String,
+    sound_name: Option<String>,
     sound_duration_ms: Option<u64>,
     play_id: String,
 }
@@ -81,27 +82,24 @@ struct TransportInner {
     active_track: RefCell<Option<ActiveTrack>>,
     scrub_interaction: RefCell<ScrubInteraction>,
     scrub_commit_timeout: RefCell<Option<glib::SourceId>>,
-    scrub_timer_id: RefCell<Option<glib::SourceId>>,
+    local_volume_save_timeout: RefCell<Option<glib::SourceId>>,
+    mic_volume_save_timeout: RefCell<Option<glib::SourceId>>,
     suppress_headphones_toggle: Cell<bool>,
     suppress_mic_toggle: Cell<bool>,
     continue_suppressed_play_id: RefCell<Option<String>>,
     last_track_sound_id: RefCell<Option<String>>,
     state: Arc<AppState>,
+    has_sound_list_provider: Cell<bool>,
     sound_list_provider: Mutex<Option<SoundListProvider>>,
+    has_sounds_checker: Mutex<Option<HasSoundsChecker>>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     on_library_changed: RefCell<Option<LibraryChangedCallback>>,
     on_list_style_changed: RefCell<Option<ListStyleChangedCallback>>,
-    settings_dialog: RefCell<Option<adw::PreferencesDialog>>,
+    on_settings_requested: RefCell<Option<SettingsRequestedCallback>>,
 }
 
 impl TransportBar {
     pub fn widget(&self) -> &Widget {
         self.inner.widget.upcast_ref()
-    }
-}
-
-impl Drop for TransportBar {
-    fn drop(&mut self) {
-        self.cleanup();
     }
 }

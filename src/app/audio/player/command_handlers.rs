@@ -39,7 +39,7 @@ pub(super) fn handle_audio_command(
             response,
         } => {
             let play_started_at = Instant::now();
-            if !state.available {
+            if !state.backend_playback_available() {
                 let _ = response.send(Err("PipeWire backend unavailable".to_string()));
             } else {
                 state.finished_playbacks.clear();
@@ -55,8 +55,7 @@ pub(super) fn handle_audio_command(
                     &state.runtime,
                 ) {
                     Ok(playback) => {
-                        let init_elapsed = init_started_at.elapsed();
-                        let init_elapsed_ms = init_elapsed.as_millis();
+                        let init_elapsed_ms = init_started_at.elapsed().as_millis();
                         if init_elapsed_ms >= 100 {
                             debug!(
                                 "ActivePlayback initialization was slow: elapsed_ms={} play_id={}",

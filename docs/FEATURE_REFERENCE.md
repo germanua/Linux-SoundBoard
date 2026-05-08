@@ -157,7 +157,7 @@ The transport bar runs across the top of the main window.
 
 > **Notes:**
 >
-> - Controls whether your real mic is mixed into `Linux_Soundboard_Mic`
+> - Controls whether your real mic is mixed into `Linux Soundboard Mic`
 > - The microphone source is configured in `Settings` → `General` → `Microphone Source`
 
 ---
@@ -518,7 +518,7 @@ Short toasts appear for:
 
 ### Use the Virtual Microphone in Other Apps
 
-- **How:** In Discord, OBS, Zoom, or another app, set the audio **input device** to `Linux_Soundboard_Mic`
+- **How:** In Discord, OBS, Zoom, or another app, set the audio **input device** to `Linux Soundboard Mic`
 - **What it does:** Routes Linux Soundboard output into that application as a microphone source
 
 > **Note:** To also include your real microphone, enable mic passthrough in the transport bar (see [Toggle Mic Passthrough](#toggle-mic-passthrough)).

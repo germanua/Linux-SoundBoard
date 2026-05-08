@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
-# Complete Fedora build script with automatic dependency installation
+# Fedora build helper — installs deps and builds AppImage or RPM.
 
 set -e
 
-echo "=== Linux Soundboard v1.1.0 - Fedora Build Script ==="
-echo ""
-
-# Check if we're on Fedora
 if ! grep -q "Fedora" /etc/os-release 2>/dev/null; then
-    echo "⚠️  Warning: This script is designed for Fedora"
+    echo "Warning: This script is designed for Fedora"
     read -p "Continue anyway? (y/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -16,13 +12,12 @@ if ! grep -q "Fedora" /etc/os-release 2>/dev/null; then
     fi
 fi
 
-echo "📦 Installing all build dependencies..."
-echo ""
+echo "Installing build dependencies..."
 
-# Install all required dependencies
 sudo dnf install -y \
     gtk4-devel \
     libadwaita-devel \
+    pulseaudio-libs-devel \
     libX11-devel \
     libXi-devel \
     pkg-config \
@@ -39,71 +34,31 @@ sudo dnf install -y \
     make \
     cmake
 
-echo ""
-echo "✅ All dependencies installed!"
+echo "Done."
 echo ""
 
-# Ask what to build
 echo "What would you like to build?"
-echo "1) AppImage (portable, works on any distro)"
-echo "2) RPM package (native Fedora package)"
+echo "1) AppImage"
+echo "2) RPM package"
 echo "3) Both"
 read -p "Enter choice (1-3): " choice
 
 build_appimage() {
-    echo ""
-    echo "🔨 Building AppImage..."
+    echo "Building AppImage..."
     ./packaging/linux/package-appimage.sh
-    
-    echo ""
-    echo "✅ AppImage built successfully!"
-    echo "   Location: ./dist/linux-soundboard-x86_64.AppImage"
-    echo ""
-    echo "To run: ./dist/linux-soundboard-x86_64.AppImage"
+    echo "Done: ./dist/linux-soundboard-x86_64.AppImage"
 }
 
 build_rpm() {
-    echo ""
-    echo "🔨 Building RPM package..."
-    
-    # Install RPM build tools if not present
+    echo "Building RPM..."
     sudo dnf install -y rpm-build rpmdevtools
-    
     ./packaging/rpm/package-rpm.sh
-    
-    echo ""
-    echo "✅ RPM built successfully!"
-    echo "   Location: ./dist/linux-soundboard-1.1.0-1.fc*.x86_64.rpm"
-    echo ""
-    echo "To install: sudo dnf install -y ./dist/linux-soundboard-1.1.0-1.fc*.x86_64.rpm"
-    echo "To run: linux-soundboard"
+    echo "Done. Install with: sudo dnf install -y ./dist/linux-soundboard-*.rpm"
 }
 
 case $choice in
-    1)
-        build_appimage
-        ;;
-    2)
-        build_rpm
-        ;;
-    3)
-        build_appimage
-        build_rpm
-        ;;
-    *)
-        echo "Invalid choice"
-        exit 1
-        ;;
+    1) build_appimage ;;
+    2) build_rpm ;;
+    3) build_appimage; build_rpm ;;
+    *) echo "Invalid choice"; exit 1 ;;
 esac
-
-echo ""
-echo "=== Build Complete ==="
-echo ""
-echo "📋 Testing checklist:"
-echo "  1. Launch the application"
-echo "  2. Check Wayland support: echo \$WAYLAND_DISPLAY"
-echo "  3. Test virtual microphone: wpctl status -n | grep Linux_Soundboard"
-echo "  4. Test audio playback"
-echo "  5. Test global hotkeys"
-echo ""
-echo "🐛 Report issues: https://github.com/germanua/Linux-SoundBoard/issues"

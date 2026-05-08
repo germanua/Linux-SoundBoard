@@ -11,6 +11,7 @@ BuildRequires:  cargo >= 1.85
 BuildRequires:  rust >= 1.85
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
+BuildRequires:  pulseaudio-libs-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
 BuildRequires:  pkgconfig
@@ -18,6 +19,7 @@ BuildRequires:  ImageMagick
 
 Requires:       gtk4
 Requires:       libadwaita
+Requires:       pulseaudio-libs
 Requires:       libX11
 Requires:       libXi
 Requires:       pipewire
@@ -69,6 +71,14 @@ install -Dm755 packaging/linux/install-swhkd-helper.sh \
 install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
     %{buildroot}%{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 
+# Install persistent virtual microphone PipeWire config
+install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
+    %{buildroot}%{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
+
+# Install user service for boot-ready audio engine
+install -Dm644 packaging/linux/linux-soundboard-engine.service \
+    %{buildroot}%{_userunitdir}/linux-soundboard-engine.service
+
 %files
 %license LICENSE
 %{_bindir}/linux-soundboard
@@ -78,9 +88,14 @@ install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 %{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
 %{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
+%{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
+%{_userunitdir}/linux-soundboard-engine.service
 
 %post
 echo "Configuring LinuxSoundBoard..."
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --global enable linux-soundboard-engine.service >/dev/null 2>&1 || true
+fi
 
 # Set setuid bit on swhkd if it exists
 if [ -f /usr/bin/swhkd ]; then

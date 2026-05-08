@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `PlayReplace` IPC request to the audio engine protocol.  Stop-all and play-new are now a single atomic engine operation, eliminating a race condition where the snapshot poller could observe the transient "all stopped" state between the two calls.
+
+### Fixed
+
+- **Continue play mode:** clicking a sound while Continue mode is active no longer causes the app to advance to the next sound instead of replaying the clicked one.  The fix uses a UI-side pending-play flag that prevents the Continue auto-advance from firing on the transient empty snapshot that occurs between `stop_all` and `play` on the worker thread.
+- **Stop on close:** closing the UI window now sends a `StopAll` command to the audio engine before disconnecting, so any actively playing sounds stop immediately instead of continuing to play after the window is dismissed.
+- **Headphones mute button:** the button now shows exactly two states (headphones on / headphones with a slash) instead of cycling through three icons.  The initialization path was using the wrong icon constants (`LOCAL_AUDIO` instead of `HEADPHONES`) so the first click produced an unexpected icon.
+- **Headphones icons at small size:** the headphone SVG icons were redesigned from 24×24 stroke-based paths (which rendered at sub-pixel widths at button scale) to 16×16 fill-based paths that match the microphone icon style and remain sharp at any button size.
+- **swhkd hotkey format:** the `~` (don't-swallow / pass-through) prefix is now placed before the final key token only (`ctrl + ~l`) instead of before the entire combination (`~ctrl + l`).  swhkd 1.3.0-dev rejects the latter form and was logging "expected command" for every registered hotkey.
+
 ## [1.1.2] - 2026-04-01
 
 ### Fixed

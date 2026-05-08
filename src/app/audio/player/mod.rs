@@ -1,6 +1,7 @@
 //! PipeWire-backed audio playback with a persistent virtual microphone.
 
-use log::{debug, error, trace, warn};
+use glib;
+use log::{debug, error, info, trace, warn};
 use pipewire as pw;
 use pw::channel as pw_channel;
 use pw::properties::properties;
@@ -8,7 +9,7 @@ use pw::spa;
 use rodio::source::SeekError as RodioSeekError;
 use rodio::source::UniformSourceIterator;
 use rodio::Source;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem;
@@ -22,40 +23,55 @@ use std::time::{Duration, Instant};
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::{Time, TimeBase};
 
 use crate::app_meta::{
-    LOCAL_PLAYBACK_NODE_NAME, MIC_CAPTURE_NODE_NAME, VIRTUAL_MIC_DESCRIPTION,
-    VIRTUAL_OUTPUT_DESCRIPTION, VIRTUAL_SOURCE_NAME,
+    LOCAL_PLAYBACK_NODE_NAME, MIC_CAPTURE_NODE_NAME, VIRTUAL_FEEDER_NODE_NAME,
+    VIRTUAL_MIC_DESCRIPTION, VIRTUAL_OUTPUT_DESCRIPTION, VIRTUAL_SOURCE_NAME,
 };
 use crate::config::{DefaultSourceMode, MicLatencyProfile};
 
 mod command_handlers;
+mod explicit_links;
 mod limiter;
 mod mixing;
 mod playback;
+mod pulse_backend;
 mod queues;
 mod source_routing;
 mod streams;
 
 use command_handlers::{audio_command_kind, handle_audio_command};
+use explicit_links::{
+    handle_link_global_remove, track_node_global, track_port_global,
+    try_link_feeder_to_virtual_mic, AudioChannel, TrackedPort,
+};
 use limiter::LookAheadLimiter;
-use mixing::{clear_all_queues, clear_output_queues, clear_virtual_mic_queues, mix_tick};
+use mixing::clear_mic_input_queue;
+#[cfg(test)]
+use mixing::clear_virtual_mic_queues;
+use mixing::{clear_all_queues, clear_output_queues, mix_tick};
 #[cfg(test)]
 use mixing::{enqueue_passthrough_chunk, fill_output_queues};
 use playback::ActivePlayback;
+use pulse_backend::PulseAudioBackend;
 use queues::ProcessQueues;
 use source_routing::{
     apply_default_source_mode, maybe_claim_default_source, recreate_capture_stream,
-    restore_default_source,
+    resolve_capture_target, resolve_source_id_by_name, restore_default_source,
 };
 #[cfg(test)]
-use source_routing::{parse_wpctl_node_name, resolve_source_id_by_name};
-use streams::{create_capture_stream, create_local_output_stream, create_virtual_source_stream};
+use source_routing::{
+    best_fallback_source_name, parse_wpctl_node_name, resolve_capture_target_from_default,
+};
+use streams::{
+    create_capture_stream, create_legacy_virtual_source_stream, create_local_output_stream,
+    create_virtual_feeder_stream,
+};
 
 const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const TARGET_OUTPUT_CHANNELS: u32 = 2;
@@ -74,13 +90,15 @@ const AUDIO_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const PLAY_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FINISHED_PLAYBACK_SNAPSHOTS: usize = 128;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+const UI_SNAPSHOT_PROGRESS_INTERVAL_MS: u64 = 100;
+const CAPTURE_RECREATE_MISS_THRESHOLD: u8 = 2;
 
 thread_local! {
     static OUTPUT_CALLBACK_SCRATCH: RefCell<Vec<f32>> = RefCell::new(Vec::new());
     static CAPTURE_CALLBACK_SCRATCH: RefCell<Vec<f32>> = RefCell::new(Vec::new());
 }
 
-#[derive(Clone, Serialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct PlaybackPosition {
     pub play_id: String,
     pub sound_id: String,
@@ -90,18 +108,27 @@ pub struct PlaybackPosition {
     pub duration_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AudioSourceInfo {
     pub node_name: String,
     pub display_name: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct PlayerSnapshot {
     pub available: bool,
     pub playback_positions: Vec<PlaybackPosition>,
     pub playing_ids: Vec<String>,
     pub audio_sources: Vec<AudioSourceInfo>,
+    /// The node name of the microphone source currently captured for passthrough,
+    /// or `None` if passthrough is off or no suitable source was found yet.
+    pub active_capture_target: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioBackendKind {
+    PipeWire,
+    PulseAudio,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +141,11 @@ struct RuntimeConfig {
     mic_latency_profile: MicLatencyProfile,
     auto_gain: AutoGainState,
     looping: bool,
+    audio_backend: AudioBackendKind,
+    /// True when the persistent `Linux Soundboard Mic` node is registered
+    /// with PipeWire (Soundpad-style ownership). Drives whether we feed
+    /// that node or fall back to creating an in-process virtual source.
+    persistent_virtual_mic: bool,
 }
 
 impl RuntimeConfig {
@@ -134,6 +166,8 @@ impl RuntimeConfig {
             mic_latency_profile: routing.mic_latency_profile,
             auto_gain: AutoGainState::from_config(config),
             looping: playback.play_mode.should_loop(),
+            audio_backend: AudioBackendKind::PipeWire,
+            persistent_virtual_mic: false,
         }
     }
 
@@ -384,8 +418,18 @@ struct SourceDescriptor {
     id: u32,
     node_name: String,
     display_name: String,
+    priority_session: i32,
     is_monitor: bool,
-    is_virtual: bool,
+    is_our_virtual_mic: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LinkDescriptor {
+    id: u32,
+    output_node_id: u32,
+    input_node_id: u32,
+    output_port_id: Option<u32>,
+    input_port_id: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -492,67 +536,214 @@ enum AudioCommand {
     Shutdown,
 }
 
-pub struct AudioPlayer {
+enum AudioPlayerBackend {
+    Local(LocalAudioPlayer),
+    Remote(RemoteAudioPlayer),
+}
+
+struct LocalAudioPlayer {
     command_tx: pw_channel::Sender<AudioCommand>,
     join_handle: Mutex<Option<thread::JoinHandle<()>>>,
     snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
 }
 
+struct RemoteAudioPlayer {
+    snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
+    stop_poll: std::sync::Arc<AtomicBool>,
+    poll_handle: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+pub struct AudioPlayer {
+    backend: AudioPlayerBackend,
+}
+
 impl AudioPlayer {
+    pub fn connect_to_engine() -> Option<Self> {
+        if !crate::audio::engine_ipc::engine_running() {
+            return None;
+        }
+
+        let snapshot = std::sync::Arc::new(RwLock::new(PlayerSnapshot::default()));
+        if let Ok(crate::audio::engine_ipc::EngineResponse::Snapshot { snapshot: initial }) =
+            crate::audio::engine_ipc::send_request(
+                crate::audio::engine_ipc::EngineRequest::Snapshot,
+            )
+        {
+            if let Ok(mut guard) = snapshot.write() {
+                *guard = initial;
+            }
+        }
+
+        let stop_poll = std::sync::Arc::new(AtomicBool::new(false));
+        let poll_snapshot = snapshot.clone();
+        let poll_stop = stop_poll.clone();
+        let poll_handle = thread::Builder::new()
+            .name("lsb-engine-snapshot-poll".to_string())
+            .spawn(move || {
+                while !poll_stop.load(Ordering::Relaxed) {
+                    if let Ok(crate::audio::engine_ipc::EngineResponse::Snapshot { snapshot }) =
+                        crate::audio::engine_ipc::send_request(
+                            crate::audio::engine_ipc::EngineRequest::Snapshot,
+                        )
+                    {
+                        if let Ok(mut guard) = poll_snapshot.write() {
+                            *guard = snapshot.clone();
+                        }
+                        glib::MainContext::default().invoke(move || {
+                            crate::playback_bridge::dispatch_snapshot(snapshot);
+                        });
+                    }
+                    thread::sleep(Duration::from_millis(UI_SNAPSHOT_PROGRESS_INTERVAL_MS));
+                }
+            })
+            .ok();
+
+        Some(Self {
+            backend: AudioPlayerBackend::Remote(RemoteAudioPlayer {
+                snapshot,
+                stop_poll,
+                poll_handle: Mutex::new(poll_handle),
+            }),
+        })
+    }
+
     pub fn new_with_config(config: &crate::config::Config) -> Self {
+        Self::new_with_config_and_persistent_mic(config, false)
+    }
+
+    pub fn new_with_config_and_persistent_mic(
+        config: &crate::config::Config,
+        persistent_virtual_mic: bool,
+    ) -> Self {
+        Self::new_with_config_and_audio_backend(
+            config,
+            AudioBackendKind::PipeWire,
+            persistent_virtual_mic,
+        )
+    }
+
+    pub fn new_with_config_and_audio_backend(
+        config: &crate::config::Config,
+        audio_backend: AudioBackendKind,
+        persistent_virtual_mic: bool,
+    ) -> Self {
         let (command_tx, command_rx) = pw_channel::channel();
-        let runtime = RuntimeConfig::from_config(config);
+        let mut runtime = RuntimeConfig::from_config(config);
+        runtime.audio_backend = audio_backend;
+        runtime.persistent_virtual_mic = persistent_virtual_mic;
         let snapshot = std::sync::Arc::new(RwLock::new(PlayerSnapshot::default()));
         let thread_snapshot = snapshot.clone();
         let handle =
             thread::spawn(move || pipewire_thread_main(command_rx, runtime, thread_snapshot));
 
         Self {
-            command_tx,
-            join_handle: Mutex::new(Some(handle)),
-            snapshot,
+            backend: AudioPlayerBackend::Local(LocalAudioPlayer {
+                command_tx,
+                join_handle: Mutex::new(Some(handle)),
+                snapshot,
+            }),
         }
     }
 
     pub fn snapshot(&self) -> PlayerSnapshot {
-        self.snapshot
-            .read()
-            .map(|snapshot| snapshot.clone())
-            .unwrap_or_default()
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => local
+                .snapshot
+                .read()
+                .map(|snapshot| snapshot.clone())
+                .unwrap_or_default(),
+            AudioPlayerBackend::Remote(remote) => remote
+                .snapshot
+                .read()
+                .map(|snapshot| snapshot.clone())
+                .unwrap_or_default(),
+        }
     }
 
     pub fn set_local_volume(&self, volume: f32) {
-        let _ = self.command_tx.send(AudioCommand::SetLocalVolume {
-            volume: volume.clamp(0.0, 1.0),
-        });
+        let volume = volume.clamp(0.0, 1.0);
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetLocalVolume { volume });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ =
+                    remote_ok(crate::audio::engine_ipc::EngineRequest::SetLocalVolume { volume });
+            }
+        }
     }
 
     pub fn set_mic_volume(&self, volume: f32) {
-        let _ = self.command_tx.send(AudioCommand::SetMicVolume {
-            volume: volume.clamp(0.0, 1.0),
-        });
+        let volume = volume.clamp(0.0, 1.0);
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::SetMicVolume { volume });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicVolume { volume });
+            }
+        }
     }
 
     pub fn set_auto_gain_enabled(&self, enabled: bool) {
-        let _ = self
-            .command_tx
-            .send(AudioCommand::SetAutoGainEnabled { enabled });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAutoGainEnabled { enabled });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetAutoGainEnabled { enabled },
+                );
+            }
+        }
     }
 
     pub fn set_auto_gain_target(&self, target_lufs: f64) {
-        let _ = self
-            .command_tx
-            .send(AudioCommand::SetAutoGainTarget { target_lufs });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAutoGainTarget { target_lufs });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::SetAutoGainTarget {
+                    target_lufs,
+                });
+            }
+        }
     }
 
     pub fn set_auto_gain_mode(&self, mode: u32) {
-        let _ = self.command_tx.send(AudioCommand::SetAutoGainMode { mode });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAutoGainMode { mode });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ =
+                    remote_ok(crate::audio::engine_ipc::EngineRequest::SetAutoGainMode { mode });
+            }
+        }
     }
 
     pub fn set_auto_gain_apply_to(&self, apply_to: u32) {
-        let _ = self
-            .command_tx
-            .send(AudioCommand::SetAutoGainApplyTo { apply_to });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAutoGainApplyTo { apply_to });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetAutoGainApplyTo { apply_to },
+                );
+            }
+        }
     }
 
     pub fn set_auto_gain_dynamic_settings(
@@ -561,22 +752,48 @@ impl AudioPlayer {
         attack_ms: u32,
         release_ms: u32,
     ) {
-        let _ = self
-            .command_tx
-            .send(AudioCommand::SetAutoGainDynamicSettings {
-                lookahead_ms,
-                attack_ms,
-                release_ms,
-            });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAutoGainDynamicSettings {
+                        lookahead_ms,
+                        attack_ms,
+                        release_ms,
+                    });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetAutoGainDynamicSettings {
+                        lookahead_ms,
+                        attack_ms,
+                        release_ms,
+                    },
+                );
+            }
+        }
     }
 
     pub fn set_looping(&self, enabled: bool) {
-        let _ = self.command_tx.send(AudioCommand::SetLooping { enabled });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::SetLooping { enabled });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::SetLooping { enabled });
+            }
+        }
     }
 
     pub fn set_mic_passthrough(&self, enabled: bool) -> Result<(), String> {
+        let AudioPlayerBackend::Local(local) = &self.backend else {
+            return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicPassthrough {
+                enabled,
+            });
+        };
         let (tx, rx) = mpsc::channel();
-        self.command_tx
+        local
+            .command_tx
             .send(AudioCommand::SetMicPassthrough {
                 enabled,
                 response: tx,
@@ -595,8 +812,12 @@ impl AudioPlayer {
     }
 
     pub fn set_mic_source(&self, source: Option<String>) -> Result<(), String> {
+        let AudioPlayerBackend::Local(local) = &self.backend else {
+            return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicSource { source });
+        };
         let (tx, rx) = mpsc::channel();
-        self.command_tx
+        local
+            .command_tx
             .send(AudioCommand::SetMicSource {
                 source,
                 response: tx,
@@ -615,8 +836,14 @@ impl AudioPlayer {
     }
 
     pub fn set_default_source_mode(&self, mode: DefaultSourceMode) -> Result<(), String> {
+        let AudioPlayerBackend::Local(local) = &self.backend else {
+            return remote_ok(
+                crate::audio::engine_ipc::EngineRequest::SetDefaultSourceMode { mode },
+            );
+        };
         let (tx, rx) = mpsc::channel();
-        self.command_tx
+        local
+            .command_tx
             .send(AudioCommand::SetDefaultSourceMode { mode, response: tx })
             .map_err(|_| "Audio backend thread is not running".to_string())?;
         match rx.recv_timeout(AUDIO_COMMAND_RESPONSE_TIMEOUT) {
@@ -632,8 +859,14 @@ impl AudioPlayer {
     }
 
     pub fn set_mic_latency_profile(&self, profile: MicLatencyProfile) -> Result<(), String> {
+        let AudioPlayerBackend::Local(local) = &self.backend else {
+            return remote_ok(
+                crate::audio::engine_ipc::EngineRequest::SetMicLatencyProfile { profile },
+            );
+        };
         let (tx, rx) = mpsc::channel();
-        self.command_tx
+        local
+            .command_tx
             .send(AudioCommand::SetMicLatencyProfile {
                 profile,
                 response: tx,
@@ -655,6 +888,10 @@ impl AudioPlayer {
         self.snapshot().audio_sources
     }
 
+    pub fn active_capture_target(&self) -> Option<String> {
+        self.snapshot().active_capture_target
+    }
+
     pub fn play(
         &self,
         sound_id: &str,
@@ -662,13 +899,31 @@ impl AudioPlayer {
         base_volume: f32,
         sound_lufs: Option<f64>,
     ) -> Result<String, String> {
+        if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
+            return match crate::audio::engine_ipc::send_request(
+                crate::audio::engine_ipc::EngineRequest::Play {
+                    sound_id: sound_id.to_string(),
+                    path: path.to_string(),
+                    base_volume,
+                    sound_lufs,
+                },
+            )? {
+                crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
+                crate::audio::engine_ipc::EngineResponse::Error { message } => Err(message),
+                other => Err(format!("Unexpected engine response to Play: {other:?}")),
+            };
+        }
+        let AudioPlayerBackend::Local(local) = &self.backend else {
+            return Err("Remote audio player unavailable".to_string());
+        };
         let (response_tx, response_rx) = mpsc::channel();
         debug!(
             "Submitting Play command: sound_id={} path={}",
             sound_id, path
         );
         let enqueue_started_at = Instant::now();
-        self.command_tx
+        local
+            .command_tx
             .send(AudioCommand::Play {
                 sound_id: sound_id.to_string(),
                 path: path.to_string(),
@@ -715,34 +970,107 @@ impl AudioPlayer {
     }
 
     pub fn stop_sound(&self, sound_id: &str) -> Result<(), String> {
-        self.command_tx
-            .send(AudioCommand::StopSound {
-                sound_id: sound_id.to_string(),
-            })
-            .map_err(|_| "Audio backend thread is not running".to_string())
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => local
+                .command_tx
+                .send(AudioCommand::StopSound {
+                    sound_id: sound_id.to_string(),
+                })
+                .map_err(|_| "Audio backend thread is not running".to_string()),
+            AudioPlayerBackend::Remote(_) => {
+                remote_ok(crate::audio::engine_ipc::EngineRequest::StopSound {
+                    sound_id: sound_id.to_string(),
+                })
+            }
+        }
+    }
+
+    /// Stop all active sounds and immediately start a new one.
+    /// For the remote backend this is a single atomic IPC request, so no
+    /// snapshot poll can observe the transient "all stopped" state between the
+    /// two operations.
+    pub fn play_replace(
+        &self,
+        sound_id: &str,
+        path: &str,
+        base_volume: f32,
+        sound_lufs: Option<f64>,
+    ) -> Result<String, String> {
+        if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
+            return match crate::audio::engine_ipc::send_request(
+                crate::audio::engine_ipc::EngineRequest::PlayReplace {
+                    sound_id: sound_id.to_string(),
+                    path: path.to_string(),
+                    base_volume,
+                    sound_lufs,
+                },
+            )? {
+                crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
+                crate::audio::engine_ipc::EngineResponse::Error { message } => Err(message),
+                other => Err(format!("Unexpected engine response to PlayReplace: {other:?}")),
+            };
+        }
+        // Local backend: stop_all + play via the command channel (in-process, no IPC race).
+        self.stop_all();
+        self.play(sound_id, path, base_volume, sound_lufs)
     }
 
     pub fn stop_all(&self) {
-        let _ = self.command_tx.send(AudioCommand::StopAll);
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::StopAll);
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::StopAll);
+            }
+        }
     }
 
     pub fn seek_playback(&self, play_id: &str, position_ms: u64) {
-        let _ = self.command_tx.send(AudioCommand::Seek {
-            play_id: play_id.to_string(),
-            position_ms,
-        });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::Seek {
+                    play_id: play_id.to_string(),
+                    position_ms,
+                });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::Seek {
+                    play_id: play_id.to_string(),
+                    position_ms,
+                });
+            }
+        }
     }
 
     pub fn pause(&self, sound_id: &str) {
-        let _ = self.command_tx.send(AudioCommand::Pause {
-            sound_id: sound_id.to_string(),
-        });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::Pause {
+                    sound_id: sound_id.to_string(),
+                });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::Pause {
+                    sound_id: sound_id.to_string(),
+                });
+            }
+        }
     }
 
     pub fn resume(&self, sound_id: &str) {
-        let _ = self.command_tx.send(AudioCommand::Resume {
-            sound_id: sound_id.to_string(),
-        });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::Resume {
+                    sound_id: sound_id.to_string(),
+                });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::Resume {
+                    sound_id: sound_id.to_string(),
+                });
+            }
+        }
     }
 
     pub fn get_playing(&self) -> Vec<String> {
@@ -758,23 +1086,43 @@ impl AudioPlayer {
     }
 
     pub fn shutdown(&self) {
-        let _ = self.command_tx.send(AudioCommand::Shutdown);
-        if let Ok(mut handle) = self.join_handle.lock() {
-            if let Some(handle) = handle.take() {
-                let (done_tx, done_rx) = mpsc::channel();
-                thread::spawn(move || {
-                    let _ = handle.join();
-                    let _ = done_tx.send(());
-                });
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local.command_tx.send(AudioCommand::Shutdown);
+                if let Ok(mut handle) = local.join_handle.lock() {
+                    if let Some(handle) = handle.take() {
+                        let (done_tx, done_rx) = mpsc::channel();
+                        thread::spawn(move || {
+                            let _ = handle.join();
+                            let _ = done_tx.send(());
+                        });
 
-                if done_rx.recv_timeout(SHUTDOWN_JOIN_TIMEOUT).is_err() {
-                    warn!(
-                        "Audio backend thread did not shut down within {} ms",
-                        SHUTDOWN_JOIN_TIMEOUT.as_millis()
-                    );
+                        if done_rx.recv_timeout(SHUTDOWN_JOIN_TIMEOUT).is_err() {
+                            warn!(
+                                "Audio backend thread did not shut down within {} ms",
+                                SHUTDOWN_JOIN_TIMEOUT.as_millis()
+                            );
+                        }
+                    }
+                }
+            }
+            AudioPlayerBackend::Remote(remote) => {
+                remote.stop_poll.store(true, Ordering::Relaxed);
+                if let Ok(mut handle) = remote.poll_handle.lock() {
+                    if let Some(handle) = handle.take() {
+                        let _ = handle.join();
+                    }
                 }
             }
         }
+    }
+}
+
+fn remote_ok(request: crate::audio::engine_ipc::EngineRequest) -> Result<(), String> {
+    match crate::audio::engine_ipc::send_request(request)? {
+        crate::audio::engine_ipc::EngineResponse::Ok => Ok(()),
+        crate::audio::engine_ipc::EngineResponse::Error { message } => Err(message),
+        other => Err(format!("Unexpected engine response: {other:?}")),
     }
 }
 
@@ -784,9 +1132,53 @@ impl Drop for AudioPlayer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedStreamState {
+    Error,
+    Unconnected,
+    Connecting,
+    Paused,
+    Streaming,
+}
+
+impl ManagedStreamState {
+    fn from_pipewire(state: pw::stream::StreamState) -> Self {
+        match state {
+            pw::stream::StreamState::Error(_) => Self::Error,
+            pw::stream::StreamState::Unconnected => Self::Unconnected,
+            pw::stream::StreamState::Connecting => Self::Connecting,
+            pw::stream::StreamState::Paused => Self::Paused,
+            pw::stream::StreamState::Streaming => Self::Streaming,
+        }
+    }
+}
+
 struct StreamHandle {
     _stream: pw::stream::StreamRc,
     _listener: pw::stream::StreamListener<()>,
+    state: Rc<RefCell<ManagedStreamState>>,
+}
+
+impl StreamHandle {
+    fn new(
+        stream: pw::stream::StreamRc,
+        listener: pw::stream::StreamListener<()>,
+        state: Rc<RefCell<ManagedStreamState>>,
+    ) -> Self {
+        Self {
+            _stream: stream,
+            _listener: listener,
+            state,
+        }
+    }
+
+    fn current_state(&self) -> ManagedStreamState {
+        *self.state.borrow()
+    }
+
+    fn node_id(&self) -> u32 {
+        self._stream.node_id()
+    }
 }
 
 impl Drop for StreamHandle {
@@ -797,7 +1189,7 @@ impl Drop for StreamHandle {
     }
 }
 
-struct BackendState {
+struct PipeWireBackendState {
     _context: pw::context::ContextRc,
     core: pw::core::CoreRc,
     _registry: pw::registry::RegistryRc,
@@ -807,13 +1199,61 @@ struct BackendState {
     capture_stream: Option<StreamHandle>,
 }
 
+enum BackendState {
+    PipeWire(PipeWireBackendState),
+    PulseAudio(PulseAudioBackend),
+}
+
+impl BackendState {
+    fn pipewire_core(&self) -> Option<pw::core::CoreRc> {
+        match self {
+            Self::PipeWire(backend) => Some(backend.core.clone()),
+            Self::PulseAudio(_) => None,
+        }
+    }
+
+    fn playback_stream_active(&self) -> bool {
+        match self {
+            Self::PipeWire(backend) => {
+                backend._local_stream.is_some() || backend.virtual_stream.is_some()
+            }
+            Self::PulseAudio(backend) => {
+                backend.local_stream_active() || backend.virtual_stream_active()
+            }
+        }
+    }
+
+    fn virtual_stream_usable(&self) -> bool {
+        match self {
+            Self::PipeWire(backend) => backend.virtual_stream.as_ref().is_some_and(|stream| {
+                !matches!(
+                    stream.current_state(),
+                    ManagedStreamState::Error | ManagedStreamState::Unconnected
+                )
+            }),
+            Self::PulseAudio(backend) => backend.virtual_stream_active(),
+        }
+    }
+}
+
 struct LoopState {
     runtime: RuntimeConfig,
     available: bool,
     backend: Option<BackendState>,
     sources: HashMap<u32, SourceDescriptor>,
+    virtual_mic_node_id: Option<u32>,
+    virtual_mic_input_ports: HashMap<AudioChannel, u32>,
+    feeder_node_id: Option<u32>,
+    feeder_output_ports: HashMap<AudioChannel, u32>,
+    feeder_links: HashMap<AudioChannel, pw::link::Link>,
+    tracked_ports: HashMap<u32, TrackedPort>,
+    links: HashMap<u32, LinkDescriptor>,
+    capture_node_id: Option<u32>,
+    active_capture_target: Option<String>,
+    capture_health_miss_ticks: u8,
     previous_default_source_name: Option<String>,
     claimed_default: bool,
+    default_source_command_in_flight: std::sync::Arc<AtomicBool>,
     active_playback: Option<ActivePlayback>,
     finished_playbacks: HashMap<String, PlaybackSnapshot>,
     next_playback_order: u64,
@@ -821,6 +1261,10 @@ struct LoopState {
     stream_runtime: std::sync::Arc<StreamRuntimeShared>,
     ultra_starvation_ticks: u32,
     snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
+    last_ui_send: Option<Instant>,
+    last_had_active: bool,
+    local_mix_buffer: Vec<f32>,
+    virtual_mix_buffer: Vec<f32>,
 }
 
 impl LoopState {
@@ -831,8 +1275,19 @@ impl LoopState {
             available: false,
             backend: None,
             sources: HashMap::new(),
+            virtual_mic_node_id: None,
+            virtual_mic_input_ports: HashMap::new(),
+            feeder_node_id: None,
+            feeder_output_ports: HashMap::new(),
+            feeder_links: HashMap::new(),
+            tracked_ports: HashMap::new(),
+            links: HashMap::new(),
+            capture_node_id: None,
+            active_capture_target: None,
+            capture_health_miss_ticks: 0,
             previous_default_source_name: None,
             claimed_default: false,
+            default_source_command_in_flight: std::sync::Arc::new(AtomicBool::new(false)),
             active_playback: None,
             finished_playbacks: HashMap::new(),
             next_playback_order: 0,
@@ -844,6 +1299,10 @@ impl LoopState {
             stream_runtime,
             ultra_starvation_ticks: 0,
             snapshot,
+            last_ui_send: None,
+            last_had_active: false,
+            local_mix_buffer: Vec::new(),
+            virtual_mix_buffer: Vec::new(),
         }
     }
 
@@ -869,7 +1328,7 @@ impl LoopState {
         let mut sources = self
             .sources
             .values()
-            .filter(|source| !source.is_monitor && !source.is_virtual)
+            .filter(|source| !source.is_monitor && !source.is_our_virtual_mic)
             .cloned()
             .collect::<Vec<_>>();
         sources.sort_by(|left, right| left.display_name.cmp(&right.display_name));
@@ -905,18 +1364,41 @@ impl LoopState {
         }
     }
 
-    fn publish_snapshot(&self) {
+    fn publish_snapshot(&mut self) {
         self.stream_runtime
             .set_playback_active(self.active_playback.is_some());
+        let new_snapshot = PlayerSnapshot {
+            available: self.available,
+            playback_positions: self.snapshot_positions(),
+            playing_ids: self.playing_ids(),
+            audio_sources: self.list_audio_sources(),
+            active_capture_target: self.active_capture_target.clone(),
+        };
 
-        if let Ok(mut snapshot) = self.snapshot.write() {
-            *snapshot = PlayerSnapshot {
-                available: self.available,
-                playback_positions: self.snapshot_positions(),
-                playing_ids: self.playing_ids(),
-                audio_sources: self.list_audio_sources(),
-            };
+        if let Ok(mut guard) = self.snapshot.write() {
+            *guard = new_snapshot.clone();
         }
+
+        let has_active = new_snapshot.playback_positions.iter().any(|p| !p.finished);
+        let is_state_change = has_active != self.last_had_active;
+        let throttle_ok = self
+            .last_ui_send
+            .map(|t| t.elapsed() >= Duration::from_millis(UI_SNAPSHOT_PROGRESS_INTERVAL_MS))
+            .unwrap_or(true);
+
+        if is_state_change || (has_active && throttle_ok) {
+            self.last_ui_send = Some(Instant::now());
+            self.last_had_active = has_active;
+            glib::MainContext::default().invoke(move || {
+                crate::playback_bridge::dispatch_snapshot(new_snapshot);
+            });
+        }
+    }
+
+    fn backend_playback_available(&self) -> bool {
+        self.backend
+            .as_ref()
+            .is_some_and(BackendState::playback_stream_active)
     }
 }
 
@@ -944,7 +1426,7 @@ fn pipewire_thread_main(
                 state_ref.stream_runtime.clone(),
             ) {
                 Ok(backend) => {
-                    state_ref.available = backend.virtual_stream.is_some();
+                    state_ref.available = backend.playback_stream_active();
                     state_ref.backend = Some(backend);
                     let _ = recreate_capture_stream(&mut state_ref);
                 }
@@ -993,7 +1475,25 @@ fn pipewire_thread_main(
             Some(Duration::from_millis(MIX_INTERVAL_MS)),
         );
 
-        let _keep_alive = (attached_receiver, mix_timer);
+        let graph_watchdog_timer = mainloop.loop_().add_timer({
+            let weak = weak.clone();
+            move |_| {
+                if let Some(state_rc) = weak.upgrade() {
+                    let mut state = state_rc.borrow_mut();
+                    if state.runtime.persistent_virtual_mic {
+                        ensure_virtual_feeder_present(&mut state);
+                    }
+                    ensure_capture_stream_present(&mut state);
+                    state.publish_snapshot();
+                }
+            }
+        });
+        let _ = graph_watchdog_timer.update_timer(
+            Some(Duration::from_millis(250)),
+            Some(Duration::from_secs(1)),
+        );
+
+        let _keep_alive = (attached_receiver, mix_timer, graph_watchdog_timer);
         mainloop.run();
     }
 }
@@ -1005,6 +1505,24 @@ fn create_backend(
     runtime: RuntimeConfig,
     stream_runtime: std::sync::Arc<StreamRuntimeShared>,
 ) -> Result<BackendState, String> {
+    match runtime.audio_backend {
+        AudioBackendKind::PipeWire => {
+            create_pipewire_backend(weak_state, mainloop, queues, runtime, stream_runtime)
+                .map(BackendState::PipeWire)
+        }
+        AudioBackendKind::PulseAudio => {
+            PulseAudioBackend::new(queues, stream_runtime, &runtime).map(BackendState::PulseAudio)
+        }
+    }
+}
+
+fn create_pipewire_backend(
+    weak_state: Weak<RefCell<LoopState>>,
+    mainloop: pw::main_loop::MainLoopRc,
+    queues: std::sync::Arc<std::sync::Mutex<ProcessQueues>>,
+    runtime: RuntimeConfig,
+    stream_runtime: std::sync::Arc<StreamRuntimeShared>,
+) -> Result<PipeWireBackendState, String> {
     let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
     let core = context.connect_rc(None).map_err(|e| e.to_string())?;
     let registry = core.get_registry_rc().map_err(|e| e.to_string())?;
@@ -1014,13 +1532,49 @@ fn create_backend(
         .global({
             let weak_state = weak_state.clone();
             move |global| {
-                if let Some(source) = source_from_global(global) {
-                    if let Some(state) = weak_state.upgrade() {
-                        let mut state = state.borrow_mut();
+                let is_link_node = global.type_ == pw::types::ObjectType::Node;
+                let is_link_port = global.type_ == pw::types::ObjectType::Port;
+                let link = link_from_global(global);
+                let capture_node_id = capture_node_id_from_global(global);
+                let source = source_from_global(global);
+                if !is_link_node
+                    && !is_link_port
+                    && source.is_none()
+                    && link.is_none()
+                    && capture_node_id.is_none()
+                {
+                    return;
+                }
+                if let Some(state) = weak_state.upgrade() {
+                    let mut state = state.borrow_mut();
+                    if let Some(capture_node_id) = capture_node_id {
+                        state.capture_node_id = Some(capture_node_id);
+                    }
+                    if is_link_node {
+                        let changed = track_node_global(&mut state, global);
+                        if changed
+                            && state.runtime.persistent_virtual_mic
+                            && state.feeder_node_id.is_none()
+                        {
+                            ensure_virtual_feeder_present(&mut state);
+                        }
+                    }
+                    if is_link_port {
+                        track_port_global(&mut state, global);
+                    }
+                    if let Some(link) = link {
+                        state.links.insert(link.id, link);
+                        try_link_feeder_to_virtual_mic(&mut state);
+                    }
+                    if let Some(source) = source {
                         state.sources.insert(source.id, source);
                         maybe_claim_default_source(&mut state);
-                        state.publish_snapshot();
+                        // A new source appeared — if mic passthrough is on but
+                        // we haven't been able to attach yet (startup race), or
+                        // the user's preferred source just came online, retry.
+                        ensure_capture_stream_present(&mut state);
                     }
+                    state.publish_snapshot();
                 }
             }
         })
@@ -1029,7 +1583,27 @@ fn create_backend(
             move |id| {
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
-                    state.sources.remove(&id);
+                    let removed_source = state.sources.remove(&id).is_some();
+                    state.links.remove(&id);
+                    if state.capture_node_id == Some(id) {
+                        state.capture_node_id = None;
+                    }
+                    if handle_link_global_remove(&mut state, id) {
+                        if state.runtime.persistent_virtual_mic {
+                            ensure_virtual_feeder_present(&mut state);
+                        }
+                    }
+                    if removed_source && state.runtime.mic_passthrough {
+                        // The source we may have been capturing from went
+                        // away (e.g. EasyEffects quit). Re-resolve so we
+                        // either pick a new target or release the dangling
+                        // stream cleanly.
+                        if let Err(err) = recreate_capture_stream(&mut state) {
+                            warn!(
+                                "Failed to re-resolve capture target after source removal: {err}"
+                            );
+                        }
+                    }
                     state.publish_snapshot();
                 }
             }
@@ -1038,15 +1612,30 @@ fn create_backend(
 
     let local_stream =
         create_local_output_stream(core.clone(), queues.clone(), stream_runtime.clone()).ok();
-    let virtual_stream = create_virtual_source_stream(
-        core.clone(),
-        queues.clone(),
-        stream_runtime,
-        runtime.pipewire_latency_hint(),
-    )
-    .ok();
+    // In persistent mode the watchdog (registry listener above) creates the
+    // feeder the moment the sink target appears, including across pipewire
+    // restarts. In legacy mode we still create the in-process source upfront.
+    let virtual_stream = if runtime.persistent_virtual_mic {
+        debug!("Persistent mode: creating explicit-link virtual mic feeder");
+        create_virtual_feeder_stream(
+            core.clone(),
+            queues.clone(),
+            stream_runtime,
+            runtime.pipewire_latency_hint(),
+        )
+        .ok()
+    } else {
+        debug!("Persistent virtual mic unavailable; using in-process virtual source");
+        create_legacy_virtual_source_stream(
+            core.clone(),
+            queues.clone(),
+            stream_runtime,
+            runtime.pipewire_latency_hint(),
+        )
+        .ok()
+    };
 
-    Ok(BackendState {
+    Ok(PipeWireBackendState {
         _context: context,
         core,
         _registry: registry,
@@ -1065,7 +1654,12 @@ fn source_from_global(
     }
 
     let props = global.props?;
-    if props.get(*pw::keys::MEDIA_CLASS) != Some("Audio/Source") {
+    let media_class = props.get(*pw::keys::MEDIA_CLASS)?;
+    // Modern PipeWire-native virtual sources (EasyEffects, NoiseTorch, our own
+    // Linux Soundboard Mic) advertise Audio/Source/Virtual; physical
+    // mics use plain Audio/Source. Accept both so users can route through
+    // EasyEffects to get processed mic + soundboard mixed into one feed.
+    if media_class != "Audio/Source" && media_class != "Audio/Source/Virtual" {
         return None;
     }
 
@@ -1075,14 +1669,247 @@ fn source_from_global(
         .or_else(|| props.get("device.description"))
         .unwrap_or(node_name.as_str())
         .to_string();
+    let priority_session = props
+        .get("priority.session")
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
 
     Some(SourceDescriptor {
         id: global.id,
         is_monitor: node_name.ends_with(".monitor"),
-        is_virtual: node_name == VIRTUAL_SOURCE_NAME,
+        is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
+        priority_session,
         node_name,
         display_name,
     })
+}
+
+fn capture_node_id_from_global(
+    global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
+) -> Option<u32> {
+    if global.type_ != pw::types::ObjectType::Node {
+        return None;
+    }
+    let props = global.props?;
+    (props.get(*pw::keys::NODE_NAME)? == MIC_CAPTURE_NODE_NAME).then_some(global.id)
+}
+
+fn link_from_global(
+    global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
+) -> Option<LinkDescriptor> {
+    if global.type_ != pw::types::ObjectType::Link {
+        return None;
+    }
+
+    let props = global.props?;
+    Some(LinkDescriptor {
+        id: global.id,
+        output_node_id: props.get("link.output.node")?.parse().ok()?,
+        input_node_id: props.get("link.input.node")?.parse().ok()?,
+        output_port_id: props
+            .get("link.output.port")
+            .and_then(|value| value.parse().ok()),
+        input_port_id: props
+            .get("link.input.port")
+            .and_then(|value| value.parse().ok()),
+    })
+}
+
+/// Idempotently (re)creates the feeder stream so the soundboard keeps
+/// reaching `Linux Soundboard Mic` after a PipeWire restart.
+fn ensure_virtual_feeder_present(state: &mut LoopState) {
+    if !state.runtime.persistent_virtual_mic {
+        return;
+    }
+    let already_present = state
+        .backend
+        .as_ref()
+        .map(BackendState::virtual_stream_usable)
+        .unwrap_or(false);
+    if already_present {
+        try_link_feeder_to_virtual_mic(state);
+        return;
+    }
+    let Some(core) = state.backend.as_ref().and_then(BackendState::pipewire_core) else {
+        return;
+    };
+    match create_virtual_feeder_stream(
+        core,
+        state.queues.clone(),
+        state.stream_runtime.clone(),
+        state.runtime.pipewire_latency_hint(),
+    ) {
+        Ok(stream) => {
+            debug!("Virtual mic feeder stream (re)created");
+            if let Some(BackendState::PipeWire(backend)) = state.backend.as_mut() {
+                backend.virtual_stream = Some(stream);
+            }
+            state.available = state.backend_playback_available();
+            try_link_feeder_to_virtual_mic(state);
+        }
+        Err(err) => {
+            warn!("Failed to (re)create virtual mic feeder stream: {err}");
+        }
+    }
+}
+
+fn capture_stream_missing(state: &LoopState) -> bool {
+    match state.backend.as_ref() {
+        Some(BackendState::PipeWire(backend)) => backend.capture_stream.is_none(),
+        Some(BackendState::PulseAudio(backend)) => !backend.capture_stream_active(),
+        None => false,
+    }
+}
+
+/// Capture-stream watchdog. Mirrors `ensure_virtual_feeder_present` but for
+/// the mic passthrough capture stream. Fixes two real-world races:
+///   1. Soundboard launches before the registry reports physical mics, so the
+///      initial `recreate_capture_stream` finds nothing and warns "No physical
+///      microphone source available for passthrough" — before this watchdog
+///      the user had to toggle passthrough off/on to recover.
+///   2. The user's preferred mic source (e.g. EasyEffects) isn't running yet
+///      when the soundboard starts; when it appears later we now wire it up
+///      automatically.
+fn ensure_capture_stream_present(state: &mut LoopState) {
+    if !state.runtime.mic_passthrough {
+        state.capture_health_miss_ticks = 0;
+        return;
+    }
+
+    if matches!(state.backend, Some(BackendState::PulseAudio(_))) {
+        if capture_stream_missing(state) {
+            if let Err(err) = recreate_capture_stream(state) {
+                warn!("Capture-stream watchdog failed to (re)create: {err}");
+            }
+        }
+        return;
+    }
+
+    let expected_target =
+        resolve_capture_target(state).or_else(|| active_capture_target_if_available(state));
+    if capture_stream_missing(state) {
+        if expected_target.is_some() {
+            if let Err(err) = recreate_capture_stream(state) {
+                warn!("Capture-stream watchdog failed to (re)create: {err}");
+            }
+        }
+        return;
+    }
+
+    if pipewire_capture_stream_healthy(state, expected_target.as_deref()) {
+        state.capture_health_miss_ticks = 0;
+        return;
+    }
+
+    if state.active_capture_target.as_deref() != expected_target.as_deref()
+        || pipewire_capture_stream_failed(state)
+    {
+        state.capture_health_miss_ticks = state.capture_health_miss_ticks.saturating_add(1);
+        if state.capture_health_miss_ticks < CAPTURE_RECREATE_MISS_THRESHOLD {
+            return;
+        }
+
+        if let Err(err) = recreate_capture_stream(state) {
+            warn!("Capture-stream watchdog failed to repair unhealthy stream: {err}");
+        }
+        return;
+    }
+
+    // Link health can be temporarily wrong while WirePlumber rewires nodes.
+    // Leaving the stream in place avoids clearing soundboard playback queues
+    // and disables passthrough contribution until a valid link appears.
+}
+
+fn pipewire_capture_stream_healthy(state: &LoopState, expected_target: Option<&str>) -> bool {
+    let Some(expected_target) = expected_target else {
+        return false;
+    };
+    if state.active_capture_target.as_deref() != Some(expected_target) {
+        return false;
+    }
+    pipewire_capture_stream_linked_to_active_target(state)
+}
+
+fn active_capture_target_if_available(state: &LoopState) -> Option<String> {
+    let target = state.active_capture_target.as_deref()?;
+    resolve_source_id_by_name(&state.sources, target).map(|_| target.to_string())
+}
+
+fn pipewire_capture_stream_linked_to_active_target(state: &LoopState) -> bool {
+    let Some(BackendState::PipeWire(backend)) = state.backend.as_ref() else {
+        return false;
+    };
+    let Some(capture_stream) = backend.capture_stream.as_ref() else {
+        return false;
+    };
+    pipewire_capture_link_healthy(
+        state.active_capture_target.as_deref(),
+        state
+            .capture_node_id
+            .or_else(|| Some(capture_stream.node_id())),
+        capture_stream.current_state(),
+        &state.sources,
+        &state.links,
+    )
+}
+
+fn pipewire_capture_stream_failed(state: &LoopState) -> bool {
+    let Some(BackendState::PipeWire(backend)) = state.backend.as_ref() else {
+        return false;
+    };
+    let Some(capture_stream) = backend.capture_stream.as_ref() else {
+        return false;
+    };
+    matches!(
+        capture_stream.current_state(),
+        ManagedStreamState::Error | ManagedStreamState::Unconnected
+    )
+}
+
+fn pipewire_capture_link_healthy(
+    active_target: Option<&str>,
+    capture_node_id: Option<u32>,
+    capture_state: ManagedStreamState,
+    sources: &HashMap<u32, SourceDescriptor>,
+    links: &HashMap<u32, LinkDescriptor>,
+) -> bool {
+    if matches!(
+        capture_state,
+        ManagedStreamState::Error | ManagedStreamState::Unconnected
+    ) {
+        return false;
+    }
+    let Some(target_name) = active_target else {
+        return false;
+    };
+    let Some(capture_node_id) = capture_node_id else {
+        return false;
+    };
+    let Some(target_source) = sources
+        .values()
+        .find(|source| source.node_name == target_name)
+    else {
+        return false;
+    };
+    if target_source.is_monitor || target_source.is_our_virtual_mic {
+        return false;
+    }
+
+    links.values().any(|link| {
+        link.output_node_id == target_source.id && link.input_node_id == capture_node_id
+    })
+}
+
+impl LoopState {
+    fn capture_stream_active(&self) -> bool {
+        match self.backend.as_ref() {
+            Some(BackendState::PipeWire(_)) => {
+                pipewire_capture_stream_linked_to_active_target(self)
+            }
+            Some(BackendState::PulseAudio(backend)) => backend.capture_stream_active(),
+            None => false,
+        }
+    }
 }
 
 fn clamp_seek_position_ms(position_ms: u64, duration_ms: Option<u64>) -> u64 {
@@ -1128,15 +1955,8 @@ impl SymphoniaSource {
             .format(&hint, mss, &format_opts, &MetadataOptions::default())
             .map_err(|e| format!("Failed to probe media: {e}"))?;
         let format = probed.format;
-
-        let track = format
-            .default_track()
-            .or_else(|| {
-                format
-                    .tracks()
-                    .iter()
-                    .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
-            })
+        let strict_audio_container = is_strict_audio_container(path);
+        let track = select_audio_track(&*format, strict_audio_container)
             .ok_or_else(|| "No audio tracks found".to_string())?;
 
         let track_id = track.id;
@@ -1251,6 +2071,46 @@ impl SymphoniaSource {
             }
         }
     }
+}
+
+fn is_strict_audio_container(path: &str) -> bool {
+    matches!(
+        std::path::Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_ascii_lowercase()),
+        Some(ext) if matches!(ext.as_str(), "aac" | "m4a" | "mp4")
+    )
+}
+
+fn is_audio_track(track: &Track) -> bool {
+    track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
+}
+
+fn select_audio_track(format: &dyn FormatReader, strict_audio_container: bool) -> Option<&Track> {
+    format
+        .tracks()
+        .iter()
+        .find(|track| is_audio_track(track))
+        .or_else(|| {
+            (!strict_audio_container)
+                .then(|| {
+                    format
+                        .default_track()
+                        .filter(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            (!strict_audio_container)
+                .then(|| {
+                    format
+                        .tracks()
+                        .iter()
+                        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
+                })
+                .flatten()
+        })
 }
 
 impl Iterator for SymphoniaSource {
@@ -1390,11 +2250,29 @@ mod tests {
                 },
             },
             looping: false,
+            audio_backend: AudioBackendKind::PipeWire,
+            persistent_virtual_mic: false,
         }
     }
 
     fn test_player_snapshot_store() -> Arc<RwLock<PlayerSnapshot>> {
         Arc::new(RwLock::new(PlayerSnapshot::default()))
+    }
+
+    fn test_source(
+        id: u32,
+        node_name: &str,
+        display_name: &str,
+        priority: i32,
+    ) -> SourceDescriptor {
+        SourceDescriptor {
+            id,
+            node_name: node_name.to_string(),
+            display_name: display_name.to_string(),
+            priority_session: priority,
+            is_monitor: node_name.ends_with(".monitor"),
+            is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
+        }
     }
 
     #[test]
@@ -1407,6 +2285,63 @@ id 72, type PipeWire:Interface:Node
             parse_wpctl_node_name(output).as_deref(),
             Some("alsa_input.pci-0000_12_00.6.analog-stereo")
         );
+    }
+
+    #[test]
+    fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors() {
+        let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+
+        state.sources.insert(
+            10,
+            SourceDescriptor {
+                id: 10,
+                node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
+                display_name: "Ryzen HD Audio".to_string(),
+                priority_session: 0,
+                is_monitor: false,
+                is_our_virtual_mic: false,
+            },
+        );
+        state.sources.insert(
+            11,
+            SourceDescriptor {
+                id: 11,
+                node_name: "easyeffects_source".to_string(),
+                display_name: "Easy Effects Source".to_string(),
+                priority_session: 0,
+                is_monitor: false,
+                is_our_virtual_mic: false,
+            },
+        );
+        state.sources.insert(
+            12,
+            SourceDescriptor {
+                id: 12,
+                node_name: VIRTUAL_SOURCE_NAME.to_string(),
+                display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
+                priority_session: 0,
+                is_monitor: false,
+                is_our_virtual_mic: true,
+            },
+        );
+        state.sources.insert(
+            13,
+            SourceDescriptor {
+                id: 13,
+                node_name: "alsa_output.pci-0000_12_00.6.analog-stereo.monitor".to_string(),
+                display_name: "Speaker Monitor".to_string(),
+                priority_session: 0,
+                is_monitor: true,
+                is_our_virtual_mic: false,
+            },
+        );
+
+        let listed = state.list_audio_sources();
+        let names: Vec<_> = listed.iter().map(|s| s.node_name.as_str()).collect();
+        assert!(names.contains(&"alsa_input.pci-0000_12_00.6.analog-stereo"));
+        assert!(names.contains(&"easyeffects_source"));
+        assert!(!names.contains(&VIRTUAL_SOURCE_NAME));
+        assert!(!names.iter().any(|name| name.ends_with(".monitor")));
     }
 
     #[test]
@@ -1460,8 +2395,9 @@ id 72, type PipeWire:Interface:Node
                 id: 7,
                 node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
                 display_name: "Mic".to_string(),
+                priority_session: 0,
                 is_monitor: false,
-                is_virtual: false,
+                is_our_virtual_mic: false,
             },
         )]);
 
@@ -1473,6 +2409,185 @@ id 72, type PipeWire:Interface:Node
     }
 
     #[test]
+    fn explicit_selected_mic_waits_for_exact_source() {
+        let mut runtime = test_runtime_config();
+        runtime.mic_source = Some("easyeffects_source".to_string());
+        let mut state = LoopState::new(runtime, test_player_snapshot_store());
+        state
+            .sources
+            .insert(7, test_source(7, "alsa_input.real", "Real Mic", 2000));
+
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some("alsa_input.real".to_string())),
+            None
+        );
+
+        state.sources.insert(
+            8,
+            test_source(8, "easyeffects_source", "Easy Effects", 1000),
+        );
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some("alsa_input.real".to_string()))
+                .as_deref(),
+            Some("easyeffects_source")
+        );
+    }
+
+    #[test]
+    fn explicit_selected_mic_rejects_linux_soundboard_virtual_mic() {
+        let mut runtime = test_runtime_config();
+        runtime.mic_source = Some(VIRTUAL_SOURCE_NAME.to_string());
+        let mut state = LoopState::new(runtime, test_player_snapshot_store());
+        state.sources.insert(
+            8,
+            test_source(8, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+        );
+
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn auto_capture_prefers_default_then_previous_then_enhancement_fallback() {
+        let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+        state.sources.insert(
+            6,
+            test_source(6, "easyeffects_source", "Easy Effects Source", 10),
+        );
+        state
+            .sources
+            .insert(7, test_source(7, "alsa_input.low", "Low Priority", 100));
+        state
+            .sources
+            .insert(8, test_source(8, "alsa_input.high", "High Priority", 200));
+        state.sources.insert(
+            9,
+            test_source(9, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+        );
+        state.sources.insert(
+            10,
+            test_source(10, "alsa_output.speakers.monitor", "Monitor", 9000),
+        );
+
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some("alsa_input.low".to_string()))
+                .as_deref(),
+            Some("alsa_input.low")
+        );
+
+        state.previous_default_source_name = Some("alsa_input.low".to_string());
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string()))
+                .as_deref(),
+            Some("alsa_input.low")
+        );
+
+        state.previous_default_source_name = None;
+        assert_eq!(
+            best_fallback_source_name(&state.sources).as_deref(),
+            Some("easyeffects_source")
+        );
+        assert_eq!(
+            resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string()))
+                .as_deref(),
+            Some("easyeffects_source")
+        );
+    }
+
+    #[test]
+    fn pipewire_capture_health_requires_non_error_linked_expected_target() {
+        let sources = HashMap::from([(
+            78,
+            test_source(
+                78,
+                "alsa_input.pci-0000_12_00.6.analog-stereo",
+                "Real Mic",
+                2000,
+            ),
+        )]);
+        let mut links = HashMap::new();
+
+        assert!(!pipewire_capture_link_healthy(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            Some(253),
+            ManagedStreamState::Streaming,
+            &sources,
+            &links,
+        ));
+
+        links.insert(
+            1,
+            LinkDescriptor {
+                id: 1,
+                output_node_id: 78,
+                input_node_id: 999,
+                output_port_id: None,
+                input_port_id: None,
+            },
+        );
+        assert!(!pipewire_capture_link_healthy(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            Some(253),
+            ManagedStreamState::Streaming,
+            &sources,
+            &links,
+        ));
+
+        links.insert(
+            2,
+            LinkDescriptor {
+                id: 2,
+                output_node_id: 78,
+                input_node_id: 253,
+                output_port_id: None,
+                input_port_id: None,
+            },
+        );
+        assert!(pipewire_capture_link_healthy(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            Some(253),
+            ManagedStreamState::Paused,
+            &sources,
+            &links,
+        ));
+        assert!(!pipewire_capture_link_healthy(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            Some(253),
+            ManagedStreamState::Error,
+            &sources,
+            &links,
+        ));
+    }
+
+    #[test]
+    fn pipewire_capture_health_rejects_self_capture_from_virtual_mic() {
+        let sources = HashMap::from([(
+            32,
+            test_source(32, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+        )]);
+        let links = HashMap::from([(
+            1,
+            LinkDescriptor {
+                id: 1,
+                output_node_id: 32,
+                input_node_id: 253,
+                output_port_id: None,
+                input_port_id: None,
+            },
+        )]);
+
+        assert!(!pipewire_capture_link_healthy(
+            Some(VIRTUAL_SOURCE_NAME),
+            Some(253),
+            ManagedStreamState::Streaming,
+            &sources,
+            &links,
+        ));
+    }
+
+    #[test]
     fn loop_state_filters_virtual_and_monitor_sources() {
         let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
         state.sources.insert(
@@ -1481,8 +2596,9 @@ id 72, type PipeWire:Interface:Node
                 id: 1,
                 node_name: "alsa_input.real".to_string(),
                 display_name: "Real Mic".to_string(),
+                priority_session: 0,
                 is_monitor: false,
-                is_virtual: false,
+                is_our_virtual_mic: false,
             },
         );
         state.sources.insert(
@@ -1491,8 +2607,9 @@ id 72, type PipeWire:Interface:Node
                 id: 2,
                 node_name: "alsa_output.monitor".to_string(),
                 display_name: "Monitor".to_string(),
+                priority_session: 0,
                 is_monitor: true,
-                is_virtual: false,
+                is_our_virtual_mic: false,
             },
         );
         state.sources.insert(
@@ -1501,8 +2618,9 @@ id 72, type PipeWire:Interface:Node
                 id: 3,
                 node_name: VIRTUAL_SOURCE_NAME.to_string(),
                 display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
+                priority_session: 0,
                 is_monitor: false,
-                is_virtual: true,
+                is_our_virtual_mic: true,
             },
         );
 
@@ -1660,7 +2778,7 @@ id 72, type PipeWire:Interface:Node
     }
 
     #[test]
-    fn recreate_capture_stream_clears_virtual_mic_queues_even_without_backend() {
+    fn recreate_capture_stream_clears_mic_input_without_dropping_soundboard_output() {
         let mut runtime = test_runtime_config();
         runtime.mic_passthrough = true;
         let mut state = LoopState::new(runtime, test_player_snapshot_store());
@@ -1676,7 +2794,7 @@ id 72, type PipeWire:Interface:Node
 
         let queues = state.queues.lock().expect("lock queues");
         assert_eq!(queues.local.len(), 2);
-        assert_eq!(queues.virtual_out.len(), 0);
+        assert_eq!(queues.virtual_out.len(), 3);
         assert_eq!(queues.mic_in.len(), 0);
     }
 
@@ -1693,8 +2811,9 @@ id 72, type PipeWire:Interface:Node
                 id: 1,
                 node_name: "alsa_input.real".to_string(),
                 display_name: "Real Mic".to_string(),
+                priority_session: 0,
                 is_monitor: false,
-                is_virtual: false,
+                is_our_virtual_mic: false,
             },
         );
         state.active_playback = Some(
@@ -1739,7 +2858,9 @@ id 72, type PipeWire:Interface:Node
         )
         .expect("create active playback");
 
-        let (local, virtual_out) = playback.render(512, &runtime);
+        let mut local = vec![0.0; 512];
+        let mut virtual_out = vec![0.0; 512];
+        playback.render_into(&mut local, &mut virtual_out, &runtime);
 
         assert!(local.iter().any(|sample| sample.abs() > f32::EPSILON));
         assert!(virtual_out.iter().any(|sample| sample.abs() > f32::EPSILON));
@@ -1770,7 +2891,9 @@ id 72, type PipeWire:Interface:Node
         assert!(playback.virtual_limiter.is_some());
 
         runtime.auto_gain.apply_to = AutoGainApplyTo::MicOnly;
-        let _ = playback.render(128, &runtime);
+        let mut local = vec![0.0; 128];
+        let mut virtual_out = vec![0.0; 128];
+        playback.render_into(&mut local, &mut virtual_out, &runtime);
 
         assert!(playback.local_limiter.is_none());
         assert!(playback.virtual_limiter.is_some());

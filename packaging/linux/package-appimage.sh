@@ -214,8 +214,8 @@ done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
 rm -rf "$APPDIR/usr/lib32"
 
-# The AppImage uses the host PipeWire and WirePlumber stack.
-echo "Skipping pactl bundling; the runtime now uses native PipeWire streams and host wpctl."
+# The AppImage uses the host audio server tools for live setup and diagnostics.
+echo "Skipping pactl/wpctl bundling; the runtime uses host PipeWire/PulseAudio services."
 
 # Trim unused libraries to keep the AppImage small.
 echo "Removing unnecessary libraries..."

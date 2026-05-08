@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, LazyLock, Mutex,
 };
+use std::time::Instant;
 
 use rayon::prelude::*;
 
@@ -37,6 +38,14 @@ const FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN: usize = 10;
 pub type LoudnessAnalysisCompletion = Box<dyn FnOnce(Result<u32, String>) + Send + 'static>;
 
 static FIRST_PLAYBACK_PHASE_RECORDED: AtomicBool = AtomicBool::new(false);
+
+/// Drop a same-sound play request if one was just dispatched within this window.
+/// Hotkey auto-repeat fires at ~30–50ms; mashing a single sound at button-press rate
+/// can't be heard as more than one playback anyway because each play resets the
+/// previous via stop_all. Distinct sounds are unaffected.
+const SAME_SOUND_DEBOUNCE_MS: u128 = 30;
+static LAST_PLAY_DISPATCH: LazyLock<Mutex<Option<(Instant, String)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingLoudnessAnalysisTrigger {
@@ -124,7 +133,9 @@ fn maybe_trigger_estimated_loudness_refinement(
     let started = ESTIMATED_LOUDNESS_REFINEMENT_COORDINATOR.try_start(
         "loudness-refinement",
         move || refine_estimated_loudness(config, force),
-        None,
+        Some(Box::new(|_| {
+            crate::ui_event_bridge::post_loudness_status_refresh();
+        })),
     )?;
 
     if !started {
@@ -197,10 +208,17 @@ pub fn trigger_missing_loudness_analysis(
         return Ok(trigger);
     }
 
+    let completion: Option<LoudnessAnalysisCompletion> = Some(Box::new(move |result| {
+        if let Some(on_complete) = on_complete {
+            on_complete(result);
+        }
+        crate::ui_event_bridge::post_loudness_status_refresh();
+    }));
+
     let started = MISSING_LOUDNESS_ANALYSIS_COORDINATOR.try_start(
         "loudness-backfill",
         move || analyze_all_loudness(config),
-        on_complete,
+        completion,
     )?;
 
     if !started {
@@ -300,8 +318,6 @@ pub fn play_sound(
         } else {
             crate::diagnostics::record_phase("playback:first_play_start", None);
         }
-    } else {
-        crate::diagnostics::set_playback_registry_count(player.get_playback_positions().len());
     }
     result
 }
@@ -315,6 +331,26 @@ pub fn play_sound_async<F>(
 where
     F: FnOnce(Result<String, String>) + 'static,
 {
+    let now = Instant::now();
+    let debounced = if let Ok(mut last) = LAST_PLAY_DISPATCH.lock() {
+        let drop_request = matches!(
+            last.as_ref(),
+            Some((prev_at, prev_id))
+                if prev_id == &id
+                    && now.duration_since(*prev_at).as_millis() < SAME_SOUND_DEBOUNCE_MS
+        );
+        if !drop_request {
+            *last = Some((now, id.clone()));
+        }
+        drop_request
+    } else {
+        false
+    };
+    if debounced {
+        log::debug!("Debounced repeated play_sound dispatch: id={}", id);
+        on_complete(Ok(String::new()));
+        return Ok(());
+    }
     dispatch_async_result(
         "play_sound",
         move || play_sound(id, config, player),

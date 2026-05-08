@@ -7,6 +7,12 @@ pub trait HotkeyBackend: Send + Sync {
         Ok(())
     }
     fn register(&self, sound_id: &str, hotkey: &str) -> Result<(), String>;
+    fn register_many(&self, bindings: &[(String, String)]) -> Result<(), String> {
+        for (sound_id, hotkey) in bindings {
+            self.register(sound_id, hotkey)?;
+        }
+        Ok(())
+    }
     fn unregister(&self, sound_id: &str) -> Result<(), String>;
     fn unregister_many(&self, sound_ids: &[String]) -> Result<(), String> {
         for sound_id in sound_ids {

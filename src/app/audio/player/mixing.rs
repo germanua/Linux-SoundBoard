@@ -2,10 +2,12 @@ use super::*;
 
 pub(super) fn mix_tick(state_rc: &Rc<RefCell<LoopState>>) {
     let mut state = state_rc.borrow_mut();
-    if !state.available {
+    if !state.backend_playback_available() {
+        state.available = false;
         state.publish_snapshot();
         return;
     }
+    state.available = true;
 
     fill_output_queues(&mut state);
 
@@ -42,11 +44,7 @@ pub(super) fn mix_tick(state_rc: &Rc<RefCell<LoopState>>) {
 
 pub(super) fn fill_output_queues(state: &mut LoopState) {
     let playback_active = state.active_playback.is_some();
-    let capture_stream_active = state
-        .backend
-        .as_ref()
-        .and_then(|backend| backend.capture_stream.as_ref())
-        .is_some();
+    let capture_stream_active = state.capture_stream_active();
     let wants_local_output = playback_active;
     let wants_virtual_output =
         playback_active || (state.runtime.mic_passthrough && capture_stream_active);
@@ -172,11 +170,7 @@ fn current_queue_deficits(
 fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) {
     let runtime = state.runtime.clone();
     let playback_active = state.active_playback.is_some();
-    let capture_stream_active = state
-        .backend
-        .as_ref()
-        .and_then(|backend| backend.capture_stream.as_ref())
-        .is_some();
+    let capture_stream_active = state.capture_stream_active();
     let passthrough_active = state.runtime.mic_passthrough && capture_stream_active;
 
     if passthrough_active && !playback_active {
@@ -186,26 +180,39 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) {
         return;
     }
 
-    let (local_samples, mut virtual_samples) =
-        if let Some(playback) = state.active_playback.as_mut() {
-            playback.render(chunk_samples, &runtime)
-        } else {
-            (vec![0.0; chunk_samples], vec![0.0; chunk_samples])
-        };
+    if state.local_mix_buffer.len() != chunk_samples {
+        state.local_mix_buffer.resize(chunk_samples, 0.0);
+    } else {
+        state.local_mix_buffer.fill(0.0);
+    }
+    if state.virtual_mix_buffer.len() != chunk_samples {
+        state.virtual_mix_buffer.resize(chunk_samples, 0.0);
+    } else {
+        state.virtual_mix_buffer.fill(0.0);
+    }
+
+    if let Some(playback) = state.active_playback.as_mut() {
+        playback.render_into(
+            &mut state.local_mix_buffer,
+            &mut state.virtual_mix_buffer,
+            &runtime,
+        );
+    }
 
     if let Ok(mut queues) = state.queues.lock() {
         if passthrough_active {
             let mic_samples = queues.mic_in.pop_samples(chunk_samples);
-            for (virtual_sample, mic_sample) in virtual_samples.iter_mut().zip(mic_samples) {
+            for (virtual_sample, mic_sample) in state.virtual_mix_buffer.iter_mut().zip(mic_samples)
+            {
                 *virtual_sample = (*virtual_sample + mic_sample).clamp(-1.0, 1.0);
             }
         }
 
         if playback_active {
-            queues.local.push_slice(&local_samples);
+            queues.local.push_slice(&state.local_mix_buffer);
         }
         if playback_active || passthrough_active {
-            queues.virtual_out.push_slice(&virtual_samples);
+            queues.virtual_out.push_slice(&state.virtual_mix_buffer);
         }
     }
 }
@@ -227,6 +234,12 @@ pub(super) fn clear_virtual_mic_queues(queues: &std::sync::Arc<std::sync::Mutex<
     if let Ok(mut queues) = queues.lock() {
         queues.mic_in.samples.clear();
         queues.virtual_out.samples.clear();
+    }
+}
+
+pub(super) fn clear_mic_input_queue(queues: &std::sync::Arc<std::sync::Mutex<ProcessQueues>>) {
+    if let Ok(mut queues) = queues.lock() {
+        queues.mic_in.samples.clear();
     }
 }
 

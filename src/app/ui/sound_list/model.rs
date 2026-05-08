@@ -79,6 +79,23 @@ impl SoundListInner {
             .collect()
     }
 
+    pub(super) fn has_navigation_sounds_from_state(&self) -> bool {
+        let tab_id = self.current_tab_id();
+        let search_query = self.current_search_query();
+        let cfg = match self.state.config.lock() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                log::warn!("Config lock poisoned: {}", e);
+                return false;
+            }
+        };
+
+        let tab_sound_ids = Self::tab_sound_ids(&cfg, &tab_id);
+        cfg.sounds
+            .iter()
+            .any(|sound| Self::matches_filters(sound, &tab_sound_ids, &search_query))
+    }
+
     pub(super) fn filtered_row_data_from_state(&self) -> Vec<SoundRowData> {
         let tab_id = self.current_tab_id();
         let search_query = self.current_search_query();

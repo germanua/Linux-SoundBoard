@@ -34,7 +34,7 @@ impl V1ToV2Migration {
             {
                 settings
                     .entry("default_source_mode".to_string())
-                    .or_insert_with(|| serde_json::json!("manual"));
+                    .or_insert_with(|| serde_json::json!("auto_while_running"));
             }
         }
         Ok(migrated)
@@ -137,7 +137,10 @@ mod tests {
     fn v1_to_v2_adds_default_source_mode_when_missing() {
         let migrated = V1ToV2Migration::migrate(base_config_with_settings(json!({}))).unwrap();
         assert_eq!(migrated["schema_version"], json!(2));
-        assert_eq!(migrated["settings"]["default_source_mode"], json!("manual"));
+        assert_eq!(
+            migrated["settings"]["default_source_mode"],
+            json!("auto_while_running")
+        );
     }
 
     #[test]
@@ -192,7 +195,10 @@ mod tests {
         let migrated = run_migrations(base_config_with_settings(json!({})), 0).unwrap();
 
         assert_eq!(migrated["schema_version"], json!(4));
-        assert_eq!(migrated["settings"]["default_source_mode"], json!("manual"));
+        assert_eq!(
+            migrated["settings"]["default_source_mode"],
+            json!("auto_while_running")
+        );
         assert_eq!(
             migrated["settings"]["mic_latency_profile"],
             json!("balanced")

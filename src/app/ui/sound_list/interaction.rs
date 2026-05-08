@@ -44,12 +44,14 @@ impl SoundListInner {
                 let sound_id = sound.id.clone();
                 let invalid_ids_for_play = Arc::clone(&invalid_ids);
                 let inner_weak_for_play = Arc::downgrade(&inner);
+                crate::playback_bridge::mark_explicit_play_pending();
                 if let Err(e) = commands::play_sound_async(
                     sound.id.clone(),
                     Arc::clone(&inner.state.config),
                     Arc::clone(&inner.state.player),
                     move |result| {
                         if let Err(e) = result {
+                            crate::playback_bridge::clear_explicit_play_pending();
                             log::warn!("Play failed for '{}': {}", sound_name, e);
                             if e.starts_with(commands::SOURCE_UNAVAILABLE_ERROR_PREFIX) {
                                 if let Ok(mut ids) = invalid_ids_for_play.lock() {
@@ -63,6 +65,7 @@ impl SoundListInner {
                         }
                     },
                 ) {
+                    crate::playback_bridge::clear_explicit_play_pending();
                     log::warn!("Failed to dispatch play for '{}': {}", sound.name, e);
                 }
                 return;
@@ -111,20 +114,25 @@ impl SoundListInner {
                         if let Ok(file) = result {
                             if let Some(path) = file.path() {
                                 let new_path = path.to_string_lossy().to_string();
-                                match commands::update_sound_source(
+                                if let Err(e) = commands::update_sound_source_async(
                                     sound_id.clone(),
                                     new_path,
                                     Arc::clone(&state.config),
+                                    move |result| match result {
+                                        Ok(_) => {
+                                            if let Ok(mut ids) = invalid_ids.lock() {
+                                                ids.remove(&sound_id);
+                                            }
+                                            if let Some(inner_refresh) =
+                                                inner_weak_refresh.upgrade()
+                                            {
+                                                inner_refresh.refresh_from_state_inner();
+                                            }
+                                        }
+                                        Err(e) => log::warn!("Update source failed: {e}"),
+                                    },
                                 ) {
-                                    Ok(_) => {
-                                        if let Ok(mut ids) = invalid_ids.lock() {
-                                            ids.remove(&sound_id);
-                                        }
-                                        if let Some(inner_refresh) = inner_weak_refresh.upgrade() {
-                                            inner_refresh.refresh_from_state_inner();
-                                        }
-                                    }
-                                    Err(e) => log::warn!("Update source failed: {e}"),
+                                    log::warn!("Failed to dispatch source update: {e}");
                                 }
                             }
                         }
@@ -206,7 +214,7 @@ impl SoundListInner {
         log::info!("Drag & drop handlers installed on sound list");
     }
 
-    fn handle_dropped_files(&self, paths: Vec<String>) -> bool {
+    fn handle_dropped_files(self: &Arc<Self>, paths: Vec<String>) -> bool {
         if paths.is_empty() {
             log::warn!("No paths to import");
             return false;
@@ -228,17 +236,27 @@ impl SoundListInner {
             Some(tab_id.clone())
         };
 
-        match commands::import_files_to_tab(paths, tab_id_opt, Arc::clone(&self.state.config)) {
-            Ok(new_sounds) => {
-                log::info!("Successfully imported {} sounds", new_sounds.len());
-                if !new_sounds.is_empty() {
-                    self.refresh_from_state_inner();
-                    self.emit_library_changed();
+        let inner_weak = Arc::downgrade(self);
+        match commands::import_files_to_tab_async(
+            paths,
+            tab_id_opt,
+            Arc::clone(&self.state.config),
+            move |result| match result {
+                Ok(new_sounds) => {
+                    log::info!("Successfully imported {} sounds", new_sounds.len());
+                    if !new_sounds.is_empty() {
+                        if let Some(inner) = inner_weak.upgrade() {
+                            inner.refresh_from_state_inner();
+                            inner.emit_library_changed();
+                        }
+                    }
                 }
-                true
-            }
+                Err(e) => log::warn!("Drop import failed: {e}"),
+            },
+        ) {
+            Ok(()) => true,
             Err(e) => {
-                log::warn!("Drop import failed: {e}");
+                log::warn!("Failed to dispatch drop import: {e}");
                 false
             }
         }
@@ -534,11 +552,23 @@ impl SoundListInner {
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 let error_window = win.downgrade();
+                let config_for_capture = Arc::clone(&state.config);
                 let hotkeys_for_capture = Arc::clone(&state.hotkeys);
+                let sound_id_for_capture = sound.id.clone();
                 crate::ui::dialogs::show_hotkey_capture(
                     &win,
                     sound.hotkey.as_deref(),
                     move |hotkey| {
+                        {
+                            let cfg = config_for_capture
+                                .lock()
+                                .map_err(|e| format!("Config lock poisoned: {}", e))?;
+                            commands::validate_hotkey_available(
+                                &cfg,
+                                &sound_id_for_capture,
+                                hotkey,
+                            )?;
+                        }
                         hotkeys_for_capture
                             .lock()
                             .map_err(|e| format!("Hotkeys lock poisoned: {}", e))?

@@ -24,6 +24,12 @@ pub const LOCAL_PLAYBACK_NODE_NAME: &str = "linuxsoundboard.local_playback";
 pub const MIC_CAPTURE_NODE_NAME: &str = "linuxsoundboard.mic_capture";
 pub const VIRTUAL_SINK_NAME: &str = "linuxsoundboard.virtual_output";
 pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
+pub const VIRTUAL_FEEDER_NODE_NAME: &str = "linuxsoundboard.virtual_mic_feeder";
 pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
-pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";
+pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux Soundboard Mic";
 pub const LOOPBACK_LATENCY_MS: u32 = 30;
+
+pub const PERSISTENT_VIRTUAL_MIC_CONF_NAME: &str = "99-linuxsoundboard.conf";
+pub const PERSISTENT_VIRTUAL_MIC_CONF_BODY: &str =
+    include_str!("../../packaging/pipewire/99-linuxsoundboard.conf");
+pub const PULSE_DEFAULT_PA_SNIPPET: &str = include_str!("../../packaging/pulse/default.pa.snippet");

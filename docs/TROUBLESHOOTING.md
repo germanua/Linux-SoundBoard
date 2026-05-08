@@ -130,7 +130,7 @@ Common package names:
 
 ### Sounds play through speakers but not through Discord or OBS
 
-Verify that the target app is listening to `Linux_Soundboard_Mic`, not your physical microphone.
+Verify that the target app is listening to `Linux Soundboard Mic`, not your physical microphone.
 
 List sources and the current default:
 
@@ -139,7 +139,44 @@ wpctl status -n
 wpctl inspect @DEFAULT_SOURCE@
 ```
 
-If the target app is a game that only reads the default source, set `Default Microphone` to `Auto While Running` before launching it.
+User installs set `Linux Soundboard Mic` as the system default microphone. If the target app is a game that only reads the default source, keep `Default Microphone` set to `Auto While Running`.
+
+### `Linux Soundboard Mic` does not appear in the device list
+
+The app installs a PipeWire config that creates one persistent `Audio/Source/Virtual` node at session start: `linuxsoundboard.virtual_mic`, displayed as `Linux Soundboard Mic`. Native packages drop the file at `/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf`; AppImage builds write the same file to `~/.config/pipewire/pipewire.conf.d/` on first launch.
+
+If the device is missing:
+
+1. Confirm the file exists in either of those locations.
+2. Restart PipeWire user services:
+   ```bash
+   systemctl --user restart wireplumber pipewire-pulse pipewire
+   ```
+3. Run `wpctl status -n | grep -i linuxsoundboard` and confirm `linuxsoundboard.virtual_mic` appears under Sources. If it is missing, check `journalctl --user -u pipewire -n 50` for parse errors in the conf.
+
+If `systemctl --user` is unavailable (e.g. WSL2, container without user systemd), log out and log back in instead. The app falls back to an in-process virtual source automatically when the persistent node cannot be registered, so audio routing continues to work — but in that fallback mode the soundboard must be launched before the game.
+
+### Discord plays my voice but soundboard clips do not reach it
+
+Both go through the same `Linux Soundboard Mic`, so a partial failure usually means the feeder stream did not connect to the virtual mic input ports. Check:
+
+1. With the soundboard running, run:
+   ```bash
+   pw-link -l | grep -i linuxsoundboard
+   ```
+   You should see `linuxsoundboard.virtual_mic_feeder:output_FL` linked into `linuxsoundboard.virtual_mic:input_FL` and `output_FR` linked into `input_FR`. If those links are missing, restart the soundboard and check the app logs.
+
+2. The soundboard re-attaches the feeder automatically when PipeWire restarts, so a manual relaunch is not required. If it does not, restart the soundboard.
+
+### EasyEffects (or another virtual source) is missing from the soundboard's "Mic source" dropdown
+
+The dropdown lists every input source PipeWire reports — physical mics and modern virtual sources alike. If EasyEffects is running but absent, confirm its node has class `Audio/Source/Virtual` (older PipeWire builds use a different class):
+
+```bash
+pw-cli list-objects Node | grep -B2 -A8 easyeffects_source
+```
+
+Look for `media.class = "Audio/Source/Virtual"`. If it is `Stream/Output/Audio` or anything else, the version of EasyEffects you are running predates the Audio/Source/Virtual convention and cannot be picked as a passthrough source — upgrade EasyEffects.
 
 ### Mic passthrough does not work
 

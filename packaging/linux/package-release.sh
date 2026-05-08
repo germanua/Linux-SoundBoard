@@ -38,6 +38,10 @@ install -Dm755 "$SWHKD_HELPER_SOURCE" "$bundle_dir/install-swhkd-helper.sh"
 install -Dm755 "$SCRIPT_DIR/install-user.sh" "$bundle_dir/install-user.sh"
 install -Dm755 "$SCRIPT_DIR/app-meta.sh" "$bundle_dir/app-meta.sh"
 install -Dm644 "$REPO_ROOT/README.md" "$bundle_dir/README.md"
+install -Dm644 "$REPO_ROOT/packaging/pipewire/99-linuxsoundboard.conf" \
+    "$bundle_dir/pipewire/99-linuxsoundboard.conf"
+install -Dm644 "$REPO_ROOT/packaging/pulse/default.pa.snippet" \
+    "$bundle_dir/pulse/default.pa.snippet"
 
 cat >"$bundle_dir/$APP_ID.desktop" <<EOF
 [Desktop Entry]

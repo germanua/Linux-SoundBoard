@@ -242,6 +242,10 @@ impl SoundList {
         self.inner.filtered_navigation_sounds_from_state()
     }
 
+    pub fn has_navigation_sounds(&self) -> bool {
+        self.inner.has_navigation_sounds_from_state()
+    }
+
     pub fn active_tab_id(&self) -> String {
         self.inner
             .active_tab_id

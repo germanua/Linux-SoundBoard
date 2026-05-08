@@ -10,6 +10,7 @@ license=('custom:PolyForm-Noncommercial-1.0.0')
 depends=(
   'gtk4'
   'libadwaita'
+  'libpulse'
   'libx11'
   'libxi'
   'libxtst'
@@ -73,4 +74,8 @@ package() {
       "$pkgdir/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
     install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
       "$pkgdir/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy"
+    install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
+      "$pkgdir/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf"
+    install -Dm644 packaging/linux/linux-soundboard-engine.service \
+      "$pkgdir/usr/lib/systemd/user/linux-soundboard-engine.service"
 }
