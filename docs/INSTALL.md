@@ -3,17 +3,17 @@
 ## Quick install — one command
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
 ```
 
 `install.sh` detects your distro and installs the right way for your system:
 
-| Distro | What happens |
-|---|---|
-| Arch / CachyOS / EndeavourOS | Installs `linux-soundboard-git` from the AUR via yay/paru |
-| Debian / Ubuntu | Downloads and installs the `.deb` package |
-| Fedora | Downloads and installs the `.rpm` package |
-| Everything else | Downloads the release tarball and runs `install-user.sh install` |
+| Distro                       | What happens                                                     |
+| ---------------------------- | ---------------------------------------------------------------- |
+| Arch / CachyOS / EndeavourOS | Installs `linux-soundboard-git` from the AUR via yay/paru        |
+| Debian / Ubuntu              | Downloads and installs the `.deb` package                        |
+| Fedora                       | Downloads and installs the `.rpm` package                        |
+| Everything else              | Downloads the release tarball and runs `install-user.sh install` |
 
 On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automatically.
 
@@ -21,9 +21,9 @@ On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automa
 
 ## Two scripts, different jobs
 
-| Script | Who runs it | What it does |
-|---|---|---|
-| `install.sh` | You, via the one-liner above | Detects distro, installs via package manager or tarball, handles swhkd on Wayland |
+| Script            | Who runs it                                                               | What it does                                                                        |
+| ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `install.sh`      | You, via the one-liner above                                              | Detects distro, installs via package manager or tarball, handles swhkd on Wayland   |
 | `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user system state: virtual mic, engine service, desktop entry, icons |
 
 `install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
@@ -56,17 +56,17 @@ Or install non-interactively, skipping the menu:
 
 ### What the installer configures
 
-| Item | Path | Effect |
-|---|---|---|
-| Binary | `~/.local/opt/linux-soundboard/linux-soundboard` | The main executable |
-| Desktop entry | `~/.local/share/applications/com.linuxsoundboard.app.desktop` | App appears in launcher |
-| Icons | `~/.local/share/icons/hicolor/*/apps/linux-soundboard.*` | Icon set for all sizes |
-| PipeWire config | `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` | Registers the virtual mic permanently |
-| PulseAudio fallback | `~/.config/pulse/default.pa` | Loads the virtual source when WirePlumber is absent |
-| Engine service | `~/.config/systemd/user/linux-soundboard-engine.service` | Starts the audio engine at login |
-| Default mic policy | Written to `~/.config/linux-soundboard/config.json` | Sets default microphone takeover mode |
+| Item                | Path                                                          | Effect                                              |
+| ------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
+| Binary              | `~/.local/opt/linux-soundboard/linux-soundboard`              | The main executable                                 |
+| Desktop entry       | `~/.local/share/applications/com.linuxsoundboard.app.desktop` | App appears in launcher                             |
+| Icons               | `~/.local/share/icons/hicolor/*/apps/linux-soundboard.*`      | Icon set for all sizes                              |
+| PipeWire config     | `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf`  | Registers the virtual mic permanently               |
+| PulseAudio fallback | `~/.config/pulse/default.pa`                                  | Loads the virtual source when WirePlumber is absent |
+| Engine service      | `~/.config/systemd/user/linux-soundboard-engine.service`      | Starts the audio engine at login                    |
+| Default mic policy  | Written to `~/.config/linux-soundboard/config.json`           | Sets default microphone takeover mode               |
 
-The PipeWire config sets `priority.session = 1010` so WirePlumber automatically presents `Linux Soundboard Mic` as the preferred input source for new apps.  The virtual microphone exists and is visible to other apps even when the soundboard UI is not running.
+The PipeWire config sets `priority.session = 1010` so WirePlumber automatically presents `Linux Soundboard Mic` as the preferred input source for new apps. The virtual microphone exists and is visible to other apps even when the soundboard UI is not running.
 
 ### Installer commands
 
@@ -152,7 +152,7 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-The AppImage writes `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` automatically on first launch and restarts PipeWire/WirePlumber.  However it does **not** install the engine service or register a desktop entry.  Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
+The AppImage writes `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` automatically on first launch and restarts PipeWire/WirePlumber. However it does **not** install the engine service or register a desktop entry. Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
 
 If AppImage reports a FUSE error:
 
@@ -173,18 +173,20 @@ sudo zypper install fuse
 
 On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
 
-**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button.  Clicking it runs a PolicyKit-authorized build and install flow entirely within the app.  No terminal required.
+**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button. Clicking it runs a PolicyKit-authorized build and install flow entirely within the app. No terminal required.
 
 Requirements for the in-app install:
+
 - Native install (DEB / RPM / AUR / AppImage on host), not a Flatpak sandbox
 - `pkexec` available (provided by `policykit-1` / `polkit`)
 - Network access to clone `swhkd` sources from GitHub
 
 **Manual install:**
+
 - Arch family: `yay -S swhkd-bin` or `yay -S swhkd-git`
 - Other distros: see [upstream install notes](https://github.com/waycrate/swhkd/blob/main/INSTALL.md)
 
-On **X11 and XWayland**, the app uses a native XInput2 backend.  No `swhkd` needed.
+On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` needed.
 
 ---
 
@@ -193,12 +195,14 @@ On **X11 and XWayland**, the app uses a native XInput2 backend.  No `swhkd` need
 ### Install build dependencies
 
 **Arch:**
+
 ```bash
 sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
   libpulse alsa-lib libx11 libxi pipewire wireplumber
 ```
 
 **Debian / Ubuntu:**
+
 ```bash
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
   libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
@@ -206,6 +210,7 @@ sudo apt install build-essential cargo rustc pkg-config imagemagick \
 ```
 
 **Fedora:**
+
 ```bash
 sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
   gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
@@ -268,4 +273,4 @@ journalctl --user -u linux-soundboard-engine.service -n 50
 
 ## Flatpak
 
-The repository contains Flatpak packaging files, but no Flathub submission is published yet.  Flatpak sandboxes also restrict PipeWire and systemd access so `install-user.sh` does not apply inside a Flatpak sandbox.
+The repository contains Flatpak packaging files, but no Flathub submission is published yet. Flatpak sandboxes also restrict PipeWire and systemd access so `install-user.sh` does not apply inside a Flatpak sandbox.

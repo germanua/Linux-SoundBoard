@@ -35,7 +35,7 @@
 <p align="center"><b>Install with one command — no root required:</b></p>
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
 ```
 
 <p align="center">Sets up the virtual mic, engine service, desktop entry, and icons automatically.</p>
@@ -44,9 +44,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/ma
 
 ## What it does
 
-Linux Soundboard routes sound effects into a **permanent virtual microphone** (`Linux Soundboard Mic`) that any app — Discord, OBS, Zoom, Steam games — can select as its input device.  Your real microphone stays available for mic passthrough so your voice and soundboard audio share the same virtual input.
+Linux Soundboard routes sound effects into a **permanent virtual microphone** (`Linux Soundboard Mic`) that any app — Discord, OBS, Zoom, Steam games — can select as its input device. Your real microphone stays available for mic passthrough so your voice and soundboard audio share the same virtual input.
 
-Unlike browser-based or Electron wrappers, this is a native Rust + GTK4 + PipeWire application.  The audio engine runs as a background systemd user service and keeps the virtual microphone registered even when the UI is closed.
+Unlike browser-based or Electron wrappers, this is a native Rust + GTK4 + PipeWire application. The audio engine runs as a background systemd user service and keeps the virtual microphone registered even when the UI is closed.
 
 ---
 
@@ -77,12 +77,12 @@ The command at the top of this page is all you need.
 
 `install.sh` detects your distro and does the right thing:
 
-| Distro | What happens |
-|---|---|
-| Arch / CachyOS / EndeavourOS | Installs from the AUR via yay or paru |
-| Debian / Ubuntu | Downloads and installs the `.deb` package |
-| Fedora | Downloads and installs the `.rpm` package |
-| Everything else | Downloads the release tarball and runs the user-space installer |
+| Distro                       | What happens                                                    |
+| ---------------------------- | --------------------------------------------------------------- |
+| Arch / CachyOS / EndeavourOS | Installs from the AUR via yay or paru                           |
+| Debian / Ubuntu              | Downloads and installs the `.deb` package                       |
+| Fedora                       | Downloads and installs the `.rpm` package                       |
+| Everything else              | Downloads the release tarball and runs the user-space installer |
 
 On Wayland, `swhkd` for global hotkeys is installed automatically.
 
@@ -137,7 +137,7 @@ The AppImage writes the PipeWire config on first launch but does not install the
 └─────────────────────────────────────────────────────┘
 ```
 
-The engine is a separate systemd user service.  This design keeps the virtual microphone and mic passthrough active regardless of whether the UI is open, and means opening/closing the UI window has no audio interruption.  Closing the UI window sends a **StopAll** command to the engine first so active sounds stop cleanly.
+The engine is a separate systemd user service. This design keeps the virtual microphone and mic passthrough active regardless of whether the UI is open, and means opening/closing the UI window has no audio interruption. Closing the UI window sends a **StopAll** command to the engine first so active sounds stop cleanly.
 
 ---
 
@@ -167,11 +167,11 @@ The engine is a separate systemd user service.  This design keeps the virtual mi
 
 ### Global hotkeys
 
-| Session | Backend | Notes |
-|---|---|---|
-| Wayland | `swhkd` | In-app one-click install via PolicyKit |
-| X11 | Native XInput2 | No extra software needed |
-| XWayland | Native XInput2 | Works without `swhkd` |
+| Session  | Backend        | Notes                                  |
+| -------- | -------------- | -------------------------------------- |
+| Wayland  | `swhkd`        | In-app one-click install via PolicyKit |
+| X11      | Native XInput2 | No extra software needed               |
+| XWayland | Native XInput2 | Works without `swhkd`                  |
 
 `~` pass-through prefix is applied automatically so hotkey combinations do not get consumed by the system.
 
@@ -179,14 +179,14 @@ The engine is a separate systemd user service.  This design keeps the virtual mi
 
 ## Documentation
 
-| Document | Contents |
-|---|---|
-| [Installation Guide](docs/INSTALL.md) | Full install, repair, and uninstall instructions including `install-user.sh` reference |
-| [Feature Reference](docs/FEATURE_REFERENCE.md) | Every UI element, right-click menu, control hotkey, and setting |
-| [Screenshot Gallery](docs/SCREENSHOTS.md) | Interface screenshots |
-| [Troubleshooting Guide](docs/TROUBLESHOOTING.md) | PipeWire, renderer, hotkey, and packaging issues |
-| [Bug Reporting Guide](docs/BUG_REPORTS.md) | How to file a useful bug report |
-| [Changelog](docs/CHANGELOG.md) | Version history |
+| Document                                         | Contents                                                                               |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| [Installation Guide](docs/INSTALL.md)            | Full install, repair, and uninstall instructions including `install-user.sh` reference |
+| [Feature Reference](docs/FEATURE_REFERENCE.md)   | Every UI element, right-click menu, control hotkey, and setting                        |
+| [Screenshot Gallery](docs/SCREENSHOTS.md)        | Interface screenshots                                                                  |
+| [Troubleshooting Guide](docs/TROUBLESHOOTING.md) | PipeWire, renderer, hotkey, and packaging issues                                       |
+| [Bug Reporting Guide](docs/BUG_REPORTS.md)       | How to file a useful bug report                                                        |
+| [Changelog](docs/CHANGELOG.md)                   | Version history                                                                        |
 
 ---
 
@@ -232,6 +232,6 @@ Linux Soundboard is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) l
 
 ## Acknowledgments
 
-Linux Soundboard is built on Rust, GTK4, Libadwaita, and the Linux audio ecosystem.  Key components include Symphonia for audio decoding, PipeWire and WirePlumber for virtual mic routing, and `swhkd` for Wayland hotkey capture.
+Linux Soundboard is built on Rust, GTK4, Libadwaita, and the Linux audio ecosystem. Key components include Symphonia for audio decoding, PipeWire and WirePlumber for virtual mic routing, and `swhkd` for Wayland hotkey capture.
 
 Full third-party license notices are in [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md).
