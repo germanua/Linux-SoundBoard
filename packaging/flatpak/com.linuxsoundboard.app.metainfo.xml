@@ -53,6 +53,17 @@
   </keywords>
   
   <releases>
+    <release version="2.0.0" date="2026-05-09">
+      <description>
+        <p>Major update promoted from the testing branch:</p>
+        <ul>
+          <li>Added atomic replace playback to remove stop/play snapshot races</li>
+          <li>Fixed continue play mode and stop-on-close behavior</li>
+          <li>Improved headphone mute icon states and small-size icon rendering</li>
+          <li>Updated swhkd hotkey formatting for native Wayland hotkeys</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.2" date="2026-04-01">
       <description>
         <p>Patch release for packaging and release metadata consistency:</p>

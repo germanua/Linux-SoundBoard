@@ -1,5 +1,5 @@
 Name:           linux-soundboard
-Version:        1.1.2
+Version:        2.0.0
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -133,6 +133,12 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Sat May 09 2026 germanua <noreply@linuxsoundboard.invalid> - 2.0.0-1
+- Promoted the testing branch rework to the main release line
+- Added atomic replace playback to remove stop/play snapshot races
+- Fixed continue play mode, close-time stop handling, and headphone icon states
+- Updated swhkd hotkey formatting for current native Wayland hotkey handling
+
 * Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.2-1
 - Fixed launcher icon lookup for native packages and AppImage builds
 - Installed icon aliases required by desktop search integrations

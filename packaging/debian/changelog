@@ -1,3 +1,12 @@
+linux-soundboard (2.0.0-1) unstable; urgency=medium
+
+  * Promote the testing branch rework to the main release line
+  * Add atomic replace playback to remove stop/play snapshot races
+  * Fix continue play mode, close-time stop handling, and headphone icon states
+  * Update swhkd hotkey formatting for current native Wayland hotkey handling
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Sat, 09 May 2026 10:00:00 +0000
+
 linux-soundboard (1.1.2-1) unstable; urgency=medium
 
   * Fix desktop icon name so launcher search finds the app consistently

@@ -38,11 +38,11 @@ For source builds or when you want to manage the download yourself:
 
 ```bash
 # 1. Download the latest release tarball from the Releases page
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-1.1.2-linux-x86_64.tar.gz
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.0.0-linux-x86_64.tar.gz
 
 # 2. Extract it
-tar -xzf linux-soundboard-1.1.2-linux-x86_64.tar.gz
-cd linux-soundboard-1.1.2-linux-x86_64
+tar -xzf linux-soundboard-2.0.0-linux-x86_64.tar.gz
+cd linux-soundboard-2.0.0-linux-x86_64
 
 # 3. Run the installer — an interactive menu guides you through the install
 ./install-user.sh
@@ -112,7 +112,7 @@ The AUR package installs a system PipeWire config at `/usr/share/pipewire/pipewi
 Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
 
 ```bash
-sudo apt install ./linux-soundboard_1.1.2-1_amd64.deb
+sudo apt install ./linux-soundboard_2.0.0-1_amd64.deb
 ```
 
 Required runtime packages (usually already present on modern Ubuntu/Debian):
@@ -130,7 +130,7 @@ After a DEB install, run `install-user.sh repair` once without a binary argument
 ### Fedora
 
 ```bash
-sudo dnf install ./linux-soundboard-1.1.2-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.0.0-1.x86_64.rpm
 ```
 
 Required runtime packages:
