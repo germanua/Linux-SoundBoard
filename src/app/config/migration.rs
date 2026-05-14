@@ -1,4 +1,4 @@
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -12,6 +12,7 @@ pub struct V0ToV1Migration;
 pub struct V1ToV2Migration;
 pub struct V2ToV3Migration;
 pub struct V3ToV4Migration;
+pub struct V4ToV5Migration;
 
 impl V0ToV1Migration {
     pub fn migrate(config: serde_json::Value) -> Result<serde_json::Value, MigrationError> {
@@ -81,6 +82,39 @@ impl V3ToV4Migration {
     }
 }
 
+impl V4ToV5Migration {
+    pub fn migrate(config: serde_json::Value) -> Result<serde_json::Value, MigrationError> {
+        let mut migrated = config;
+        if let Some(obj) = migrated.as_object_mut() {
+            obj.insert("schema_version".to_string(), serde_json::json!(5));
+            if let Some(settings) = obj
+                .get_mut("settings")
+                .and_then(|settings| settings.as_object_mut())
+            {
+                match settings
+                    .get("default_source_mode")
+                    .and_then(|mode| mode.as_str())
+                {
+                    Some("auto_while_running") => {
+                        settings.insert(
+                            "default_source_mode".to_string(),
+                            serde_json::json!("temporary_default_while_running"),
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        settings.insert(
+                            "default_source_mode".to_string(),
+                            serde_json::json!("auto_route_while_running"),
+                        );
+                    }
+                }
+            }
+        }
+        Ok(migrated)
+    }
+}
+
 pub fn run_migrations(
     config: serde_json::Value,
     from_version: u32,
@@ -92,19 +126,26 @@ pub fn run_migrations(
         let migrated = V0ToV1Migration::migrate(config)?;
         let migrated = V1ToV2Migration::migrate(migrated)?;
         let migrated = V2ToV3Migration::migrate(migrated)?;
-        return V3ToV4Migration::migrate(migrated);
+        let migrated = V3ToV4Migration::migrate(migrated)?;
+        return V4ToV5Migration::migrate(migrated);
     }
     if from_version == 1 {
         let migrated = V1ToV2Migration::migrate(config)?;
         let migrated = V2ToV3Migration::migrate(migrated)?;
-        return V3ToV4Migration::migrate(migrated);
+        let migrated = V3ToV4Migration::migrate(migrated)?;
+        return V4ToV5Migration::migrate(migrated);
     }
     if from_version == 2 {
         let migrated = V2ToV3Migration::migrate(config)?;
-        return V3ToV4Migration::migrate(migrated);
+        let migrated = V3ToV4Migration::migrate(migrated)?;
+        return V4ToV5Migration::migrate(migrated);
     }
     if from_version == 3 {
-        return V3ToV4Migration::migrate(config);
+        let migrated = V3ToV4Migration::migrate(config)?;
+        return V4ToV5Migration::migrate(migrated);
+    }
+    if from_version == 4 {
+        return V4ToV5Migration::migrate(config);
     }
     Err(MigrationError::NoMigrationPath {
         from: from_version,
@@ -191,13 +232,38 @@ mod tests {
     }
 
     #[test]
-    fn run_migrations_v0_to_v4_applies_all_steps() {
-        let migrated = run_migrations(base_config_with_settings(json!({})), 0).unwrap();
+    fn v4_to_v5_migrates_legacy_auto_mode_to_temporary_default() {
+        let migrated = V4ToV5Migration::migrate(base_config_with_settings(json!({
+            "default_source_mode": "auto_while_running"
+        })))
+        .unwrap();
 
-        assert_eq!(migrated["schema_version"], json!(4));
+        assert_eq!(migrated["schema_version"], json!(5));
         assert_eq!(
             migrated["settings"]["default_source_mode"],
-            json!("auto_while_running")
+            json!("temporary_default_while_running")
+        );
+    }
+
+    #[test]
+    fn v4_to_v5_adds_auto_route_mode_when_missing() {
+        let migrated = V4ToV5Migration::migrate(base_config_with_settings(json!({}))).unwrap();
+
+        assert_eq!(migrated["schema_version"], json!(5));
+        assert_eq!(
+            migrated["settings"]["default_source_mode"],
+            json!("auto_route_while_running")
+        );
+    }
+
+    #[test]
+    fn run_migrations_v0_to_v5_applies_all_steps() {
+        let migrated = run_migrations(base_config_with_settings(json!({})), 0).unwrap();
+
+        assert_eq!(migrated["schema_version"], json!(5));
+        assert_eq!(
+            migrated["settings"]["default_source_mode"],
+            json!("temporary_default_while_running")
         );
         assert_eq!(
             migrated["settings"]["mic_latency_profile"],
@@ -221,7 +287,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(migrated["schema_version"], json!(4));
+        assert_eq!(migrated["schema_version"], json!(5));
         assert_eq!(
             migrated["settings"]["mic_latency_profile"],
             json!("balanced")
@@ -245,7 +311,7 @@ mod tests {
         let config = base_config_with_settings(json!("not-an-object"));
         let migrated = run_migrations(config, 1).unwrap();
 
-        assert_eq!(migrated["schema_version"], json!(4));
+        assert_eq!(migrated["schema_version"], json!(5));
         assert_eq!(migrated["settings"], json!("not-an-object"));
     }
 

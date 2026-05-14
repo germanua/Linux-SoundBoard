@@ -24,7 +24,7 @@ On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automa
 | Script            | Who runs it                                                               | What it does                                                                        |
 | ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `install.sh`      | You, via the one-liner above                                              | Detects distro, installs via package manager or tarball, handles swhkd on Wayland   |
-| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user system state: virtual mic, engine service, desktop entry, icons |
+| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, and legacy audio cleanup |
 
 `install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
 
@@ -61,12 +61,11 @@ Or install non-interactively, skipping the menu:
 | Binary              | `~/.local/opt/linux-soundboard/linux-soundboard`              | The main executable                                 |
 | Desktop entry       | `~/.local/share/applications/com.linuxsoundboard.app.desktop` | App appears in launcher                             |
 | Icons               | `~/.local/share/icons/hicolor/*/apps/linux-soundboard.*`      | Icon set for all sizes                              |
-| PipeWire config     | `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf`  | Registers the virtual mic permanently               |
-| PulseAudio fallback | `~/.config/pulse/default.pa`                                  | Loads the virtual source when WirePlumber is absent |
 | Engine service      | `~/.config/systemd/user/linux-soundboard-engine.service`      | Starts the audio engine at login                    |
-| Default mic policy  | Written to `~/.config/linux-soundboard/config.json`           | Sets default microphone takeover mode               |
+| Legacy cleanup      | Old PipeWire/PulseAudio/WirePlumber soundboard routing files  | Disables obsolete persistent virtual mic setup      |
+| Microphone routing  | App setting in `~/.config/linux-soundboard/config.json`       | Routes recording apps while leaving system defaults alone by default |
 
-The PipeWire config sets `priority.session = 1010` so WirePlumber automatically presents `Linux Soundboard Mic` as the preferred input source for new apps. The virtual microphone exists and is visible to other apps even when the soundboard UI is not running.
+The engine creates `Linux Soundboard Mic` at runtime while it is running. It uses low PipeWire priority, unmutes the virtual mic on registration, and keeps EasyEffects or your real microphone as the system default unless you explicitly enable **Game compatibility mode**.
 
 ### Installer commands
 
@@ -105,7 +104,7 @@ yay -S linux-soundboard-git
 paru -S linux-soundboard-git
 ```
 
-The AUR package installs a system PipeWire config at `/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` and handles everything else as a managed package.
+The AUR package installs the app, icons, helper files, and the user audio-engine service. It does not install a persistent PipeWire virtual mic config.
 
 ### Ubuntu and Debian
 
@@ -121,7 +120,7 @@ Required runtime packages (usually already present on modern Ubuntu/Debian):
 pipewire  wireplumber  libpulse0
 ```
 
-After a DEB install, run `install-user.sh repair` once without a binary argument to set up the engine service and write the user-level PipeWire config for your account:
+After a DEB install, run `install-user.sh repair` once without a binary argument to set up the engine service for your account and disable obsolete user-level audio routing files:
 
 ```bash
 ./install-user.sh repair
@@ -139,7 +138,7 @@ Required runtime packages:
 pipewire  wireplumber  pulseaudio-libs
 ```
 
-Same as Debian: run `./install-user.sh repair` after the RPM install to configure the engine service and user-level audio routing for your account.
+Same as Debian: run `./install-user.sh repair` after the RPM install to configure the engine service and clean obsolete user-level audio routing for your account.
 
 ---
 
@@ -152,7 +151,7 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-The AppImage writes `~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf` automatically on first launch and restarts PipeWire/WirePlumber. However it does **not** install the engine service or register a desktop entry. Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
+The AppImage creates the virtual mic only while its audio engine is running. It does **not** install the engine service or register a desktop entry by itself. Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
 
 If AppImage reports a FUSE error:
 
@@ -242,8 +241,8 @@ After rebuilding, run `./packaging/linux/install-user.sh repair` to copy the new
    ```bash
    wpctl status -n | grep Soundboard
    ```
-3. In Discord, OBS, Zoom, or your target application, select **Linux Soundboard Mic** as the input device.
-4. For games that only read the system default mic, set **Default Microphone → Auto While Running** in the app settings.
+3. In Discord, OBS, Zoom, or your target application, select **Linux Soundboard Mic** as the input device when the app exposes a microphone picker.
+4. Leave **Microphone Routing → Auto-route while running** enabled for movable apps. For games or recorders that only read the system default mic, switch to **Game compatibility mode** before launching them.
 5. Add a sound folder or drag audio files into the library.
 6. On Wayland, click **Install** in the hotkey warning banner if global hotkeys are not working.
 

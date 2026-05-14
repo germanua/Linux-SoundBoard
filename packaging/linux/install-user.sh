@@ -231,18 +231,6 @@ resolve_icon_source_root() {
         "$SCRIPT_DIR/../../src/resources/icons"
 }
 
-resolve_pipewire_template() {
-    find_existing_path \
-        "$SCRIPT_DIR/pipewire/$PIPEWIRE_CONF_NAME" \
-        "$SCRIPT_DIR/../pipewire/$PIPEWIRE_CONF_NAME"
-}
-
-resolve_pulse_template() {
-    find_existing_path \
-        "$SCRIPT_DIR/pulse/default.pa.snippet" \
-        "$SCRIPT_DIR/../pulse/default.pa.snippet"
-}
-
 desktop_quote() {
     local raw=$1
 
@@ -458,44 +446,6 @@ set_pulseaudio_default_source() {
     pactl set-default-source "$name" >/dev/null 2>&1
 }
 
-set_virtual_mic_as_default_source() {
-    set_pipewire_default_source "$VIRTUAL_SOURCE_NAME" \
-        || set_pulseaudio_default_source "$VIRTUAL_SOURCE_NAME"
-}
-
-configure_default_microphone_mode() {
-    if [[ ! -f "$APP_CONFIG_FILE" ]]; then
-        return 0
-    fi
-
-    if ! grep -Fq '"default_source_mode"' "$APP_CONFIG_FILE"; then
-        return 0
-    fi
-
-    if ! grep -Fq '"default_source_mode": "manual"' "$APP_CONFIG_FILE"; then
-        return 0
-    fi
-
-    backup_file_if_needed "$APP_CONFIG_FILE"
-    sed -i 's/"default_source_mode"[[:space:]]*:[[:space:]]*"manual"/"default_source_mode": "auto_while_running"/' "$APP_CONFIG_FILE"
-    info "Configured app default microphone mode: Auto While Running"
-}
-
-claim_virtual_mic_default_source() {
-    local attempt
-
-    for attempt in 1 2 3 4 5; do
-        if virtual_mic_present && set_virtual_mic_as_default_source; then
-            info "Configured system default microphone: Linux Soundboard Mic"
-            return 0
-        fi
-        sleep 0.5
-    done
-
-    warn "Could not set Linux Soundboard Mic as the system default microphone yet."
-    return 1
-}
-
 restore_preinstall_default_source() {
     local policy=$1
     local previous
@@ -565,29 +515,6 @@ restore_preinstall_default_source() {
     esac
 }
 
-system_pipewire_conf_matches_template() {
-    local template=$1
-
-    [[ -f "$SYSTEM_PIPEWIRE_CONF" ]] && cmp -s "$SYSTEM_PIPEWIRE_CONF" "$template"
-}
-
-install_pipewire_config() {
-    local template=$1
-
-    if system_pipewire_conf_matches_template "$template"; then
-        info "System PipeWire config already provides Linux Soundboard virtual mic."
-        return 0
-    fi
-
-    if [[ -f "$PIPEWIRE_USER_CONF" ]] && ! contains_managed_marker "$PIPEWIRE_USER_CONF" && ! path_in_manifest "$PIPEWIRE_USER_CONF"; then
-        warn "Refusing to overwrite non-managed PipeWire config: $PIPEWIRE_USER_CONF"
-        return 0
-    fi
-
-    install_file_from_source "$template" "$PIPEWIRE_USER_CONF" 644
-    info "Installed user PipeWire virtual mic config: $PIPEWIRE_USER_CONF"
-}
-
 strip_managed_block() {
     local input=$1
     local output=$2
@@ -607,60 +534,99 @@ strip_managed_block() {
     ' "$input" >"$output"
 }
 
-install_pulseaudio_config() {
-    local template=$1
-    local base
-    local tmp
+next_disabled_path() {
+    local path=$1
+    local candidate="$path.disabled"
+    local index=1
 
-    base="$(mktemp)"
-    tmp="$(mktemp)"
+    while [[ -e "$candidate" ]]; do
+        candidate="$path.disabled.$index"
+        index=$((index + 1))
+    done
 
-    if [[ -f "$PULSE_DEFAULT_PA" ]]; then
-        backup_file_if_needed "$PULSE_DEFAULT_PA"
-        strip_managed_block "$PULSE_DEFAULT_PA" "$base"
-    else
-        printf '.include /etc/pulse/default.pa\n' >"$base"
+    printf '%s\n' "$candidate"
+}
+
+managed_linuxsoundboard_audio_file() {
+    local path=$1
+
+    [[ -f "$path" ]] || return 1
+    grep -Fq "$MANAGED_MARKER" "$path" || return 1
+    grep -Fq "$VIRTUAL_SOURCE_NAME" "$path" || return 1
+}
+
+disable_file() {
+    local path=$1
+    local label=$2
+    local disabled_path
+
+    disabled_path="$(next_disabled_path "$path")"
+    mv -- "$path" "$disabled_path"
+    info "Disabled obsolete $label: $disabled_path"
+}
+
+disable_managed_audio_file() {
+    local path=$1
+    local label=$2
+
+    [[ -e "$path" ]] || return 0
+    if ! managed_linuxsoundboard_audio_file "$path"; then
+        warn "Skipped non-managed $label: $path"
+        return 0
     fi
 
-    sed '${/^$/d;}' "$base" >"$tmp"
-    printf '\n\n' >>"$tmp"
-    cat "$template" >>"$tmp"
-    printf '\n' >>"$tmp"
+    disable_file "$path" "$label"
+}
 
-    install_file_from_source "$tmp" "$PULSE_DEFAULT_PA" 644
-    rm -f "$base" "$tmp"
-    info "Installed PulseAudio virtual mic block: $PULSE_DEFAULT_PA"
+remove_system_managed_audio_file() {
+    local path=$1
+    local label=$2
+
+    [[ -e "$path" ]] || return 0
+    if ! managed_linuxsoundboard_audio_file "$path"; then
+        warn "Skipped non-managed system $label: $path"
+        return 0
+    fi
+
+    if [[ -w "$path" && -w "$(dirname "$path")" ]]; then
+        rm -f -- "$path"
+        info "Removed obsolete system $label: $path"
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo rm -f -- "$path"
+        info "Removed obsolete system $label with sudo: $path"
+    else
+        warn "Obsolete system $label still exists: $path"
+        warn "Remove it manually with: sudo rm -f '$path'"
+    fi
+}
+
+cleanup_legacy_wireplumber_config() {
+    local path
+    local candidates=(
+        "$XDG_CONFIG_HOME/wireplumber/main.lua.d/99-linuxsoundboard-autoroute.lua"
+        "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/50-linuxsoundboard-capture.conf"
+        "$XDG_CONFIG_HOME/wireplumber/wireplumber.conf.d/51-linuxsoundboard-force-capture.conf"
+        "$XDG_DATA_HOME/wireplumber/scripts/50-linuxsoundboard-force-capture.lua"
+    )
+
+    for path in "${candidates[@]}"; do
+        [[ -f "$path" ]] || continue
+        if grep -Fiq 'linuxsoundboard' "$path" && { grep -Fq 'target.object' "$path" || grep -Fq "$VIRTUAL_SOURCE_NAME" "$path" || grep -Fq 'LinuxSoundboard_Mic' "$path"; }; then
+            disable_file "$path" "WirePlumber routing file"
+        fi
+    done
+}
+
+cleanup_legacy_audio_config() {
+    capture_preinstall_audio_snapshot
+    disable_managed_audio_file "$PIPEWIRE_USER_CONF" "PipeWire virtual mic config"
+    remove_system_managed_audio_file "$SYSTEM_PIPEWIRE_CONF" "PipeWire virtual mic config"
+    cleanup_legacy_wireplumber_config
+    remove_pulse_managed_block
 }
 
 install_audio_config() {
-    local server
-    local pipewire_template
-    local pulse_template
-
-    capture_preinstall_audio_snapshot
-    server="$(detect_audio_server)"
-
-    case "$server" in
-        pipewire)
-            pipewire_template="$(resolve_pipewire_template || true)"
-            if [[ -n "$pipewire_template" ]]; then
-                install_pipewire_config "$pipewire_template"
-            else
-                warn "PipeWire template not found; virtual mic config was not installed."
-            fi
-            ;;
-        pulseaudio)
-            pulse_template="$(resolve_pulse_template || true)"
-            if [[ -n "$pulse_template" ]]; then
-                install_pulseaudio_config "$pulse_template"
-            else
-                warn "PulseAudio template not found; virtual mic config was not installed."
-            fi
-            ;;
-        *)
-            warn "No supported audio server detected; audio config was not installed."
-            ;;
-    esac
+    cleanup_legacy_audio_config
 }
 
 active_user_unit() {
@@ -770,10 +736,8 @@ install_or_repair() {
     install_file_from_content "$DESKTOP_DIR/$APP_ID.desktop" 644 "$(render_desktop_file)"
     install_file_from_content "$ENGINE_SERVICE" 644 "$(render_engine_service)"
     install_audio_config
-    configure_default_microphone_mode
     restart_audio_services
     reload_start_engine_service
-    claim_virtual_mic_default_source || true
     refresh_desktop_caches
 
     if virtual_mic_present; then
@@ -812,6 +776,7 @@ remove_managed_file() {
 }
 
 remove_pipewire_config() {
+    remove_system_managed_audio_file "$SYSTEM_PIPEWIRE_CONF" "PipeWire virtual mic config"
     if [[ -f "$PIPEWIRE_USER_CONF" ]]; then
         if path_in_manifest "$PIPEWIRE_USER_CONF" || contains_managed_marker "$PIPEWIRE_USER_CONF"; then
             rm -f -- "$PIPEWIRE_USER_CONF"
@@ -986,7 +951,7 @@ print_status() {
     printf '  Engine unit:   %s\n' "$([[ -f "$ENGINE_SERVICE" ]] && printf '%s' "$ENGINE_SERVICE" || printf 'missing')"
     printf '  Engine active: %s\n' "${service_state:-unknown}"
     printf '  Engine enable: %s\n' "${service_enabled:-unknown}"
-    printf '  PipeWire conf: %s\n' "$([[ -f "$PIPEWIRE_USER_CONF" ]] && printf '%s' "$PIPEWIRE_USER_CONF" || printf 'missing')"
+    printf '  Legacy conf:   %s\n' "$([[ -f "$PIPEWIRE_USER_CONF" ]] && printf '%s' "$PIPEWIRE_USER_CONF" || printf 'missing')"
     printf '  Pulse config:  %s\n' "$(pulse_config_status)"
     printf '  Virtual mic:   %s\n' "$(virtual_mic_present && printf 'visible' || printf 'not visible')"
     printf '  Default mic:   %s\n' "${default_source:-unknown}"

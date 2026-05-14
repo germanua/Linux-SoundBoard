@@ -9,9 +9,10 @@ use std::time::Duration;
 
 use log::{info, warn};
 
+use crate::app_meta::APP_VERSION;
 use crate::audio::engine_ipc::{self, BindEngineSocket, EngineRequest, EngineResponse};
 use crate::audio::player::AudioPlayer;
-use crate::config::Config;
+use crate::config::{Config, DefaultSourceMode, CURRENT_SCHEMA_VERSION};
 
 pub fn run() -> i32 {
     match engine_ipc::bind_engine_socket() {
@@ -67,11 +68,13 @@ fn load_config() -> Config {
         Ok(config) => config,
         Err(err) => {
             warn!(
-                "Failed to load config from '{}': {}. Starting audio engine with defaults.",
+                "Failed to load config from '{}': {}. Starting audio engine in fail-closed routing mode.",
                 Config::config_path().display(),
                 err
             );
-            Config::default()
+            let mut config = Config::default();
+            config.settings.default_source_mode = DefaultSourceMode::Manual;
+            config
         }
     }
 }
@@ -116,6 +119,14 @@ fn handle_request(
     stop: &AtomicBool,
 ) -> EngineResponse {
     match request {
+        EngineRequest::Info => EngineResponse::Info {
+            engine_protocol_version: engine_ipc::ENGINE_PROTOCOL_VERSION,
+            app_version: APP_VERSION.to_string(),
+            config_schema_version: CURRENT_SCHEMA_VERSION,
+            binary_path: std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "unknown".to_string()),
+        },
         EngineRequest::Ping => EngineResponse::Pong,
         EngineRequest::Snapshot => EngineResponse::Snapshot {
             snapshot: player.snapshot(),

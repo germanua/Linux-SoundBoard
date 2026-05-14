@@ -38,15 +38,15 @@
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
 ```
 
-<p align="center">Sets up the virtual mic, engine service, desktop entry, and icons automatically.</p>
+<p align="center">Sets up the runtime audio engine, desktop entry, and icons automatically.</p>
 
 ---
 
 ## What it does
 
-Linux Soundboard routes sound effects into a **permanent virtual microphone** (`Linux Soundboard Mic`) that any app — Discord, OBS, Zoom, Steam games — can select as its input device. Your real microphone stays available for mic passthrough so your voice and soundboard audio share the same virtual input.
+Linux Soundboard routes sound effects into a runtime virtual microphone (`Linux Soundboard Mic`) that apps can use as their input device. By default it leaves EasyEffects or your real microphone as the system default, then routes movable recording apps to the soundboard mic while the engine is running.
 
-Unlike browser-based or Electron wrappers, this is a native Rust + GTK4 + PipeWire application. The audio engine runs as a background systemd user service and keeps the virtual microphone registered even when the UI is closed.
+Unlike browser-based or Electron wrappers, this is a native Rust + GTK4 + PipeWire application. The audio engine runs as a background systemd user service, creates the virtual microphone at runtime, and keeps audio active even when the UI is closed.
 
 ---
 
@@ -89,7 +89,7 @@ On Wayland, `swhkd` for global hotkeys is installed automatically.
 After install, the per-user setup tool `install-user.sh` handles repair and uninstall:
 
 ```bash
-install-user.sh repair          # re-register virtual mic, restart engine
+install-user.sh repair          # clean old audio configs, restart engine
 install-user.sh remove          # uninstall with interactive prompt
 install-user.sh remove --yes    # uninstall without prompts
 install-user.sh status          # show what is installed and service status
@@ -102,16 +102,16 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-The AppImage writes the PipeWire config on first launch but does not install the engine service or desktop entry. Run `install-user.sh install linux-soundboard-x86_64.AppImage` for a full install from the AppImage.
+The AppImage creates the virtual mic only while its audio engine is running and does not install the engine service or desktop entry by itself. Run `install-user.sh install linux-soundboard-x86_64.AppImage` for a full install from the AppImage.
 
 ---
 
 ## Quick Start
 
-1. Install using the method above. The virtual microphone `Linux Soundboard Mic` is now permanently registered with PipeWire.
+1. Install using the method above. The engine creates `Linux Soundboard Mic` while it is running.
 2. Launch `linux-soundboard` from your application menu or terminal.
-3. **In Discord, OBS, Zoom, or your game** — select `Linux Soundboard Mic` as the microphone input. You only need to do this once.
-4. For games that read the system default mic (e.g. Arma Reforger): set **Default Microphone** to `Auto While Running` in Settings. The app sets `Linux Soundboard Mic` as default while running and restores your real mic when you exit.
+3. **In Discord, OBS, Zoom, or your game** — select `Linux Soundboard Mic` as the microphone input when the app has an input selector.
+4. Keep **Microphone Routing** set to `Auto-route while running` for normal apps. For games that only read the system default mic, switch to `Game compatibility mode` before launching the game; the app restores the previous default when you leave that mode or exit.
 5. Add a sound folder or drag audio files into the window to build your library.
 6. On Wayland: if you see a hotkey warning, click **Install** in the banner to install `swhkd` for global hotkeys.
 
@@ -137,7 +137,7 @@ The AppImage writes the PipeWire config on first launch but does not install the
 └─────────────────────────────────────────────────────┘
 ```
 
-The engine is a separate systemd user service. This design keeps the virtual microphone and mic passthrough active regardless of whether the UI is open, and means opening/closing the UI window has no audio interruption. Closing the UI window sends a **StopAll** command to the engine first so active sounds stop cleanly.
+The engine is a separate systemd user service. This design keeps the runtime virtual microphone and mic passthrough active regardless of whether the UI is open, and means opening/closing the UI window has no audio interruption. Closing the UI window sends a **StopAll** command to the engine first so active sounds stop cleanly.
 
 ---
 
@@ -152,10 +152,11 @@ The engine is a separate systemd user service. This design keeps the virtual mic
 
 ### Audio routing
 
-- **Permanent virtual mic** — `Linux Soundboard Mic` is always registered with PipeWire, even when the app is not running
+- **Runtime virtual mic** — `Linux Soundboard Mic` is created by the active engine, uses low PipeWire priority, and is unmuted on registration
 - **Mic passthrough** — blends your real microphone into the virtual mic stream so your voice and sound effects go out on the same input device
-- **Default mic takeover** — `Auto While Running` mode sets the virtual mic as the system default while the app is open and restores your real mic when you close it; games and apps that cannot switch inputs still hear you
-- **PulseAudio fallback** — works on systems without WirePlumber using a `default.pa` fragment
+- **Auto-route mode** — keeps EasyEffects or your real microphone as the system default, then routes movable recording apps to `Linux Soundboard Mic`
+- **Game compatibility mode** — temporarily sets the virtual mic as the system default for games and recorders that cannot be moved, then restores the previous default when disabled or closed
+- **EasyEffects coexistence** — captures processed mic audio from EasyEffects while routing target apps to the soundboard mic without making it the default outside compatibility mode
 
 ### Library
 

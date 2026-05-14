@@ -139,34 +139,46 @@ wpctl status -n
 wpctl inspect @DEFAULT_SOURCE@
 ```
 
-User installs set `Linux Soundboard Mic` as the system default microphone. If the target app is a game that only reads the default source, keep `Default Microphone` set to `Auto While Running`.
+New installs keep EasyEffects or your real microphone as the system default. In the default **Microphone Routing → Auto-route while running** mode, Linux Soundboard moves eligible recording streams to `Linux Soundboard Mic` while it is running. If the target app is a game or recorder that only reads the system default source and cannot be moved, enable **Game compatibility mode** before launching it.
 
 ### `Linux Soundboard Mic` does not appear in the device list
 
-The app installs a PipeWire config that creates one persistent `Audio/Source/Virtual` node at session start: `linuxsoundboard.virtual_mic`, displayed as `Linux Soundboard Mic`. Native packages drop the file at `/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf`; AppImage builds write the same file to `~/.config/pipewire/pipewire.conf.d/` on first launch.
+The app no longer installs a persistent PipeWire config. `linuxsoundboard.virtual_mic`, displayed as `Linux Soundboard Mic`, is created by the running audio engine. If the engine autostarts at login, the mic can appear after login even when the UI is closed.
 
 If the device is missing:
 
-1. Confirm the file exists in either of those locations.
-2. Restart PipeWire user services:
+1. Confirm the engine is running:
    ```bash
+   systemctl --user status linux-soundboard-engine.service
+   ```
+2. Restart the engine:
+   ```bash
+   systemctl --user restart linux-soundboard-engine.service
+   ```
+3. Run `wpctl status -n | grep -i linuxsoundboard` and confirm `linuxsoundboard.virtual_mic` appears under Sources.
+4. If an old persistent config still exists, disable it and restart audio services:
+   ```bash
+   mv ~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf ~/.config/pipewire/pipewire.conf.d/99-linuxsoundboard.conf.disabled
    systemctl --user restart wireplumber pipewire-pulse pipewire
    ```
-3. Run `wpctl status -n | grep -i linuxsoundboard` and confirm `linuxsoundboard.virtual_mic` appears under Sources. If it is missing, check `journalctl --user -u pipewire -n 50` for parse errors in the conf.
 
-If `systemctl --user` is unavailable (e.g. WSL2, container without user systemd), log out and log back in instead. The app falls back to an in-process virtual source automatically when the persistent node cannot be registered, so audio routing continues to work — but in that fallback mode the soundboard must be launched before the game.
+If `systemctl --user` is unavailable (e.g. WSL2, container without user systemd), keep the app running before launching the target app.
 
 ### Discord plays my voice but soundboard clips do not reach it
 
-Both go through the same `Linux Soundboard Mic`, so a partial failure usually means the feeder stream did not connect to the virtual mic input ports. Check:
+Both go through the same runtime `Linux Soundboard Mic`, so a partial failure usually means the target app is not routed to `linuxsoundboard.virtual_mic`, the virtual mic is muted by stale WirePlumber state, or the running engine is stale.
 
 1. With the soundboard running, run:
    ```bash
-   pw-link -l | grep -i linuxsoundboard
+   wpctl status -n | grep -i linuxsoundboard
+   pw-metadata -n default -m | grep -i linuxsoundboard
    ```
-   You should see `linuxsoundboard.virtual_mic_feeder:output_FL` linked into `linuxsoundboard.virtual_mic:input_FL` and `output_FR` linked into `input_FR`. If those links are missing, restart the soundboard and check the app logs.
+   The virtual mic should not be muted, and the target app stream should point at `linuxsoundboard.virtual_mic`.
 
-2. The soundboard re-attaches the feeder automatically when PipeWire restarts, so a manual relaunch is not required. If it does not, restart the soundboard.
+2. Restart the engine so the UI refuses any old incompatible engine and starts the current one:
+   ```bash
+   systemctl --user restart linux-soundboard-engine.service
+   ```
 
 ### EasyEffects (or another virtual source) is missing from the soundboard's "Mic source" dropdown
 

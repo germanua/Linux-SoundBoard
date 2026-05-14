@@ -2,6 +2,7 @@
 set -e
 
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    rm -f /usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --global disable linux-soundboard-engine.service >/dev/null 2>&1 || true
     fi

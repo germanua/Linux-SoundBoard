@@ -1,7 +1,9 @@
-//! PipeWire-backed audio playback with a persistent virtual microphone.
+//! PipeWire-backed audio playback with a runtime virtual microphone.
 
 use glib;
 use log::{debug, error, info, trace, warn};
+use ogg::PacketReader;
+use opus::{Channels as OpusChannels, Decoder as OpusDecoder};
 use pipewire as pw;
 use pw::channel as pw_channel;
 use pw::properties::properties;
@@ -11,7 +13,8 @@ use rodio::source::UniformSourceIterator;
 use rodio::Source;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::BufReader as IoBufReader;
 use std::mem;
 use std::process::Command;
 use std::rc::{Rc, Weak};
@@ -42,13 +45,13 @@ mod mixing;
 mod playback;
 mod pulse_backend;
 mod queues;
+mod source_autoroute;
 mod source_routing;
 mod streams;
 
 use command_handlers::{audio_command_kind, handle_audio_command};
 use explicit_links::{
-    handle_link_global_remove, track_node_global, track_port_global,
-    try_link_feeder_to_virtual_mic, AudioChannel, TrackedPort,
+    handle_link_global_remove, track_node_global, track_port_global, AudioChannel, TrackedPort,
 };
 use limiter::LookAheadLimiter;
 use mixing::clear_mic_input_queue;
@@ -60,6 +63,11 @@ use mixing::{enqueue_passthrough_chunk, fill_output_queues};
 use playback::ActivePlayback;
 use pulse_backend::PulseAudioBackend;
 use queues::ProcessQueues;
+use source_autoroute::{
+    bind_default_metadata_from_global, bind_input_stream_node_from_global,
+    clear_autorouted_input_streams, maybe_autoroute_input_streams, AutoroutedInputStream,
+    DefaultMetadataHandle, InputStreamNodeHandle,
+};
 use source_routing::{
     apply_default_source_mode, maybe_claim_default_source, recreate_capture_stream,
     resolve_capture_target, resolve_source_id_by_name, restore_default_source,
@@ -69,8 +77,7 @@ use source_routing::{
     best_fallback_source_name, parse_wpctl_node_name, resolve_capture_target_from_default,
 };
 use streams::{
-    create_capture_stream, create_legacy_virtual_source_stream, create_local_output_stream,
-    create_virtual_feeder_stream,
+    create_capture_stream, create_local_output_stream, create_runtime_virtual_source_stream,
 };
 
 const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
@@ -142,10 +149,6 @@ struct RuntimeConfig {
     auto_gain: AutoGainState,
     looping: bool,
     audio_backend: AudioBackendKind,
-    /// True when the persistent `Linux Soundboard Mic` node is registered
-    /// with PipeWire (Soundpad-style ownership). Drives whether we feed
-    /// that node or fall back to creating an in-process virtual source.
-    persistent_virtual_mic: bool,
 }
 
 impl RuntimeConfig {
@@ -167,7 +170,6 @@ impl RuntimeConfig {
             auto_gain: AutoGainState::from_config(config),
             looping: playback.play_mode.should_loop(),
             audio_backend: AudioBackendKind::PipeWire,
-            persistent_virtual_mic: false,
         }
     }
 
@@ -416,11 +418,26 @@ impl AutoGainState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SourceDescriptor {
     id: u32,
+    serial: Option<u64>,
     node_name: String,
     display_name: String,
     priority_session: i32,
     is_monitor: bool,
     is_our_virtual_mic: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InputStreamDescriptor {
+    id: u32,
+    node_name: String,
+    app_name: Option<String>,
+    app_id: Option<String>,
+    app_process_binary: Option<String>,
+    media_name: Option<String>,
+    media_role: Option<String>,
+    target_object: Option<String>,
+    dont_move: bool,
+    stream_capture_sink: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -559,7 +576,20 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn connect_to_engine() -> Option<Self> {
-        if !crate::audio::engine_ipc::engine_running() {
+        let info = match crate::audio::engine_ipc::engine_info() {
+            Ok(info) => info,
+            Err(err) => {
+                if crate::audio::engine_ipc::engine_running() {
+                    warn!("Refusing to use incompatible Linux Soundboard audio engine: {err}");
+                }
+                return None;
+            }
+        };
+        if !crate::audio::engine_ipc::engine_info_compatible(&info) {
+            warn!(
+                "Refusing to use incompatible Linux Soundboard audio engine: protocol={} schema={} binary={}",
+                info.engine_protocol_version, info.config_schema_version, info.binary_path
+            );
             return None;
         }
 
@@ -608,29 +638,16 @@ impl AudioPlayer {
     }
 
     pub fn new_with_config(config: &crate::config::Config) -> Self {
-        Self::new_with_config_and_persistent_mic(config, false)
-    }
-
-    pub fn new_with_config_and_persistent_mic(
-        config: &crate::config::Config,
-        persistent_virtual_mic: bool,
-    ) -> Self {
-        Self::new_with_config_and_audio_backend(
-            config,
-            AudioBackendKind::PipeWire,
-            persistent_virtual_mic,
-        )
+        Self::new_with_config_and_audio_backend(config, AudioBackendKind::PipeWire)
     }
 
     pub fn new_with_config_and_audio_backend(
         config: &crate::config::Config,
         audio_backend: AudioBackendKind,
-        persistent_virtual_mic: bool,
     ) -> Self {
         let (command_tx, command_rx) = pw_channel::channel();
         let mut runtime = RuntimeConfig::from_config(config);
         runtime.audio_backend = audio_backend;
-        runtime.persistent_virtual_mic = persistent_virtual_mic;
         let snapshot = std::sync::Arc::new(RwLock::new(PlayerSnapshot::default()));
         let thread_snapshot = snapshot.clone();
         let handle =
@@ -1007,7 +1024,9 @@ impl AudioPlayer {
             )? {
                 crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
                 crate::audio::engine_ipc::EngineResponse::Error { message } => Err(message),
-                other => Err(format!("Unexpected engine response to PlayReplace: {other:?}")),
+                other => Err(format!(
+                    "Unexpected engine response to PlayReplace: {other:?}"
+                )),
             };
         }
         // Local backend: stop_all + play via the command channel (in-process, no IPC race).
@@ -1222,25 +1241,21 @@ impl BackendState {
             }
         }
     }
-
-    fn virtual_stream_usable(&self) -> bool {
-        match self {
-            Self::PipeWire(backend) => backend.virtual_stream.as_ref().is_some_and(|stream| {
-                !matches!(
-                    stream.current_state(),
-                    ManagedStreamState::Error | ManagedStreamState::Unconnected
-                )
-            }),
-            Self::PulseAudio(backend) => backend.virtual_stream_active(),
-        }
-    }
 }
 
 struct LoopState {
     runtime: RuntimeConfig,
     available: bool,
+    default_metadata: Option<DefaultMetadataHandle>,
     backend: Option<BackendState>,
     sources: HashMap<u32, SourceDescriptor>,
+    input_streams: HashMap<u32, InputStreamDescriptor>,
+    input_stream_metadata_targets: HashMap<u32, String>,
+    input_stream_handles: HashMap<u32, InputStreamNodeHandle>,
+    autorouted_input_streams: HashMap<u32, AutoroutedInputStream>,
+    autoroute_blocked_input_streams: HashSet<u32>,
+    default_audio_source_name: Option<String>,
+    virtual_mic_state_reset_ids: HashSet<u32>,
     virtual_mic_node_id: Option<u32>,
     virtual_mic_input_ports: HashMap<AudioChannel, u32>,
     feeder_node_id: Option<u32>,
@@ -1273,8 +1288,16 @@ impl LoopState {
         Self {
             runtime,
             available: false,
+            default_metadata: None,
             backend: None,
             sources: HashMap::new(),
+            input_streams: HashMap::new(),
+            input_stream_metadata_targets: HashMap::new(),
+            input_stream_handles: HashMap::new(),
+            autorouted_input_streams: HashMap::new(),
+            autoroute_blocked_input_streams: HashSet::new(),
+            default_audio_source_name: None,
+            virtual_mic_state_reset_ids: HashSet::new(),
             virtual_mic_node_id: None,
             virtual_mic_input_ports: HashMap::new(),
             feeder_node_id: None,
@@ -1480,9 +1503,6 @@ fn pipewire_thread_main(
             move |_| {
                 if let Some(state_rc) = weak.upgrade() {
                     let mut state = state_rc.borrow_mut();
-                    if state.runtime.persistent_virtual_mic {
-                        ensure_virtual_feeder_present(&mut state);
-                    }
                     ensure_capture_stream_present(&mut state);
                     state.publish_snapshot();
                 }
@@ -1526,6 +1546,7 @@ fn create_pipewire_backend(
     let context = pw::context::ContextRc::new(&mainloop, None).map_err(|e| e.to_string())?;
     let core = context.connect_rc(None).map_err(|e| e.to_string())?;
     let registry = core.get_registry_rc().map_err(|e| e.to_string())?;
+    let registry_for_global = registry.clone();
 
     let registry_listener = registry
         .add_listener_local()
@@ -1537,9 +1558,21 @@ fn create_pipewire_backend(
                 let link = link_from_global(global);
                 let capture_node_id = capture_node_id_from_global(global);
                 let source = source_from_global(global);
+                let input_stream = bind_input_stream_node_from_global(
+                    &registry_for_global,
+                    global,
+                    weak_state.clone(),
+                );
+                let metadata = bind_default_metadata_from_global(
+                    &registry_for_global,
+                    global,
+                    weak_state.clone(),
+                );
                 if !is_link_node
                     && !is_link_port
                     && source.is_none()
+                    && input_stream.is_none()
+                    && metadata.is_none()
                     && link.is_none()
                     && capture_node_id.is_none()
                 {
@@ -1547,32 +1580,48 @@ fn create_pipewire_backend(
                 }
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
+                    if let Some(metadata) = metadata {
+                        state.default_metadata = Some(metadata);
+                        maybe_autoroute_input_streams(&mut state);
+                    }
                     if let Some(capture_node_id) = capture_node_id {
                         state.capture_node_id = Some(capture_node_id);
                     }
                     if is_link_node {
-                        let changed = track_node_global(&mut state, global);
-                        if changed
-                            && state.runtime.persistent_virtual_mic
-                            && state.feeder_node_id.is_none()
-                        {
-                            ensure_virtual_feeder_present(&mut state);
-                        }
+                        track_node_global(&mut state, global);
                     }
                     if is_link_port {
                         track_port_global(&mut state, global);
                     }
                     if let Some(link) = link {
                         state.links.insert(link.id, link);
-                        try_link_feeder_to_virtual_mic(&mut state);
                     }
                     if let Some(source) = source {
+                        if source.is_our_virtual_mic
+                            && state.virtual_mic_state_reset_ids.insert(source.id)
+                        {
+                            spawn_virtual_mic_state_reset(source.id);
+                        }
                         state.sources.insert(source.id, source);
                         maybe_claim_default_source(&mut state);
+                        maybe_autoroute_input_streams(&mut state);
                         // A new source appeared — if mic passthrough is on but
                         // we haven't been able to attach yet (startup race), or
                         // the user's preferred source just came online, retry.
                         ensure_capture_stream_present(&mut state);
+                    }
+                    if let Some((mut input_stream, input_stream_handle)) = input_stream {
+                        let stream_id = input_stream.id;
+                        if let Some(target_object) =
+                            state.input_stream_metadata_targets.get(&stream_id).cloned()
+                        {
+                            input_stream.target_object = Some(target_object);
+                        }
+                        state.input_streams.insert(stream_id, input_stream);
+                        state
+                            .input_stream_handles
+                            .insert(stream_id, input_stream_handle);
+                        maybe_autoroute_input_streams(&mut state);
                     }
                     state.publish_snapshot();
                 }
@@ -1583,16 +1632,35 @@ fn create_pipewire_backend(
             move |id| {
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
+                    let removed_source_name = state
+                        .sources
+                        .get(&id)
+                        .map(|source| source.node_name.clone());
                     let removed_source = state.sources.remove(&id).is_some();
+                    state.virtual_mic_state_reset_ids.remove(&id);
+                    if state
+                        .default_metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.id == id)
+                    {
+                        state.default_metadata = None;
+                        state.autorouted_input_streams.clear();
+                        state.autoroute_blocked_input_streams.clear();
+                        state.input_stream_metadata_targets.clear();
+                    }
+                    state.input_streams.remove(&id);
+                    state.input_stream_metadata_targets.remove(&id);
+                    state.input_stream_handles.remove(&id);
+                    state.autorouted_input_streams.remove(&id);
+                    state.autoroute_blocked_input_streams.remove(&id);
                     state.links.remove(&id);
                     if state.capture_node_id == Some(id) {
                         state.capture_node_id = None;
                     }
-                    if handle_link_global_remove(&mut state, id) {
-                        if state.runtime.persistent_virtual_mic {
-                            ensure_virtual_feeder_present(&mut state);
-                        }
+                    if removed_source_name.as_deref() == Some(VIRTUAL_SOURCE_NAME) {
+                        clear_autorouted_input_streams(&mut state);
                     }
+                    handle_link_global_remove(&mut state, id);
                     if removed_source && state.runtime.mic_passthrough {
                         // The source we may have been capturing from went
                         // away (e.g. EasyEffects quit). Re-resolve so we
@@ -1612,28 +1680,14 @@ fn create_pipewire_backend(
 
     let local_stream =
         create_local_output_stream(core.clone(), queues.clone(), stream_runtime.clone()).ok();
-    // In persistent mode the watchdog (registry listener above) creates the
-    // feeder the moment the sink target appears, including across pipewire
-    // restarts. In legacy mode we still create the in-process source upfront.
-    let virtual_stream = if runtime.persistent_virtual_mic {
-        debug!("Persistent mode: creating explicit-link virtual mic feeder");
-        create_virtual_feeder_stream(
-            core.clone(),
-            queues.clone(),
-            stream_runtime,
-            runtime.pipewire_latency_hint(),
-        )
-        .ok()
-    } else {
-        debug!("Persistent virtual mic unavailable; using in-process virtual source");
-        create_legacy_virtual_source_stream(
-            core.clone(),
-            queues.clone(),
-            stream_runtime,
-            runtime.pipewire_latency_hint(),
-        )
-        .ok()
-    };
+    debug!("Creating runtime in-process virtual mic source");
+    let virtual_stream = create_runtime_virtual_source_stream(
+        core.clone(),
+        queues.clone(),
+        stream_runtime,
+        runtime.pipewire_latency_hint(),
+    )
+    .ok();
 
     Ok(PipeWireBackendState {
         _context: context,
@@ -1673,15 +1727,39 @@ fn source_from_global(
         .get("priority.session")
         .and_then(|value| value.parse::<i32>().ok())
         .unwrap_or(0);
+    let serial = props
+        .get("object.serial")
+        .and_then(|value| value.parse::<u64>().ok());
 
     Some(SourceDescriptor {
         id: global.id,
+        serial,
         is_monitor: node_name.ends_with(".monitor"),
         is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
         priority_session,
         node_name,
         display_name,
     })
+}
+
+fn spawn_virtual_mic_state_reset(source_id: u32) {
+    let _ = thread::Builder::new()
+        .name("lsb-virtual-mic-state-reset".to_string())
+        .spawn(move || {
+            let source_id = source_id.to_string();
+            let volume = Command::new("wpctl")
+                .args(["set-volume", &source_id, "1.0"])
+                .status();
+            if !matches!(volume, Ok(status) if status.success()) {
+                warn!("Failed to reset Linux Soundboard virtual mic volume with wpctl");
+            }
+            let mute = Command::new("wpctl")
+                .args(["set-mute", &source_id, "0"])
+                .status();
+            if !matches!(mute, Ok(status) if status.success()) {
+                warn!("Failed to unmute Linux Soundboard virtual mic with wpctl");
+            }
+        });
 }
 
 fn capture_node_id_from_global(
@@ -1717,42 +1795,6 @@ fn link_from_global(
 
 /// Idempotently (re)creates the feeder stream so the soundboard keeps
 /// reaching `Linux Soundboard Mic` after a PipeWire restart.
-fn ensure_virtual_feeder_present(state: &mut LoopState) {
-    if !state.runtime.persistent_virtual_mic {
-        return;
-    }
-    let already_present = state
-        .backend
-        .as_ref()
-        .map(BackendState::virtual_stream_usable)
-        .unwrap_or(false);
-    if already_present {
-        try_link_feeder_to_virtual_mic(state);
-        return;
-    }
-    let Some(core) = state.backend.as_ref().and_then(BackendState::pipewire_core) else {
-        return;
-    };
-    match create_virtual_feeder_stream(
-        core,
-        state.queues.clone(),
-        state.stream_runtime.clone(),
-        state.runtime.pipewire_latency_hint(),
-    ) {
-        Ok(stream) => {
-            debug!("Virtual mic feeder stream (re)created");
-            if let Some(BackendState::PipeWire(backend)) = state.backend.as_mut() {
-                backend.virtual_stream = Some(stream);
-            }
-            state.available = state.backend_playback_available();
-            try_link_feeder_to_virtual_mic(state);
-        }
-        Err(err) => {
-            warn!("Failed to (re)create virtual mic feeder stream: {err}");
-        }
-    }
-}
-
 fn capture_stream_missing(state: &LoopState) -> bool {
     match state.backend.as_ref() {
         Some(BackendState::PipeWire(backend)) => backend.capture_stream.is_none(),
@@ -1761,8 +1803,8 @@ fn capture_stream_missing(state: &LoopState) -> bool {
     }
 }
 
-/// Capture-stream watchdog. Mirrors `ensure_virtual_feeder_present` but for
-/// the mic passthrough capture stream. Fixes two real-world races:
+/// Capture-stream watchdog for the mic passthrough capture stream. Fixes two
+/// real-world races:
 ///   1. Soundboard launches before the registry reports physical mics, so the
 ///      initial `recreate_capture_stream` finds nothing and warns "No physical
 ///      microphone source available for passthrough" — before this watchdog
@@ -1917,6 +1959,323 @@ fn clamp_seek_position_ms(position_ms: u64, duration_ms: Option<u64>) -> u64 {
         Some(duration_ms) => position_ms.min(duration_ms),
         None => position_ms,
     }
+}
+
+enum PlaybackSource {
+    Symphonia(SymphoniaSource),
+    OggOpus(OggOpusSource),
+}
+
+impl PlaybackSource {
+    fn from_path(path: &str) -> Result<Self, String> {
+        if OggOpusSource::looks_like_ogg_opus(path) {
+            return OggOpusSource::from_path(path).map(Self::OggOpus);
+        }
+
+        SymphoniaSource::from_path(path).map(Self::Symphonia)
+    }
+}
+
+impl Iterator for PlaybackSource {
+    type Item = i16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Symphonia(source) => source.next(),
+            Self::OggOpus(source) => source.next(),
+        }
+    }
+}
+
+impl Source for PlaybackSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        match self {
+            Self::Symphonia(source) => source.current_frame_len(),
+            Self::OggOpus(source) => source.current_frame_len(),
+        }
+    }
+
+    fn channels(&self) -> u16 {
+        match self {
+            Self::Symphonia(source) => source.channels(),
+            Self::OggOpus(source) => source.channels(),
+        }
+    }
+
+    fn sample_rate(&self) -> u32 {
+        match self {
+            Self::Symphonia(source) => source.sample_rate(),
+            Self::OggOpus(source) => source.sample_rate(),
+        }
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            Self::Symphonia(source) => source.total_duration(),
+            Self::OggOpus(source) => source.total_duration(),
+        }
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), RodioSeekError> {
+        match self {
+            Self::Symphonia(source) => source.try_seek(position),
+            Self::OggOpus(source) => source.try_seek(position),
+        }
+    }
+}
+
+impl ResettableSource for PlaybackSource {
+    fn seek_resettable(&mut self, position: Duration) -> Result<(), RodioSeekError> {
+        self.try_seek(position)
+    }
+}
+
+const OPUS_SAMPLE_RATE: u32 = 48_000;
+const OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
+
+struct OggOpusHead {
+    channels: u16,
+    pre_skip: u16,
+    stream_serial: u32,
+}
+
+struct OggOpusSource {
+    path: String,
+    reader: PacketReader<IoBufReader<std::fs::File>>,
+    decoder: OpusDecoder,
+    channels: u16,
+    stream_serial: u32,
+    pre_skip_remaining: u64,
+    total_duration: Option<Duration>,
+    buffer: Vec<i16>,
+    decode_buffer: Vec<i16>,
+    current_sample_offset: usize,
+}
+
+impl OggOpusSource {
+    fn looks_like_ogg_opus(path: &str) -> bool {
+        let Ok(file) = std::fs::File::open(path) else {
+            return false;
+        };
+        let mut reader = PacketReader::new(IoBufReader::new(file));
+        matches!(
+            reader.read_packet(),
+            Ok(Some(packet)) if packet.data.starts_with(b"OpusHead")
+        )
+    }
+
+    fn from_path(path: &str) -> Result<Self, String> {
+        let file =
+            std::fs::File::open(path).map_err(|e| format!("Failed to open Ogg Opus file: {e}"))?;
+        let mut reader = PacketReader::new(IoBufReader::new(file));
+        let head = read_ogg_opus_headers(&mut reader)?;
+        let opus_channels = match head.channels {
+            1 => OpusChannels::Mono,
+            2 => OpusChannels::Stereo,
+            channels => {
+                return Err(format!(
+                    "Unsupported Ogg Opus channel count: {channels}. Only mono and stereo are supported."
+                ))
+            }
+        };
+        let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, opus_channels)
+            .map_err(|e| format!("Failed to create Opus decoder: {e}"))?;
+        let total_duration = scan_ogg_opus_duration(path, head.stream_serial, head.pre_skip);
+        let decode_buffer_len = OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL * head.channels as usize;
+
+        Ok(Self {
+            path: path.to_string(),
+            reader,
+            decoder,
+            channels: head.channels,
+            stream_serial: head.stream_serial,
+            pre_skip_remaining: u64::from(head.pre_skip),
+            total_duration,
+            buffer: Vec::new(),
+            decode_buffer: vec![0; decode_buffer_len],
+            current_sample_offset: 0,
+        })
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<(), String> {
+        let mut fresh = Self::from_path(&self.path)?;
+        let target_samples = position
+            .as_millis()
+            .saturating_mul(u128::from(OPUS_SAMPLE_RATE))
+            .saturating_mul(u128::from(fresh.channels))
+            / 1_000;
+        let mut remaining = target_samples.min(u128::from(u64::MAX)) as u64;
+        while remaining > 0 {
+            if fresh.next().is_none() {
+                break;
+            }
+            remaining -= 1;
+        }
+        *self = fresh;
+        Ok(())
+    }
+
+    fn decode_next_packet(&mut self) -> Option<()> {
+        loop {
+            let packet = match self.reader.read_packet() {
+                Ok(Some(packet)) => packet,
+                Ok(None) => return None,
+                Err(err) => {
+                    debug!("Ogg Opus packet read failed: {err}");
+                    return None;
+                }
+            };
+
+            if packet.stream_serial() != self.stream_serial
+                || packet.data.is_empty()
+                || packet.data.starts_with(b"OpusHead")
+                || packet.data.starts_with(b"OpusTags")
+            {
+                continue;
+            }
+
+            let decoded_frames =
+                match self
+                    .decoder
+                    .decode(&packet.data, &mut self.decode_buffer, false)
+                {
+                    Ok(frames) => frames,
+                    Err(err) => {
+                        debug!("Opus packet decode failed: {err}");
+                        continue;
+                    }
+                };
+            let channels = self.channels as usize;
+            let decoded_samples = decoded_frames * channels;
+            let mut start_frame = 0usize;
+            if self.pre_skip_remaining > 0 {
+                let skip_frames = decoded_frames.min(self.pre_skip_remaining as usize);
+                self.pre_skip_remaining -= skip_frames as u64;
+                start_frame = skip_frames;
+            }
+            let start_sample = start_frame * channels;
+            self.buffer.clear();
+            self.buffer
+                .extend_from_slice(&self.decode_buffer[start_sample..decoded_samples]);
+            self.current_sample_offset = 0;
+            if !self.buffer.is_empty() {
+                return Some(());
+            }
+        }
+    }
+}
+
+impl Iterator for OggOpusSource {
+    type Item = i16;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.current_sample_offset >= self.buffer.len() {
+                self.decode_next_packet()?;
+            }
+            if self.current_sample_offset < self.buffer.len() {
+                let sample = self.buffer[self.current_sample_offset];
+                self.current_sample_offset += 1;
+                return Some(sample);
+            }
+        }
+    }
+}
+
+impl Source for OggOpusSource {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        OPUS_SAMPLE_RATE
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.total_duration
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), RodioSeekError> {
+        self.seek(position)
+            .map_err(|err| RodioSeekError::Other(Box::new(std::io::Error::other(err))))
+    }
+}
+
+fn read_ogg_opus_headers(
+    reader: &mut PacketReader<IoBufReader<std::fs::File>>,
+) -> Result<OggOpusHead, String> {
+    let head_packet = reader
+        .read_packet()
+        .map_err(|e| format!("Failed to read Ogg Opus header: {e}"))?
+        .ok_or_else(|| "Ogg Opus file is empty".to_string())?;
+    let mut head = parse_ogg_opus_head(&head_packet.data)?;
+    head.stream_serial = head_packet.stream_serial();
+
+    let tags_packet = reader
+        .read_packet()
+        .map_err(|e| format!("Failed to read Ogg Opus tags: {e}"))?
+        .ok_or_else(|| "Ogg Opus file is missing OpusTags".to_string())?;
+    if tags_packet.stream_serial() != head.stream_serial
+        || !tags_packet.data.starts_with(b"OpusTags")
+    {
+        return Err("Ogg Opus file is missing OpusTags".to_string());
+    }
+
+    Ok(head)
+}
+
+fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, String> {
+    if data.len() < 19 || !data.starts_with(b"OpusHead") {
+        return Err("Ogg file is not an Opus stream".to_string());
+    }
+    let version = data[8];
+    if version & 0xf0 != 0 {
+        return Err(format!("Unsupported Ogg Opus version: {version}"));
+    }
+    let channels = u16::from(data[9]);
+    if !(1..=2).contains(&channels) {
+        return Err(format!(
+            "Unsupported Ogg Opus channel count: {channels}. Only mono and stereo are supported."
+        ));
+    }
+    let pre_skip = u16::from_le_bytes([data[10], data[11]]);
+    let input_rate = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+    if input_rate != OPUS_SAMPLE_RATE {
+        return Err(format!(
+            "Unsupported Ogg Opus input sample rate: {input_rate}. Only 48000 Hz is supported."
+        ));
+    }
+    let channel_mapping_family = data[18];
+    if channel_mapping_family != 0 {
+        return Err(format!(
+            "Unsupported Ogg Opus channel mapping family: {channel_mapping_family}"
+        ));
+    }
+
+    Ok(OggOpusHead {
+        channels,
+        pre_skip,
+        stream_serial: 0,
+    })
+}
+
+fn scan_ogg_opus_duration(path: &str, stream_serial: u32, pre_skip: u16) -> Option<Duration> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader = PacketReader::new(IoBufReader::new(file));
+    let mut last_granule = None;
+    while let Ok(Some(packet)) = reader.read_packet() {
+        if packet.stream_serial() == stream_serial {
+            last_granule = Some(packet.absgp_page());
+        }
+    }
+    let frames = last_granule?.saturating_sub(u64::from(pre_skip));
+    Some(Duration::from_secs_f64(
+        frames as f64 / f64::from(OPUS_SAMPLE_RATE),
+    ))
 }
 
 /// Symphonia-backed source with seek tracking.
@@ -2228,6 +2587,8 @@ where
 mod tests {
     use super::*;
     use crate::test_support::audio_fixtures::{cleanup_test_audio_path, create_test_audio_file};
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+    use opus::{Application as OpusApplication, Encoder as OpusEncoder};
     use std::sync::Arc;
 
     fn test_runtime_config() -> RuntimeConfig {
@@ -2251,7 +2612,6 @@ mod tests {
             },
             looping: false,
             audio_backend: AudioBackendKind::PipeWire,
-            persistent_virtual_mic: false,
         }
     }
 
@@ -2267,12 +2627,83 @@ mod tests {
     ) -> SourceDescriptor {
         SourceDescriptor {
             id,
+            serial: None,
             node_name: node_name.to_string(),
             display_name: display_name.to_string(),
             priority_session: priority,
             is_monitor: node_name.ends_with(".monitor"),
             is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
         }
+    }
+
+    fn create_test_ogg_opus_file() -> std::path::PathBuf {
+        let base =
+            std::env::temp_dir().join(format!("linux-soundboard-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).expect("create ogg opus temp dir");
+        let path = base.join("tone.ogg");
+        let serial = 0x4c53424f;
+        let mut writer = PacketWriter::new(Vec::new());
+        let mut head = b"OpusHead".to_vec();
+        head.push(1);
+        head.push(1);
+        head.extend_from_slice(&0u16.to_le_bytes());
+        head.extend_from_slice(&OPUS_SAMPLE_RATE.to_le_bytes());
+        head.extend_from_slice(&0i16.to_le_bytes());
+        head.push(0);
+        writer
+            .write_packet(
+                head.into_boxed_slice(),
+                serial,
+                PacketWriteEndInfo::EndPage,
+                0,
+            )
+            .expect("write opus head");
+
+        let vendor = b"linux-soundboard-test";
+        let mut tags = b"OpusTags".to_vec();
+        tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+        tags.extend_from_slice(vendor);
+        tags.extend_from_slice(&0u32.to_le_bytes());
+        writer
+            .write_packet(
+                tags.into_boxed_slice(),
+                serial,
+                PacketWriteEndInfo::EndPage,
+                0,
+            )
+            .expect("write opus tags");
+
+        let mut encoder =
+            OpusEncoder::new(OPUS_SAMPLE_RATE, OpusChannels::Mono, OpusApplication::Audio)
+                .expect("create opus encoder");
+        let frame_samples = 960usize;
+        let mut granule = 0u64;
+        for packet_index in 0..2 {
+            let mut pcm = vec![0.0f32; frame_samples];
+            for (index, sample) in pcm.iter_mut().enumerate() {
+                let absolute = packet_index * frame_samples + index;
+                let phase =
+                    2.0 * std::f32::consts::PI * 440.0 * absolute as f32 / OPUS_SAMPLE_RATE as f32;
+                *sample = phase.sin() * 0.25;
+            }
+            let mut encoded = vec![0; 4_000];
+            let len = encoder
+                .encode_float(&pcm, &mut encoded)
+                .expect("encode opus frame");
+            encoded.truncate(len);
+            granule += frame_samples as u64;
+            let end = if packet_index == 1 {
+                PacketWriteEndInfo::EndStream
+            } else {
+                PacketWriteEndInfo::NormalPacket
+            };
+            writer
+                .write_packet(encoded.into_boxed_slice(), serial, end, granule)
+                .expect("write opus packet");
+        }
+
+        std::fs::write(&path, writer.into_inner()).expect("write ogg opus fixture");
+        path
     }
 
     #[test]
@@ -2295,6 +2726,7 @@ id 72, type PipeWire:Interface:Node
             10,
             SourceDescriptor {
                 id: 10,
+                serial: None,
                 node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
                 display_name: "Ryzen HD Audio".to_string(),
                 priority_session: 0,
@@ -2306,6 +2738,7 @@ id 72, type PipeWire:Interface:Node
             11,
             SourceDescriptor {
                 id: 11,
+                serial: None,
                 node_name: "easyeffects_source".to_string(),
                 display_name: "Easy Effects Source".to_string(),
                 priority_session: 0,
@@ -2317,6 +2750,7 @@ id 72, type PipeWire:Interface:Node
             12,
             SourceDescriptor {
                 id: 12,
+                serial: None,
                 node_name: VIRTUAL_SOURCE_NAME.to_string(),
                 display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
                 priority_session: 0,
@@ -2328,6 +2762,7 @@ id 72, type PipeWire:Interface:Node
             13,
             SourceDescriptor {
                 id: 13,
+                serial: None,
                 node_name: "alsa_output.pci-0000_12_00.6.analog-stereo.monitor".to_string(),
                 display_name: "Speaker Monitor".to_string(),
                 priority_session: 0,
@@ -2393,6 +2828,7 @@ id 72, type PipeWire:Interface:Node
             7,
             SourceDescriptor {
                 id: 7,
+                serial: None,
                 node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
                 display_name: "Mic".to_string(),
                 priority_session: 0,
@@ -2406,6 +2842,44 @@ id 72, type PipeWire:Interface:Node
             Some(7)
         );
         assert_eq!(resolve_source_id_by_name(&sources, "missing"), None);
+    }
+
+    #[test]
+    fn auto_route_mode_does_not_claim_system_default() {
+        let mut runtime = test_runtime_config();
+        runtime.default_source_mode = DefaultSourceMode::AutoRouteWhileRunning;
+        let mut state = LoopState::new(runtime, test_player_snapshot_store());
+        state
+            .sources
+            .insert(1, test_source(1, "alsa_input.real", "Real Mic", 100));
+        state.sources.insert(
+            2,
+            test_source(2, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 0),
+        );
+
+        maybe_claim_default_source(&mut state);
+
+        assert!(!state.claimed_default);
+        assert!(state.previous_default_source_name.is_none());
+    }
+
+    #[test]
+    fn restore_default_source_stops_claim_without_random_fallback() {
+        let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+        state.claimed_default = true;
+        state.previous_default_source_name = Some("missing.source".to_string());
+        state.sources.insert(
+            2,
+            test_source(2, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 0),
+        );
+
+        restore_default_source(&mut state).unwrap();
+
+        assert!(!state.claimed_default);
+        assert_eq!(
+            state.previous_default_source_name.as_deref(),
+            Some("missing.source")
+        );
     }
 
     #[test]
@@ -2594,6 +3068,7 @@ id 72, type PipeWire:Interface:Node
             1,
             SourceDescriptor {
                 id: 1,
+                serial: None,
                 node_name: "alsa_input.real".to_string(),
                 display_name: "Real Mic".to_string(),
                 priority_session: 0,
@@ -2605,6 +3080,7 @@ id 72, type PipeWire:Interface:Node
             2,
             SourceDescriptor {
                 id: 2,
+                serial: None,
                 node_name: "alsa_output.monitor".to_string(),
                 display_name: "Monitor".to_string(),
                 priority_session: 0,
@@ -2616,6 +3092,7 @@ id 72, type PipeWire:Interface:Node
             3,
             SourceDescriptor {
                 id: 3,
+                serial: None,
                 node_name: VIRTUAL_SOURCE_NAME.to_string(),
                 display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
                 priority_session: 0,
@@ -2659,6 +3136,55 @@ id 72, type PipeWire:Interface:Node
         assert_eq!(queues.local.len(), target_samples);
         assert_eq!(queues.virtual_out.len(), target_samples);
         drop(queues);
+
+        cleanup_test_audio_path(&audio_path);
+    }
+
+    #[test]
+    fn ogg_opus_source_decodes_and_seek_discards() {
+        let audio_path = create_test_ogg_opus_file();
+        let mut source = OggOpusSource::from_path(&audio_path.to_string_lossy())
+            .expect("create ogg opus source");
+
+        assert_eq!(source.channels(), 1);
+        assert_eq!(source.sample_rate(), OPUS_SAMPLE_RATE);
+        assert!(source
+            .total_duration()
+            .is_some_and(|duration| duration >= Duration::from_millis(40)));
+
+        let first_samples: Vec<_> = source.by_ref().take(960).collect();
+        assert!(first_samples.iter().any(|sample| *sample != 0));
+
+        source
+            .try_seek(Duration::from_millis(20))
+            .expect("seek ogg opus source");
+        let seeked_samples: Vec<_> = source.take(128).collect();
+        assert!(seeked_samples.iter().any(|sample| *sample != 0));
+
+        cleanup_test_audio_path(&audio_path);
+    }
+
+    #[test]
+    fn active_playback_routes_ogg_opus_through_common_mix_path() {
+        let audio_path = create_test_ogg_opus_file();
+        let runtime = test_runtime_config();
+        let mut playback = ActivePlayback::new(
+            "play-opus".to_string(),
+            "sound-opus".to_string(),
+            audio_path.to_string_lossy().to_string(),
+            0,
+            1.0,
+            None,
+            &runtime,
+        )
+        .expect("create active ogg opus playback");
+
+        let mut local = vec![0.0; 512];
+        let mut virtual_out = vec![0.0; 512];
+        playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+        assert!(local.iter().any(|sample| sample.abs() > f32::EPSILON));
+        assert!(virtual_out.iter().any(|sample| sample.abs() > f32::EPSILON));
 
         cleanup_test_audio_path(&audio_path);
     }
@@ -2809,6 +3335,7 @@ id 72, type PipeWire:Interface:Node
             1,
             SourceDescriptor {
                 id: 1,
+                serial: None,
                 node_name: "alsa_input.real".to_string(),
                 display_name: "Real Mic".to_string(),
                 priority_session: 0,

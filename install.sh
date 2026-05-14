@@ -142,19 +142,6 @@ run_user_installer() {
     "$installer" "$mode"
 }
 
-# Try to download and run user-space setup (desktop integration) from the
-# release tarball.  Non-fatal: package-manager installs already handle this,
-# so a missing tarball is not a hard error.
-try_repair_user_install() {
-    local bundle_dir
-    if bundle_dir="$(download_and_extract_tarball 2>/dev/null)"; then
-        run_user_installer repair "$bundle_dir"
-    else
-        info "No release tarball found; skipping user-space desktop integration."
-    fi
-}
-
-
 install_arch() {
     info "Installing from AUR: $APP_AUR_PACKAGE"
     pacman_install base-devel git
@@ -169,7 +156,7 @@ install_arch() {
 }
 
 install_debian() {
-    local url; url="$(find_asset_url "\\.deb$" || true)"
+    local url; url="$(find_asset_url '\\.deb$' || true)"
     if [[ -z "$url" ]]; then
         warn "No .deb in latest release; falling back to tarball install."
         install_tarball; return
@@ -181,11 +168,12 @@ install_debian() {
     apt_install "$file"
 
     # Run user-space setup (service, PipeWire config) for the installing account.
-    try_repair_user_install
+    local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
+    run_user_installer repair "$bundle_dir"
 }
 
 install_fedora() {
-    local url; url="$(find_asset_url "\\.rpm$" || true)"
+    local url; url="$(find_asset_url '\\.rpm$' || true)"
     if [[ -z "$url" ]]; then
         warn "No .rpm in latest release; falling back to tarball install."
         install_tarball; return
@@ -196,8 +184,8 @@ install_fedora() {
     fetch_progress "$url" "$file"
     dnf_install "$file"
 
-    # Run user-space setup (service, PipeWire config) for the installing account.
-    try_repair_user_install
+    local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
+    run_user_installer repair "$bundle_dir"
 }
 
 install_tarball() {

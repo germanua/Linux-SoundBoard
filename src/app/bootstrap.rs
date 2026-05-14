@@ -22,6 +22,9 @@ pub fn run() {
     if std::env::args().any(|arg| arg == "--audio-engine") {
         std::process::exit(crate::audio_engine::run());
     }
+    if std::env::args().any(|arg| arg == "--diagnose") {
+        std::process::exit(crate::diagnostics::routing::run());
+    }
 
     configure_preferred_backend();
     configure_preferred_renderer();
@@ -46,8 +49,7 @@ fn init_logging() {
 linux_soundboard::audio_engine=info,\
 linux_soundboard::init::audio=info,\
 linux_soundboard::audio::player=info,\
-linux_soundboard::audio::player::source_routing=info,\
-linux_soundboard::pipewire::persistent_mic=info",
+linux_soundboard::audio::player::source_routing=info",
     );
     env_logger::Builder::from_env(env).init();
 }
@@ -374,29 +376,24 @@ fn prebound_hotkeys(config: &Config) -> Vec<(String, String)> {
 
 fn initialize_player(config: &Config) -> crate::audio::player::AudioPlayer {
     use crate::audio::player::AudioBackendKind;
-    use crate::pipewire::persistent_mic::AudioServer;
 
     if let Some(player) = crate::audio::player::AudioPlayer::connect_to_engine() {
         log::info!("Connected UI to existing Linux Soundboard audio engine");
         return player;
     }
+    crate::audio::engine_ipc::shutdown_incompatible_engine_if_running();
     ensure_audio_engine_service_started();
     if let Some(player) = crate::audio::player::AudioPlayer::connect_to_engine() {
         log::info!("Started and connected UI to Linux Soundboard audio engine");
         return player;
     }
 
-    let outcome = crate::pipewire::persistent_mic::ensure_persistent_virtual_mic();
-    log::info!("Persistent virtual mic setup: {:?}", outcome);
-    let backend = match outcome.audio_server().unwrap_or(AudioServer::PipeWire) {
-        AudioServer::PulseAudio => AudioBackendKind::PulseAudio,
-        AudioServer::PipeWire | AudioServer::Unsupported => AudioBackendKind::PipeWire,
+    let backend = if crate::pipewire::detection::check_pipewire().available {
+        AudioBackendKind::PipeWire
+    } else {
+        AudioBackendKind::PulseAudio
     };
-    crate::audio::player::AudioPlayer::new_with_config_and_audio_backend(
-        config,
-        backend,
-        outcome.node_available(),
-    )
+    crate::audio::player::AudioPlayer::new_with_config_and_audio_backend(config, backend)
 }
 
 fn ensure_audio_engine_service_started() {
@@ -423,7 +420,7 @@ fn ensure_audio_engine_service_started() {
 
     let started_at = std::time::Instant::now();
     while started_at.elapsed() < Duration::from_secs(2) {
-        if crate::audio::engine_ipc::engine_running() {
+        if crate::audio::engine_ipc::compatible_engine_running() {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));

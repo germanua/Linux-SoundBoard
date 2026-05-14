@@ -218,9 +218,6 @@ pub(super) fn drop_feeder_links(state: &mut LoopState) {
         debug!("Dropping virtual mic feeder links");
     }
     state.feeder_links.clear();
-    if state.runtime.persistent_virtual_mic {
-        state.available = state.backend_playback_available();
-    }
 }
 
 #[cfg(test)]

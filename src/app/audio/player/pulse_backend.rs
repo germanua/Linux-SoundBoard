@@ -63,23 +63,7 @@ impl PulseAudioBackend {
         .map_err(|err| format!("PulseAudio local output unavailable: {err}"))
         .ok();
 
-        let virtual_stream = if runtime.persistent_virtual_mic {
-            create_playback_stream(
-                &mainloop,
-                &context,
-                &spec,
-                VIRTUAL_FEEDER_NODE_NAME,
-                Some(VIRTUAL_SOURCE_NAME),
-                runtime.virtual_output_target_samples(),
-                queues.clone(),
-                stream_runtime.clone(),
-                OutputTarget::Virtual,
-            )
-            .map_err(|err| format!("PulseAudio virtual mic unavailable: {err}"))
-            .ok()
-        } else {
-            None
-        };
+        let virtual_stream = None;
 
         let mut backend = Self {
             mainloop,
@@ -383,19 +367,17 @@ fn samples_to_bytes(samples: usize) -> u32 {
 #[derive(Clone, Copy)]
 enum OutputTarget {
     Local,
-    Virtual,
 }
 
 fn write_playback_bytes(
     stream: &PulseStream,
     queues: &Arc<Mutex<ProcessQueues>>,
-    stream_runtime: &Arc<StreamRuntimeShared>,
+    _stream_runtime: &Arc<StreamRuntimeShared>,
     target: OutputTarget,
     requested_bytes: usize,
 ) {
     let max_samples = match target {
         OutputTarget::Local => MAX_LOCAL_OUTPUT_CALLBACK_SAMPLES,
-        OutputTarget::Virtual => stream_runtime.max_virtual_callback_samples(),
     };
     let mut sample_count = (requested_bytes / std::mem::size_of::<f32>()).min(max_samples);
     sample_count -= sample_count % TARGET_OUTPUT_CHANNELS as usize;
@@ -408,9 +390,6 @@ fn write_playback_bytes(
         match target {
             OutputTarget::Local => {
                 let _ = queues.local.pop_into(&mut samples);
-            }
-            OutputTarget::Virtual => {
-                let _ = queues.virtual_out.pop_into(&mut samples);
             }
         }
     }

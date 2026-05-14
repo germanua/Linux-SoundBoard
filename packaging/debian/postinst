@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+rm -f /usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
+
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --global enable linux-soundboard-engine.service >/dev/null 2>&1 || true
 fi

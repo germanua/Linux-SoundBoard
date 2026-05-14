@@ -3,20 +3,22 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::audio::player::PlayerSnapshot;
-use crate::config::{DefaultSourceMode, MicLatencyProfile};
+use crate::config::{DefaultSourceMode, MicLatencyProfile, CURRENT_SCHEMA_VERSION};
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(3);
 const ENGINE_DIR_NAME: &str = "linux-soundboard";
 const ENGINE_SOCKET_NAME: &str = "engine.sock";
+pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineRequest {
+    Info,
     Ping,
     Snapshot,
     Play {
@@ -92,10 +94,30 @@ pub enum EngineRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineResponse {
     Ok,
+    Info {
+        engine_protocol_version: u32,
+        app_version: String,
+        config_schema_version: u32,
+        binary_path: String,
+    },
     Pong,
-    PlayId { play_id: String },
-    Snapshot { snapshot: PlayerSnapshot },
-    Error { message: String },
+    PlayId {
+        play_id: String,
+    },
+    Snapshot {
+        snapshot: PlayerSnapshot,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineInfo {
+    pub engine_protocol_version: u32,
+    pub app_version: String,
+    pub config_schema_version: u32,
+    pub binary_path: String,
 }
 
 pub enum BindEngineSocket {
@@ -117,6 +139,69 @@ pub fn engine_socket_path_for(runtime_dir: Option<PathBuf>) -> PathBuf {
 
 pub fn engine_running() -> bool {
     matches!(send_request(EngineRequest::Ping), Ok(EngineResponse::Pong))
+}
+
+pub fn engine_info() -> Result<EngineInfo, String> {
+    engine_info_at(&engine_socket_path())
+}
+
+pub fn engine_info_at(path: &Path) -> Result<EngineInfo, String> {
+    match send_request_to(path, EngineRequest::Info)? {
+        EngineResponse::Info {
+            engine_protocol_version,
+            app_version,
+            config_schema_version,
+            binary_path,
+        } => Ok(EngineInfo {
+            engine_protocol_version,
+            app_version,
+            config_schema_version,
+            binary_path,
+        }),
+        EngineResponse::Error { message } => Err(message),
+        other => Err(format!("Unexpected engine info response: {other:?}")),
+    }
+}
+
+pub fn engine_info_compatible(info: &EngineInfo) -> bool {
+    info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
+        && info.config_schema_version == CURRENT_SCHEMA_VERSION
+}
+
+pub fn compatible_engine_running() -> bool {
+    matches!(engine_info(), Ok(info) if engine_info_compatible(&info))
+}
+
+pub fn shutdown_incompatible_engine_if_running() -> bool {
+    let path = engine_socket_path();
+    shutdown_incompatible_engine_at(&path, Duration::from_secs(3))
+}
+
+pub fn shutdown_incompatible_engine_at(path: &Path, timeout: Duration) -> bool {
+    if !path.exists() {
+        return false;
+    }
+
+    match engine_info_at(path) {
+        Ok(info) if engine_info_compatible(&info) => return false,
+        Ok(info) => {
+            log::warn!(
+                "Stopping incompatible Linux Soundboard audio engine: protocol={} schema={} binary={}",
+                info.engine_protocol_version,
+                info.config_schema_version,
+                info.binary_path
+            );
+        }
+        Err(err) => {
+            if !engine_responds_at(path) {
+                return false;
+            }
+            log::warn!("Stopping old Linux Soundboard audio engine without compatible info: {err}");
+        }
+    }
+
+    let _ = send_request_to(path, EngineRequest::Shutdown);
+    wait_for_engine_stop(path, timeout)
 }
 
 pub fn bind_engine_socket() -> Result<BindEngineSocket, String> {
@@ -187,6 +272,17 @@ fn engine_responds_at(path: &Path) -> bool {
     )
 }
 
+fn wait_for_engine_stop(path: &Path, timeout: Duration) -> bool {
+    let started_at = Instant::now();
+    while started_at.elapsed() < timeout {
+        if !path.exists() || !engine_responds_at(path) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 fn write_message<T: Serialize>(stream: &mut UnixStream, message: &T) -> Result<(), String> {
     serde_json::to_writer(&mut *stream, message)
         .map_err(|e| format!("Failed to encode engine message: {e}"))?;
@@ -228,8 +324,30 @@ mod tests {
         let request = parse_request(r#"{"type":"set_mic_volume","volume":0.75}"#).unwrap();
         assert!(matches!(request, EngineRequest::SetMicVolume { .. }));
 
+        let request = parse_request(r#"{"type":"info"}"#).unwrap();
+        assert!(matches!(request, EngineRequest::Info));
+
         let err = parse_request(r#"{"type":"not_real"}"#).unwrap_err();
         assert!(err.contains("Invalid engine request"));
+    }
+
+    #[test]
+    fn engine_info_compatibility_requires_current_protocol_and_schema() {
+        let current = EngineInfo {
+            engine_protocol_version: ENGINE_PROTOCOL_VERSION,
+            app_version: "test".to_string(),
+            config_schema_version: CURRENT_SCHEMA_VERSION,
+            binary_path: "/tmp/linux-soundboard".to_string(),
+        };
+        assert!(engine_info_compatible(&current));
+
+        let mut old_protocol = current.clone();
+        old_protocol.engine_protocol_version = ENGINE_PROTOCOL_VERSION.saturating_sub(1);
+        assert!(!engine_info_compatible(&old_protocol));
+
+        let mut old_schema = current;
+        old_schema.config_schema_version = CURRENT_SCHEMA_VERSION.saturating_sub(1);
+        assert!(!engine_info_compatible(&old_schema));
     }
 
     #[test]

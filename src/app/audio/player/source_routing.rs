@@ -37,7 +37,11 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Strin
                 "Mic passthrough waiting for '{}' to appear in PipeWire graph",
                 requested
             );
-        } else if state.sources.values().any(|s| !s.is_monitor && !s.is_our_virtual_mic) {
+        } else if state
+            .sources
+            .values()
+            .any(|s| !s.is_monitor && !s.is_our_virtual_mic)
+        {
             info!("Mic passthrough: all available sources are monitors or virtual; waiting for a physical microphone");
         } else {
             info!("Mic passthrough: no microphone found — will activate automatically when one is connected");
@@ -136,16 +140,25 @@ fn enhancement_source_score(source: &SourceDescriptor) -> u8 {
 
 pub(super) fn apply_default_source_mode(state: &mut LoopState) -> Result<(), String> {
     match state.runtime.default_source_mode {
-        DefaultSourceMode::Manual => restore_default_source(state),
-        DefaultSourceMode::AutoWhileRunning => {
+        DefaultSourceMode::Manual => {
+            clear_autorouted_input_streams(state);
+            restore_default_source(state)
+        }
+        DefaultSourceMode::AutoRouteWhileRunning => {
+            restore_default_source(state)?;
+            maybe_autoroute_input_streams(state);
+            Ok(())
+        }
+        DefaultSourceMode::TemporaryDefaultWhileRunning => {
             maybe_claim_default_source(state);
+            maybe_autoroute_input_streams(state);
             Ok(())
         }
     }
 }
 
 pub(super) fn maybe_claim_default_source(state: &mut LoopState) {
-    if state.runtime.default_source_mode != DefaultSourceMode::AutoWhileRunning
+    if state.runtime.default_source_mode != DefaultSourceMode::TemporaryDefaultWhileRunning
         || state.claimed_default
         || state
             .default_source_command_in_flight
@@ -164,7 +177,11 @@ pub(super) fn maybe_claim_default_source(state: &mut LoopState) {
     };
 
     if state.previous_default_source_name.is_none() {
-        state.previous_default_source_name = best_fallback_source_name(&state.sources);
+        state.previous_default_source_name = state
+            .default_audio_source_name
+            .clone()
+            .filter(|source_name| is_physical_source_name(source_name, &state.sources))
+            .or_else(|| best_fallback_source_name(&state.sources));
     }
 
     spawn_default_source_claim(
@@ -175,6 +192,8 @@ pub(super) fn maybe_claim_default_source(state: &mut LoopState) {
 }
 
 pub(super) fn restore_default_source(state: &mut LoopState) -> Result<(), String> {
+    clear_autorouted_input_streams(state);
+
     if !state.claimed_default {
         return Ok(());
     }
@@ -185,6 +204,11 @@ pub(super) fn restore_default_source(state: &mut LoopState) -> Result<(), String
                 state.default_source_command_in_flight.clone(),
                 source_id,
                 previous_name,
+            );
+        } else {
+            warn!(
+                "Previous default source '{}' is no longer available; leaving current default source unchanged",
+                previous_name
             );
         }
     }
@@ -341,14 +365,12 @@ fn command_output_detail(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-#[cfg(test)]
 pub(super) fn parse_wpctl_node_name(output: &str) -> Option<String> {
     output
         .lines()
         .find_map(|line| parse_wpctl_property_line(line, "node.name"))
 }
 
-#[cfg(test)]
 fn parse_wpctl_property_line(line: &str, property: &str) -> Option<String> {
     let (_, value) = line.split_once(property)?;
     let (_, value) = value.split_once('=')?;

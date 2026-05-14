@@ -1,28 +1,56 @@
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] Keeping GTK backend unchanged because GDK_BACKEND is already set: Some("wayland")
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] Starting Linux Soundboard (GTK4)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager
 
-(linux-soundboard:12639): Adwaita-WARNING **: 01:20:10.445: Using GtkSettings:gtk-application-prefer-dark-theme with libadwaita is unsupported. Please use AdwStyleManager:color-scheme instead.
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] GTK display backend: Wayland
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:config_loaded] VmRSS=53844kB VmHWM=53844kB VmData=57036kB VmSize=597140kB VmSwap=0kB RssAnon=9792kB RssFile=44044kB RssShmem=8kB Threads=7 Pss=21171kB PrivClean=8356kB PrivDirty=9792kB ShClean=35688kB ShDirty=8kB
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:config_loaded] RSS=53908kB PSS=21235kB PrivDirty=9792kB RssFile=44108kB RssShmem=8kB ShDirty=8kB Threads=7 timers=0 hotkeys="" playback=0 validation=0(,0) work=none(0,0)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::hotkeys::manager_runtime] Initializing hotkey backend manager
-[2026-05-07T22:20:10Z INFO  linux_soundboard::hotkeys::manager_runtime] Deferring hotkey backend startup until the first binding is added
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:hotkeys_ready] VmRSS=53972kB VmHWM=53972kB VmData=57036kB VmSize=597140kB VmSwap=0kB RssAnon=9792kB RssFile=44172kB RssShmem=8kB Threads=7 Pss=21299kB PrivClean=8484kB PrivDirty=9792kB ShClean=35688kB ShDirty=8kB
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:hotkeys_ready] RSS=53972kB PSS=21299kB PrivDirty=9792kB RssFile=44172kB RssShmem=8kB ShDirty=8kB Threads=7 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(,0) work=none(0,0)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::bootstrap] Connected UI to existing Linux Soundboard audio engine
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:player_initialized] VmRSS=54116kB VmHWM=54116kB VmData=59232kB VmSize=664740kB VmSwap=0kB RssAnon=9808kB RssFile=44300kB RssShmem=8kB Threads=8 Pss=21447kB PrivClean=8612kB PrivDirty=9812kB ShClean=35688kB ShDirty=8kB
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:player_initialized] RSS=54120kB PSS=21447kB PrivDirty=9812kB RssFile=44300kB RssShmem=8kB ShDirty=8kB Threads=8 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(,0) work=none(0,0)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::pipewire::detection] PipeWire detected via pw-cli
-[2026-05-07T22:20:10Z INFO  linux_soundboard::ui::sound_list::interaction] Drag & drop handlers installed on sound list
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:window_built] VmRSS=67640kB VmHWM=67640kB VmData=72224kB VmSize=743124kB VmSwap=0kB RssAnon=20732kB RssFile=46900kB RssShmem=8kB Threads=9 Pss=34927kB PrivClean=11140kB PrivDirty=20736kB ShClean=35760kB ShDirty=8kB
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:window_built] RSS=67644kB PSS=34927kB PrivDirty=20736kB RssFile=46900kB RssShmem=8kB ShDirty=8kB Threads=9 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:window_presented] RSS=112340kB PSS=54176kB PrivDirty=30860kB RssFile=81352kB RssShmem=128kB ShDirty=128kB Threads=29 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM [startup:loudness_bg:check] VmRSS=124336kB VmHWM=124336kB VmData=246184kB VmSize=2407672kB VmSwap=0kB RssAnon=37240kB RssFile=86968kB RssShmem=128kB Threads=29 Pss=63107kB PrivClean=15012kB PrivDirty=37240kB ShClean=71956kB ShDirty=128kB
-[2026-05-07T22:20:10Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [startup:loudness_check] RSS=124336kB PSS=63107kB PrivDirty=37240kB RssFile=86968kB RssShmem=128kB ShDirty=128kB Threads=29 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
-[2026-05-07T22:20:11Z DEBUG linux_soundboard::commands::shared] Async UI command started: name=play_sound
-[2026-05-07T22:20:11Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [playback:first_play_start] RSS=124692kB PSS=63262kB PrivDirty=37304kB RssFile=87260kB RssShmem=128kB ShDirty=128kB Threads=28 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
-[2026-05-07T22:20:11Z DEBUG linux_soundboard::commands::shared] Async UI command finished: name=play_sound elapsed_ms=35
-[2026-05-07T22:20:15Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [idle:5s] RSS=124948kB PSS=63530kB PrivDirty=37496kB RssFile=87324kB RssShmem=128kB ShDirty=128kB Threads=28 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
-[2026-05-07T22:20:26Z INFO  linux_soundboard::diagnostics::memory] RAM_PHASE [shutdown:close_request] RSS=124908kB PSS=63475kB PrivDirty=37456kB RssFile=87324kB RssShmem=128kB ShDirty=128kB Threads=17 timers=0 hotkeys="Hotkeys: Idle (no bindings)" playback=0 validation=0(deferred,0) work=none(0,0)
+Pass -h after a command to see command-specific options
+
+[ Virtual Mic — linuxsoundboard.virtual_mic ]
+  visible in pactl : YES
+  visible in wpctl : YES (in Sources)
+
+[ WirePlumber Settings ]
+  linking.allow-moving-streams : Value: true
+
+[ System Default Source ]
+  current : alsa_input.pci-0000_12_00.6.analog-stereo
+
+[ PipeWire Metadata (target.object assignments) ]
+  No target.object assignments — soundboard may not be running
+
+[ Stream/Input/Audio nodes (recording streams) ]
+  id=107
+    app        : <unknown>
+    node.name  : linuxsoundboard.mic_capture
+    target     : alsa_input.pci-0000_12_00.6.analog-stereo
+    decision   : SKIP — node.dont-move=true
+
+  id=122
+    app        : gsr-default_input
+    node.name  : gsr-default_input
+    target     : alsa_input.pci-0000_12_00.6.analog-stereo
+    decision   : ROUTE → linuxsoundboard.virtual_mic
+
+  id=123
+    app        : gsr-default_output
+    node.name  : gsr-default_output
+    target     : alsa_output.pci-0000_12_00.6.analog-stereo
+    decision   : ROUTE → linuxsoundboard.virtual_mic
+
+  id=136
+    app        : gsr-easyeffects_source
+    node.name  : gsr-easyeffects_source
+    target     : easyeffects_source
+    decision   : SKIP — processor internal
+
+
+~/opencode/LinuxSoundBoardv1 testing* ⇡⇣
+❯ journalctl --user -u linux-soundboard-engine.service -f
+
+тра 14 11:31:53 flinux systemd[1942]: Stopping Linux Soundboard audio engine...
+тра 14 11:31:53 flinux systemd[1942]: Stopped Linux Soundboard audio engine.
+тра 14 11:31:53 flinux systemd[1942]: Started Linux Soundboard audio engine.
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio_engine] Linux Soundboard audio engine listening at /run/user/1000/linux-soundboard/engine.sock
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_routing] Mic passthrough: no microphone found — will activate automatically when one is connected
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_autoroute] Registered PipeWire default metadata for input stream routing
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_routing] Connecting mic passthrough capture to alsa_input.pci-0000_12_00.6.analog-stereo
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_autoroute] Routed input stream 'gsr-default_input' to linuxsoundboard.virtual_mic
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_autoroute] Routed input stream 'gsr-default_output' to linuxsoundboard.virtual_mic
+тра 14 11:31:53 flinux linux-soundboard[51484]: [2026-05-14T08:31:53Z INFO  linux_soundboard::audio::player::source_autoroute] Routed input stream 'gsr-default_input' to linuxsoundboard.virtual_mic
+^C⏎

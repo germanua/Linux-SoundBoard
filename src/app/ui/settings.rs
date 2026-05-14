@@ -937,14 +937,19 @@ fn build_general_page(
         mic_group.add(&mic_row);
 
         let default_mode_row = adw::ComboRow::builder()
-            .title("Default Microphone")
-            .subtitle("Controls whether the app claims the system default mic for games")
+            .title("Microphone Routing")
+            .subtitle("Controls how recording apps are routed to Linux Soundboard Mic")
             .build();
-        let default_mode_items = gtk4::StringList::new(&["Manual", "Auto While Running"]);
+        let default_mode_items = gtk4::StringList::new(&[
+            "Manual",
+            "Auto-route while running",
+            "Game compatibility mode",
+        ]);
         default_mode_row.set_model(Some(&default_mode_items));
         default_mode_row.set_selected(match current_default_source_mode {
             DefaultSourceMode::Manual => 0,
-            DefaultSourceMode::AutoWhileRunning => 1,
+            DefaultSourceMode::AutoRouteWhileRunning => 1,
+            DefaultSourceMode::TemporaryDefaultWhileRunning => 2,
         });
         let confirmed_default_mode_selection = Rc::new(RefCell::new(default_mode_row.selected()));
         let suppress_default_mode_selection = Rc::new(Cell::new(false));
@@ -962,7 +967,8 @@ fn build_general_page(
                 return;
             }
             let mode = match row.selected() {
-                1 => DefaultSourceMode::AutoWhileRunning,
+                1 => DefaultSourceMode::AutoRouteWhileRunning,
+                2 => DefaultSourceMode::TemporaryDefaultWhileRunning,
                 _ => DefaultSourceMode::Manual,
             };
             row.set_sensitive(false);
@@ -1117,7 +1123,10 @@ fn build_general_page(
             "Discord",
             "Settings → Voice & Video → Input Device → Default",
         ),
-        ("OBS Studio", "Audio → Mic/Aux → Default or Linux Soundboard Mic"),
+        (
+            "OBS Studio",
+            "Audio → Mic/Aux → Default or Linux Soundboard Mic",
+        ),
         (
             "Steam Voice",
             "Steam → Settings → Voice → Microphone Device → Default Device",

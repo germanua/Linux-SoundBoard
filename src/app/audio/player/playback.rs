@@ -9,7 +9,7 @@ pub(super) struct ActivePlayback {
     pub(super) playback_order: u64,
     pub(super) duration_ms: Option<u64>,
     pub(super) source:
-        ResettablePlaybackSource<SymphoniaSource, Box<dyn Fn() -> Result<SymphoniaSource, String>>>,
+        ResettablePlaybackSource<PlaybackSource, Box<dyn Fn() -> Result<PlaybackSource, String>>>,
     pub(super) position_ms: u64,
     pub(super) fallback_samples_written: u64,
     pub(super) paused: bool,
@@ -36,8 +36,8 @@ impl ActivePlayback {
         config: &RuntimeConfig,
     ) -> Result<Self, String> {
         let factory_path = path.clone();
-        let factory: Box<dyn Fn() -> Result<SymphoniaSource, String>> =
-            Box::new(move || SymphoniaSource::from_path(&factory_path));
+        let factory: Box<dyn Fn() -> Result<PlaybackSource, String>> =
+            Box::new(move || PlaybackSource::from_path(&factory_path));
         let source = ResettablePlaybackSource::new(
             factory,
             TARGET_OUTPUT_CHANNELS as u16,

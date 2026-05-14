@@ -62,7 +62,7 @@ mod tests {
         assert_eq!(value["settings"]["list_style"], "compact");
         assert_eq!(
             value["settings"]["default_source_mode"],
-            "auto_while_running"
+            "auto_route_while_running"
         );
         assert_eq!(value["settings"]["mic_latency_profile"], "balanced");
     }
@@ -105,11 +105,21 @@ mod tests {
         assert_eq!(cfg.settings.auto_gain_apply_to, AutoGainApplyTo::MicOnly);
         assert_eq!(cfg.settings.play_mode, PlayMode::Default);
         assert_eq!(cfg.settings.list_style, ListStyle::Compact);
-        assert_eq!(cfg.settings.default_source_mode, DefaultSourceMode::Manual);
+        assert_eq!(
+            cfg.settings.default_source_mode,
+            DefaultSourceMode::AutoRouteWhileRunning
+        );
         assert_eq!(
             cfg.settings.mic_latency_profile,
             MicLatencyProfile::Balanced
         );
+    }
+
+    #[test]
+    fn legacy_default_source_mode_alias_deserializes_to_compatibility_mode() {
+        let mode: DefaultSourceMode = serde_json::from_str(r#""auto_while_running""#).unwrap();
+
+        assert_eq!(mode, DefaultSourceMode::TemporaryDefaultWhileRunning);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 pub mod memory;
+pub mod routing;
 
 pub use memory::{
     build_app_inventory, clear_work_runtime, estimate_config_bytes, estimate_ui_bytes,

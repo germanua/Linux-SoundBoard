@@ -47,10 +47,6 @@ override_dh_auto_install:
 	install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
 		debian/linux-soundboard/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 
-	# Install persistent virtual microphone PipeWire config
-	install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
-		debian/linux-soundboard/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
-
 	# Install user service for boot-ready audio engine
 	install -Dm644 packaging/linux/linux-soundboard-engine.service \
 		debian/linux-soundboard/usr/lib/systemd/user/linux-soundboard-engine.service

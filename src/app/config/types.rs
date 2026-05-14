@@ -184,16 +184,18 @@ pub enum ListStyle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DefaultSourceMode {
-    #[default]
     Manual,
-    AutoWhileRunning,
+    #[default]
+    AutoRouteWhileRunning,
+    TemporaryDefaultWhileRunning,
 }
 
 impl DefaultSourceMode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Manual => "manual",
-            Self::AutoWhileRunning => "auto_while_running",
+            Self::AutoRouteWhileRunning => "auto_route_while_running",
+            Self::TemporaryDefaultWhileRunning => "temporary_default_while_running",
         }
     }
 }
@@ -204,7 +206,10 @@ impl FromStr for DefaultSourceMode {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "manual" => Ok(Self::Manual),
-            "auto_while_running" => Ok(Self::AutoWhileRunning),
+            "auto_route_while_running" => Ok(Self::AutoRouteWhileRunning),
+            "temporary_default_while_running" | "auto_while_running" => {
+                Ok(Self::TemporaryDefaultWhileRunning)
+            }
             _ => Err(()),
         }
     }
@@ -295,7 +300,7 @@ impl FromStr for LoudnessAnalysisState {
 impl_string_serde_enum!(LoudnessAnalysisState);
 
 fn default_default_source_mode() -> DefaultSourceMode {
-    DefaultSourceMode::AutoWhileRunning
+    DefaultSourceMode::AutoRouteWhileRunning
 }
 
 impl ListStyle {
@@ -684,7 +689,7 @@ impl Default for Settings {
             allow_multiple_playbacks: false,
             mic_passthrough: true,
             mic_source: None,
-            default_source_mode: DefaultSourceMode::AutoWhileRunning,
+            default_source_mode: DefaultSourceMode::AutoRouteWhileRunning,
             mic_latency_profile: MicLatencyProfile::Balanced,
             skip_delete_confirm: false,
             auto_gain: false,

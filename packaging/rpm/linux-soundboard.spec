@@ -12,6 +12,8 @@ BuildRequires:  rust >= 1.85
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
 BuildRequires:  pulseaudio-libs-devel
+BuildRequires:  alsa-lib-devel
+BuildRequires:  pipewire-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
 BuildRequires:  pkgconfig
@@ -71,10 +73,6 @@ install -Dm755 packaging/linux/install-swhkd-helper.sh \
 install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
     %{buildroot}%{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 
-# Install persistent virtual microphone PipeWire config
-install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
-    %{buildroot}%{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
-
 # Install user service for boot-ready audio engine
 install -Dm644 packaging/linux/linux-soundboard-engine.service \
     %{buildroot}%{_userunitdir}/linux-soundboard-engine.service
@@ -88,11 +86,11 @@ install -Dm644 packaging/linux/linux-soundboard-engine.service \
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 %{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
 %{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
-%{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
 %{_userunitdir}/linux-soundboard-engine.service
 
 %post
 echo "Configuring LinuxSoundBoard..."
+rm -f %{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --global enable linux-soundboard-engine.service >/dev/null 2>&1 || true
 fi
@@ -149,19 +147,19 @@ fi
 - Added third-party license notices and README acknowledgments
 - Refreshed release package examples and install metadata
 
-* Tue Mar 25 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-2
+* Wed Mar 25 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-2
 - Migrated from Portal to swhkd for universal hotkey support
 - Added support for Wayland, X11, and TTY hotkeys
 - Improved hotkey reliability with hot reload via SIGHUP
 - Removed Portal backend dependency
 - Added automatic swhkd configuration in post-install
 
-* Mon Mar 24 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-1
+* Tue Mar 24 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-1
 - New upstream release
 - Add native Wayland support
 - Improve AppImage compatibility
 - Add distribution-specific packages
 - Fix virtual microphone creation on modern distributions
 
-* Sat Mar 22 2026 germanua <noreply@linuxsoundboard.invalid> - 1.0.0-1
+* Sun Mar 22 2026 germanua <noreply@linuxsoundboard.invalid> - 1.0.0-1
 - Initial RPM release

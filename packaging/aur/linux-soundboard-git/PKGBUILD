@@ -88,8 +88,6 @@ package() {
     done
   done
 
-  install -Dm644 packaging/pipewire/99-linuxsoundboard.conf \
-    "${pkgdir}/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf"
   install -Dm644 packaging/linux/linux-soundboard-engine.service \
     "${pkgdir}/usr/lib/systemd/user/linux-soundboard-engine.service"
 }

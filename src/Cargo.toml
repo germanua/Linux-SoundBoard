@@ -38,6 +38,8 @@ gtk4 = { version = "0.9", features = ["v4_10"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
 log = "0.4"
 nix = { version = "0.29", features = ["signal", "process", "user", "fs"] }
+ogg = "0.8"
+opus = "0.3"
 parking_lot = "0.12"
 pipewire = "0.9.2"
 pulse = { version = "2", package = "libpulse-binding" }
@@ -88,7 +90,6 @@ assets = [
     ["../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", "usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", "644"],
     ["../packaging/linux/install-swhkd-helper.sh", "usr/libexec/linux-soundboard/install-swhkd-helper.sh", "755"],
     ["../packaging/linux/com.linuxsoundboard.install-swhkd.policy", "usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", "644"],
-    ["../packaging/pipewire/99-linuxsoundboard.conf", "usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf", "644"],
     ["../packaging/linux/linux-soundboard-engine.service", "usr/lib/systemd/user/linux-soundboard-engine.service", "644"],
 ]
 
@@ -110,7 +111,6 @@ assets = [
     { source = "../packaging/flatpak/com.linuxsoundboard.app.metainfo.xml", dest = "/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml", mode = "644" },
     { source = "../packaging/linux/install-swhkd-helper.sh", dest = "/usr/libexec/linux-soundboard/install-swhkd-helper.sh", mode = "755" },
     { source = "../packaging/linux/com.linuxsoundboard.install-swhkd.policy", dest = "/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", mode = "644" },
-    { source = "../packaging/pipewire/99-linuxsoundboard.conf", dest = "/usr/share/pipewire/pipewire.conf.d/99-linuxsoundboard.conf", mode = "644" },
     { source = "../packaging/linux/linux-soundboard-engine.service", dest = "/usr/lib/systemd/user/linux-soundboard-engine.service", mode = "644" },
 ]
 
