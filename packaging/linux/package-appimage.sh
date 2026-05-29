@@ -10,7 +10,7 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
 ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
-BINARY_SOURCE="$REPO_ROOT/src/target/release/$APP_BINARY"
+BINARY_SOURCE="$REPO_ROOT/target/release/$APP_BINARY"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
 DIST_ROOT="$REPO_ROOT/dist"
 TOOLS_ROOT="$DIST_ROOT/.appimage-tools"
@@ -125,7 +125,7 @@ fi
 
 # Skip VMware shim libraries; they drag host-only dependencies into the AppImage.
 if grep -Fq 'done < <(find "$directory" \( -type l -o -type f \) -name "$library" -print0)' "$GTK_PLUGIN_BIN"; then
-    sed -i '/done < <(find "\$directory" \\( -type l -o -type f \\) -name "\$library" -print0)/c\    done < <(find "$directory" \( -type l -o -type f \) ! -path "/usr/lib/vmware/*" ! -path "/usr/lib/vmware/**" -name "$library" -print0)' "$GTK_PLUGIN_BIN"
+    sed -i '/done < <(find "\$directory" \\( -type l -o -type f \\) -name "\$library" -print0)/c\    done < <(find "$directory" \\( -type l -o -type f \\) ! -path "/usr/lib/vmware/*" ! -path "/usr/lib/vmware/**" -name "$library" -print0)' "$GTK_PLUGIN_BIN"
 fi
 
 # Patch GTK plugin for Wayland support.

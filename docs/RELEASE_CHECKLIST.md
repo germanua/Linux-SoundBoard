@@ -165,13 +165,13 @@ Test `packaging/linux/install-user.sh` from a binary:
 
 ```bash
 # Install
-./packaging/linux/install-user.sh install ./src/target/release/linux-soundboard
+./packaging/linux/install-user.sh install ./target/release/linux-soundboard
 
 # Verify status
 ./packaging/linux/install-user.sh status
 
 # Repair (should be a no-op if nothing changed)
-./packaging/linux/install-user.sh repair ./src/target/release/linux-soundboard
+./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
 
 # Remove (use --yes to skip confirmation prompt in CI)
 ./packaging/linux/install-user.sh remove --yes

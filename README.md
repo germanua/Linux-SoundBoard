@@ -195,15 +195,15 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 ```bash
 # Arch
-sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita libpulse alsa-lib libx11 libxi pipewire wireplumber
+sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita libpulse alsa-lib opus libx11 libxi pipewire wireplumber
 
 # Debian / Ubuntu
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
-  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev libx11-dev libxi-dev pipewire wireplumber
+  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev libopus-dev libx11-dev libxi-dev pipewire wireplumber
 
 # Fedora
 sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
-  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel libX11-devel libXi-devel pipewire wireplumber
+  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel opus-devel libX11-devel libXi-devel pipewire-devel pipewire wireplumber
 ```
 
 ```bash
@@ -211,7 +211,7 @@ git clone https://github.com/germanua/Linux-SoundBoard.git
 cd Linux-SoundBoard/src
 cargo build --release
 cd ..
-./packaging/linux/install-user.sh install ./src/target/release/linux-soundboard
+./packaging/linux/install-user.sh install ./target/release/linux-soundboard
 ```
 
 Full source-build notes are in [docs/INSTALL.md](docs/INSTALL.md).

@@ -225,7 +225,7 @@ In **Default** mode, the soundboard is the system default mic — all apps that 
 
 If Discord/Vesktop screen-share with sound works in **Manual** mode but breaks in **Default** mode, capture a comparison bundle so the routing-decision history can be reviewed. The audit log records every PipeWire metadata write Soundboard makes and every default-source command it issues, with timestamps. It only writes when `LSB_ROUTE_AUDIT=1` is set.
 
-The recipe assumes you have a path to the Soundboard binary (e.g. `~/AppImage/linux-soundboard.AppImage` or the cargo build at `src/target/release/linux-soundboard`). Replace `LINUX_SOUNDBOARD` below with that path.
+The recipe assumes you have a path to the Soundboard binary (e.g. `~/AppImage/linux-soundboard.AppImage` or the cargo build at `target/release/linux-soundboard`). Replace `LINUX_SOUNDBOARD` below with that path.
 
 ```bash
 # 1. Stop the systemd-managed engine, the UI, Discord, and Vesktop. The audit
@@ -236,7 +236,7 @@ pkill -f Discord 2>/dev/null
 pkill -f vesktop 2>/dev/null
 
 mkdir -p /tmp/lsb-bug
-LINUX_SOUNDBOARD=src/target/release/linux-soundboard
+LINUX_SOUNDBOARD=target/release/linux-soundboard
 
 # 2. Capture baseline state — no Soundboard, no share.
 $LINUX_SOUNDBOARD --diagnose-graph-snapshot /tmp/lsb-bug/00-baseline.jsonl
@@ -310,7 +310,7 @@ sudo chmod u+s "$(command -v swhkd)"
 
 If one-click install fails:
 
-- Ensure PolicyKit is installed (`policykit-1` on Debian/Ubuntu, `polkit` on Fedora/Arch/openSUSE).
+- Ensure PolicyKit is installed (`pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, `polkit` on Fedora/Arch/openSUSE).
 - Ensure network access is available (installer clones upstream `swhkd` sources).
 - Retry from the app and review the detailed failure output shown in the dialog.
 

@@ -13,6 +13,7 @@ BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
 BuildRequires:  pulseaudio-libs-devel
 BuildRequires:  alsa-lib-devel
+BuildRequires:  opus-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
@@ -48,7 +49,7 @@ cargo build --release --manifest-path src/Cargo.toml
 rm -rf %{buildroot}
 
 # Install binary
-install -Dm755 src/target/release/linux-soundboard \
+install -Dm755 target/release/linux-soundboard \
     %{buildroot}%{_bindir}/linux-soundboard
 
 # Install desktop file

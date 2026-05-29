@@ -19,12 +19,12 @@ VERSION="$(cargo_version_from_manifest "$REPO_ROOT/src/Cargo.toml")" || exit 1
 RPMBUILD_DIR="$HOME/rpmbuild"
 mkdir -p "$RPMBUILD_DIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-# Create source tarball
+# Create source tarball from the working tree so local packaging fixes are
+# included before they are committed.
 echo "Creating source tarball..."
 TARBALL="$RPMBUILD_DIR/SOURCES/linux-soundboard-$VERSION.tar.gz"
-git archive --format=tar.gz --prefix="linux-soundboard-$VERSION/" HEAD > "$TARBALL" 2>/dev/null || \
-    tar czf "$TARBALL" --transform "s,^,linux-soundboard-$VERSION/," \
-        --exclude='.git' --exclude='target' --exclude='dist' --exclude='pkg' .
+tar czf "$TARBALL" --transform "s,^,linux-soundboard-$VERSION/," \
+    --exclude='.git' --exclude='target' --exclude='dist' --exclude='pkg' .
 
 # Copy spec file
 cp "$SCRIPT_DIR/linux-soundboard.spec" "$RPMBUILD_DIR/SPECS/"
