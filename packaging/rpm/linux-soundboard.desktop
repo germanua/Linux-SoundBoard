@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.1
+Type=Application
+Name=Linux Soundboard
+Comment=Native Linux soundboard with virtual microphone support
+Exec=linux-soundboard
+Icon=com.linuxsoundboard.app
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=soundboard;audio;pipewire;microphone;
+StartupNotify=true
+StartupWMClass=linux-soundboard

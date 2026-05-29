@@ -1,0 +1,992 @@
+/* Dark theme custom styles */
+@define-color accent_bg_color #948979;
+@define-color accent_fg_color #DFD0B8;
+@define-color accent_color #948979;
+
+window,
+.main-window {
+  background-color: #222831;
+  color: #dfd0b8;
+}
+
+/* Global text color — ensure all labels/buttons inherit the warm tone */
+label,
+button,
+entry {
+  color: #dfd0b8;
+}
+
+.sound-cell {
+  margin: 0;
+  padding: 6px 10px;
+}
+
+.sound-cell-playing {
+  background-color: transparent;
+}
+
+.sound-cell-active {
+  background-color: transparent;
+}
+
+.sound-row-playing {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+.sound-row-active {
+  background-color: rgba(148, 137, 121, 0.2);
+}
+
+columnview row > cell.sound-cell-playing {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+columnview row > cell.sound-cell-active {
+  background-color: rgba(148, 137, 121, 0.2);
+}
+
+.sound-cell-first {
+  border-left: 4px solid transparent;
+  padding-left: 6px;
+}
+
+.sound-cell-first.sound-cell-playing {
+  border-left-color: rgba(148, 137, 121, 0.65);
+}
+
+.sound-cell-first.sound-cell-active {
+  border-left-color: #948979;
+}
+
+.sound-row-selected {
+  background-color: rgba(148, 137, 121, 0.25);
+}
+
+.transport-bar {
+  background: #393e46;
+  background-color: #393e46;
+  background-image: none;
+  box-shadow: none;
+  border-image: none;
+  border-bottom: 2px solid rgba(148, 137, 121, 0.5);
+  padding: 3px 5px;
+  min-height: 38px;
+  color: #dfd0b8;
+}
+
+/* Override Adwaita toolbar styling that bleeds through */
+.transport-bar.toolbar,
+.transport-bar > .toolbar,
+box.toolbar.transport-bar {
+  background: #393e46;
+  background-color: #393e46;
+  background-image: none;
+  box-shadow: none;
+}
+
+headerbar,
+headerbar:backdrop,
+.titlebar {
+  background: #393e46;
+  background-color: #393e46;
+  background-image: none;
+  box-shadow: none;
+}
+
+.main-window button:focus-visible,
+.main-window entry:focus,
+.main-window searchentry:focus,
+.main-window scale:focus slider,
+.main-window row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.48);
+  outline: none;
+}
+
+.transport-bar label {
+  color: #dfd0b8;
+}
+
+.transport-cluster {
+  background-color: transparent;
+  border: none;
+  border-radius: 10px;
+  padding: 1px 4px;
+}
+
+.transport-timeline {
+  min-width: 320px;
+}
+
+.transport-track-name {
+  font-size: 11px;
+  opacity: 0.78;
+}
+
+.transport-bar button {
+  color: #dfd0b8;
+  border-radius: 10px;
+  background-image: none;
+}
+
+.transport-bar button:active,
+.transport-bar togglebutton:active {
+  background-color: rgba(148, 137, 121, 0.18);
+  border-color: rgba(148, 137, 121, 0.42);
+  box-shadow: none;
+}
+
+.transport-bar button:checked,
+.transport-bar togglebutton:checked {
+  background-color: rgba(148, 137, 121, 0.24);
+  border-color: rgba(148, 137, 121, 0.46);
+  box-shadow: none;
+}
+
+.transport-btn {
+  min-width: 31px;
+  min-height: 31px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.transport-playback-btn {
+  /* Uses .transport-btn dimensions (31x31) */
+}
+
+/* Symbolic icon coloring in transport bar */
+.transport-bar button image {
+  color: #dfd0b8;
+  -gtk-icon-size: 15px;
+}
+
+.transport-icon-btn image {
+  -gtk-icon-size: 15px;
+}
+
+.transport-playmode-btn image {
+  -gtk-icon-size: 16px;
+}
+
+.transport-refresh-btn image {
+  -gtk-icon-size: 16px;
+}
+
+.transport-playback-btn image {
+  -gtk-icon-size: 16px;
+}
+
+.transport-bar button:hover image {
+  color: #ffffff;
+}
+
+.btn-active image {
+  color: #948979;
+}
+
+.tabs-sidebar {
+  background-color: #2d3139;
+  border-right: 1px solid rgba(148, 137, 121, 0.2);
+  min-width: 180px;
+  color: #dfd0b8;
+}
+
+.tabs-sidebar label {
+  color: #dfd0b8;
+}
+
+.tabs-sidebar image {
+  color: #dfd0b8;
+}
+
+.tabs-sidebar button image {
+  color: #dfd0b8;
+  -gtk-icon-size: 16px;
+}
+
+.sidebar-new-tab-btn {
+  border-radius: 50%;
+  padding: 4px;
+  min-width: 28px;
+  min-height: 28px;
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #dfd0b8;
+}
+
+.sidebar-new-tab-btn:hover {
+  background-color: rgba(223, 208, 184, 0.12);
+}
+
+.sidebar-new-tab-btn:active {
+  background-color: rgba(223, 208, 184, 0.2);
+}
+
+.sidebar-new-tab-btn image {
+  color: #dfd0b8;
+  -gtk-icon-size: 16px;
+}
+
+/* Column view text */
+columnview {
+  color: #dfd0b8;
+}
+
+columnview > listview {
+  border-spacing: 0;
+}
+
+columnview row > cell {
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  outline: none;
+  background-color: transparent;
+  background-image: none;
+}
+
+columnview row > cell label {
+  color: #dfd0b8;
+}
+
+.tab-row {
+  border-radius: 6px;
+  margin: 2px 4px;
+  padding: 6px 8px;
+}
+
+.tab-row:hover {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+.tab-row.active {
+  background-color: rgba(148, 137, 121, 0.25);
+  border-left: 3px solid #948979;
+}
+
+.tab-row-drop-hover {
+  background-color: rgba(148, 137, 121, 0.22);
+  border: 1px solid rgba(148, 137, 121, 0.58);
+}
+
+/* Appearance options selection in Settings */
+.appearance-choice-row {
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  border-top: 0;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+row.appearance-choice-row {
+  border-top: 0;
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.appearance-choice-selected {
+  background-color: rgba(148, 137, 121, 0.16);
+  border-left-color: #948979;
+}
+
+/* Navigation sidebar selection override */
+.navigation-sidebar row:selected {
+  background-color: rgba(148, 137, 121, 0.2);
+  border-left: 4px solid #948979;
+}
+
+.navigation-sidebar row:selected:focus-within {
+  background-color: rgba(148, 137, 121, 0.25);
+}
+
+.navigation-sidebar row:hover:not(:selected) {
+  background-color: rgba(148, 137, 121, 0.1);
+}
+
+/* Hotkey badge — pill style */
+.hotkey-badge {
+  font-family: monospace;
+  font-size: 10px;
+  background-color: rgba(148, 137, 121, 0.1);
+  border: 1px solid rgba(148, 137, 121, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: rgba(223, 208, 184, 0.85);
+}
+
+.setup-banner {
+  background-color: rgba(220, 120, 0, 0.2);
+  border-bottom: 1px solid rgba(220, 120, 0, 0.5);
+  padding: 8px 16px;
+}
+
+/* GTK CSS Label does not support transform: scale() — use opacity-only pulse */
+@keyframes playing-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    color: #948979;
+  }
+  50% {
+    opacity: 0.4;
+    color: #dfd0b8;
+  }
+}
+
+@keyframes spin {
+  from {
+    opacity: 1;
+  }
+  25% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Playing sound indicator dot */
+.playing-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 50%;
+  color: #948979;
+  animation: playing-dot-pulse 1.5s ease-in-out infinite;
+}
+
+/* Row styling for sound list */
+columnview row:nth-child(even) > cell {
+  background-color: rgba(148, 137, 121, 0.03);
+}
+
+columnview header button,
+columnview header button:hover,
+columnview header button:active,
+columnview header button:checked {
+  background: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: #dfd0b8;
+}
+
+/* Active transport buttons — background tint + border glow */
+.btn-active {
+  background-color: rgba(148, 137, 121, 0.25);
+  border: 1px solid rgba(148, 137, 121, 0.44);
+}
+
+/* Settings button active glow */
+.btn-settings-active {
+  background-color: rgba(148, 137, 121, 0.25);
+  border: 1px solid rgba(148, 137, 121, 0.5);
+}
+
+/* Settings controls should keep the app palette instead of the system accent */
+.lsb-settings-overlay {
+  background-color: transparent;
+}
+
+.settings-overlay-backdrop {
+  background-color: rgba(9, 12, 16, 0.52);
+  background-image: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+
+.settings-overlay-backdrop:hover,
+.settings-overlay-backdrop:active {
+  background-color: rgba(9, 12, 16, 0.58);
+  background-image: none;
+}
+
+.settings-overlay-panel {
+  background-color: #202832;
+  border: 1px solid rgba(148, 137, 121, 0.34);
+  border-radius: 18px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  color: #dfd0b8;
+}
+
+.settings-overlay-header {
+  min-height: 60px;
+  padding: 0 12px;
+  background-color: #383f49;
+  border-bottom: 1px solid rgba(9, 12, 16, 0.3);
+  border-radius: 18px 18px 0 0;
+}
+
+.settings-overlay-close-btn {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  background-color: rgba(223, 208, 184, 0.12);
+  border-radius: 999px;
+}
+
+.settings-overlay-close-btn image {
+  -gtk-icon-size: 15px;
+}
+
+.settings-overlay-close-btn:hover {
+  background-color: rgba(223, 208, 184, 0.2);
+}
+
+.settings-overlay-content {
+  min-height: 0;
+}
+
+.settings-overlay-switcher {
+  border-spacing: 8px;
+  padding: 0;
+}
+
+.settings-overlay-tab {
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 16px;
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  box-shadow: none;
+  color: #dfd0b8;
+}
+
+.settings-overlay-tab box {
+  border-spacing: 8px;
+}
+
+.settings-overlay-tab label {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.settings-overlay-tab image {
+  -gtk-icon-size: 15px;
+}
+
+.settings-overlay-tab:checked {
+  background-color: #4b5158;
+  color: #dfd0b8;
+  box-shadow: none;
+}
+
+.settings-overlay-tab:hover {
+  background-color: rgba(223, 208, 184, 0.08);
+}
+
+.settings-overlay-tab:checked:hover {
+  background-color: #4b5158;
+}
+
+.lsb-settings-dialog switch {
+  color: #dfd0b8;
+}
+
+.lsb-settings-dialog switch:checked {
+  background-color: #948979;
+  color: #dfd0b8;
+}
+
+.lsb-settings-dialog switch:checked slider {
+  background-color: #f2e7d5;
+}
+
+.lsb-settings-dialog button.settings-primary-btn {
+  background-color: #948979;
+  color: #f2e7d5;
+  border: 1px solid rgba(223, 208, 184, 0.22);
+  box-shadow: none;
+}
+
+.lsb-settings-dialog button.settings-primary-btn:hover {
+  background-color: #a39887;
+}
+
+.lsb-settings-dialog button.settings-primary-btn:active {
+  background-color: #847866;
+}
+
+.lsb-settings-dialog button.settings-danger-btn,
+.lsb-settings-dialog button.settings-danger-btn image {
+  color: #d98d7a;
+}
+
+.lsb-settings-dialog button.settings-danger-btn:hover {
+  background-color: rgba(217, 141, 122, 0.1);
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn,
+.lsb-settings-dialog button.settings-folder-remove-btn image {
+  color: #d98d7a;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn image {
+  -gtk-icon-size: 16px;
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn:hover {
+  background-color: rgba(217, 141, 122, 0.15);
+  border-color: rgba(217, 141, 122, 0.6);
+}
+
+.lsb-settings-dialog button.settings-folder-remove-btn:active {
+  background-color: rgba(217, 141, 122, 0.22);
+}
+
+/* Refresh button spinning indicator */
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Custom scrollbar styling */
+scrollbar slider {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 4px;
+  background-color: rgba(148, 137, 121, 0.4);
+}
+
+scrollbar slider:hover {
+  background-color: rgba(148, 137, 121, 0.7);
+}
+
+/* Transport button hover */
+.transport-bar button:hover {
+  background-color: rgba(148, 137, 121, 0.12);
+  border-radius: 10px;
+}
+
+.transport-search {
+  min-height: 31px;
+  min-width: 104px;
+  padding: 0 6px;
+  font-size: 10px;
+  border-radius: 10px;
+}
+
+/* Scrub bar (transport Scale widget) */
+.transport-bar scale {
+  min-height: 18px;
+}
+
+.transport-bar scale trough {
+  background-color: rgba(34, 40, 49, 0.7);
+  border: 1px solid rgba(148, 137, 121, 0.3);
+  border-radius: 4px;
+  min-height: 10px;
+}
+
+.transport-bar scale trough highlight {
+  background: linear-gradient(90deg, #948979, #dfd0b8);
+  border-radius: 4px;
+}
+
+.transport-bar scale slider {
+  background-color: #dfd0b8;
+  border: 2px solid #948979;
+  border-radius: 50%;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+/* Volume sliders (smaller) */
+scale.volume-slider trough {
+  background-color: rgba(34, 40, 49, 0.7);
+  border: 1px solid rgba(148, 137, 121, 0.4);
+  border-radius: 4px;
+  min-height: 6px;
+}
+
+scale.volume-slider trough highlight {
+  background-color: #948979;
+  border-radius: 4px;
+}
+
+scale.volume-slider slider {
+  background-color: #dfd0b8;
+  border: 2px solid #948979;
+  border-radius: 50%;
+  min-width: 16px;
+  min-height: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.transport-volume-icon {
+  color: #dfd0b8;
+  -gtk-icon-size: 14px;
+  opacity: 0.9;
+}
+
+.volume-readout-wrap {
+  min-width: 38px;
+}
+
+.volume-readout {
+  min-width: 38px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #dfd0b8;
+  opacity: 0.9;
+}
+
+entry.volume-input {
+  min-width: 38px;
+  min-height: 24px;
+  padding: 0 4px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 137, 121, 0.35);
+  background-color: rgba(34, 40, 49, 0.45);
+  font-family: monospace;
+  font-size: 11px;
+  color: #dfd0b8;
+}
+
+/* Sound row hover */
+columnview row:hover {
+  background-color: rgba(148, 137, 121, 0.08);
+}
+
+columnview row:hover > cell {
+  background-color: transparent;
+}
+
+/* Sound list selection should use the app palette, not the desktop accent */
+columnview.data-table row:selected {
+  background-color: rgba(148, 137, 121, 0.18);
+  background-image: none;
+}
+
+columnview.data-table row:selected > cell {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  outline: none;
+  box-shadow: none;
+}
+
+columnview.data-table row:selected:hover {
+  background-color: rgba(148, 137, 121, 0.23);
+  background-image: none;
+}
+
+columnview.data-table row:selected:hover > cell {
+  background-color: transparent;
+  background-image: none;
+}
+
+columnview.data-table row:selected > cell label {
+  color: #dfd0b8;
+}
+
+columnview.data-table row:selected:focus-within {
+  background-color: rgba(148, 137, 121, 0.25);
+  background-image: none;
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.42);
+}
+
+columnview.data-table row:selected:focus-within > cell {
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+
+columnview.data-table row:focus-within:not(:selected) {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.28);
+}
+
+columnview.data-table row:focus-within:not(:selected) > cell {
+  box-shadow: none;
+}
+
+columnview.data-table row:active {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+columnview.data-table rubberband {
+  background-color: rgba(148, 137, 121, 0.13);
+  border: 1px solid rgba(148, 137, 121, 0.58);
+}
+
+/* Hotkey capture zone */
+.hotkey-capture-zone {
+  border: 2px solid rgba(148, 137, 121, 0.5);
+  border-radius: 8px;
+  padding: 16px;
+  background-color: rgba(34, 40, 49, 0.5);
+}
+
+@keyframes hotkey-recording-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.hotkey-recording {
+  animation: hotkey-recording-pulse 1s ease-in-out infinite;
+  color: #948979;
+}
+
+/* Add-to-tab mode header in transport bar */
+.add-to-tab-header {
+  color: #948979;
+  font-weight: bold;
+}
+
+.drop-zone-overlay {
+  background-color: rgba(148, 137, 121, 0.15);
+  border: 3px dashed rgba(148, 137, 121, 0.6);
+  border-radius: 16px;
+  margin: 16px;
+  padding: 18px 20px;
+}
+
+.drop-zone-ready {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+.drop-zone-importing {
+  background-color: rgba(148, 137, 121, 0.22);
+}
+
+.drop-zone-rejected {
+  background-color: rgba(196, 90, 90, 0.18);
+  border-color: rgba(196, 90, 90, 0.75);
+}
+
+.drop-zone-icon {
+  margin-bottom: 4px;
+  color: #dfd0b8;
+  -gtk-icon-size: 28px;
+}
+
+/* Tab count badge */
+.tab-count-badge {
+  font-size: 10px;
+  background-color: transparent;
+  border-radius: 0;
+  padding: 0;
+  color: rgba(223, 208, 184, 0.65);
+}
+
+/* Monospace label */
+.monospace {
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.sound-index {
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", monospace;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  color: rgba(223, 208, 184, 0.78);
+}
+
+.sound-duration {
+  font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", monospace;
+  font-size: 11px;
+  color: rgba(223, 208, 184, 0.86);
+}
+
+.sound-name {
+  font-weight: 500;
+}
+
+/* Theme swatch circles */
+.theme-swatch {
+  min-width: 16px;
+  min-height: 16px;
+  border-radius: 50%;
+  margin: 0 2px;
+  border: 1px solid rgba(148, 137, 121, 0.3);
+}
+
+/* Volume controls pill container */
+.volume-group {
+  background-color: transparent;
+  border: 1px solid rgba(148, 137, 121, 0.2);
+  border-radius: 10px;
+  padding: 2px 7px;
+  margin: 0;
+}
+
+/* Content area background differentiation */
+columnview {
+  color: #dfd0b8;
+  background-color: #262c36;
+}
+
+columnview header button {
+  padding: 6px 10px;
+  min-height: 34px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  opacity: 0.95;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Card List Style Mode
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Card mode header - match cell padding */
+columnview.list-style-card header button {
+  padding: 10px 12px;
+}
+
+/* Card mode container */
+columnview.list-style-card row > cell {
+  padding: 10px 8px;
+}
+
+.list-style-card .sound-cell {
+  padding: 10px 16px;
+}
+
+.list-style-card .sound-cell-first {
+  border-left: none;
+  padding-left: 16px;
+}
+
+columnview.list-style-card row > cell:first-child {
+  border-left: 4px solid transparent;
+}
+
+/* Card mode row backgrounds - more visible alternation */
+columnview.list-style-card row:nth-child(even) {
+  background-color: rgba(148, 137, 121, 0.06);
+}
+
+columnview.list-style-card row:nth-child(odd) {
+  background-color: rgba(34, 40, 49, 0.3);
+}
+
+/* Card mode row backgrounds - disable zebra striping */
+columnview.list-style-card row:nth-child(even),
+columnview.list-style-card row:nth-child(odd) {
+  background-color: transparent;
+}
+
+/* Card mode hover - stronger effect */
+columnview.list-style-card row:hover {
+  background-color: rgba(148, 137, 121, 0.15);
+}
+
+columnview.list-style-card.data-table row:selected {
+  background-color: rgba(148, 137, 121, 0.22);
+}
+
+columnview.list-style-card.data-table row:selected:hover {
+  background-color: rgba(148, 137, 121, 0.28);
+}
+
+/* Card mode playing state - consistent color across all cells */
+columnview.list-style-card .sound-cell-playing {
+  background-color: transparent;
+}
+
+columnview.list-style-card .sound-cell-first.sound-cell-playing {
+  border-left-color: transparent;
+}
+
+/* Card mode active/selected - stronger accent */
+columnview.list-style-card .sound-cell-active {
+  background-color: transparent;
+}
+
+columnview.list-style-card .sound-cell-first.sound-cell-active {
+  border-left-color: transparent;
+}
+
+columnview.list-style-card row > cell:first-child.sound-cell-playing {
+  border-left-color: #948979;
+}
+
+columnview.list-style-card row > cell:first-child.sound-cell-active {
+  border-left-color: #dfd0b8;
+}
+
+columnview.list-style-card row > cell.sound-cell-playing {
+  background-color: rgba(148, 137, 121, 0.18);
+}
+
+columnview.list-style-card row > cell.sound-cell-active {
+  background-color: rgba(148, 137, 121, 0.25);
+}
+
+/* Card mode playing dot - larger with glow simulation */
+.list-style-card .playing-dot {
+  min-width: 10px;
+  min-height: 10px;
+  color: #dfd0b8;
+}
+
+/* Card mode sound name - bolder */
+.list-style-card .sound-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* Card mode hotkey badge - more subtle */
+.list-style-card .hotkey-badge {
+  background-color: transparent;
+  border: 1px solid rgba(148, 137, 121, 0.25);
+  color: rgba(223, 208, 184, 0.7);
+}
+
+/* Card mode index number - more visible */
+.list-style-card .sound-index {
+  font-size: 12px;
+  color: rgba(148, 137, 121, 0.6);
+}
+
+/* Drag icon label */
+.drag-icon-label {
+  background-color: rgba(148, 137, 121, 0.95);
+  color: #1a1614;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(148, 137, 121, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.transport-search:focus,
+entry.volume-input:focus,
+.hotkey-capture-zone:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.45);
+  outline: none;
+}
+
+.lsb-settings-dialog entry:focus,
+.lsb-settings-dialog spinbutton:focus-within,
+.lsb-settings-dialog row:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.4);
+  outline: none;
+}

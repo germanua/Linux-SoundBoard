@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<policyconfig>
+  <vendor>Linux Soundboard</vendor>
+  <vendor_url>https://github.com/germanua/Linux-SoundBoard</vendor_url>
+
+  <action id="com.linuxsoundboard.install-swhkd">
+    <description>Install Wayland hotkey support for Linux Soundboard</description>
+    <message>Authentication is required to install swhkd for Linux Soundboard.</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/linux-soundboard/install-swhkd-helper.sh</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

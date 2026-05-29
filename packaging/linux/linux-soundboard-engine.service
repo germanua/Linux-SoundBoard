@@ -1,0 +1,22 @@
+[Unit]
+Description=Linux Soundboard audio engine
+Documentation=https://github.com/germanua/Linux-SoundBoard
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+
+[Service]
+# Type=exec: systemd tracks the exec'd process PID and reports exec failures
+# clearly, unlike Type=simple which considers the service started immediately.
+Type=exec
+ExecStart=linux-soundboard --audio-engine
+Restart=on-failure
+RestartSec=2s
+
+# Hardening options tested compatible with PipeWire/PulseAudio user services.
+# ProtectHome and ProtectSystem are omitted: the engine must access user sound
+# files under $HOME and does not run with mount namespaces in user sessions.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

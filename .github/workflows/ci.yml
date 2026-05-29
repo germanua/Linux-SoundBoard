@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Build & test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libpulse-dev \
+            libasound2-dev \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libx11-dev \
+            libxi-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Build (release)
+        run: cargo build --workspace --release --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  topology-guard:
+    name: Architecture guard
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if audio imports ui
+        run: |
+          if grep -r --include="*.rs" "crate::ui::" src/app/audio/; then
+            echo "ERROR: audio module imports crate::ui — forbidden dependency direction"
+            exit 1
+          fi
+
+      - name: Fail if audio imports commands
+        run: |
+          if grep -r --include="*.rs" "crate::commands::" src/app/audio/; then
+            echo "ERROR: audio module imports crate::commands — forbidden dependency direction"
+            exit 1
+          fi
+
+      - name: Fail if audio imports init
+        run: |
+          if grep -r --include="*.rs" "crate::init::" src/app/audio/; then
+            echo "ERROR: audio module imports crate::init — forbidden dependency direction"
+            exit 1
+          fi
+
+      - name: Fail if loudness_acceptance is in the production module graph
+        run: |
+          # Reject ungated "pub mod loudness_acceptance" — a #[cfg(test)] gate
+          # must appear on the same line: "#[cfg(test)] pub mod loudness_acceptance"
+          if grep -r --include="*.rs" "^pub mod loudness_acceptance" src/app/audio/; then
+            echo "ERROR: loudness_acceptance declared without #[cfg(test)] gate in audio/"
+            exit 1
+          fi
+
+  metadata-validators:
+    name: Package metadata validation
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validators
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            desktop-file-utils \
+            appstream \
+            shellcheck
+
+      - name: Validate desktop files
+        run: |
+          desktop-file-validate packaging/flatpak/com.linuxsoundboard.app.desktop
+          desktop-file-validate packaging/debian/linux-soundboard.desktop
+          desktop-file-validate packaging/rpm/linux-soundboard.desktop
+
+      - name: Validate AppStream metainfo
+        run: appstreamcli validate --explain --no-net packaging/flatpak/com.linuxsoundboard.app.metainfo.xml
+
+      - name: ShellCheck installer scripts
+        run: |
+          shellcheck install.sh
+          shellcheck packaging/common.sh
+          shellcheck packaging/validate-metadata.sh
+          shellcheck packaging/smoke-check.sh
+          shellcheck packaging/linux/install-user.sh
+          shellcheck packaging/linux/install-swhkd-helper.sh
+          shellcheck packaging/linux/package-appimage.sh
+          shellcheck packaging/linux/appimage-preflight-check.sh
+          shellcheck packaging/debian/package-deb.sh
+          shellcheck packaging/rpm/package-rpm.sh
+
+      - name: Validate systemd service file
+        run: systemd-analyze verify packaging/linux/linux-soundboard-engine.service
+
+      - name: Check desktop Icon= matches installed icon name
+        run: |
+          for desktop in packaging/flatpak/com.linuxsoundboard.app.desktop packaging/debian/linux-soundboard.desktop packaging/rpm/linux-soundboard.desktop; do
+            icon=$(grep "^Icon=" "$desktop" | cut -d= -f2)
+            if [ "$icon" != "com.linuxsoundboard.app" ]; then
+              echo "ERROR: $desktop uses Icon=$icon, expected Icon=com.linuxsoundboard.app"
+              exit 1
+            fi
+          done
+          echo "All desktop Icon= values correct"
+
+      - name: Cross-format metadata consistency
+        run: bash packaging/validate-metadata.sh
+
+      - name: Packaging smoke check
+        run: bash packaging/smoke-check.sh
+
+  deps:
+    name: Unused dependencies
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libpulse-dev \
+            libasound2-dev \
+            libpipewire-0.3-dev \
+            libspa-0.2-dev \
+            libx11-dev \
+            libxi-dev \
+            pkg-config
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-machete-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-machete-
+
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+
+      - name: Check for unused dependencies
+        run: cargo machete

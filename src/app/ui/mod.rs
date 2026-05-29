@@ -1,0 +1,15 @@
+pub mod app_window;
+pub mod dialogs;
+mod dnd_import;
+pub mod icons;
+pub mod menu;
+pub mod settings;
+mod settings_folders;
+mod settings_hotkeys;
+mod settings_mic;
+mod settings_playback;
+pub mod sound_list;
+mod tab_dnd;
+pub mod tabs_sidebar;
+pub mod theme;
+pub mod transport;

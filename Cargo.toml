@@ -1,0 +1,15 @@
+[workspace]
+members = ["src"]
+resolver = "2"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "unwind"

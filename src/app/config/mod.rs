@@ -1,0 +1,232 @@
+mod defaults;
+pub mod migration;
+pub use migration::{MigrationError, CURRENT_SCHEMA_VERSION};
+mod persistence;
+mod types;
+
+pub use defaults::*;
+pub use types::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_for_persistence_drops_non_finite_loudness() {
+        let mut cfg = Config::default();
+        let mut sound = Sound::new("silence".to_string(), "/tmp/silence.wav".to_string());
+        sound.loudness_lufs = Some(f64::NEG_INFINITY);
+        cfg.sounds.push(sound);
+
+        cfg.sanitize_for_persistence();
+
+        assert_eq!(cfg.sounds[0].loudness_lufs, None);
+        assert!(serde_json::to_string(&cfg).is_ok());
+    }
+
+    #[test]
+    fn sanitize_for_persistence_clamps_invalid_target_lufs() {
+        let mut cfg = Config::default();
+        cfg.settings.auto_gain_target_lufs = f64::NAN;
+        cfg.sanitize_for_persistence();
+        assert_eq!(cfg.settings.auto_gain_target_lufs, -14.0);
+
+        cfg.settings.auto_gain_target_lufs = 7.0;
+        cfg.sanitize_for_persistence();
+        assert_eq!(cfg.settings.auto_gain_target_lufs, 0.0);
+    }
+
+    #[test]
+    fn sanitize_for_persistence_disables_multiple_playback() {
+        let mut cfg = Config::default();
+        cfg.settings.allow_multiple_playbacks = true;
+
+        cfg.sanitize_for_persistence();
+
+        assert!(!cfg.settings.allow_multiple_playbacks);
+    }
+
+    #[test]
+    fn untransformed_sound_omits_source_path_when_serialized() {
+        let sound = Sound::new("silence".to_string(), "/tmp/silence.wav".to_string());
+
+        let json = serde_json::to_string(&sound).unwrap();
+
+        assert!(!json.contains("source_path"));
+    }
+
+    #[test]
+    fn sanitize_for_persistence_removes_redundant_source_path() {
+        let mut cfg = Config::default();
+        let mut sound = Sound::new("silence".to_string(), "/tmp/silence.wav".to_string());
+        sound.source_path = Some(sound.path.clone());
+        cfg.sounds.push(sound);
+
+        cfg.sanitize_for_persistence();
+
+        assert_eq!(cfg.sounds[0].source_path, None);
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(!json.contains("source_path"));
+    }
+
+    #[test]
+    fn config_default_uses_current_schema_version() {
+        assert_eq!(Config::default().schema_version, CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn typed_settings_serialize_to_legacy_strings() {
+        let cfg = Config::default();
+        let value = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(value["settings"]["theme"], "dark");
+        assert_eq!(value["settings"]["auto_gain_mode"], "static");
+        assert_eq!(value["settings"]["auto_gain_apply_to"], "both");
+        assert_eq!(value["settings"]["play_mode"], "default");
+        assert_eq!(value["settings"]["list_style"], "compact");
+        assert_eq!(value["settings"]["default_source_mode"], "default");
+        assert_eq!(value["settings"]["mic_latency_profile"], "balanced");
+    }
+
+    #[test]
+    fn typed_settings_deserialize_invalid_values_to_defaults() {
+        let cfg: Config = serde_json::from_str(
+            r#"{
+                "sound_folders": [],
+                "sounds": [],
+                "tabs": [],
+                "settings": {
+                    "theme": "weird",
+                    "local_volume": 80,
+                    "local_mute": false,
+                    "mic_volume": 100,
+                    "allow_multiple_playbacks": true,
+                    "mic_passthrough": true,
+                    "mic_source": null,
+                    "default_source_mode": "weird",
+                    "mic_latency_profile": "turbo",
+                    "skip_delete_confirm": false,
+                    "auto_gain": false,
+                    "auto_gain_mode": "weird",
+                    "auto_gain_target_lufs": -14.0,
+                    "auto_gain_apply_to": "odd",
+                    "auto_gain_lookahead_ms": 30,
+                    "auto_gain_attack_ms": 6,
+                    "auto_gain_release_ms": 150,
+                    "control_hotkeys": {},
+                    "play_mode": "nope",
+                    "list_style": "wide"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.settings.theme, Theme::Dark);
+        assert_eq!(cfg.settings.auto_gain_mode, AutoGainMode::Static);
+        assert_eq!(cfg.settings.auto_gain_apply_to, AutoGainApplyTo::MicOnly);
+        assert_eq!(cfg.settings.play_mode, PlayMode::Default);
+        assert_eq!(cfg.settings.list_style, ListStyle::Compact);
+        assert_eq!(cfg.settings.default_source_mode, DefaultSourceMode::Default);
+        assert_eq!(
+            cfg.settings.mic_latency_profile,
+            MicLatencyProfile::Balanced
+        );
+    }
+
+    #[test]
+    fn legacy_default_source_mode_variants_migrate_to_default() {
+        // Old configs may have any of these legacy names. All migrate to the
+        // single new `Default` variant since they all expressed "soundboard
+        // should be the mic in some way".
+        for legacy in [
+            r#""auto_route_while_running""#,
+            r#""temporary_default_while_running""#,
+            r#""auto_while_running""#,
+        ] {
+            let mode: DefaultSourceMode = serde_json::from_str(legacy).unwrap();
+            assert_eq!(mode, DefaultSourceMode::Default, "legacy {legacy}");
+        }
+        let manual: DefaultSourceMode = serde_json::from_str(r#""manual""#).unwrap();
+        assert_eq!(manual, DefaultSourceMode::Manual);
+    }
+
+    #[test]
+    fn control_hotkey_metadata_is_consistent() {
+        for meta in ControlHotkeyAction::all() {
+            assert_eq!(ControlHotkeyAction::from_id(meta.id), Some(meta.action));
+            assert_eq!(
+                ControlHotkeyAction::from_binding_id(meta.binding_id),
+                Some(meta.action)
+            );
+            assert_eq!(meta.action.id(), meta.id);
+            assert_eq!(meta.action.binding_id(), meta.binding_id);
+        }
+    }
+
+    #[test]
+    fn remove_sounds_from_tab_batch_removes_present_and_ignores_missing() {
+        let mut cfg = Config::default();
+        let mut tab = SoundTab::new("Custom".to_string(), 1);
+        tab.id = "custom-a".to_string();
+        tab.sound_ids = vec![
+            "sound-1".to_string(),
+            "sound-2".to_string(),
+            "sound-3".to_string(),
+        ];
+        cfg.tabs.push(tab);
+
+        let removed = cfg.remove_sounds_from_tab(
+            "custom-a",
+            &[
+                "sound-2".to_string(),
+                "missing-id".to_string(),
+                "sound-2".to_string(),
+            ],
+        );
+
+        assert!(removed);
+        let tab = cfg.get_tab("custom-a").unwrap();
+        assert_eq!(tab.sound_ids, vec!["sound-1", "sound-3"]);
+    }
+
+    #[test]
+    fn remove_sounds_from_tab_batch_fails_when_tab_missing() {
+        let mut cfg = Config::default();
+        let removed = cfg.remove_sounds_from_tab("missing-tab", &["sound-1".to_string()]);
+        assert!(!removed);
+    }
+
+    #[test]
+    fn remove_sounds_batch_removes_sounds_and_tab_membership() {
+        let mut cfg = Config::default();
+
+        let mut sound_a = Sound::new("A".to_string(), "/tmp/a.wav".to_string());
+        sound_a.id = "sound-a".to_string();
+        let mut sound_b = Sound::new("B".to_string(), "/tmp/b.wav".to_string());
+        sound_b.id = "sound-b".to_string();
+        let mut sound_c = Sound::new("C".to_string(), "/tmp/c.wav".to_string());
+        sound_c.id = "sound-c".to_string();
+        cfg.sounds = vec![sound_a, sound_b, sound_c];
+
+        let mut tab = SoundTab::new("Custom".to_string(), 1);
+        tab.sound_ids = vec![
+            "sound-a".to_string(),
+            "sound-b".to_string(),
+            "sound-c".to_string(),
+        ];
+        cfg.tabs.push(tab);
+
+        cfg.remove_sounds(&[
+            "sound-b".to_string(),
+            "missing-id".to_string(),
+            "sound-c".to_string(),
+        ]);
+
+        let remaining_ids = cfg
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining_ids, vec!["sound-a"]);
+        assert_eq!(cfg.tabs[0].sound_ids, vec!["sound-a"]);
+    }
+}
