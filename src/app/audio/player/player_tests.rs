@@ -1,0 +1,1040 @@
+use super::source_routing;
+use super::*;
+use crate::app_meta::VIRTUAL_MIC_DESCRIPTION;
+use crate::test_support::audio_fixtures::{cleanup_test_audio_path, create_test_audio_file};
+use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+use opus::{Application as OpusApplication, Channels as OpusChannels, Encoder as OpusEncoder};
+use std::sync::Arc;
+
+fn test_runtime_config() -> RuntimeConfig {
+    super::test_runtime_config_with_mode(DefaultSourceMode::Manual)
+}
+
+fn test_player_snapshot_store() -> Arc<RwLock<PlayerSnapshot>> {
+    super::test_player_snapshot_store()
+}
+
+fn test_source(id: u32, node_name: &str, display_name: &str, priority: i32) -> SourceDescriptor {
+    SourceDescriptor {
+        id,
+        serial: None,
+        node_name: node_name.to_string(),
+        display_name: display_name.to_string(),
+        priority_session: priority,
+        is_monitor: node_name.ends_with(".monitor"),
+        is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
+        is_virtual: false,
+        is_hardware_backed: node_name.starts_with("alsa_input.")
+            || node_name.starts_with("bluez_input.")
+            || node_name.starts_with("v4l2_input."),
+    }
+}
+
+fn create_test_ogg_opus_file() -> std::path::PathBuf {
+    let base = std::env::temp_dir().join(format!("linux-soundboard-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&base).expect("create ogg opus temp dir");
+    let path = base.join("tone.ogg");
+    let serial = 0x4c53424f;
+    let mut writer = PacketWriter::new(Vec::new());
+    let mut head = b"OpusHead".to_vec();
+    head.push(1);
+    head.push(1);
+    head.extend_from_slice(&0u16.to_le_bytes());
+    head.extend_from_slice(&OPUS_SAMPLE_RATE.to_le_bytes());
+    head.extend_from_slice(&0i16.to_le_bytes());
+    head.push(0);
+    writer
+        .write_packet(
+            head.into_boxed_slice(),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write opus head");
+
+    let vendor = b"linux-soundboard-test";
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(vendor);
+    tags.extend_from_slice(&0u32.to_le_bytes());
+    writer
+        .write_packet(
+            tags.into_boxed_slice(),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write opus tags");
+
+    let mut encoder =
+        OpusEncoder::new(OPUS_SAMPLE_RATE, OpusChannels::Mono, OpusApplication::Audio)
+            .expect("create opus encoder");
+    let frame_samples = 960usize;
+    let mut granule = 0u64;
+    for packet_index in 0..2 {
+        let mut pcm = vec![0.0f32; frame_samples];
+        for (index, sample) in pcm.iter_mut().enumerate() {
+            let absolute = packet_index * frame_samples + index;
+            let phase =
+                2.0 * std::f32::consts::PI * 440.0 * absolute as f32 / OPUS_SAMPLE_RATE as f32;
+            *sample = phase.sin() * 0.25;
+        }
+        let mut encoded = vec![0; 4_000];
+        let len = encoder
+            .encode_float(&pcm, &mut encoded)
+            .expect("encode opus frame");
+        encoded.truncate(len);
+        granule += frame_samples as u64;
+        let end = if packet_index == 1 {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        writer
+            .write_packet(encoded.into_boxed_slice(), serial, end, granule)
+            .expect("write opus packet");
+    }
+
+    std::fs::write(&path, writer.into_inner()).expect("write ogg opus fixture");
+    path
+}
+
+#[test]
+fn parse_wpctl_node_name_extracts_quoted_name() {
+    let output = r#"
+id 72, type PipeWire:Interface:Node
+  * node.name = "alsa_input.pci-0000_12_00.6.analog-stereo"
+"#;
+    assert_eq!(
+        parse_wpctl_node_name(output).as_deref(),
+        Some("alsa_input.pci-0000_12_00.6.analog-stereo")
+    );
+}
+
+#[test]
+fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+
+    state.sources.insert(
+        10,
+        SourceDescriptor {
+            id: 10,
+            serial: None,
+            node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
+            display_name: "Ryzen HD Audio".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    state.sources.insert(
+        11,
+        SourceDescriptor {
+            id: 11,
+            serial: None,
+            node_name: "easyeffects_source".to_string(),
+            display_name: "Easy Effects Source".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+    state.sources.insert(
+        12,
+        SourceDescriptor {
+            id: 12,
+            serial: None,
+            node_name: VIRTUAL_SOURCE_NAME.to_string(),
+            display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: true,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+    state.sources.insert(
+        13,
+        SourceDescriptor {
+            id: 13,
+            serial: None,
+            node_name: "alsa_output.pci-0000_12_00.6.analog-stereo.monitor".to_string(),
+            display_name: "Speaker Monitor".to_string(),
+            priority_session: 0,
+            is_monitor: true,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+
+    let listed = state.list_audio_sources();
+    let names: Vec<_> = listed.iter().map(|s| s.node_name.as_str()).collect();
+    assert!(names.contains(&"alsa_input.pci-0000_12_00.6.analog-stereo"));
+    assert!(names.contains(&"easyeffects_source"));
+    assert!(!names.contains(&VIRTUAL_SOURCE_NAME));
+    assert!(!names.iter().any(|name| name.ends_with(".monitor")));
+}
+
+#[test]
+fn build_playback_positions_prefers_newest_unfinished_entries() {
+    let mut registry = HashMap::new();
+    registry.insert(
+        "play-old".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-old".to_string(),
+            playback_order: 1,
+            position_ms: 1_000,
+            paused: false,
+            duration_ms: Some(10_000),
+            finished: false,
+        },
+    );
+    registry.insert(
+        "play-new".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-new".to_string(),
+            playback_order: 2,
+            position_ms: 250,
+            paused: false,
+            duration_ms: Some(10_000),
+            finished: false,
+        },
+    );
+    registry.insert(
+        "play-finished".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-finished".to_string(),
+            playback_order: 3,
+            position_ms: 10_000,
+            paused: false,
+            duration_ms: Some(10_000),
+            finished: true,
+        },
+    );
+
+    let positions = build_playback_positions(&registry);
+    assert_eq!(positions[0].play_id, "play-new");
+    assert_eq!(positions[1].play_id, "play-old");
+    assert_eq!(positions[2].play_id, "play-finished");
+}
+
+#[test]
+fn resolve_source_id_by_name_finds_matching_source() {
+    let sources = HashMap::from([(
+        7,
+        SourceDescriptor {
+            id: 7,
+            serial: None,
+            node_name: "alsa_input.pci-0000_12_00.6.analog-stereo".to_string(),
+            display_name: "Mic".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    )]);
+
+    assert_eq!(
+        resolve_source_id_by_name(&sources, "alsa_input.pci-0000_12_00.6.analog-stereo"),
+        Some(7)
+    );
+    assert_eq!(resolve_source_id_by_name(&sources, "missing"), None);
+}
+
+#[test]
+fn restore_default_source_stops_claim_without_random_fallback() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.claimed_default = true;
+    state.previous_default_source_name = Some("missing.source".to_string());
+    state.sources.insert(
+        2,
+        test_source(2, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 0),
+    );
+
+    source_routing::restore_default_source(&mut state).unwrap();
+
+    assert!(!state.claimed_default);
+    assert_eq!(
+        state.previous_default_source_name.as_deref(),
+        Some("missing.source")
+    );
+}
+
+#[test]
+fn explicit_selected_mic_waits_for_exact_source() {
+    let mut runtime = test_runtime_config();
+    runtime.mic_source = Some("easyeffects_source".to_string());
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    state
+        .sources
+        .insert(7, test_source(7, "alsa_input.real", "Real Mic", 2000));
+
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("alsa_input.real".to_string())),
+        None
+    );
+
+    state.sources.insert(
+        8,
+        test_source(8, "easyeffects_source", "Easy Effects", 1000),
+    );
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("alsa_input.real".to_string())).as_deref(),
+        Some("easyeffects_source")
+    );
+}
+
+#[test]
+fn explicit_selected_mic_rejects_linux_soundboard_virtual_mic() {
+    let mut runtime = test_runtime_config();
+    runtime.mic_source = Some(VIRTUAL_SOURCE_NAME.to_string());
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    state.sources.insert(
+        8,
+        test_source(8, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+    );
+
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string())),
+        None
+    );
+}
+
+#[test]
+fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
+    // When easyeffects_source is registered alongside physical mics,
+    // the soundboard must pick easyeffects_source regardless of what
+    // PipeWire reports as the current default or what previous_default_source_name holds.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        6,
+        SourceDescriptor {
+            id: 6,
+            serial: None,
+            node_name: "easyeffects_source".to_string(),
+            display_name: "Easy Effects Source".to_string(),
+            priority_session: 10,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,          // Audio/Source/Virtual at runtime
+            is_hardware_backed: false, // no device.api
+        },
+    );
+    state
+        .sources
+        .insert(7, test_source(7, "alsa_input.low", "Low Priority", 100));
+    state
+        .sources
+        .insert(8, test_source(8, "alsa_input.high", "High Priority", 200));
+    state.sources.insert(
+        9,
+        test_source(9, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+    );
+    state.sources.insert(
+        10,
+        test_source(10, "alsa_output.speakers.monitor", "Monitor", 9000),
+    );
+
+    // Even when default_source is a valid physical mic, enhancement wins.
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("alsa_input.low".to_string())).as_deref(),
+        Some("easyeffects_source")
+    );
+
+    // Even when previous_default_source_name is set to a physical mic, enhancement wins.
+    state.previous_default_source_name = Some("alsa_input.low".to_string());
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string()))
+            .as_deref(),
+        Some("easyeffects_source")
+    );
+
+    // best_upstream_mic_source_name independently confirms easyeffects_source scores highest.
+    assert_eq!(
+        best_upstream_mic_source_name(&state.sources).as_deref(),
+        Some("easyeffects_source")
+    );
+
+    // Without previous_default_source_name, still returns easyeffects_source.
+    state.previous_default_source_name = None;
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string()))
+            .as_deref(),
+        Some("easyeffects_source")
+    );
+}
+
+#[test]
+fn auto_capture_falls_back_to_physical_mic_when_no_enhancement_source() {
+    // When EasyEffects is not running, best_upstream_mic_source_name picks
+    // the highest-priority physical mic by priority_session score.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state
+        .sources
+        .insert(7, test_source(7, "alsa_input.low", "Low Priority", 100));
+    state
+        .sources
+        .insert(8, test_source(8, "alsa_input.high", "High Priority", 200));
+    state.sources.insert(
+        9,
+        test_source(9, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+    );
+
+    // alsa_input.high has higher priority_session (200 > 100) so it wins.
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("alsa_input.low".to_string())).as_deref(),
+        Some("alsa_input.high")
+    );
+}
+
+#[test]
+fn auto_capture_prefers_any_virtual_source_over_physical_mic() {
+    // An unknown-named Audio/Source/Virtual node (not matching any hardcoded
+    // ENHANCEMENT_SOURCE_PATTERNS) must still beat a physical mic — proving
+    // the heuristic is app-agnostic, not just rebranded pattern matching.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "custom_voice_chain".to_string(),
+            display_name: "My Custom Filter Chain".to_string(),
+            priority_session: 9999,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "alsa_input.usb_mic".to_string(),
+            display_name: "USB Microphone".to_string(),
+            priority_session: 9999,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    assert_eq!(
+        best_upstream_mic_source_name(&state.sources).as_deref(),
+        Some("custom_voice_chain"),
+        "virtual source must beat physical mic regardless of name patterns"
+    );
+}
+
+#[test]
+fn auto_capture_prefers_misconfigured_filter_chain_over_physical_mic() {
+    // Robustness test: a user-built filter-chain that's misconfigured with
+    // media.class = "Audio/Source" instead of Audio/Source/Virtual still wins
+    // over a physical mic because device.api is structurally absent on
+    // software nodes. Signal A alone is enough to identify the chain.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "my_filter_chain".to_string(),
+            display_name: "Custom Voice Chain".to_string(),
+            priority_session: 100,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,         // user misconfigured the module
+            is_hardware_backed: false, // but PipeWire still sets no device.api
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "alsa_input.pci-real_mic".to_string(),
+            display_name: "Built-in Microphone".to_string(),
+            priority_session: 9999,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    assert_eq!(
+        best_upstream_mic_source_name(&state.sources).as_deref(),
+        Some("my_filter_chain"),
+        "absence of device.api alone must be enough to identify software source"
+    );
+}
+
+#[test]
+fn selected_enhancement_source_does_not_silently_fall_back() {
+    // User explicitly picked easyeffects_source, but it's not registered.
+    // Even with a perfectly good physical mic available, resolution must
+    // return None (caller will warn and wait) — never substitute the raw mic.
+    let mut runtime = test_runtime_config();
+    runtime.mic_source = Some("easyeffects_source".to_string());
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    state
+        .sources
+        .insert(1, test_source(1, "alsa_input.usb_mic", "USB Mic", 9000));
+
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("alsa_input.usb_mic".to_string())),
+        None,
+        "must not fall back to the physical mic when the user picked an enhancement source"
+    );
+
+    // When the enhancement source DOES appear, resolution returns it.
+    state.sources.insert(
+        2,
+        test_source(2, "easyeffects_source", "Easy Effects Source", 10),
+    );
+    assert_eq!(
+        resolve_capture_target_from_default(&state, None).as_deref(),
+        Some("easyeffects_source")
+    );
+}
+
+#[test]
+fn pipewire_capture_health_requires_non_error_linked_expected_target() {
+    let sources = HashMap::from([(
+        78,
+        test_source(
+            78,
+            "alsa_input.pci-0000_12_00.6.analog-stereo",
+            "Real Mic",
+            2000,
+        ),
+    )]);
+    let mut links = HashMap::new();
+
+    assert!(!pipewire_capture_link_healthy(
+        Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+        Some(253),
+        ManagedStreamState::Streaming,
+        &sources,
+        &links,
+    ));
+
+    links.insert(
+        1,
+        LinkDescriptor {
+            id: 1,
+            output_node_id: 78,
+            input_node_id: 999,
+            output_port_id: None,
+            input_port_id: None,
+        },
+    );
+    assert!(!pipewire_capture_link_healthy(
+        Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+        Some(253),
+        ManagedStreamState::Streaming,
+        &sources,
+        &links,
+    ));
+
+    links.insert(
+        2,
+        LinkDescriptor {
+            id: 2,
+            output_node_id: 78,
+            input_node_id: 253,
+            output_port_id: None,
+            input_port_id: None,
+        },
+    );
+    assert!(pipewire_capture_link_healthy(
+        Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+        Some(253),
+        ManagedStreamState::Paused,
+        &sources,
+        &links,
+    ));
+    assert!(!pipewire_capture_link_healthy(
+        Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+        Some(253),
+        ManagedStreamState::Error,
+        &sources,
+        &links,
+    ));
+}
+
+#[test]
+fn pipewire_capture_health_rejects_self_capture_from_virtual_mic() {
+    let sources = HashMap::from([(
+        32,
+        test_source(32, VIRTUAL_SOURCE_NAME, VIRTUAL_MIC_DESCRIPTION, 5000),
+    )]);
+    let links = HashMap::from([(
+        1,
+        LinkDescriptor {
+            id: 1,
+            output_node_id: 32,
+            input_node_id: 253,
+            output_port_id: None,
+            input_port_id: None,
+        },
+    )]);
+
+    assert!(!pipewire_capture_link_healthy(
+        Some(VIRTUAL_SOURCE_NAME),
+        Some(253),
+        ManagedStreamState::Streaming,
+        &sources,
+        &links,
+    ));
+}
+
+#[test]
+fn loop_state_filters_virtual_and_monitor_sources() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "alsa_input.real".to_string(),
+            display_name: "Real Mic".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "alsa_output.monitor".to_string(),
+            display_name: "Monitor".to_string(),
+            priority_session: 0,
+            is_monitor: true,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    state.sources.insert(
+        3,
+        SourceDescriptor {
+            id: 3,
+            serial: None,
+            node_name: VIRTUAL_SOURCE_NAME.to_string(),
+            display_name: VIRTUAL_MIC_DESCRIPTION.to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: true,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+
+    let visible = state.list_audio_sources();
+    assert_eq!(
+        visible,
+        vec![AudioSourceInfo {
+            node_name: "alsa_input.real".to_string(),
+            display_name: "Real Mic".to_string(),
+            is_virtual: false,
+            is_hardware_backed: true,
+        }]
+    );
+}
+
+#[test]
+fn fill_output_queues_prefills_target_buffer_for_active_playback() {
+    let audio_path = create_test_audio_file("wav");
+    let runtime = test_runtime_config();
+    let playback = ActivePlayback::new(
+        "play-1".to_string(),
+        "sound-1".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        None,
+        None,
+        &runtime,
+    )
+    .expect("create active playback");
+
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    state.active_playback = Some(playback);
+
+    fill_output_queues(&mut state);
+
+    let queues = state.queues.lock();
+    let target_samples = LOCAL_OUTPUT_QUEUE_TARGET_FRAMES * TARGET_OUTPUT_CHANNELS as usize;
+    assert_eq!(queues.local.len(), target_samples);
+    assert_eq!(queues.virtual_out.len(), target_samples);
+    drop(queues);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn ogg_opus_source_decodes_and_seek_discards() {
+    let audio_path = create_test_ogg_opus_file();
+    let mut source =
+        OggOpusSource::from_path(&audio_path.to_string_lossy()).expect("create ogg opus source");
+
+    assert_eq!(source.channels(), 1);
+    assert_eq!(source.sample_rate(), OPUS_SAMPLE_RATE);
+    assert!(source
+        .total_duration()
+        .is_some_and(|duration| duration >= Duration::from_millis(40)));
+
+    let first_samples: Vec<_> = source.by_ref().take(960).collect();
+    assert!(first_samples.iter().any(|sample| *sample != 0));
+
+    source
+        .try_seek(Duration::from_millis(20))
+        .expect("seek ogg opus source");
+    let seeked_samples: Vec<_> = source.take(128).collect();
+    assert!(seeked_samples.iter().any(|sample| *sample != 0));
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn active_playback_routes_ogg_opus_through_common_mix_path() {
+    let audio_path = create_test_ogg_opus_file();
+    let runtime = test_runtime_config();
+    let mut playback = ActivePlayback::new(
+        "play-opus".to_string(),
+        "sound-opus".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        None,
+        None,
+        &runtime,
+    )
+    .expect("create active ogg opus playback");
+
+    let mut local = vec![0.0; 512];
+    let mut virtual_out = vec![0.0; 512];
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(local.iter().any(|sample| sample.abs() > f32::EPSILON));
+    assert!(virtual_out.iter().any(|sample| sample.abs() > f32::EPSILON));
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn fill_output_queues_respects_per_tick_batch_budget() {
+    let audio_path = create_test_audio_file("wav");
+    let runtime = test_runtime_config();
+    let playback = ActivePlayback::new(
+        "play-budget".to_string(),
+        "sound-budget".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        None,
+        None,
+        &runtime,
+    )
+    .expect("create active playback");
+
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    state.active_playback = Some(playback);
+
+    fill_output_queues(&mut state);
+
+    let queues = state.queues.lock();
+    let max_samples_per_tick = state.runtime.max_fill_batches_per_tick(true, true)
+        * MIX_CHUNK_FRAMES
+        * TARGET_OUTPUT_CHANNELS as usize;
+    assert!(queues.local.len() <= max_samples_per_tick);
+    assert!(queues.virtual_out.len() <= max_samples_per_tick);
+    drop(queues);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn fill_output_queues_mic_passthrough_without_capture_stream_keeps_queues_idle() {
+    let mut runtime = test_runtime_config();
+    runtime.mic_passthrough = true;
+
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    fill_output_queues(&mut state);
+    fill_output_queues(&mut state);
+
+    let queues = state.queues.lock();
+    assert_eq!(queues.local.len(), 0);
+    assert_eq!(queues.virtual_out.len(), 0);
+}
+
+#[test]
+fn passthrough_chunk_skips_when_mic_in_below_threshold() {
+    // When mic_in has fewer samples than chunk_samples, no output should be
+    // pushed. Padding with zeros would cause a silence discontinuity through
+    // the consumer's resampler ~40 ms later.
+    let mut queues = ProcessQueues::new(8, 8, 8);
+    queues.mic_in.push_slice(&[0.25, -0.5]); // only 2 samples
+
+    let pushed = enqueue_passthrough_chunk(&mut queues, 6); // needs 6
+
+    assert_eq!(pushed, 0);
+    assert_eq!(queues.virtual_out.len(), 0);
+}
+
+#[test]
+fn passthrough_chunk_pushes_when_mic_in_has_full_chunk() {
+    let mut queues = ProcessQueues::new(64, 64, 64);
+    queues.mic_in.push_slice(&[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+
+    let pushed = enqueue_passthrough_chunk(&mut queues, 6);
+
+    assert_eq!(pushed, 6);
+    let mut output = vec![0.0; 6];
+    let dequeued = queues.virtual_out.pop_into(&mut output);
+    assert_eq!(dequeued, 6);
+    assert_eq!(output, vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6]);
+}
+
+#[test]
+fn runtime_latency_profile_low_reduces_virtual_target() {
+    let mut runtime = test_runtime_config();
+    runtime.mic_latency_profile = MicLatencyProfile::Low;
+
+    assert!(runtime.virtual_output_target_samples() < runtime.local_output_target_samples());
+    assert!(runtime.max_virtual_callback_samples() < MAX_LOCAL_OUTPUT_CALLBACK_SAMPLES);
+}
+
+#[test]
+fn runtime_latency_profile_ultra_is_smallest_virtual_target() {
+    let mut low = test_runtime_config();
+    low.mic_latency_profile = MicLatencyProfile::Low;
+    let mut ultra = test_runtime_config();
+    ultra.mic_latency_profile = MicLatencyProfile::Ultra;
+
+    assert!(ultra.virtual_output_target_samples() < low.virtual_output_target_samples());
+    assert!(ultra.max_virtual_callback_samples() < low.max_virtual_callback_samples());
+}
+
+#[test]
+fn clear_virtual_mic_queues_resets_mic_path_only() {
+    let state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    {
+        let mut queues = state.queues.lock();
+        queues.local.push_slice(&[0.1, 0.2]);
+        queues.virtual_out.push_slice(&[0.3, 0.4, 0.5]);
+        queues.mic_in.push_slice(&[0.6, 0.7, 0.8, 0.9]);
+    }
+
+    clear_virtual_mic_queues(&state.queues);
+
+    let queues = state.queues.lock();
+    assert_eq!(queues.local.len(), 2);
+    assert_eq!(queues.virtual_out.len(), 0);
+    assert_eq!(queues.mic_in.len(), 0);
+}
+
+#[test]
+fn clear_all_queues_resets_local_virtual_and_mic_buffers() {
+    let state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    {
+        let mut queues = state.queues.lock();
+        queues.local.push_slice(&[0.1, 0.2]);
+        queues.virtual_out.push_slice(&[0.3, 0.4, 0.5]);
+        queues.mic_in.push_slice(&[0.6, 0.7, 0.8, 0.9]);
+    }
+
+    clear_all_queues(&state.queues);
+
+    let queues = state.queues.lock();
+    assert_eq!(queues.local.len(), 0);
+    assert_eq!(queues.virtual_out.len(), 0);
+    assert_eq!(queues.mic_in.len(), 0);
+}
+
+#[test]
+fn recreate_capture_stream_clears_mic_input_without_dropping_soundboard_output() {
+    let mut runtime = test_runtime_config();
+    runtime.mic_passthrough = true;
+    let mut state = LoopState::new(runtime, test_player_snapshot_store());
+    {
+        let mut queues = state.queues.lock();
+        queues.local.push_slice(&[0.1, 0.2]);
+        queues.virtual_out.push_slice(&[0.3, 0.4, 0.5]);
+        queues.mic_in.push_slice(&[0.6, 0.7, 0.8, 0.9]);
+    }
+
+    let result = recreate_capture_stream(&mut state);
+    assert!(result.is_ok());
+
+    let queues = state.queues.lock();
+    assert_eq!(queues.local.len(), 2);
+    assert_eq!(queues.virtual_out.len(), 3);
+    assert_eq!(queues.mic_in.len(), 0);
+}
+
+#[test]
+fn publish_snapshot_includes_visible_sources_and_active_playback() {
+    let audio_path = create_test_audio_file("wav");
+    let runtime = test_runtime_config();
+    let snapshot = test_player_snapshot_store();
+    let mut state = LoopState::new(runtime.clone(), snapshot.clone());
+    state.available = true;
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "alsa_input.real".to_string(),
+            display_name: "Real Mic".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+        },
+    );
+    state.active_playback = Some(
+        ActivePlayback::new(
+            "play-1".to_string(),
+            "sound-1".to_string(),
+            audio_path.to_string_lossy().to_string(),
+            0,
+            1.0,
+            None,
+            None,
+            &runtime,
+        )
+        .expect("create active playback"),
+    );
+    state.publish_snapshot();
+
+    let snapshot = snapshot.read().clone();
+    assert!(snapshot.available);
+    assert_eq!(snapshot.playing_ids, vec!["sound-1".to_string()]);
+    assert_eq!(snapshot.audio_sources.len(), 1);
+    assert_eq!(snapshot.audio_sources[0].node_name, "alsa_input.real");
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn dynamic_lookahead_mode_warmup_does_not_output_initial_silence() {
+    let audio_path = create_test_audio_file("wav");
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = true;
+    runtime.auto_gain.mode = AutoGainMode::DynamicLookAhead;
+    runtime.auto_gain.apply_to = AutoGainApplyTo::Both;
+
+    let mut playback = ActivePlayback::new(
+        "play-warmup".to_string(),
+        "sound-warmup".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        Some(-14.0),
+        None,
+        &runtime,
+    )
+    .expect("create active playback");
+
+    let mut local = vec![0.0; 512];
+    let mut virtual_out = vec![0.0; 512];
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(local.iter().any(|sample| sample.abs() > f32::EPSILON));
+    assert!(virtual_out.iter().any(|sample| sample.abs() > f32::EPSILON));
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn dynamic_apply_to_switch_rebuilds_live_limiter_scope() {
+    let audio_path = create_test_audio_file("wav");
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = true;
+    runtime.auto_gain.mode = AutoGainMode::DynamicLookAhead;
+    runtime.auto_gain.apply_to = AutoGainApplyTo::Both;
+
+    let mut playback = ActivePlayback::new(
+        "play-scope".to_string(),
+        "sound-scope".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        Some(-14.0),
+        None,
+        &runtime,
+    )
+    .expect("create active playback");
+
+    assert!(playback.local_limiter.is_some());
+    assert!(playback.virtual_limiter.is_some());
+
+    runtime.auto_gain.apply_to = AutoGainApplyTo::MicOnly;
+    let mut local = vec![0.0; 128];
+    let mut virtual_out = vec![0.0; 128];
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(playback.local_limiter.is_none());
+    assert!(playback.virtual_limiter.is_some());
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn loop_state_trim_finished_playbacks_discards_oldest_entries() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.finished_playbacks.insert(
+        "play-1".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-1".to_string(),
+            playback_order: 1,
+            position_ms: 100,
+            paused: false,
+            duration_ms: Some(1_000),
+            finished: true,
+        },
+    );
+    state.finished_playbacks.insert(
+        "play-2".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-2".to_string(),
+            playback_order: 2,
+            position_ms: 200,
+            paused: false,
+            duration_ms: Some(1_000),
+            finished: true,
+        },
+    );
+    state.finished_playbacks.insert(
+        "play-3".to_string(),
+        PlaybackSnapshot {
+            sound_id: "sound-3".to_string(),
+            playback_order: 3,
+            position_ms: 300,
+            paused: false,
+            duration_ms: Some(1_000),
+            finished: true,
+        },
+    );
+
+    state.trim_finished_playbacks(2);
+
+    assert_eq!(state.finished_playbacks.len(), 2);
+    assert!(!state.finished_playbacks.contains_key("play-1"));
+    assert!(state.finished_playbacks.contains_key("play-2"));
+    assert!(state.finished_playbacks.contains_key("play-3"));
+}

@@ -1,0 +1,47 @@
+# Rust and build outputs
+/target/
+/src/target/
+/dist/
+/debian/
+
+# Packaging build directories
+/rpmbuild/
+/flatpak-build/
+/flatpak-repo/
+/.flatpak-builder/
+/packaging/aur/linux-soundboard-git/pkg/
+/packaging/aur/linux-soundboard-git/src/
+/packaging/aur/linux-soundboard-git/linux-soundboard/
+/packaging/aur/linux-soundboard-git/*.pkg.tar.*
+
+# Generated package artifacts
+*.AppImage
+*.deb
+*.rpm
+*.flatpak
+*.tar.gz
+
+# Editors and temporary files
+/.vscode/
+/.idea/
+/.history/
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Logs
+*.log
+
+# Local notes and scratch files
+
+# Local environment files
+.env
+.env.local
+.env.*.local
+
+# Local tooling state
+aur-linux-soundboard-git/

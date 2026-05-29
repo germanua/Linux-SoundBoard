@@ -1,0 +1,78 @@
+app-id: com.linuxsoundboard.app
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: linux-soundboard
+
+finish-args:
+  # Display server access: Wayland primary, X11 as fallback.
+  # --share=ipc is required alongside fallback-x11 for MIT-SHM shared memory.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+
+  # Audio access.
+  # --socket=pulseaudio provides the PipeWire PulseAudio-compat socket used
+  # for playback and virtual mic routing.
+  # --device=all is required so PipeWire can access /dev/snd and audio device
+  # nodes directly for native PipeWire virtual mic creation; the PulseAudio
+  # socket alone is not sufficient for raw device routing.
+  - --socket=pulseaudio
+  - --device=all
+
+  # Read-only access to the most common directories where users store sounds.
+  # For sound files outside these locations users open them via the file
+  # chooser dialog, which routes through the portal without extra permissions.
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-download:ro
+  - --filesystem=xdg-documents:ro
+
+  # Portal access for the file chooser and Wayland global shortcuts.
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.GlobalShortcuts
+
+  # GIO/GVfs support: lets GTK file operations reach mounted volumes and
+  # network shares through the GVfs daemon socket.
+  - --talk-name=org.gtk.vfs.*
+  - --filesystem=xdg-run/gvfsd
+
+modules:
+  - name: linux-soundboard
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/linux-soundboard/cargo
+    build-commands:
+      # Generate icons
+      - bash packaging/linux/generate-icons.sh icon.png
+      
+      # Build application
+      - cargo --offline fetch --manifest-path src/Cargo.toml --verbose
+      - cargo --offline build --release --manifest-path src/Cargo.toml --verbose
+      
+      # Install binary
+      - install -Dm755 src/target/release/linux-soundboard /app/bin/linux-soundboard
+      
+      # Install desktop file
+      - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.desktop /app/share/applications/com.linuxsoundboard.app.desktop
+      
+      # Install icons
+      - |
+        for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+          install -Dm644 src/resources/icons/$size/apps/com.linuxsoundboard.app.png \
+            /app/share/icons/hicolor/$size/apps/com.linuxsoundboard.app.png
+        done
+      
+      # Install metainfo
+      - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml /app/share/metainfo/com.linuxsoundboard.app.metainfo.xml
+    
+    sources:
+      - type: dir
+        path: ../..
+      
+      # Cargo dependencies (generated with flatpak-cargo-generator.py)
+      - cargo-sources.json

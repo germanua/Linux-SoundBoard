@@ -1,0 +1,42 @@
+Source: linux-soundboard
+Section: sound
+Priority: optional
+Maintainer: germanua <noreply@linuxsoundboard.invalid>
+Build-Depends: debhelper-compat (= 13),
+               cargo,
+               rustc (>= 1.85),
+               libgtk-4-dev,
+               libadwaita-1-dev,
+               libpulse-dev,
+               libasound2-dev,
+               libx11-dev,
+               libxi-dev,
+               pkg-config,
+               imagemagick
+Standards-Version: 4.6.2
+Homepage: https://github.com/germanua/Linux-SoundBoard
+Vcs-Git: https://github.com/germanua/Linux-SoundBoard.git
+Vcs-Browser: https://github.com/germanua/Linux-SoundBoard
+
+Package: linux-soundboard
+Architecture: amd64
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libgtk-4-1,
+         libadwaita-1-0,
+         libx11-6,
+         libxi6,
+         libpulse0,
+         policykit-1,
+         pipewire,
+         wireplumber
+Recommends: xwayland
+Description: Native Linux soundboard with virtual microphone support
+ A high-performance, native Linux soundboard built with Rust, GTK4, and
+ Libadwaita. Features include:
+  * Virtual microphone for routing audio to Discord, OBS, Zoom, etc.
+  * Mic passthrough to mix your voice with soundboard audio
+  * LUFS normalization for consistent volume levels
+  * Native Wayland hotkeys via host-installed swhkd with full native X11/XWayland support
+  * Modern GTK4/Libadwaita UI with dark mode support
+  * Native PipeWire virtual microphone routing

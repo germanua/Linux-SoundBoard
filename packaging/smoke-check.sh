@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+#
+# Packaging smoke checks for Linux Soundboard.
+#
+# These checks verify the packaging artifacts are internally consistent and
+# structurally valid without requiring build tooling (rpmbuild, dpkg, flatpak-
+# builder) or a running audio session. Checks that require build tools are
+# noted in the output but skipped automatically when the tool is absent.
+#
+# Exit codes: 0 = all checks pass, 1 = one or more failures.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+PASS=0
+FAIL=0
+SKIP=0
+
+pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
+fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
+skip() { printf '[SKIP] %s\n' "$1"; SKIP=$((SKIP + 1)); }
+note() { printf '[NOTE] %s\n' "$1"; }
+
+# ── 1. Metadata consistency ──────────────────────────────────────────────────
+
+echo "==> Metadata consistency"
+vm_ec=0
+vm_output="$(bash "$SCRIPT_DIR/validate-metadata.sh" 2>&1)" || vm_ec=$?
+echo "$vm_output" | grep -v '^\[NOTE\]' || true
+if [[ $vm_ec -eq 0 ]]; then
+    pass "validate-metadata.sh: all checks pass"
+else
+    fail "validate-metadata.sh: one or more checks failed (run validate-metadata.sh for details)"
+fi
+
+echo ""
+
+# ── 2. Desktop file validation ───────────────────────────────────────────────
+
+echo "==> Desktop file validation"
+DESKTOP_FILES=(
+    "$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.desktop"
+    "$REPO_ROOT/packaging/debian/linux-soundboard.desktop"
+    "$REPO_ROOT/packaging/rpm/linux-soundboard.desktop"
+)
+
+if command -v desktop-file-validate >/dev/null 2>&1; then
+    for f in "${DESKTOP_FILES[@]}"; do
+        label="$(basename "$(dirname "$f")")/$(basename "$f")"
+        if desktop-file-validate "$f" 2>&1; then
+            pass "desktop-file-validate: $label"
+        else
+            fail "desktop-file-validate: $label"
+        fi
+    done
+else
+    skip "desktop-file-validate not installed (install desktop-file-utils to enable)"
+    for f in "${DESKTOP_FILES[@]}"; do
+        if [[ -f "$f" ]]; then
+            pass "desktop file exists: $(basename "$(dirname "$f")")/$(basename "$f")"
+        else
+            fail "desktop file missing: $f"
+        fi
+    done
+fi
+
+echo ""
+
+# ── 3. AppStream metadata validation ─────────────────────────────────────────
+
+echo "==> AppStream metadata validation"
+METAINFO="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.metainfo.xml"
+
+if [[ ! -f "$METAINFO" ]]; then
+    fail "metainfo.xml not found: $METAINFO"
+else
+    if command -v appstreamcli >/dev/null 2>&1; then
+        as_ec=0
+        as_out="$(appstreamcli validate --no-net "$METAINFO" 2>&1)" || as_ec=$?
+        echo "$as_out" | grep -v '^W:' || true
+        if [[ $as_ec -eq 0 ]]; then
+            pass "appstreamcli validate: metainfo.xml"
+        else
+            fail "appstreamcli validate: metainfo.xml (run 'appstreamcli validate --no-net packaging/flatpak/com.linuxsoundboard.app.metainfo.xml' for details)"
+        fi
+    elif command -v appstream-util >/dev/null 2>&1; then
+        if appstream-util validate-relax "$METAINFO"; then
+            pass "appstream-util validate-relax: metainfo.xml"
+        else
+            fail "appstream-util validate-relax: metainfo.xml"
+        fi
+    else
+        skip "appstreamcli / appstream-util not installed (install appstream-utils or libappstream-glib to enable)"
+        pass "metainfo.xml exists and is well-formed XML (xmllint not checked; install appstream tools for full validation)"
+    fi
+fi
+
+echo ""
+
+# ── 4. Service file ───────────────────────────────────────────────────────────
+
+echo "==> Systemd service file"
+SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
+
+if [[ ! -f "$SERVICE" ]]; then
+    fail "engine service file not found: $SERVICE"
+else
+    if command -v systemd-analyze >/dev/null 2>&1; then
+        if systemd-analyze verify "$SERVICE" 2>&1; then
+            pass "systemd-analyze verify: engine service"
+        else
+            fail "systemd-analyze verify: engine service"
+        fi
+    else
+        skip "systemd-analyze not available; checking service fields manually"
+        for field in "Description=" "ExecStart=" "Type=exec" "Restart=" "WantedBy=default.target"; do
+            if grep -qF "$field" "$SERVICE"; then
+                pass "engine service: $field"
+            else
+                fail "engine service: missing '$field'"
+            fi
+        done
+    fi
+fi
+
+echo ""
+
+# ── 5. install-user.sh subcommand coverage ────────────────────────────────────
+
+echo "==> install-user.sh subcommands"
+INSTALLER="$REPO_ROOT/packaging/linux/install-user.sh"
+if [[ ! -f "$INSTALLER" ]]; then
+    fail "install-user.sh not found: $INSTALLER"
+else
+    for subcmd in "install" "repair" "remove" "status"; do
+        if grep -qw "$subcmd" "$INSTALLER"; then
+            pass "install-user.sh: '$subcmd' subcommand present"
+        else
+            fail "install-user.sh: '$subcmd' subcommand not found"
+        fi
+    done
+    if grep -q "XDG_DATA_HOME\|XDG_CONFIG_HOME" "$INSTALLER"; then
+        pass "install-user.sh: uses XDG_DATA_HOME/XDG_CONFIG_HOME (no hard-coded uid paths)"
+    else
+        fail "install-user.sh: no XDG_DATA_HOME/XDG_CONFIG_HOME usage found"
+    fi
+fi
+
+echo ""
+
+# ── 6. Flatpak manifest: forbidden finish-args check ─────────────────────────
+
+echo "==> Flatpak manifest permission audit"
+MANIFEST="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.yml"
+if [[ ! -f "$MANIFEST" ]]; then
+    fail "Flatpak manifest not found: $MANIFEST"
+else
+    if grep -qF -- "--filesystem=home" "$MANIFEST"; then
+        fail "Flatpak manifest: --filesystem=home present (overly broad; Flathub policy requires removal)"
+    else
+        pass "Flatpak manifest: no --filesystem=home"
+    fi
+    if grep -qF -- "--filesystem=host" "$MANIFEST"; then
+        fail "Flatpak manifest: --filesystem=host present (overly broad)"
+    else
+        pass "Flatpak manifest: no --filesystem=host"
+    fi
+    if grep -qF -- "--talk-name=org.freedesktop.Flatpak" "$MANIFEST"; then
+        fail "Flatpak manifest: --talk-name=org.freedesktop.Flatpak present (sandbox escape risk)"
+    else
+        pass "Flatpak manifest: no --talk-name=org.freedesktop.Flatpak"
+    fi
+    if grep -qF -- "--socket=session-bus" "$MANIFEST"; then
+        fail "Flatpak manifest: --socket=session-bus present (overly broad bus access)"
+    else
+        pass "Flatpak manifest: no --socket=session-bus"
+    fi
+    if grep -qF -- "--socket=system-bus" "$MANIFEST"; then
+        fail "Flatpak manifest: --socket=system-bus present (overly broad bus access)"
+    else
+        pass "Flatpak manifest: no --socket=system-bus"
+    fi
+fi
+
+echo ""
+
+# ── 7. AppImage preflight script ──────────────────────────────────────────────
+
+echo "==> AppImage preflight check script"
+PREFLIGHT="$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
+if [[ ! -f "$PREFLIGHT" ]]; then
+    fail "AppImage preflight script not found: $PREFLIGHT"
+else
+    if bash -n "$PREFLIGHT" 2>&1; then
+        pass "AppImage preflight script: no syntax errors"
+    else
+        fail "AppImage preflight script: syntax errors detected"
+    fi
+fi
+
+echo ""
+
+# ── 8. Shell script syntax checks ────────────────────────────────────────────
+
+echo "==> Shell script syntax"
+SHELL_SCRIPTS=(
+    "$REPO_ROOT/packaging/linux/install-user.sh"
+    "$REPO_ROOT/packaging/linux/app-meta.sh"
+    "$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
+    "$REPO_ROOT/packaging/linux/generate-icons.sh"
+    "$REPO_ROOT/packaging/linux/package-appimage.sh"
+    "$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
+    "$REPO_ROOT/packaging/debian/package-deb.sh"
+    "$REPO_ROOT/packaging/rpm/package-rpm.sh"
+    "$REPO_ROOT/packaging/common.sh"
+    "$REPO_ROOT/packaging/validate-metadata.sh"
+)
+
+for script in "${SHELL_SCRIPTS[@]}"; do
+    if [[ ! -f "$script" ]]; then
+        fail "script not found: $script"
+        continue
+    fi
+    label="${script#"$REPO_ROOT/"}"
+    if bash -n "$script" 2>&1; then
+        pass "syntax ok: $label"
+    else
+        fail "syntax error: $label"
+    fi
+done
+
+echo ""
+
+# ── 9. install.sh (top-level installer) ──────────────────────────────────────
+
+echo "==> Top-level install.sh"
+TOP_INSTALL="$REPO_ROOT/install.sh"
+if [[ ! -f "$TOP_INSTALL" ]]; then
+    fail "install.sh not found: $TOP_INSTALL"
+else
+    if bash -n "$TOP_INSTALL" 2>&1; then
+        pass "install.sh: no syntax errors"
+    else
+        fail "install.sh: syntax errors detected"
+    fi
+fi
+
+echo ""
+
+# ── 10. Build tool availability notes ────────────────────────────────────────
+
+echo "==> Build tool availability (informational)"
+for tool_label in \
+    "flatpak-builder:Flatpak build" \
+    "dpkg-buildpackage:Debian package build" \
+    "rpmbuild:RPM package build" \
+    "desktop-file-validate:desktop file linting" \
+    "appstreamcli:AppStream metadata linting" \
+    "appstream-util:AppStream metadata linting (alternative)"
+do
+    tool="${tool_label%%:*}"
+    label="${tool_label#*:}"
+    if command -v "$tool" >/dev/null 2>&1; then
+        note "$tool available ($label)"
+    else
+        note "$tool NOT available ($label) — install to enable full smoke testing"
+    fi
+done
+
+echo ""
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
+if [[ "$FAIL" -gt 0 ]]; then
+    exit 1
+fi

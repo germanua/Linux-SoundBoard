@@ -1,0 +1,297 @@
+use std::collections::HashSet;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::config::defaults::{config_dir_name, CONFIG_FILE_NAME};
+use crate::config::{Config, LoudnessAnalysisState, SoundTab};
+
+static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn save_temp_path(path: &Path) -> PathBuf {
+    let sequence = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(
+        "{}.tmp.{}.{}",
+        CONFIG_FILE_NAME,
+        std::process::id(),
+        sequence
+    ))
+}
+
+impl Config {
+    pub fn config_path() -> PathBuf {
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(config_dir_name());
+
+        let _ = fs::create_dir_all(&config_dir);
+        config_dir.join(CONFIG_FILE_NAME)
+    }
+
+    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = Self::config_path();
+        if path.exists() {
+            let content = fs::read_to_string(&path)?;
+            let raw: serde_json::Value = serde_json::from_str(&content)?;
+
+            let version = raw
+                .get("schema_version")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(0);
+
+            let config_value = if version == crate::config::migration::CURRENT_SCHEMA_VERSION {
+                raw
+            } else {
+                crate::config::migration::run_migrations(raw, version)?
+            };
+
+            let mut config: Config = serde_json::from_value(config_value)?;
+            config.sanitize_for_persistence();
+            Ok(config)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
+    pub fn save(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.sanitize_for_persistence();
+        let tmp_path = save_temp_path(&path);
+
+        let write_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let tmp_file = fs::File::create(&tmp_path)?;
+            let mut writer = std::io::BufWriter::new(tmp_file);
+            serde_json::to_writer_pretty(&mut writer, self)?;
+            writer.flush()?;
+            Ok(())
+        })();
+
+        if let Err(err) = write_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(Box::new(err));
+        }
+        Ok(())
+    }
+
+    pub fn add_sound_folder(&mut self, folder: String) {
+        if !self.sound_folders.contains(&folder) {
+            log::info!("Config: Adding folder: {}", folder);
+            self.sound_folders.push(folder);
+            log::info!("Config: Total folders now: {}", self.sound_folders.len());
+        } else {
+            log::info!("Config: Folder already exists: {}", folder);
+        }
+    }
+
+    pub fn remove_sound_folder(&mut self, folder: &str) {
+        log::info!("Config: Removing folder: {}", folder);
+        let before = self.sound_folders.len();
+        self.sound_folders.retain(|f| f != folder);
+        let after = self.sound_folders.len();
+        log::info!("Config: Folders before: {}, after: {}", before, after);
+    }
+
+    pub fn add_sound(&mut self, sound: crate::config::Sound) {
+        if !self.sounds.iter().any(|s| s.path == sound.path) {
+            self.sounds.push(sound);
+        }
+    }
+
+    pub fn remove_sound(&mut self, id: &str) {
+        self.remove_sounds(&[id.to_string()]);
+    }
+
+    pub fn remove_sounds(&mut self, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let remove_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        self.sounds
+            .retain(|sound| !remove_set.contains(sound.id.as_str()));
+        for tab in &mut self.tabs {
+            tab.sound_ids
+                .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
+        }
+    }
+
+    pub fn get_sound(&self, id: &str) -> Option<&crate::config::Sound> {
+        self.sounds.iter().find(|s| s.id == id)
+    }
+
+    pub fn get_sound_mut(&mut self, id: &str) -> Option<&mut crate::config::Sound> {
+        self.sounds.iter_mut().find(|s| s.id == id)
+    }
+
+    pub fn set_hotkey(&mut self, id: &str, hotkey: Option<String>) {
+        if let Some(sound) = self.get_sound_mut(id) {
+            sound.hotkey = hotkey;
+        }
+    }
+
+    pub fn set_sound_name(&mut self, id: &str, name: String) {
+        if let Some(sound) = self.get_sound_mut(id) {
+            sound.name = name;
+        }
+    }
+
+    pub fn sanitize_for_persistence(&mut self) {
+        for sound in &mut self.sounds {
+            if sound.source_path.as_deref() == Some(sound.path.as_str()) {
+                sound.source_path = None;
+            }
+            if sound
+                .loudness_source_fingerprint
+                .as_ref()
+                .is_some_and(|fingerprint| fingerprint.trim().is_empty())
+            {
+                sound.loudness_source_fingerprint = None;
+            }
+            if matches!(sound.loudness_lufs, Some(v) if !v.is_finite()) {
+                log::warn!(
+                    "Dropping non-finite loudness for sound '{}' [{}]",
+                    sound.name,
+                    sound.path
+                );
+                sound.loudness_lufs = None;
+                sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+            }
+
+            match sound.loudness_confidence {
+                Some(confidence) if !confidence.is_finite() => {
+                    sound.loudness_confidence = None;
+                }
+                Some(confidence) => {
+                    sound.loudness_confidence = Some(confidence.clamp(0.0, 1.0));
+                }
+                None => {}
+            }
+
+            if sound.loudness_lufs.is_some() {
+                if matches!(
+                    sound.loudness_analysis_state,
+                    LoudnessAnalysisState::Pending | LoudnessAnalysisState::Unavailable
+                ) {
+                    // Backward compatibility: old configs did not store loudness state.
+                    sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+                }
+                if sound.loudness_confidence.is_none() {
+                    sound.loudness_confidence = Some(1.0);
+                }
+            } else if matches!(
+                sound.loudness_analysis_state,
+                LoudnessAnalysisState::Estimated | LoudnessAnalysisState::Refined
+            ) {
+                sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
+                sound.loudness_confidence = None;
+            }
+
+            if sound.loudness_analysis_state == LoudnessAnalysisState::Unavailable {
+                sound.loudness_confidence = None;
+            }
+        }
+
+        self.settings.normalize_for_persistence();
+    }
+
+    pub fn create_tab(&mut self, name: String) -> SoundTab {
+        let order = self.tabs.iter().map(|t| t.order).max().unwrap_or(0) + 1;
+        let tab = SoundTab::new(name, order);
+        self.tabs.push(tab.clone());
+        tab
+    }
+
+    pub fn rename_tab(&mut self, id: &str, name: String) -> bool {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            tab.name = name;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_tab(&mut self, id: &str) -> bool {
+        let len_before = self.tabs.len();
+        self.tabs.retain(|t| t.id != id);
+        self.tabs.len() < len_before
+    }
+
+    pub fn get_tab(&self, id: &str) -> Option<&SoundTab> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
+
+    pub fn get_tab_mut(&mut self, id: &str) -> Option<&mut SoundTab> {
+        self.tabs.iter_mut().find(|t| t.id == id)
+    }
+
+    pub fn add_sounds_to_tab(&mut self, tab_id: &str, sound_ids: Vec<String>) -> bool {
+        if let Some(tab) = self.get_tab_mut(tab_id) {
+            for sound_id in sound_ids {
+                if !tab.sound_ids.contains(&sound_id) {
+                    tab.sound_ids.push(sound_id);
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_sound_from_tab(&mut self, tab_id: &str, sound_id: &str) -> bool {
+        if let Some(tab) = self.get_tab_mut(tab_id) {
+            let len_before = tab.sound_ids.len();
+            tab.sound_ids.retain(|id| id != sound_id);
+            tab.sound_ids.len() < len_before
+        } else {
+            false
+        }
+    }
+
+    pub fn remove_sounds_from_tab(&mut self, tab_id: &str, sound_ids: &[String]) -> bool {
+        let Some(tab) = self.get_tab_mut(tab_id) else {
+            return false;
+        };
+
+        if sound_ids.is_empty() {
+            return true;
+        }
+
+        let remove_set: HashSet<&str> = sound_ids.iter().map(String::as_str).collect();
+        tab.sound_ids
+            .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_temp_path_is_unique_per_call() {
+        let path = PathBuf::from("/tmp/linux-soundboard/config.json");
+
+        let first = save_temp_path(&path);
+        let second = save_temp_path(&path);
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), path.parent());
+        assert_eq!(second.parent(), path.parent());
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("config.json.tmp."));
+    }
+}
