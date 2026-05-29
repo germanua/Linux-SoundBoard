@@ -23,10 +23,18 @@ On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automa
 
 | Script            | Who runs it                                                               | What it does                                                                        |
 | ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `install.sh`      | You, via the one-liner above                                              | Detects distro, installs via package manager or tarball, handles swhkd on Wayland   |
+| `install.sh`      | You, via the one-liner above                                              | Detects distro, installs via package manager or tarball, handles swhkd on Wayland, and can repair/status/uninstall |
 | `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, and legacy audio cleanup |
 
 `install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
+
+For a full uninstall through the same smart wrapper:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- uninstall --yes
+```
+
+This removes managed per-user files first, then removes the native `linux-soundboard` package when one is installed. Add `--keep-package` to remove only the per-user setup.
 
 ---
 
@@ -70,6 +78,12 @@ The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It use
 ### Installer commands
 
 ```bash
+# Full-system wrapper commands
+./install.sh repair
+./install.sh status
+./install.sh uninstall --yes
+./install.sh uninstall --yes --keep-package
+
 # Interactive menu (runs automatically when called with no arguments in a terminal)
 ./install-user.sh
 
@@ -123,11 +137,18 @@ Required runtime packages (usually already present on modern Ubuntu/Debian):
 pipewire  wireplumber  libpulse0
 ```
 
-After a DEB install, run `install-user.sh repair` once without a binary argument to set up the engine service for your account and disable obsolete user-level audio routing files:
+The package enables the engine service for new logins automatically. To enable
+it for the current session and clear any obsolete user-level audio routing files
+without copying package-owned files into `~/.local`, run the smart wrapper's
+repair command:
 
 ```bash
-./install-user.sh repair
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
 ```
+
+When a native package is installed, `install.sh repair` configures only the user
+service. It does not redeploy the binary, desktop entry, icons, or engine unit
+that the package already owns.
 
 ### Fedora
 
@@ -141,7 +162,7 @@ Required runtime packages:
 pipewire  wireplumber  pulseaudio-libs
 ```
 
-Same as Debian: run `./install-user.sh repair` after the RPM install to configure the engine service and clean obsolete user-level audio routing for your account.
+Same as Debian: run the smart wrapper repair command after the RPM install to configure the engine service and clean obsolete user-level audio routing for your account, without copying package-owned files into `~/.local`.
 
 ---
 

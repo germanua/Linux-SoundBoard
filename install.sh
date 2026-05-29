@@ -6,10 +6,12 @@
 # No root required on the fallback path; sudo is needed for package manager paths.
 #
 # Usage: bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
+#        curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- uninstall --yes
 
 set -euo pipefail
 
 APP_REPO="germanua/Linux-SoundBoard"
+APP_PACKAGE="linux-soundboard"
 APP_BINARY="linux-soundboard"
 APP_AUR_PACKAGE="linux-soundboard-git"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
@@ -25,6 +27,25 @@ log()     { printf '[%s] %s\n' "$1" "$2"; }
 info()    { log INFO "$1"; }
 warn()    { log WARN "$1" >&2; }
 fail()    { log ERROR "$1" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+Linux Soundboard installer
+
+Usage:
+  ./install.sh [install]
+  ./install.sh repair [binary]
+  ./install.sh status
+  ./install.sh remove [--yes] [--keep-data] [--keep-package] [--restore-default-source|--keep-current-default-source]
+  ./install.sh uninstall [--yes] [--keep-data] [--keep-package] [--restore-default-source|--keep-current-default-source]
+  ./install.sh --help
+
+The default install command detects your distro and installs via a native
+package when available. The remove/uninstall command removes per-user files and
+also removes the native Linux Soundboard package when one is installed. Pass
+--keep-package to leave the native package installed.
+EOF
+}
 
 # ── Download helpers ──────────────────────────────────────────────────────────
 
@@ -124,22 +145,58 @@ download_and_extract_tarball() {
     [[ -n "$url" ]] || fail "No release tarball for $arch. See https://github.com/$APP_REPO/releases"
 
     local tarball="$WORK_DIR/linux-soundboard.tar.gz"
-    info "Downloading $url ..."
+    info "Downloading $url ..." >&2
     fetch_progress "$url" "$tarball"
 
-    info "Extracting..."
+    info "Extracting..." >&2
     tar -xzf "$tarball" -C "$WORK_DIR"
 
     find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -1
 }
 
 run_user_installer() {
-    local mode=$1   # install | repair
+    local mode=$1   # install | repair | remove | status
     local bundle_dir=$2
+    shift 2
 
     local installer="$bundle_dir/install-user.sh"
     [[ -x "$installer" ]] || chmod +x "$installer"
-    "$installer" "$mode"
+    "$installer" "$mode" "$@"
+}
+
+local_user_installer() {
+    local script_path="${BASH_SOURCE[0]:-$0}"
+    local script_dir
+    local candidate
+
+    script_dir="$(cd -- "$(dirname -- "$script_path")" >/dev/null 2>&1 && pwd -P || pwd)"
+
+    for candidate in \
+        "$script_dir/packaging/linux/install-user.sh" \
+        "$script_dir/install-user.sh"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+run_user_installer_from_available_source() {
+    local mode=$1
+    shift
+    local installer
+    local bundle_dir
+
+    if installer="$(local_user_installer)"; then
+        [[ -x "$installer" ]] || chmod +x "$installer"
+        "$installer" "$mode" "$@"
+        return
+    fi
+
+    bundle_dir="$(download_and_extract_tarball)"
+    run_user_installer "$mode" "$bundle_dir" "$@"
 }
 
 install_arch() {
@@ -167,9 +224,13 @@ install_debian() {
     fetch_progress "$url" "$file"
     apt_install "$file"
 
-    # Run user-space setup (service) for the installing account.
-    local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
-    run_user_installer repair "$bundle_dir"
+    # The package owns the binary, desktop entry, icons, and the systemd user
+    # unit. Only enable the engine service for the installing account; do not
+    # redeploy those files into ~/.local, which would shadow the package and run
+    # a stale binary after a package upgrade. The package's postinst already
+    # enables the service for new logins, so a failure here is non-fatal.
+    run_user_installer_from_available_source setup-user \
+        || warn "Could not configure the user service; it will start on next login."
 }
 
 install_fedora() {
@@ -184,13 +245,161 @@ install_fedora() {
     fetch_progress "$url" "$file"
     dnf_install "$file"
 
-    local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
-    run_user_installer repair "$bundle_dir"
+    # The package owns the binary, desktop entry, icons, and the systemd user
+    # unit. Only enable the engine service for the installing account; do not
+    # redeploy those files into ~/.local, which would shadow the package and run
+    # a stale binary after a package upgrade. The package's postinst already
+    # enables the service for new logins, so a failure here is non-fatal.
+    run_user_installer_from_available_source setup-user \
+        || warn "Could not configure the user service; it will start on next login."
 }
 
 install_tarball() {
     local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
     run_user_installer install "$bundle_dir"
+}
+
+# ── Repair, status, and removal ───────────────────────────────────────────────
+
+as_root() {
+    if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        fail "sudo is required to remove the native package."
+    fi
+}
+
+installed_native_packages() {
+    local found=0
+    local pkg
+
+    if command -v dpkg-query >/dev/null 2>&1 \
+        && dpkg-query -W -f='${Status}' "$APP_PACKAGE" 2>/dev/null | grep -q "install ok installed"; then
+        printf 'deb\t%s\n' "$APP_PACKAGE"
+        found=1
+    fi
+
+    if command -v rpm >/dev/null 2>&1 && rpm -q "$APP_PACKAGE" >/dev/null 2>&1; then
+        printf 'rpm\t%s\n' "$APP_PACKAGE"
+        found=1
+    fi
+
+    if command -v pacman >/dev/null 2>&1; then
+        for pkg in "$APP_AUR_PACKAGE" "$APP_PACKAGE"; do
+            if pacman -Q "$pkg" >/dev/null 2>&1; then
+                printf 'pacman\t%s\n' "$pkg"
+                found=1
+            fi
+        done
+    fi
+
+    ((found == 1))
+}
+
+remove_deb_package() {
+    if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get remove -y "$APP_PACKAGE"
+    else
+        as_root dpkg -r "$APP_PACKAGE"
+    fi
+}
+
+remove_rpm_package() {
+    if command -v dnf >/dev/null 2>&1; then
+        as_root dnf remove -y "$APP_PACKAGE"
+    elif command -v zypper >/dev/null 2>&1; then
+        as_root zypper --non-interactive remove "$APP_PACKAGE"
+    else
+        as_root rpm -e "$APP_PACKAGE"
+    fi
+}
+
+remove_pacman_package() {
+    local pkg=$1
+
+    as_root pacman -Rns --noconfirm "$pkg"
+}
+
+remove_native_packages() {
+    local found=0
+    local kind
+    local pkg
+
+    while IFS=$'\t' read -r kind pkg; do
+        [[ -n "${kind:-}" && -n "${pkg:-}" ]] || continue
+        found=1
+        info "Removing native package: $pkg"
+        case "$kind" in
+            deb)
+                remove_deb_package
+                ;;
+            rpm)
+                remove_rpm_package
+                ;;
+            pacman)
+                remove_pacman_package "$pkg"
+                ;;
+        esac
+    done < <(installed_native_packages || true)
+
+    if ((found == 0)); then
+        info "No native Linux Soundboard package is installed."
+    fi
+}
+
+print_native_package_status() {
+    local packages=()
+    local kind
+    local pkg
+
+    while IFS=$'\t' read -r kind pkg; do
+        [[ -n "${kind:-}" && -n "${pkg:-}" ]] || continue
+        packages+=("$kind:$pkg")
+    done < <(installed_native_packages || true)
+
+    if ((${#packages[@]} == 0)); then
+        printf '  Native pkg:    missing\n'
+    else
+        printf '  Native pkg:    %s\n' "${packages[*]}"
+    fi
+}
+
+REMOVE_KEEP_PACKAGE=0
+USER_REMOVE_ARGS=()
+
+parse_wrapper_remove_args() {
+    REMOVE_KEEP_PACKAGE=0
+    USER_REMOVE_ARGS=()
+
+    while (($# > 0)); do
+        case "$1" in
+            --keep-package)
+                REMOVE_KEEP_PACKAGE=1
+                ;;
+            *)
+                USER_REMOVE_ARGS+=("$1")
+                ;;
+        esac
+        shift
+    done
+}
+
+remove_installation() {
+    parse_wrapper_remove_args "$@"
+    run_user_installer_from_available_source remove "${USER_REMOVE_ARGS[@]}"
+
+    if ((REMOVE_KEEP_PACKAGE == 1)); then
+        info "Keeping native package because --keep-package was passed."
+    else
+        remove_native_packages
+    fi
+}
+
+print_status() {
+    run_user_installer_from_available_source status
+    print_native_package_status
 }
 
 # ── swhkd (Wayland global hotkeys) ───────────────────────────────────────────
@@ -265,9 +474,7 @@ ensure_pipewire_services() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-main() {
-    [[ ${EUID:-$(id -u)} -eq 0 ]] && fail "Run as your regular user, not root."
-
+install_main() {
     detect_distro
     detect_session
     info "Distro:  $DISTRO_NAME"
@@ -287,6 +494,50 @@ main() {
     ensure_pipewire_services
 
     printf '\nDone. Launch with: %s\n' "$APP_BINARY"
+}
+
+main() {
+    local command="${1:-install}"
+
+    case "$command" in
+        --help|-h|help)
+            usage
+            return
+            ;;
+    esac
+
+    [[ ${EUID:-$(id -u)} -eq 0 ]] && fail "Run as your regular user, not root."
+
+    case "$command" in
+        install)
+            [[ $# -gt 0 ]] && shift
+            install_main "$@"
+            ;;
+        repair)
+            [[ $# -gt 0 ]] && shift
+            # On a native-package install, repair the user service only. A full
+            # repair would deploy a ~/.local copy that shadows the package. An
+            # explicit binary argument still forces a full repair (source builds).
+            if [[ $# -eq 0 ]] && installed_native_packages >/dev/null 2>&1; then
+                info "Native Linux Soundboard package detected; configuring the user service only."
+                run_user_installer_from_available_source setup-user
+            else
+                run_user_installer_from_available_source repair "$@"
+            fi
+            ;;
+        status)
+            [[ $# -gt 0 ]] && shift
+            print_status
+            ;;
+        remove|uninstall)
+            [[ $# -gt 0 ]] && shift
+            remove_installation "$@"
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
 }
 
 main "$@"

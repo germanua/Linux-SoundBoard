@@ -45,5 +45,4 @@ plan*.md
 .env.*.local
 
 # Local tooling state
-.claude/
 aur-linux-soundboard-git/
