@@ -14,9 +14,6 @@
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
   </a>
-  <a href="https://github.com/germanua/Linux-SoundBoard/actions/workflows/ci.yml">
-    <img src="https://github.com/germanua/Linux-SoundBoard/actions/workflows/ci.yml/badge.svg" alt="CI">
-  </a>
 </p>
 
 <p align="center">
@@ -85,9 +82,13 @@ The command at the top of this page is all you need.
 
 On Wayland, `swhkd` for global hotkeys is installed automatically.
 
-After install, the per-user setup tool `install-user.sh` handles repair and uninstall:
+After install, use `install.sh` for full repair/uninstall. The low-level
+`install-user.sh` tool remains available when you only want to manage per-user
+files:
 
 ```bash
+install.sh repair               # repair via the smart wrapper
+install.sh uninstall --yes      # remove user files and native package
 install-user.sh repair          # clean old audio configs, restart engine
 install-user.sh remove          # uninstall with interactive prompt
 install-user.sh remove --yes    # uninstall without prompts

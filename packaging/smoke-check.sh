@@ -134,7 +134,7 @@ INSTALLER="$REPO_ROOT/packaging/linux/install-user.sh"
 if [[ ! -f "$INSTALLER" ]]; then
     fail "install-user.sh not found: $INSTALLER"
 else
-    for subcmd in "install" "repair" "remove" "status"; do
+    for subcmd in "install" "repair" "setup-user" "remove" "status"; do
         if grep -qw "$subcmd" "$INSTALLER"; then
             pass "install-user.sh: '$subcmd' subcommand present"
         else
@@ -145,6 +145,29 @@ else
         pass "install-user.sh: uses XDG_DATA_HOME/XDG_CONFIG_HOME (no hard-coded uid paths)"
     else
         fail "install-user.sh: no XDG_DATA_HOME/XDG_CONFIG_HOME usage found"
+    fi
+fi
+
+echo ""
+
+# ── 5a. install.sh wrapper subcommand coverage ───────────────────────────────
+
+echo "==> install.sh wrapper subcommands"
+WRAPPER="$REPO_ROOT/install.sh"
+if [[ ! -f "$WRAPPER" ]]; then
+    fail "install.sh not found: $WRAPPER"
+else
+    for subcmd in "install" "repair" "remove" "uninstall" "status"; do
+        if grep -qw "$subcmd" "$WRAPPER"; then
+            pass "install.sh: '$subcmd' subcommand present"
+        else
+            fail "install.sh: '$subcmd' subcommand not found"
+        fi
+    done
+    if grep -q -- "--keep-package" "$WRAPPER"; then
+        pass "install.sh: package-preserving remove option present"
+    else
+        fail "install.sh: --keep-package option missing"
     fi
 fi
 

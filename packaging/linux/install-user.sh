@@ -39,6 +39,9 @@ AUDIO_SNAPSHOT_FILE="$STATE_DIR/preinstall-audio.env"
 YES=0
 KEEP_DATA=0
 DEFAULT_SOURCE_POLICY="ask"
+# Set to 1 whenever a managed PipeWire/PulseAudio/WirePlumber file is disabled,
+# removed, or rewritten, so the audio stack is only restarted when needed.
+AUDIO_CONFIG_CHANGED=0
 
 log() {
     printf '[%s] %s\n' "$1" "$2"
@@ -65,12 +68,17 @@ Usage:
   ./install-user.sh
   ./install-user.sh install [binary]
   ./install-user.sh repair [binary]
+  ./install-user.sh setup-user
   ./install-user.sh remove [--yes] [--keep-data] [--restore-default-source|--keep-current-default-source]
   ./install-user.sh status
   ./install-user.sh --help
 
 No arguments opens the interactive menu when run from a terminal. In
 noninteractive mode, pass an explicit command.
+
+Use 'setup-user' after installing the native DEB/RPM package to enable the
+engine service for your account and clean obsolete user-level audio routing,
+without redeploying app files the package already owns.
 EOF
 }
 
@@ -179,8 +187,20 @@ install_file_from_source() {
     local source=$1
     local dest=$2
     local mode=$3
+    local source_real
+    local dest_real
 
     ensure_parent_dir "$dest"
+    if [[ -e "$dest" ]]; then
+        source_real="$(realpath "$source")"
+        dest_real="$(realpath "$dest")"
+        if [[ "$source_real" == "$dest_real" ]]; then
+            chmod "$mode" "$dest"
+            record_file "$dest"
+            return 0
+        fi
+    fi
+
     backup_file_if_needed "$dest"
     install -m "$mode" "$source" "$dest"
     record_file "$dest"
@@ -220,6 +240,8 @@ resolve_binary_source() {
         realpath "$SCRIPT_DIR/$APP_BINARY"
     elif [[ -x "$SCRIPT_DIR/../../src/target/release/$APP_BINARY" ]]; then
         realpath "$SCRIPT_DIR/../../src/target/release/$APP_BINARY"
+    elif command -v "$APP_BINARY" >/dev/null 2>&1; then
+        realpath "$(command -v "$APP_BINARY")"
     else
         return 1
     fi
@@ -271,13 +293,23 @@ render_engine_service() {
 $MANAGED_MARKER_LINE
 [Unit]
 Description=$APP_NAME audio engine
+Documentation=$APP_URL
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
 
 [Service]
-Type=simple
+# Type=exec: systemd tracks the exec'd process PID and reports exec failures
+# clearly, unlike Type=simple which considers the service started immediately.
+Type=exec
 ExecStart=$(systemd_quote "$INSTALL_BINARY") --audio-engine
 Restart=on-failure
-RestartSec=2
+RestartSec=2s
+
+# Hardening options tested compatible with PipeWire/PulseAudio user services.
+# ProtectHome and ProtectSystem are omitted: the engine must access user sound
+# files under \$HOME and does not run with mount namespaces in user sessions.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
 
 [Install]
 WantedBy=default.target
@@ -562,6 +594,7 @@ disable_file() {
 
     disabled_path="$(next_disabled_path "$path")"
     mv -- "$path" "$disabled_path"
+    AUDIO_CONFIG_CHANGED=1
     info "Disabled obsolete $label: $disabled_path"
 }
 
@@ -590,9 +623,11 @@ remove_system_managed_audio_file() {
 
     if [[ -w "$path" && -w "$(dirname "$path")" ]]; then
         rm -f -- "$path"
+        AUDIO_CONFIG_CHANGED=1
         info "Removed obsolete system $label: $path"
     elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
         sudo rm -f -- "$path"
+        AUDIO_CONFIG_CHANGED=1
         info "Removed obsolete system $label with sudo: $path"
     else
         warn "Obsolete system $label still exists: $path"
@@ -720,6 +755,7 @@ install_or_repair() {
     local binary_arg=${2:-}
     local binary_source
     local icon_source_root
+    AUDIO_CONFIG_CHANGED=0
 
     binary_source="$(resolve_binary_source "$binary_arg")" || fail "Could not find a built $APP_BINARY binary. Pass the binary path after '$mode'."
     icon_source_root="$(resolve_icon_source_root)" || fail "Could not find the bundled icon set."
@@ -736,7 +772,7 @@ install_or_repair() {
     install_file_from_content "$DESKTOP_DIR/$APP_ID.desktop" 644 "$(render_desktop_file)"
     install_file_from_content "$ENGINE_SERVICE" 644 "$(render_engine_service)"
     install_audio_config
-    restart_audio_services
+    maybe_restart_audio_services
     reload_start_engine_service
     refresh_desktop_caches
 
@@ -751,6 +787,42 @@ install_or_repair() {
     printf '  Binary:   %s\n' "$INSTALL_BINARY"
     printf '  Launcher: %s\n' "$DESKTOP_DIR/$APP_ID.desktop"
     printf '  Engine:   %s\n' "$ENGINE_SERVICE"
+}
+
+maybe_restart_audio_services() {
+    if ((AUDIO_CONFIG_CHANGED == 1)); then
+        restart_audio_services
+    fi
+}
+
+# Service-only setup for native package (DEB/RPM) installs. The package owns the
+# binary, desktop entry, icons, and the systemd user unit, so this only enables
+# the engine service for the installing account and clears obsolete user-level
+# audio routing. It deliberately does not deploy a second copy of those files
+# into ~/.local, which would shadow the package and run a stale binary after a
+# package upgrade.
+setup_user_service() {
+    AUDIO_CONFIG_CHANGED=0
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "systemctl not found; cannot configure the user service."
+        return 0
+    fi
+
+    info "Configuring $APP_NAME user service."
+    cleanup_legacy_audio_config
+    maybe_restart_audio_services
+    reload_start_engine_service
+
+    if virtual_mic_present; then
+        info "Virtual microphone is visible."
+    else
+        warn "Virtual microphone is not visible yet. It may appear after the engine starts or the session restarts."
+    fi
+
+    printf '\n'
+    printf 'User service configured:\n'
+    printf '  Engine:   %s (systemctl --user)\n' "$ENGINE_SERVICE_NAME"
 }
 
 remove_managed_file() {
@@ -773,6 +845,21 @@ remove_managed_file() {
     else
         warn "Skipped non-managed file: $path"
     fi
+}
+
+remove_known_app_file() {
+    local path=$1
+    local label=$2
+
+    [[ -e "$path" ]] || return 0
+
+    if backup_exists_for_path "$path" || path_in_manifest "$path" || contains_managed_marker "$path"; then
+        remove_managed_file "$path"
+        return 0
+    fi
+
+    rm -f -- "$path"
+    info "Removed Linux Soundboard $label: $path"
 }
 
 remove_pipewire_config() {
@@ -809,10 +896,12 @@ remove_pulse_managed_block() {
 
     if [[ -z "$stripped_content" ]] || { [[ "$stripped_content" == ".include /etc/pulse/default.pa" ]] && ((has_backup == 0)); }; then
         rm -f -- "$PULSE_DEFAULT_PA"
+        AUDIO_CONFIG_CHANGED=1
         info "Removed Linux Soundboard PulseAudio config."
     else
         backup_file_if_needed "$PULSE_DEFAULT_PA"
         install_file_from_source "$tmp" "$PULSE_DEFAULT_PA" 644
+        AUDIO_CONFIG_CHANGED=1
         info "Removed Linux Soundboard PulseAudio block."
     fi
     rm -f "$tmp"
@@ -828,15 +917,22 @@ pulse_config_status() {
 
 remove_icons() {
     local path
+    local size
 
     while IFS= read -r path; do
-        remove_managed_file "$path"
+        remove_known_app_file "$path" "icon"
     done < <(
-        awk -F '\t' -v app_id="$APP_ID" -v icon_name="$APP_ICON_NAME" \
-            '$1 == "file" && index($3, "/icons/hicolor/") > 0 {
-                n = split($3, a, "/"); base = a[n]; sub(/\.png$/, "", base)
-                if (base == app_id || base == icon_name) print $3
-            }' "$MANIFEST_FILE" 2>/dev/null | sort -u
+        {
+            awk -F '\t' -v app_id="$APP_ID" -v icon_name="$APP_ICON_NAME" \
+                '$1 == "file" && index($3, "/icons/hicolor/") > 0 {
+                    n = split($3, a, "/"); base = a[n]; sub(/\.png$/, "", base)
+                    if (base == app_id || base == icon_name) print $3
+                }' "$MANIFEST_FILE" 2>/dev/null
+            for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+                printf '%s/%s/apps/%s.png\n' "$ICON_THEME_DIR" "$size" "$APP_ID"
+                printf '%s/%s/apps/%s.png\n' "$ICON_THEME_DIR" "$size" "$APP_ICON_NAME"
+            done
+        } | sort -u
     )
 }
 
@@ -898,17 +994,18 @@ remove_installation() {
     stop_disable_engine_service
     restore_preinstall_default_source "$DEFAULT_SOURCE_POLICY"
 
-    remove_managed_file "$ENGINE_SERVICE"
-    remove_managed_file "$DESKTOP_DIR/$APP_ID.desktop"
+    remove_known_app_file "$ENGINE_SERVICE" "engine service"
+    remove_known_app_file "$DESKTOP_DIR/$APP_ID.desktop" "desktop entry"
     remove_icons
     remove_pipewire_config
     remove_pulse_managed_block
-    remove_managed_file "$INSTALL_HELPER"
-    remove_managed_file "$INSTALL_BINARY"
+    remove_known_app_file "$INSTALL_HELPER" "helper"
+    remove_known_app_file "$INSTALL_BINARY" "binary"
 
     restart_audio_services
     refresh_desktop_caches
     remove_empty_recorded_dirs
+    rmdir "$INSTALL_ROOT" >/dev/null 2>&1 || true
 
     if ((KEEP_DATA == 0)); then
         purge_app_data
@@ -1058,6 +1155,10 @@ main() {
         repair)
             shift
             install_or_repair repair "${1:-}"
+            ;;
+        setup-user)
+            shift
+            setup_user_service
             ;;
         remove)
             shift
