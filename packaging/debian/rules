@@ -22,7 +22,7 @@ override_dh_auto_test:
 	true
 
 override_dh_auto_install:
-	install -Dm755 src/target/release/linux-soundboard \
+	install -Dm755 target/release/linux-soundboard \
 		debian/linux-soundboard/usr/bin/linux-soundboard
 	
 	# Install desktop file

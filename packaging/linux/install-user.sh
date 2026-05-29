@@ -238,6 +238,8 @@ resolve_binary_source() {
         realpath "$explicit_path"
     elif [[ -x "$SCRIPT_DIR/$APP_BINARY" ]]; then
         realpath "$SCRIPT_DIR/$APP_BINARY"
+    elif [[ -x "$SCRIPT_DIR/../../target/release/$APP_BINARY" ]]; then
+        realpath "$SCRIPT_DIR/../../target/release/$APP_BINARY"
     elif [[ -x "$SCRIPT_DIR/../../src/target/release/$APP_BINARY" ]]; then
         realpath "$SCRIPT_DIR/../../src/target/release/$APP_BINARY"
     elif command -v "$APP_BINARY" >/dev/null 2>&1; then

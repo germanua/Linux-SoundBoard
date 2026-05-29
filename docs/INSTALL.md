@@ -201,7 +201,7 @@ On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
 Requirements for the in-app install:
 
 - Native install (DEB / RPM / AUR / AppImage on host), not a Flatpak sandbox
-- `pkexec` available (provided by `policykit-1` / `polkit`)
+- `pkexec` available (provided by `pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, or `polkit` on Fedora/Arch)
 - Network access to clone `swhkd` sources from GitHub
 
 **Manual install:**
@@ -221,7 +221,7 @@ On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` neede
 
 ```bash
 sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
-  libpulse alsa-lib libx11 libxi pipewire wireplumber
+  libpulse alsa-lib opus libx11 libxi pipewire wireplumber
 ```
 
 **Debian / Ubuntu:**
@@ -229,7 +229,7 @@ sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
 ```bash
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
   libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
-  libx11-dev libxi-dev pipewire wireplumber
+  libopus-dev libx11-dev libxi-dev pipewire wireplumber
 ```
 
 **Fedora:**
@@ -237,7 +237,7 @@ sudo apt install build-essential cargo rustc pkg-config imagemagick \
 ```bash
 sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
   gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
-  libX11-devel libXi-devel pipewire wireplumber
+  opus-devel libX11-devel libXi-devel pipewire-devel pipewire wireplumber
 ```
 
 ### Build and install
@@ -249,7 +249,7 @@ cargo build --release
 
 # Install using the user installer, pointing it at the freshly built binary
 cd ..
-./packaging/linux/install-user.sh install ./src/target/release/linux-soundboard
+./packaging/linux/install-user.sh install ./target/release/linux-soundboard
 ```
 
 The installer detects the binary next to the script automatically when run from the repository root.

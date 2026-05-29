@@ -55,7 +55,7 @@ modules:
       - cargo --offline build --release --manifest-path src/Cargo.toml --verbose
       
       # Install binary
-      - install -Dm755 src/target/release/linux-soundboard /app/bin/linux-soundboard
+      - install -Dm755 target/release/linux-soundboard /app/bin/linux-soundboard
       
       # Install desktop file
       - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.desktop /app/share/applications/com.linuxsoundboard.app.desktop
