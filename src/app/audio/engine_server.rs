@@ -12,7 +12,7 @@ use log::{error, info, warn};
 use crate::app_meta::APP_VERSION;
 use crate::audio::engine_ipc::{self, BindEngineSocket, EngineRequest, EngineResponse};
 use crate::audio::{AudioBackendKind, AudioPlayer, EngineError};
-use crate::config::{Config, DefaultSourceMode, CURRENT_SCHEMA_VERSION};
+use crate::config::{Config, CURRENT_SCHEMA_VERSION};
 
 pub fn run() -> i32 {
     match engine_ipc::bind_engine_socket() {
@@ -78,17 +78,17 @@ fn load_config() -> Config {
         Ok(config) => config,
         Err(err) => {
             warn!(
-                "Failed to load config from '{}': {}. Starting audio engine in fail-closed routing mode.",
+                "Failed to load config from '{}': {}. Starting audio engine with default settings.",
                 Config::config_path().display(),
                 err
             );
-            let mut config = Config::default();
-            // Fail-closed: when config load fails, don't claim the system
-            // default. The user might already have a working setup.
-            config.settings.default_source_mode = DefaultSourceMode::Manual;
-            config
+            fallback_config_after_load_error()
         }
     }
+}
+
+fn fallback_config_after_load_error() -> Config {
+    Config::default()
 }
 
 fn handle_client(stream: UnixStream, player: Arc<AudioPlayer>, stop: Arc<AtomicBool>) {
@@ -263,5 +263,22 @@ fn result_to_response(result: Result<(), EngineError>) -> EngineResponse {
         Err(e) => EngineResponse::Error {
             message: e.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::DefaultSourceMode;
+
+    use super::*;
+
+    #[test]
+    fn config_load_error_fallback_uses_default_mic_routing() {
+        let config = fallback_config_after_load_error();
+
+        assert_eq!(
+            config.settings.default_source_mode,
+            DefaultSourceMode::Default
+        );
     }
 }

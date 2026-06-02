@@ -117,10 +117,7 @@ pub(super) fn build_mic_group(state: Arc<AppState>) -> adw::PreferencesGroup {
             .title("Microphone Routing")
             .subtitle("How apps receive the soundboard mic.")
             .build();
-        let default_mode_items = gtk4::StringList::new(&[
-            "Default — Soundboard is the system mic (recommended)",
-            "Manual — I'll pick the default mic myself",
-        ]);
+        let default_mode_items = gtk4::StringList::new(&["Default (recommended)", "Manual"]);
         default_mode_row.set_model(Some(&default_mode_items));
         default_mode_row.set_selected(match current_default_source_mode {
             DefaultSourceMode::Default => 0,
