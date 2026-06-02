@@ -27,6 +27,7 @@ fn test_source(id: u32, node_name: &str, display_name: &str, priority: i32) -> S
         is_hardware_backed: node_name.starts_with("alsa_input.")
             || node_name.starts_with("bluez_input.")
             || node_name.starts_with("v4l2_input."),
+        is_null_sink_backed: false,
     }
 }
 
@@ -127,6 +128,7 @@ fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors()
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -141,6 +143,7 @@ fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors()
             is_our_virtual_mic: false,
             is_virtual: true,
             is_hardware_backed: false,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -155,6 +158,7 @@ fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors()
             is_our_virtual_mic: true,
             is_virtual: true,
             is_hardware_backed: false,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -169,6 +173,7 @@ fn list_audio_sources_includes_virtual_third_parties_excludes_own_and_monitors()
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
 
@@ -237,6 +242,7 @@ fn resolve_source_id_by_name_finds_matching_source() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     )]);
 
@@ -324,6 +330,7 @@ fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
             is_our_virtual_mic: false,
             is_virtual: true,          // Audio/Source/Virtual at runtime
             is_hardware_backed: false, // no device.api
+            is_null_sink_backed: false,
         },
     );
     state
@@ -411,6 +418,7 @@ fn auto_capture_prefers_any_virtual_source_over_physical_mic() {
             is_our_virtual_mic: false,
             is_virtual: true,
             is_hardware_backed: false,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -425,6 +433,7 @@ fn auto_capture_prefers_any_virtual_source_over_physical_mic() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     assert_eq!(
@@ -453,6 +462,7 @@ fn auto_capture_prefers_misconfigured_filter_chain_over_physical_mic() {
             is_our_virtual_mic: false,
             is_virtual: false,         // user misconfigured the module
             is_hardware_backed: false, // but PipeWire still sets no device.api
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -467,12 +477,129 @@ fn auto_capture_prefers_misconfigured_filter_chain_over_physical_mic() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     assert_eq!(
         best_upstream_mic_source_name(&state.sources).as_deref(),
         Some("my_filter_chain"),
         "absence of device.api alone must be enough to identify software source"
+    );
+}
+
+#[test]
+fn auto_capture_ignores_null_sink_screenshare_source_when_physical_mic_exists() {
+    // A Vencord/Discord screenshare source is a PipeWire null sink
+    // (factory.name = support.null-audio-sink) carrying application audio, not a
+    // mic. Auto-detect must pick the real physical mic over it, even though the
+    // null sink is also a virtual / non-hardware source.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "vencord-screen-share".to_string(),
+            display_name: "vencord-screen-share".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+            is_null_sink_backed: true,
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "alsa_input.usb_mic".to_string(),
+            display_name: "USB Microphone".to_string(),
+            priority_session: 100,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+            is_null_sink_backed: false,
+        },
+    );
+    assert_eq!(
+        best_upstream_mic_source_name(&state.sources).as_deref(),
+        Some("alsa_input.usb_mic"),
+        "a null-sink screenshare source must never beat a real microphone"
+    );
+}
+
+#[test]
+fn auto_capture_returns_none_when_only_null_sink_source_present() {
+    // With nothing but a null-sink screenshare source registered, auto-detect
+    // must select nothing (passthrough waits for a real mic) rather than route
+    // application audio into the virtual mic — even via the default fallback.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "vencord-screen-share".to_string(),
+            display_name: "vencord-screen-share".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+            is_null_sink_backed: true,
+        },
+    );
+    assert_eq!(best_upstream_mic_source_name(&state.sources), None);
+    assert_eq!(
+        resolve_capture_target_from_default(&state, Some("vencord-screen-share".to_string())),
+        None,
+        "a null sink must not be selected even as the default/previous fallback"
+    );
+}
+
+#[test]
+fn auto_capture_trusts_null_sink_that_matches_enhancement_name() {
+    // The null-sink exclusion has an escape hatch: a null sink whose node name
+    // matches a known enhancement app (Signal C) is the user's deliberate setup
+    // (e.g. a NoiseTorch build backed by a null sink) and is still preferred.
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "noisetorch".to_string(),
+            display_name: "NoiseTorch Microphone".to_string(),
+            priority_session: 0,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+            is_null_sink_backed: true, // null-sink-backed BUT name-matches
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "alsa_input.usb_mic".to_string(),
+            display_name: "USB Microphone".to_string(),
+            priority_session: 9999,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: false,
+            is_hardware_backed: true,
+            is_null_sink_backed: false,
+        },
+    );
+    assert_eq!(
+        best_upstream_mic_source_name(&state.sources).as_deref(),
+        Some("noisetorch"),
+        "a null sink that name-matches an enhancement app is still trusted"
     );
 }
 
@@ -611,6 +738,7 @@ fn loop_state_filters_virtual_and_monitor_sources() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -625,6 +753,7 @@ fn loop_state_filters_virtual_and_monitor_sources() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     state.sources.insert(
@@ -639,6 +768,7 @@ fn loop_state_filters_virtual_and_monitor_sources() {
             is_our_virtual_mic: true,
             is_virtual: true,
             is_hardware_backed: false,
+            is_null_sink_backed: false,
         },
     );
 
@@ -904,6 +1034,7 @@ fn publish_snapshot_includes_visible_sources_and_active_playback() {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         },
     );
     state.active_playback = Some(

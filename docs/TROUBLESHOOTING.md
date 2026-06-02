@@ -214,6 +214,18 @@ linux-soundboard --diagnose
 
 Check whether the screen-share stream is connected to the soundboard's virtual mic or to a sink monitor. If the soundboard is interfering, switch to **Manual** routing mode as a workaround and configure the target app to use `Linux_Soundboard_Mic` directly.
 
+### Mic passthrough captures a Vencord/Discord screenshare source instead of my microphone
+
+Older builds could auto-select a screenshare virtual source — for example `vencord-screen-share` — for mic passthrough when no enhancement chain (EasyEffects/NoiseTorch) was running. The Passthrough Status would read `Active: vencord-screen-share` and your voice would be missing.
+
+Auto-detect now skips PipeWire null-sink sources, because they carry application audio rather than a microphone. If you still see a screenshare source being captured, confirm it is a null sink:
+
+```bash
+pw-cli list-objects Node | grep -B2 -A8 vencord-screen-share
+```
+
+Look for `factory.name = "support.null-audio-sink"`. As a workaround for any null-sink source that auto-detect does not yet skip, explicitly select your physical microphone in **Settings → Microphone Source**.
+
 ### An app I don't want using Linux_Soundboard_Mic
 
 In **Default** mode, the soundboard is the system default mic — all apps that use the default input will get it. To exclude a specific app, either:
