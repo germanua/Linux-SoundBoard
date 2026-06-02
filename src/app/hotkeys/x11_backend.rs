@@ -11,6 +11,8 @@ use std::thread;
 use x11::xinput2;
 use x11::xlib;
 
+use crate::app_meta::{BACKEND_ENV_VAR, FORCE_X11_ENV_VAR, X11_BACKEND};
+
 use super::backend_runtime::HotkeyBackend;
 use super::error::{hotkey_conflict, HotkeyError};
 use super::HOTKEYS_POLL_INTERVAL_MS;
@@ -50,9 +52,10 @@ struct Binding {
 impl X11Backend {
     #[allow(clippy::multiple_unsafe_ops_per_block)]
     pub fn new() -> Result<Self, HotkeyError> {
-        if session_is_wayland() {
+        if should_disable_x11_backend() {
             return Err(HotkeyError::BackendUnavailable(
-                "Wayland session detected; X11 backend disabled".to_string(),
+                "Wayland session detected; X11 backend disabled unless X11 is explicitly selected"
+                    .to_string(),
             ));
         }
 
@@ -129,9 +132,8 @@ impl X11Backend {
     }
 }
 
-fn session_is_wayland() -> bool {
-    match std::env::var("XDG_SESSION_TYPE")
-        .ok()
+fn is_wayland_session(xdg_session_type: Option<&str>, has_wayland_display: bool) -> bool {
+    match xdg_session_type
         .map(|value| value.to_ascii_lowercase())
         .as_deref()
     {
@@ -140,7 +142,49 @@ fn session_is_wayland() -> bool {
         _ => {}
     }
 
-    std::env::var("WAYLAND_DISPLAY").is_ok()
+    has_wayland_display
+}
+
+fn session_is_wayland() -> bool {
+    let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+    is_wayland_session(
+        session_type.as_deref(),
+        std::env::var("WAYLAND_DISPLAY").is_ok(),
+    )
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn x11_requested(backend: Option<&str>, force_x11: Option<&str>) -> bool {
+    backend
+        .map(|value| value.trim().eq_ignore_ascii_case(X11_BACKEND))
+        .unwrap_or(false)
+        || force_x11.map(is_truthy).unwrap_or(false)
+}
+
+fn explicit_x11_requested() -> bool {
+    let backend = std::env::var(BACKEND_ENV_VAR).ok();
+    let force_x11 = std::env::var(FORCE_X11_ENV_VAR).ok();
+    x11_requested(backend.as_deref(), force_x11.as_deref())
+}
+
+#[cfg(test)]
+fn should_disable_x11_backend_for_env(
+    xdg_session_type: Option<&str>,
+    has_wayland_display: bool,
+    backend: Option<&str>,
+    force_x11: Option<&str>,
+) -> bool {
+    is_wayland_session(xdg_session_type, has_wayland_display) && !x11_requested(backend, force_x11)
+}
+
+fn should_disable_x11_backend() -> bool {
+    session_is_wayland() && !explicit_x11_requested()
 }
 
 impl Drop for X11Backend {
@@ -395,5 +439,55 @@ mod tests {
                 "Display pointer should be None before listener starts"
             );
         }
+    }
+
+    #[test]
+    fn wayland_session_disables_x11_by_default() {
+        assert!(should_disable_x11_backend_for_env(
+            Some("wayland"),
+            true,
+            None,
+            None
+        ));
+    }
+
+    #[test]
+    fn explicit_gtk_x11_allows_x11_backend_in_wayland_session() {
+        assert!(!should_disable_x11_backend_for_env(
+            Some("wayland"),
+            true,
+            Some("x11"),
+            None
+        ));
+    }
+
+    #[test]
+    fn force_x11_allows_x11_backend_in_wayland_session() {
+        assert!(!should_disable_x11_backend_for_env(
+            Some("wayland"),
+            true,
+            None,
+            Some("1")
+        ));
+    }
+
+    #[test]
+    fn false_force_x11_does_not_allow_x11_backend_in_wayland_session() {
+        assert!(should_disable_x11_backend_for_env(
+            Some("wayland"),
+            true,
+            None,
+            Some("false")
+        ));
+    }
+
+    #[test]
+    fn x11_session_allows_x11_backend_even_if_wayland_display_exists() {
+        assert!(!should_disable_x11_backend_for_env(
+            Some("x11"),
+            true,
+            None,
+            None
+        ));
     }
 }
