@@ -452,7 +452,7 @@ _These controls appear only when auto-gain is enabled._
 
 ### General → Microphone Source
 
-- **Trigger:** Choose a source from the dropdown
+- **Trigger:** Click a source in the list (the active source carries a checkmark)
 - **Options:** `Auto-detect (Default)` or any enumerated PipeWire source the app can see
 - **What it does:** Selects which real microphone is used for mic passthrough
 
