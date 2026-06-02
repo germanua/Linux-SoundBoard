@@ -218,13 +218,13 @@ Check whether the screen-share stream is connected to the soundboard's virtual m
 
 Older builds could auto-select a screenshare virtual source — for example `vencord-screen-share` — for mic passthrough when no enhancement chain (EasyEffects/NoiseTorch) was running. The Passthrough Status would read `Active: vencord-screen-share` and your voice would be missing.
 
-Auto-detect now skips PipeWire null-sink sources, because they carry application audio rather than a microphone. If you still see a screenshare source being captured, confirm it is a null sink:
+`Auto-detect (Default)` now only auto-selects a recognised enhancement chain or a real hardware microphone; it never auto-selects screenshare or other unrecognised virtual sources. If you still see one selected, it is almost certainly an **explicit** pick saved in your settings — `Auto-detect` only auto-picks, it never overrides a source you chose by hand. Check it:
 
 ```bash
-pw-cli list-objects Node | grep -B2 -A8 vencord-screen-share
+grep mic_source ~/.config/linux-soundboard/config.json
 ```
 
-Look for `factory.name = "support.null-audio-sink"`. As a workaround for any null-sink source that auto-detect does not yet skip, explicitly select your physical microphone in **Settings → Microphone Source**.
+If `mic_source` names the screenshare source (rather than being `null`), set **Settings → Microphone Source** back to `Auto-detect (Default)`, or pick your real microphone. Note that explicit selection of a screenshare source is intentionally still allowed for power users who want it.
 
 ### An app I don't want using Linux_Soundboard_Mic
 
