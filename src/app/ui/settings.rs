@@ -330,10 +330,8 @@ fn build_general_page(
     page.add(&playback_group);
     page.add(&auto_gain_group);
 
-    let (mic_source_group, mic_routing_group) =
-        super::settings_mic::build_mic_group(Arc::clone(&state));
-    page.add(&mic_source_group);
-    page.add(&mic_routing_group);
+    let mic_group = super::settings_mic::build_mic_group(Arc::clone(&state));
+    page.add(&mic_group);
 
     let theme_group = adw::PreferencesGroup::builder().title("Appearance").build();
 
