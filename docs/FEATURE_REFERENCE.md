@@ -458,6 +458,8 @@ _These controls appear only when auto-gain is enabled._
 
 > **Note:** If mic passthrough is already active, changing the source restarts it with the new source.
 
+> **Auto-detect behavior:** `Auto-detect (Default)` prefers a real microphone or a recognised mic-enhancement chain (EasyEffects, NoiseTorch, RNNoise). It deliberately skips PipeWire null-sink sources used for loopback or screenshare — for example Vencord/Discord "Share Sound", OBS virtual audio, or a manual virtual cable — because those carry application audio, not your voice. Such a source still appears in the dropdown and can be selected explicitly if you really want it.
+
 ---
 
 ### General → Passthrough Status

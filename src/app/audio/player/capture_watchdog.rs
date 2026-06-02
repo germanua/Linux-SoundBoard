@@ -180,6 +180,7 @@ mod tests {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_null_sink_backed: false,
         }
     }
 

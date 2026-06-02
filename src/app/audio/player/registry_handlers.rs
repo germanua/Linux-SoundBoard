@@ -46,6 +46,12 @@ pub(super) fn source_from_global(
         props.get(*pw::keys::DEVICE_API),
         Some("alsa") | Some("bluez5") | Some("v4l2") | Some("oss")
     );
+    // A PipeWire null sink exposed as a virtual source (Vencord/Discord
+    // screenshare, OBS virtual audio, manual virtual cables). These carry
+    // application audio, not a microphone — source_routing excludes them from
+    // mic auto-detect. Read the structural factory name rather than matching any
+    // device name.
+    let is_null_sink_backed = props.get(*pw::keys::FACTORY_NAME) == Some("support.null-audio-sink");
 
     Some(SourceDescriptor {
         id: global.id,
@@ -54,6 +60,7 @@ pub(super) fn source_from_global(
         is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
         is_virtual,
         is_hardware_backed,
+        is_null_sink_backed,
         priority_session,
         node_name,
         display_name,
@@ -254,6 +261,7 @@ mod tests {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: !is_monitor,
+            is_null_sink_backed: false,
         }
     }
 

@@ -139,9 +139,11 @@ pub(super) fn resolve_capture_target_from_default(
 // mics (alsa_input.…) AND virtual processor sources (easyeffects_source,
 // noisetorch, …) — what they share is "user voice flowing IN to Soundboard".
 fn is_upstream_mic_source(source_name: &str, sources: &HashMap<u32, SourceDescriptor>) -> bool {
-    sources
-        .values()
-        .any(|candidate| candidate.node_name == source_name && upstream_source_allowed(candidate))
+    sources.values().any(|candidate| {
+        candidate.node_name == source_name
+            && upstream_source_allowed(candidate)
+            && !is_loopback_sink(candidate)
+    })
 }
 
 pub(super) fn best_upstream_mic_source_name(
@@ -149,7 +151,7 @@ pub(super) fn best_upstream_mic_source_name(
 ) -> Option<String> {
     sources
         .values()
-        .filter(|candidate| upstream_source_allowed(candidate))
+        .filter(|candidate| upstream_source_allowed(candidate) && !is_loopback_sink(candidate))
         .max_by(|left, right| {
             enhancement_source_score(left)
                 .cmp(&enhancement_source_score(right))
@@ -184,6 +186,13 @@ fn upstream_source_allowed(source: &SourceDescriptor) -> bool {
 // any physical mic. For a physical mic to win against an enhancement source, ALL
 // THREE signals would have to disagree — essentially impossible in practice.
 fn enhancement_source_score(source: &SourceDescriptor) -> u8 {
+    // A null-sink loopback source (screenshare/virtual cable) is not a mic
+    // enhancement chain; never let it out-score a real mic. Defensive — auto-detect
+    // already filters these out via is_loopback_sink before scoring.
+    if is_loopback_sink(source) {
+        return 0;
+    }
+
     let signal_a = !source.is_hardware_backed;
     let signal_b = source.is_virtual;
 
@@ -209,6 +218,17 @@ fn name_looks_like_enhancement_source(name: &str) -> bool {
     ENHANCEMENT_SOURCE_PATTERNS
         .iter()
         .any(|needle| name.contains(needle))
+}
+
+// A PipeWire null sink (loopback/aggregation target) that does NOT also name-match
+// a known enhancement app. Null sinks carry application audio, not a mic
+// (Vencord/Discord screenshare, OBS virtual audio, virtual cables), so they are
+// excluded from mic auto-detect. A null sink whose name DOES match an enhancement
+// app (Signal C) is still trusted and NOT excluded — the user's setup wins.
+fn is_loopback_sink(source: &SourceDescriptor) -> bool {
+    source.is_null_sink_backed
+        && !name_looks_like_enhancement_source(&source.node_name)
+        && !name_looks_like_enhancement_source(&source.display_name)
 }
 
 pub(super) fn restore_default_source(state: &mut LoopState) -> Result<(), EngineError> {

@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mic auto-detect selecting a screenshare source:** `Auto-detect (Default)` no longer picks a PipeWire null-sink source — Vencord/Discord screenshare, OBS virtual audio, or a manual virtual cable — as the microphone when no enhancement chain is running.  Null sinks (`factory.name = support.null-audio-sink`) are loopback targets fed by application audio, never a microphone, so they are excluded from auto-detect.  Explicit dropdown selection is unchanged, and a null sink whose node name matches a known enhancement app (e.g. NoiseTorch) is still trusted.
+
 ## [2.0.0] - 2026-05-09
 
 ### Added

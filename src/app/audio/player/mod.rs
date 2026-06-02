@@ -166,6 +166,12 @@ struct SourceDescriptor {
     // loopbacks, filter chains) never have device.api set. This is set by the
     // device factory, not user-editable in normal configs — structurally reliable.
     is_hardware_backed: bool,
+    // True when factory.name == "support.null-audio-sink" — a PipeWire null sink.
+    // Null sinks are loopback/aggregation targets fed by application audio
+    // (Vencord/Discord screenshare, OBS virtual audio, virtual cables), never a
+    // microphone. Excluded from mic auto-detect unless the node also name-matches
+    // a known enhancement app (see source_routing::is_loopback_sink).
+    is_null_sink_backed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
