@@ -77,7 +77,7 @@ impl SoundListInner {
             });
         }
 
-        let column = ColumnViewColumn::new(Some("#"), Some(factory));
+        let column = ColumnViewColumn::new(None, Some(factory));
         column.set_fixed_width(56);
         column
     }

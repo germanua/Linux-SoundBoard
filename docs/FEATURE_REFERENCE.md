@@ -22,7 +22,7 @@
 
 ### Sound List
 
-The sound list is the primary library view on the right side of the window. It displays columns: `#`, `NAME`, `DURATION`, and `HOTKEY`.
+The sound list is the primary library view on the right side of the window. It displays an unlabeled row-number column plus `NAME`, `DURATION`, and `HOTKEY`.
 
 **What you can do:**
 
@@ -442,8 +442,8 @@ _These controls appear only when auto-gain is enabled._
 
 - **Trigger:** Choose a routing mode from the dropdown
 - **Options:**
-  - `Default — Soundboard is the system mic (recommended)` — the soundboard claims the system default mic so recording apps use it automatically
-  - `Manual — I'll pick the default mic myself` — the soundboard never changes the system default
+  - `Default (recommended)` — the soundboard claims the system default mic so recording apps use it automatically
+  - `Manual` — the soundboard never changes the system default
 - **What it does:** Controls whether the soundboard sets itself as the default audio input device
 
 > **Note:** Switching modes takes effect immediately. A confirmation dialog may appear when changing to Default mode.
