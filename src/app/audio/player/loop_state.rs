@@ -253,7 +253,6 @@ mod tests {
             is_our_virtual_mic: is_ours,
             is_virtual: is_ours,
             is_hardware_backed: !is_monitor && !is_ours,
-            is_null_sink_backed: false,
         }
     }
 
@@ -324,7 +323,6 @@ mod tests {
                     is_our_virtual_mic: false,
                     is_virtual: false,
                     is_hardware_backed: true,
-                    is_null_sink_backed: false,
                 },
             );
         }

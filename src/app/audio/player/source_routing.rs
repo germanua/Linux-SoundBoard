@@ -111,11 +111,12 @@ pub(super) fn resolve_capture_target_from_default(
             .map(|candidate| candidate.node_name.clone());
     }
 
-    // When no explicit source is set, let best_upstream_mic_source_name pick —
-    // it ranks enhancement processors (EasyEffects, NoiseTorch, RNNoise, …) above
-    // raw physical mics via enhancement_source_score. Checking default_source /
-    // previous_default_source_name first would return the raw mic even when an
-    // enhancement source is available, bypassing the user's audio processing chain.
+    // When no explicit source is set, let best_upstream_mic_source_name pick — it
+    // ranks recognised enhancement chains (EasyEffects, NoiseTorch, RNNoise, …)
+    // above raw hardware mics so a deliberately-deployed processed-mic feed wins.
+    // Checking default_source / previous_default_source_name first would return the
+    // raw mic even when an enhancement chain is available, bypassing the user's
+    // audio processing.
     if let Some(best) = best_upstream_mic_source_name(&state.sources) {
         return Some(best);
     }
@@ -134,27 +135,36 @@ pub(super) fn resolve_capture_target_from_default(
         .filter(|source_name| is_upstream_mic_source(source_name, &state.sources))
 }
 
-// True when `source_name` resolves to a tracked Audio/Source that is a valid
-// upstream mic for Soundboard's capture stream. "Upstream" covers BOTH physical
-// mics (alsa_input.…) AND virtual processor sources (easyeffects_source,
-// noisetorch, …) — what they share is "user voice flowing IN to Soundboard".
+// True when `source_name` resolves to a tracked Audio/Source that auto-detect may
+// fall back to (a recognised enhancement chain or a real hardware mic). Used only
+// for the default-source / previous-default fallback paths — it must not resurrect
+// a screenshare or other ineligible virtual source the ranking already rejected.
 fn is_upstream_mic_source(source_name: &str, sources: &HashMap<u32, SourceDescriptor>) -> bool {
-    sources.values().any(|candidate| {
-        candidate.node_name == source_name
-            && upstream_source_allowed(candidate)
-            && !is_loopback_sink(candidate)
-    })
+    sources
+        .values()
+        .any(|candidate| candidate.node_name == source_name && auto_detect_eligible(candidate))
 }
 
+// Pick the best source for AUTO-detect. Only two kinds of source are ever chosen
+// automatically: a recognised mic-enhancement chain (EasyEffects, NoiseTorch,
+// RNNoise — preferred, since the user deliberately deployed it to process their
+// mic) and a real hardware microphone. Everything else — screenshare null sinks
+// (Vencord/Discord), OBS virtual audio, loopback/virtual cables, unnamed custom
+// virtual sources — is reachable only by EXPLICIT selection, never auto-picked.
+//
+// This relies solely on properties PipeWire delivers in the registry `global`
+// event: the node name (for enhancement matching) and device.id (for hardware
+// detection). device.api and factory.name are NOT available there, only in the
+// bound node info, so they must not be used for auto-detect decisions.
 pub(super) fn best_upstream_mic_source_name(
     sources: &HashMap<u32, SourceDescriptor>,
 ) -> Option<String> {
     sources
         .values()
-        .filter(|candidate| upstream_source_allowed(candidate) && !is_loopback_sink(candidate))
+        .filter(|candidate| auto_detect_eligible(candidate))
         .max_by(|left, right| {
-            enhancement_source_score(left)
-                .cmp(&enhancement_source_score(right))
+            auto_detect_rank(left)
+                .cmp(&auto_detect_rank(right))
                 .then_with(|| left.priority_session.cmp(&right.priority_session))
                 .then_with(|| left.display_name.cmp(&right.display_name))
                 .then_with(|| left.node_name.cmp(&right.node_name))
@@ -164,53 +174,34 @@ pub(super) fn best_upstream_mic_source_name(
 }
 
 // Excludes monitor sources (sink monitors aren't real mics) and Soundboard's
-// own virtual mic (would create a feedback loop).
+// own virtual mic (would create a feedback loop). Used for EXPLICIT selection —
+// the user may deliberately pick any non-monitor, non-own source.
 fn upstream_source_allowed(source: &SourceDescriptor) -> bool {
     !source.is_monitor && !source.is_our_virtual_mic
 }
 
-// Score a source's likelihood of being a user-deployed mic enhancement chain.
-// Three independent signals are combined additively so misconfiguration of any
-// one signal still leaves the other two to reach the correct decision:
-//
-//   Signal A (structural):     no hardware device.api set
-//                               (PipeWire's device factory sets this on alsa/bluez5/v4l2
-//                                sources; software null-sinks/loopbacks/filter-chains
-//                                never have it. Not user-editable in normal configs.)
-//   Signal B (class):          media.class == "Audio/Source/Virtual"
-//                               (PipeWire-standard. Configurable in some modules.)
-//   Signal C (name fallback):  matches a known enhancement-app name
-//                               (last-resort backup for legacy tools.)
-//
-// Score range 0..=3. A score-0 source is a clear physical mic; ≥1 is preferred over
-// any physical mic. For a physical mic to win against an enhancement source, ALL
-// THREE signals would have to disagree — essentially impossible in practice.
-fn enhancement_source_score(source: &SourceDescriptor) -> u8 {
-    // A null-sink loopback source (screenshare/virtual cable) is not a mic
-    // enhancement chain; never let it out-score a real mic. Defensive — auto-detect
-    // already filters these out via is_loopback_sink before scoring.
-    if is_loopback_sink(source) {
-        return 0;
+// True when a source may be chosen by AUTO-detect: a recognised enhancement chain
+// or a real hardware mic, and not a monitor / our own virtual mic.
+fn auto_detect_eligible(source: &SourceDescriptor) -> bool {
+    upstream_source_allowed(source)
+        && (is_named_enhancement_source(source) || source.is_hardware_backed)
+}
+
+// Rank among auto-detect-eligible sources: a recognised enhancement chain
+// outranks a raw hardware mic so a deliberately-deployed processed-mic feed wins.
+// (Only meaningful for sources that already passed auto_detect_eligible.)
+fn auto_detect_rank(source: &SourceDescriptor) -> u8 {
+    if is_named_enhancement_source(source) {
+        2
+    } else {
+        1
     }
+}
 
-    let signal_a = !source.is_hardware_backed;
-    let signal_b = source.is_virtual;
-
-    let mut score: u8 = match (signal_a, signal_b) {
-        (true, true) => 2,
-        (true, false) | (false, true) => 1,
-        (false, false) => 0,
-    };
-
-    let node_name = source.node_name.to_ascii_lowercase();
-    let display_name = source.display_name.to_ascii_lowercase();
-    let name_match = ENHANCEMENT_SOURCE_PATTERNS
-        .iter()
-        .any(|needle| node_name.contains(needle) || display_name.contains(needle));
-    if name_match {
-        score = score.saturating_add(1);
-    }
-    score
+// True when the node name or description matches a known mic-enhancement app.
+fn is_named_enhancement_source(source: &SourceDescriptor) -> bool {
+    name_looks_like_enhancement_source(&source.node_name)
+        || name_looks_like_enhancement_source(&source.display_name)
 }
 
 fn name_looks_like_enhancement_source(name: &str) -> bool {
@@ -218,17 +209,6 @@ fn name_looks_like_enhancement_source(name: &str) -> bool {
     ENHANCEMENT_SOURCE_PATTERNS
         .iter()
         .any(|needle| name.contains(needle))
-}
-
-// A PipeWire null sink (loopback/aggregation target) that does NOT also name-match
-// a known enhancement app. Null sinks carry application audio, not a mic
-// (Vencord/Discord screenshare, OBS virtual audio, virtual cables), so they are
-// excluded from mic auto-detect. A null sink whose name DOES match an enhancement
-// app (Signal C) is still trusted and NOT excluded — the user's setup wins.
-fn is_loopback_sink(source: &SourceDescriptor) -> bool {
-    source.is_null_sink_backed
-        && !name_looks_like_enhancement_source(&source.node_name)
-        && !name_looks_like_enhancement_source(&source.display_name)
 }
 
 pub(super) fn restore_default_source(state: &mut LoopState) -> Result<(), EngineError> {
