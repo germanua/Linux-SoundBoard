@@ -262,6 +262,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
             record_state_phase("shutdown:close_request", &state_close);
             state_close.player.stop_all();
             state_close.player.shutdown();
+            state_close.hotkeys.lock().shutdown();
             if let Err(e) = crate::diagnostics::write_memory_report() {
                 log::warn!("Failed to write memory report: {}", e);
             }

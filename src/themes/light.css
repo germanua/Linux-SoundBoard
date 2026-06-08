@@ -16,6 +16,22 @@ entry {
   color: #332b1f;
 }
 
+tooltip,
+tooltip.background {
+  background-color: #fffdfb;
+  background-image: none;
+  color: #332b1f;
+  border: 1px solid rgba(168, 141, 82, 0.42);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(51, 43, 31, 0.18);
+}
+
+tooltip label,
+tooltip.background label {
+  color: #332b1f;
+  text-shadow: none;
+}
+
 .sound-row-selected {
   background-color: rgba(168, 141, 82, 0.25);
 }

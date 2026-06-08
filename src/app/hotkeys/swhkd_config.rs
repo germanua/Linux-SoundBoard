@@ -32,17 +32,15 @@ impl SwhkdConfig {
     }
 
     fn get_config_path() -> Result<PathBuf, HotkeyError> {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("XDG_CONFIG_HOME"))
-            .map_err(|_| HotkeyError::Io("Could not determine home directory".to_string()))?;
-
         let config_dir = if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             PathBuf::from(xdg)
         } else {
+            let home = std::env::var("HOME")
+                .map_err(|_| HotkeyError::Io("Could not determine home directory".to_string()))?;
             PathBuf::from(home).join(".config")
         };
 
-        Ok(config_dir.join("swhkd").join("swhkdrc"))
+        Ok(config_dir.join("linux-soundboard").join("swhkdrc"))
     }
 
     pub fn add_hotkey(&mut self, sound_id: &str, hotkey: &str) -> Result<(), HotkeyError> {
