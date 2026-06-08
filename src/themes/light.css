@@ -116,7 +116,7 @@ headerbar:backdrop,
 }
 
 .transport-timeline {
-  min-width: 320px;
+  min-width: 120px;
 }
 
 .transport-track-name {
@@ -445,6 +445,77 @@ columnview header button:checked {
 
 .settings-overlay-content {
   min-height: 0;
+}
+
+.dialog-host-panel {
+  min-width: 280px;
+}
+
+.dialog-host-header {
+  min-height: 44px;
+}
+
+.dialog-host-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #332b1f;
+}
+
+.dialog-host-content {
+  padding: 16px;
+}
+
+.dialog-host-message {
+  color: #332b1f;
+}
+
+.dialog-host-actions {
+  padding: 0 16px 16px;
+}
+
+.dialog-host-action-btn {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+}
+
+.dialog-host-input {
+  min-height: 36px;
+}
+
+.dialog-host-path-scroll {
+  border-radius: 8px;
+}
+
+/* Right-click context menus (tab / sound popovers). */
+.lsb-context-menu > contents {
+  background-color: #fffdfb;
+  border: 1px solid rgba(120, 93, 41, 0.35);
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(51, 43, 31, 0.28);
+  padding: 4px;
+  color: #332b1f;
+}
+
+.lsb-context-menu modelbutton {
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: #332b1f;
+}
+
+.lsb-context-menu modelbutton:hover {
+  background-color: rgba(168, 141, 82, 0.18);
+}
+
+.lsb-context-menu modelbutton:active {
+  background-color: rgba(168, 141, 82, 0.26);
+}
+
+.lsb-context-menu separator {
+  min-height: 1px;
+  margin: 4px 6px;
+  background-color: rgba(168, 141, 82, 0.22);
 }
 
 .settings-overlay-switcher {

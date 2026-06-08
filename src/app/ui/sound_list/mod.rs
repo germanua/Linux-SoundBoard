@@ -13,6 +13,8 @@ use crate::app_meta::GENERAL_TAB_ID;
 use crate::app_state::AppState;
 use crate::config::{ListStyle, Sound};
 
+use super::dialogs::DialogHost;
+
 mod columns;
 mod interaction;
 mod model;
@@ -56,6 +58,7 @@ pub(super) struct SoundListInner {
     pub(super) invalid_ids: Arc<Mutex<HashSet<String>>>,
     pub(super) active_sound_id: Arc<Mutex<Option<String>>>,
     pub(super) state: Arc<AppState>,
+    pub(super) dialog_host: DialogHost,
     pub(super) on_library_changed: RefCell<Option<Box<dyn Fn() + 'static>>>,
     pub(super) visible_row_indices: RefCell<HashMap<String, u32>>,
 }
@@ -73,7 +76,7 @@ unsafe impl Send for SoundListInner {}
 unsafe impl Sync for SoundListInner {}
 
 impl SoundList {
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new(state: Arc<AppState>, dialog_host: DialogHost) -> Self {
         let store = gio::ListStore::new::<BoxedAnyObject>();
         let selection = MultiSelection::new(Some(store.clone()));
         let col_view = ColumnView::new(Some(selection.clone()));
@@ -111,6 +114,7 @@ impl SoundList {
             invalid_ids: Arc::new(Mutex::new(HashSet::new())),
             active_sound_id: Arc::new(Mutex::new(None)),
             state,
+            dialog_host,
             on_library_changed: RefCell::new(None),
             visible_row_indices: RefCell::new(HashMap::new()),
         });

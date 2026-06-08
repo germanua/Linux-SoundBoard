@@ -80,6 +80,12 @@ struct TransportInner {
     refresh_btn: Button,
     search_entry: SearchEntry,
     settings_btn: Button,
+    sidebar_toggle_btn: Button,
+    row1: GtkBox,
+    row2: GtkBox,
+    audio_group: GtkBox,
+    utility_group: GtkBox,
+    compact: Cell<bool>,
     active_track: RefCell<Option<ActiveTrack>>,
     scrub_interaction: RefCell<ScrubInteraction>,
     scrub_commit_timeout: RefCell<Option<glib::SourceId>>,
@@ -102,5 +108,40 @@ struct TransportInner {
 impl TransportBar {
     pub fn widget(&self) -> &Widget {
         self.inner.widget.upcast_ref()
+    }
+
+    /// Button that reveals the collapsed sidebar; hidden unless the layout is collapsed.
+    pub fn sidebar_toggle_button(&self) -> &Button {
+        &self.inner.sidebar_toggle_btn
+    }
+
+    /// Switch between the wide single-row layout and the compact two-row layout.
+    ///
+    /// In compact mode the audio and utility clusters move onto a second row so the
+    /// bar fits a narrow window without clipping.
+    pub fn set_compact(&self, compact: bool) {
+        if self.inner.compact.get() == compact {
+            return;
+        }
+        self.inner.compact.set(compact);
+
+        let row1 = &self.inner.row1;
+        let row2 = &self.inner.row2;
+        let audio = &self.inner.audio_group;
+        let utility = &self.inner.utility_group;
+
+        if compact {
+            row1.remove(audio);
+            row1.remove(utility);
+            row2.append(audio);
+            row2.append(utility);
+            row2.set_visible(true);
+        } else {
+            row2.remove(audio);
+            row2.remove(utility);
+            row1.append(audio);
+            row1.append(utility);
+            row2.set_visible(false);
+        }
     }
 }

@@ -12,6 +12,7 @@ use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{ListStyle, Theme};
 
+use super::dialogs::DialogHost;
 use super::icons;
 use super::settings_folders::{
     rebuild_sound_folder_rows, schedule_rebuild_sound_folder_rows, FolderRowRefs, RebuildPending,
@@ -34,6 +35,7 @@ fn set_appearance_row_selected(row: &adw::ActionRow, selected: bool) {
 pub fn build_settings_overlay(
     parent: &Window,
     state: Arc<AppState>,
+    dialog_host: DialogHost,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
 ) -> gtk4::Overlay {
@@ -55,9 +57,9 @@ pub fn build_settings_overlay(
 
     let panel = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     panel.add_css_class("settings-overlay-panel");
-    panel.set_halign(gtk4::Align::Center);
+    panel.set_halign(gtk4::Align::Fill);
     panel.set_valign(gtk4::Align::Center);
-    panel.set_size_request(600, 700);
+    panel.set_hexpand(true);
 
     let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
     header.add_css_class("settings-overlay-header");
@@ -102,6 +104,7 @@ pub fn build_settings_overlay(
         &stack,
         Arc::clone(&state),
         parent,
+        dialog_host,
         on_library_changed,
         on_list_style_changed,
         overlay_widget.downgrade(),
@@ -124,7 +127,22 @@ pub fn build_settings_overlay(
         });
     }
     general_tab.set_active(true);
-    overlay.add_overlay(&panel);
+
+    // Keep the settings panel adaptive: cap its width on wide windows and let it shrink
+    // with side margins on narrow ones, instead of forcing a fixed 600x700 size.
+    let panel_clamp = adw::Clamp::builder()
+        .maximum_size(640)
+        .tightening_threshold(520)
+        .hexpand(true)
+        .halign(gtk4::Align::Fill)
+        .valign(gtk4::Align::Center)
+        .margin_start(24)
+        .margin_end(24)
+        .margin_top(24)
+        .margin_bottom(24)
+        .child(&panel)
+        .build();
+    overlay.add_overlay(&panel_clamp);
 
     {
         let overlay = overlay.clone();
@@ -176,6 +194,7 @@ fn build_settings_content(
     stack: &gtk4::Stack,
     state: Arc<AppState>,
     parent: &Window,
+    dialog_host: DialogHost,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
     visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
@@ -189,30 +208,54 @@ fn build_settings_content(
         parent,
         on_library_changed,
         on_list_style_changed,
-        visibility_weak,
+        visibility_weak.clone(),
     );
     let general_scroll = gtk4::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(600)
         .build();
     general_scroll.set_child(Some(&general_page));
     let general_stack_page = stack.add_titled(&general_scroll, Some("general"), "General");
     general_stack_page.set_icon_name(icons::name(icons::SETTINGS));
 
-    let hotkeys_page = settings_hotkeys::build_hotkeys_page(Arc::clone(&state));
+    let hotkeys_page = settings_hotkeys::build_hotkeys_page(Arc::clone(&state), dialog_host);
     let hotkeys_scroll = gtk4::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(600)
         .build();
     hotkeys_scroll.set_child(Some(&hotkeys_page));
     let hotkeys_stack_page = stack.add_titled(&hotkeys_scroll, Some("hotkeys"), "Control Hotkeys");
     hotkeys_stack_page.set_icon_name(icons::name(icons::KEYBOARD));
 
     content.append(stack);
+
+    // Cap the scrollable content height to the available window height so the panel is
+    // content-sized when it fits and scrolls (rather than overflowing) when the window
+    // is short. Tracked live via a tick callback on the mapped content.
+    content.add_tick_callback(move |_content, _clock| {
+        if let Some(overlay) = visibility_weak.upgrade() {
+            let available = overlay.height();
+            if available > 0 {
+                let max = (available - 160).max(220);
+                if general_scroll.max_content_height() != max {
+                    general_scroll.set_max_content_height(max);
+                }
+                if hotkeys_scroll.max_content_height() != max {
+                    hotkeys_scroll.set_max_content_height(max);
+                }
+            }
+        }
+        gtk4::glib::ControlFlow::Continue
+    });
+
     content
 }
 

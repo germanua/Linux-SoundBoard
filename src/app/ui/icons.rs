@@ -70,6 +70,10 @@ pub const KEYBOARD: IconPair =
     IconPair::with_fallbacks("lsb-keyboard-symbolic", &["input-keyboard-symbolic"]);
 pub const DROP_ZONE: IconPair =
     IconPair::with_fallbacks("lsb-drop-zone-symbolic", &["folder-download-symbolic"]);
+pub const SIDEBAR: IconPair = IconPair::with_fallbacks(
+    "sidebar-show-symbolic",
+    &["view-list-symbolic", "open-menu-symbolic"],
+);
 
 #[cfg(test)]
 const ALL_ICONS: &[IconPair] = &[
@@ -94,6 +98,7 @@ const ALL_ICONS: &[IconPair] = &[
     SETTINGS,
     KEYBOARD,
     DROP_ZONE,
+    SIDEBAR,
 ];
 
 thread_local! {

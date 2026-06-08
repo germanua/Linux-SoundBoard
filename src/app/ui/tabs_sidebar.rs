@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, GestureClick, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
+    Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
     SelectionMode, Widget,
 };
 
@@ -13,7 +13,7 @@ use crate::app_meta::GENERAL_TAB_ID;
 use crate::app_state::AppState;
 use crate::commands;
 
-use super::dialogs;
+use super::dialogs::DialogHost;
 use super::icons;
 use super::menu;
 use super::tab_dnd;
@@ -66,14 +66,14 @@ struct TabsInner {
     on_tab_membership_changed: RefCell<Option<TabMembershipChangedCallback>>,
     active_tab_id: Mutex<String>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
+    dialog_host: DialogHost,
 }
 
 impl TabsSidebar {
     #[allow(clippy::arc_with_non_send_sync)]
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new(state: Arc<AppState>, dialog_host: DialogHost) -> Self {
         let vbox = GtkBox::new(Orientation::Vertical, 0);
         vbox.add_css_class("tabs-sidebar");
-        vbox.set_width_request(196);
 
         let header = GtkBox::new(Orientation::Horizontal, 4);
         header.set_margin_start(8);
@@ -116,6 +116,7 @@ impl TabsSidebar {
             on_tab_membership_changed: RefCell::new(None),
             active_tab_id: Mutex::new(GENERAL_TAB_ID.to_string()),
             toast_sender: Mutex::new(None),
+            dialog_host,
         });
 
         {
@@ -136,11 +137,11 @@ impl TabsSidebar {
 
         {
             let inner_weak = Arc::downgrade(&inner);
-            new_tab_btn.connect_clicked(move |btn| {
+            new_tab_btn.connect_clicked(move |_| {
                 let Some(inner_btn) = inner_weak.upgrade() else {
                     return;
                 };
-                inner_btn.show_new_tab_dialog(btn);
+                inner_btn.show_new_tab_dialog();
             });
         }
 
@@ -188,17 +189,9 @@ impl TabsInner {
         });
     }
 
-    fn show_new_tab_dialog(self: &Arc<Self>, button: &Button) {
-        let Some(win) = button
-            .root()
-            .and_then(|root| root.downcast::<gtk4::Window>().ok())
-        else {
-            return;
-        };
-
+    fn show_new_tab_dialog(self: &Arc<Self>) {
         let inner_weak = Arc::downgrade(self);
-        dialogs::show_input(
-            &win,
+        self.dialog_host.show_input(
             "New Tab",
             "Enter a name for the new tab:",
             "",
@@ -673,13 +666,6 @@ impl TabsInner {
         tab_id: &str,
         tab_name: &str,
     ) {
-        let Some(win) = widget
-            .root()
-            .and_then(|root| root.downcast::<gtk4::Window>().ok())
-        else {
-            return;
-        };
-
         let menu_model = gio::Menu::new();
         menu_model.append(Some("Rename Tab"), Some("tab-ctx.rename"));
         menu_model.append(Some("Delete Tab"), Some("tab-ctx.delete"));
@@ -688,9 +674,9 @@ impl TabsInner {
 
         {
             let inner_weak = Arc::downgrade(self);
-            let win = win.clone();
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("rename", None);
             action.connect_activate(move |_, _| {
                 let Some(inner_menu) = inner_weak.upgrade() else {
@@ -698,8 +684,7 @@ impl TabsInner {
                 };
                 let inner_confirm_weak = Arc::downgrade(&inner_menu);
                 let tab_id = tab_id.clone();
-                dialogs::show_input(
-                    &win,
+                dialog_host.show_input(
                     "Rename Tab",
                     "Enter a new name:",
                     &tab_name,
@@ -724,9 +709,9 @@ impl TabsInner {
 
         {
             let inner_weak = Arc::downgrade(self);
-            let win = win.clone();
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("delete", None);
             action.connect_activate(move |_, _| {
                 let Some(inner_menu) = inner_weak.upgrade() else {
@@ -735,7 +720,7 @@ impl TabsInner {
                 let inner_confirm_weak = Arc::downgrade(&inner_menu);
                 let tab_id = tab_id.clone();
                 let message = format!("Delete tab '{tab_name}'? Sounds will not be removed.");
-                dialogs::show_confirm(&win, "Delete Tab", &message, "Delete", move || {
+                dialog_host.show_confirm("Delete Tab", &message, "Delete", move || {
                     let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
                         return;
                     };

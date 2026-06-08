@@ -89,8 +89,7 @@ impl SoundListInner {
             let sound_id_remove = sound.id.clone();
             let win_locate = win.clone();
 
-            crate::ui::dialogs::show_missing_file(
-                &win,
+            inner.dialog_host.show_missing_file(
                 &sound_name,
                 &sound_path,
                 move || {
@@ -393,13 +392,6 @@ impl SoundListInner {
         y: f64,
         sound: crate::config::Sound,
     ) {
-        let Some(win) = widget
-            .root()
-            .and_then(|root| root.downcast::<gtk4::Window>().ok())
-        else {
-            return;
-        };
-
         let active_tab = self.active_tab_id.lock().clone();
         let tabs = self.state.config.lock().tabs.clone();
 
@@ -475,14 +467,13 @@ impl SoundListInner {
             let inner = Arc::clone(self);
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
-            let win = win.clone();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("rename", None);
             action.connect_activate(move |_, _| {
                 let inner_confirm = Arc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
-                crate::ui::dialogs::show_input(
-                    &win,
+                dialog_host.show_input(
                     "Rename Sound",
                     "Enter a new name:",
                     &sound.name,
@@ -504,18 +495,17 @@ impl SoundListInner {
             let inner = Arc::clone(self);
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
-            let win = win.clone();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("set-hotkey", None);
             action.connect_activate(move |_, _| {
                 let inner_confirm = Arc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
-                let error_window = win.downgrade();
+                let dialog_host_weak = dialog_host.downgrade();
                 let config_for_capture = Arc::clone(&state.config);
                 let hotkeys_for_capture = Arc::clone(&state.hotkeys);
                 let sound_id_for_capture = sound.id.clone();
-                crate::ui::dialogs::show_hotkey_capture(
-                    &win,
+                dialog_host.show_hotkey_capture(
                     sound.hotkey.as_deref(),
                     move |hotkey| {
                         {
@@ -543,21 +533,16 @@ impl SoundListInner {
                             log::warn!("Set hotkey failed: {e}");
                             let detail = e.to_string();
                             let message = crate::hotkeys::format_hotkey_error(&detail);
-                            if let Some(error_window) = error_window.upgrade() {
+                            if let Some(dialog_host) = dialog_host_weak.upgrade() {
                                 if crate::hotkeys::should_offer_swhkd_install(&detail) {
-                                    crate::ui::dialogs::show_hotkey_error_with_install_option(
-                                        &error_window,
+                                    dialog_host.show_hotkey_error_with_install_option(
                                         "Failed to Set Hotkey",
                                         &message,
                                         Arc::clone(&state_confirm.config),
                                         Arc::clone(&state_confirm.hotkeys),
                                     );
                                 } else {
-                                    crate::ui::dialogs::show_error(
-                                        &error_window,
-                                        "Failed to Set Hotkey",
-                                        &message,
-                                    );
+                                    dialog_host.show_error("Failed to Set Hotkey", &message);
                                 }
                             }
                         }
@@ -569,11 +554,11 @@ impl SoundListInner {
 
         {
             let sound = sound.clone();
-            let win = win.clone();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("check-path", None);
             action.connect_activate(move |_, _| {
                 let path = sound.source_path.as_deref().unwrap_or(&sound.path);
-                crate::ui::dialogs::show_path_info(&win, &sound.name, path);
+                dialog_host.show_path_info(&sound.name, path);
             });
             action_group.add_action(&action);
         }
@@ -582,12 +567,12 @@ impl SoundListInner {
             let inner = Arc::clone(self);
             let state = Arc::clone(&self.state);
             let target_ids = target_ids.clone();
-            let win = win.clone();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("refine-loudness", None);
             action.connect_activate(move |_, _| {
                 for sound_id in &target_ids {
                     let inner_done = Arc::clone(&inner);
-                    let win_done = win.downgrade();
+                    let dialog_host = dialog_host.downgrade();
                     let sound_id_for_err = sound_id.clone();
                     if let Err(e) = commands::analyze_sound_loudness_async(
                         sound_id.clone(),
@@ -600,12 +585,9 @@ impl SoundListInner {
                                     sound_id_for_err,
                                     err
                                 );
-                                if let Some(win_done) = win_done.upgrade() {
-                                    crate::ui::dialogs::show_error(
-                                        &win_done,
-                                        "Loudness Refinement Failed",
-                                        &err.to_string(),
-                                    );
+                                if let Some(dialog_host) = dialog_host.upgrade() {
+                                    dialog_host
+                                        .show_error("Loudness Refinement Failed", &err.to_string());
                                 }
                             }
                         },
@@ -675,7 +657,7 @@ impl SoundListInner {
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
             let target_ids = target_ids.clone();
-            let win = win.clone();
+            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("delete", None);
             action.connect_activate(move |_, _| {
                 let skip_confirm = state.config.lock().settings.skip_delete_confirm;
@@ -711,13 +693,7 @@ impl SoundListInner {
                     } else {
                         format!("Delete '{}'? This cannot be undone.", sound_to_delete.name)
                     };
-                    crate::ui::dialogs::show_confirm(
-                        &win,
-                        "Delete Sound",
-                        &message,
-                        "Delete",
-                        delete_sound,
-                    );
+                    dialog_host.show_confirm("Delete Sound", &message, "Delete", delete_sound);
                 }
             });
             action_group.add_action(&action);

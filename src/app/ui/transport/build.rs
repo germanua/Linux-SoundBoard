@@ -23,11 +23,16 @@ fn apply_transport_button_size(button: &impl IsA<gtk4::Widget>) {
 impl TransportBar {
     pub fn new(state: Arc<AppState>) -> Self {
         let hbox = GtkBox::new(Orientation::Horizontal, 5);
-        hbox.add_css_class("transport-bar");
-        hbox.set_margin_start(0);
-        hbox.set_margin_end(0);
-        hbox.set_margin_top(0);
-        hbox.set_margin_bottom(0);
+        hbox.add_css_class("transport-row");
+        hbox.add_css_class("transport-row-primary");
+
+        // Reveals the sidebar when the layout is collapsed; hidden in the wide layout.
+        let sidebar_toggle_btn = icons::button(icons::SIDEBAR, "Show Tabs");
+        sidebar_toggle_btn.add_css_class("transport-btn");
+        sidebar_toggle_btn.add_css_class("transport-icon-btn");
+        sidebar_toggle_btn.set_visible(false);
+        apply_transport_button_size(&sidebar_toggle_btn);
+        hbox.append(&sidebar_toggle_btn);
 
         let playback_group = GtkBox::new(Orientation::Horizontal, 4);
         playback_group.add_css_class("transport-cluster");
@@ -285,8 +290,20 @@ impl TransportBar {
 
         hbox.append(&utility_group);
 
+        // Secondary row used only by the compact layout; the audio and utility clusters
+        // move here when the window is too narrow for a single row.
+        let row2 = GtkBox::new(Orientation::Horizontal, 5);
+        row2.add_css_class("transport-row");
+        row2.add_css_class("transport-row-secondary");
+        row2.set_visible(false);
+
+        let transport_root = GtkBox::new(Orientation::Vertical, 4);
+        transport_root.add_css_class("transport-bar");
+        transport_root.append(&hbox);
+        transport_root.append(&row2);
+
         let inner = Rc::new(TransportInner {
-            widget: hbox,
+            widget: transport_root,
             play_btn: play_btn.clone(),
             stop_btn: stop_btn.clone(),
             prev_btn: prev_btn.clone(),
@@ -307,6 +324,12 @@ impl TransportBar {
             refresh_btn: refresh_btn.clone(),
             search_entry: search_entry.clone(),
             settings_btn: settings_btn.clone(),
+            sidebar_toggle_btn: sidebar_toggle_btn.clone(),
+            row1: hbox.clone(),
+            row2: row2.clone(),
+            audio_group: audio_group.clone(),
+            utility_group: utility_group.clone(),
+            compact: Cell::new(false),
             active_track: RefCell::new(None),
             scrub_interaction: RefCell::new(ScrubInteraction::default()),
             scrub_commit_timeout: RefCell::new(None),
