@@ -1,17 +1,18 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use glib;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation, Paned};
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation};
 use libadwaita as adw;
+use libadwaita::prelude::BreakpointBinExt;
 
 use crate::app_meta::{APP_ICON_NAME, APP_TITLE};
 use crate::app_state::AppState;
 use crate::commands;
 use crate::timer_registry::TimerRegistry;
 
+use super::dialogs::DialogHost;
 use super::dnd_import;
 use super::settings;
 use super::sound_list::SoundList;
@@ -35,11 +36,12 @@ pub fn build_window(
         .icon_name(APP_ICON_NAME)
         .default_width(1400)
         .default_height(850)
-        .width_request(1100)
-        .height_request(650)
+        .width_request(520)
+        .height_request(400)
         .build();
     window.add_css_class("main-window");
 
+    let dialog_host = DialogHost::new();
     let root_box = GtkBox::new(Orientation::Vertical, 0);
 
     {
@@ -67,19 +69,16 @@ pub fn build_window(
             banner.set_button_label(Some(if can_install { "Install" } else { "Dismiss" }));
             banner.set_revealed(true);
             if can_install {
-                let window_weak = window.downgrade();
+                let dialog_host = dialog_host.clone();
                 let config = Arc::clone(&state.config);
                 let hotkeys = Arc::clone(&state.hotkeys);
                 let reason_text = reason.clone();
                 banner.connect_button_clicked(move |b| {
-                    if let Some(window) = window_weak.upgrade() {
-                        crate::ui::dialogs::prompt_swhkd_install(
-                            window.upcast_ref::<gtk4::Window>(),
-                            Arc::clone(&config),
-                            Arc::clone(&hotkeys),
-                            &reason_text,
-                        );
-                    }
+                    dialog_host.prompt_swhkd_install(
+                        Arc::clone(&config),
+                        Arc::clone(&hotkeys),
+                        &reason_text,
+                    );
                     b.set_revealed(false);
                 });
             } else {
@@ -92,16 +91,15 @@ pub fn build_window(
     let transport = TransportBar::new(Arc::clone(&state));
     root_box.append(transport.widget());
 
-    let paned = Paned::new(Orientation::Horizontal);
-    paned.set_vexpand(true);
+    let split_view = adw::OverlaySplitView::new();
+    split_view.set_vexpand(true);
+    split_view.set_min_sidebar_width(180.0);
+    split_view.set_max_sidebar_width(220.0);
 
-    let tabs = TabsSidebar::new(Arc::clone(&state));
-    paned.set_start_child(Some(tabs.widget()));
-    paned.set_position(220);
-    paned.set_shrink_start_child(false);
-    paned.set_resize_start_child(false);
+    let tabs = TabsSidebar::new(Arc::clone(&state), dialog_host.clone());
+    split_view.set_sidebar(Some(tabs.widget()));
 
-    let sound_list = SoundList::new(Arc::clone(&state));
+    let sound_list = SoundList::new(Arc::clone(&state), dialog_host.clone());
 
     {
         let transport_snapshot = transport.clone();
@@ -189,8 +187,8 @@ pub fn build_window(
         });
     }
 
-    paned.set_end_child(Some(sound_list.widget()));
-    root_box.append(&paned);
+    split_view.set_content(Some(sound_list.widget()));
+    root_box.append(&split_view);
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root_box));
@@ -218,51 +216,91 @@ pub fn build_window(
         }
     }
 
-    // `AdwApplicationWindow` does not expose `set_content`; use `set_child` here.
     let drop_overlay =
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
-    window.set_child(Some(&drop_overlay));
+
+    // Responsive layout: below a narrow width the sidebar collapses into an overlay and
+    // the transport bar reflows onto a second row. A `BreakpointBin` lets us drive adw
+    // breakpoints without switching the window away from `gtk4::ApplicationWindow`.
+    let breakpoint_bin = adw::BreakpointBin::new();
+    breakpoint_bin.set_child(Some(&drop_overlay));
+
+    let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        adw::BreakpointConditionLengthType::MaxWidth,
+        960.0,
+        adw::LengthUnit::Px,
+    ));
+    {
+        let split_view = split_view.clone();
+        let transport = transport.clone();
+        breakpoint.connect_apply(move |_| {
+            split_view.set_collapsed(true);
+            transport.set_compact(true);
+        });
+    }
+    {
+        let split_view = split_view.clone();
+        let transport = transport.clone();
+        breakpoint.connect_unapply(move |_| {
+            split_view.set_collapsed(false);
+            transport.set_compact(false);
+        });
+    }
+    breakpoint_bin.add_breakpoint(breakpoint);
+
+    // Hide the overlay sidebar while collapsed; show it inline once expanded again.
+    split_view.connect_collapsed_notify(|split_view| {
+        split_view.set_show_sidebar(!split_view.is_collapsed());
+    });
+
+    // The sidebar reveal button only appears while the sidebar is collapsed.
+    {
+        let toggle = transport.sidebar_toggle_button().clone();
+        split_view
+            .bind_property("collapsed", &toggle, "visible")
+            .sync_create()
+            .build();
+        let split_view = split_view.clone();
+        toggle.connect_clicked(move |_| {
+            let shown = split_view.property::<bool>("show-sidebar");
+            split_view.set_show_sidebar(!shown);
+        });
+    }
+
+    window.set_child(Some(&breakpoint_bin));
 
     {
-        let settings_overlay: Rc<RefCell<Option<gtk4::Overlay>>> = Rc::new(RefCell::new(None));
-        let drop_overlay = drop_overlay.clone();
-        let parent_window = window.clone();
-        let state_settings = Arc::clone(&state);
         let sl_settings = sound_list.clone();
         let tabs_settings = tabs.clone();
         let sl_style_settings = sound_list.clone();
+        let on_library_changed: Rc<dyn Fn() + 'static> = {
+            let sl_settings = sl_settings.clone();
+            let tabs_settings = tabs_settings.clone();
+            Rc::new(move || {
+                sl_settings.refresh_from_state();
+                tabs_settings.reload_tabs();
+            })
+        };
+        let on_list_style_changed: Rc<dyn Fn(String) + 'static> = {
+            let sl_style_settings = sl_style_settings.clone();
+            Rc::new(move |style| {
+                sl_style_settings.set_list_style(&style);
+            })
+        };
+
+        let settings_overlay = settings::build_settings_overlay(
+            window.upcast_ref::<gtk4::Window>(),
+            Arc::clone(&state),
+            dialog_host.clone(),
+            Some(on_library_changed),
+            Some(on_list_style_changed),
+        );
+        drop_overlay.add_overlay(&settings_overlay);
+        drop_overlay.add_overlay(dialog_host.widget());
+
         transport.connect_settings_requested(move || {
-            if settings_overlay.borrow().is_none() {
-                let on_library_changed: Rc<dyn Fn() + 'static> = {
-                    let sl_settings = sl_settings.clone();
-                    let tabs_settings = tabs_settings.clone();
-                    Rc::new(move || {
-                        sl_settings.refresh_from_state();
-                        tabs_settings.reload_tabs();
-                    })
-                };
-                let on_list_style_changed: Rc<dyn Fn(String) + 'static> = {
-                    let sl_style_settings = sl_style_settings.clone();
-                    Rc::new(move |style| {
-                        sl_style_settings.set_list_style(&style);
-                    })
-                };
-
-                let overlay = settings::build_settings_overlay(
-                    parent_window.upcast_ref::<gtk4::Window>(),
-                    Arc::clone(&state_settings),
-                    Some(on_library_changed),
-                    Some(on_list_style_changed),
-                );
-                drop_overlay.add_overlay(&overlay);
-                *settings_overlay.borrow_mut() = Some(overlay);
-                log::debug!("Settings overlay built lazily");
-            }
-
-            if let Some(overlay) = settings_overlay.borrow().as_ref() {
-                overlay.set_visible(true);
-                overlay.grab_focus();
-            }
+            settings_overlay.set_visible(true);
+            settings_overlay.grab_focus();
         });
     }
 
