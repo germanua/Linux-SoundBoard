@@ -226,6 +226,8 @@ fn build_playback_positions(registry: &HashMap<String, PlaybackSnapshot>) -> Vec
 enum AudioPlayerBackend {
     Local(LocalAudioPlayer),
     Remote(RemoteAudioPlayer),
+    #[cfg(test)]
+    Noop(NoopAudioPlayer),
 }
 
 struct LocalAudioPlayer {
@@ -238,6 +240,11 @@ struct RemoteAudioPlayer {
     snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
     stop_poll: std::sync::Arc<AtomicBool>,
     poll_handle: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+#[cfg(test)]
+struct NoopAudioPlayer {
+    snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
 }
 
 pub struct AudioPlayer {
@@ -307,6 +314,15 @@ impl AudioPlayer {
         Self::new_with_config_and_audio_backend(config, AudioBackendKind::PipeWire)
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test_noop() -> Self {
+        Self {
+            backend: AudioPlayerBackend::Noop(NoopAudioPlayer {
+                snapshot: std::sync::Arc::new(RwLock::new(PlayerSnapshot::default())),
+            }),
+        }
+    }
+
     pub fn new_with_config_and_audio_backend(
         config: &crate::config::Config,
         audio_backend: AudioBackendKind,
@@ -332,6 +348,8 @@ impl AudioPlayer {
         match &self.backend {
             AudioPlayerBackend::Local(local) => local.snapshot.read().clone(),
             AudioPlayerBackend::Remote(remote) => remote.snapshot.read().clone(),
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(noop) => noop.snapshot.read().clone(),
         }
     }
 
@@ -347,6 +365,8 @@ impl AudioPlayer {
                 let _ =
                     remote_ok(crate::audio::engine_ipc::EngineRequest::SetLocalVolume { volume });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -359,6 +379,8 @@ impl AudioPlayer {
             AudioPlayerBackend::Remote(_) => {
                 let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicVolume { volume });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -374,6 +396,8 @@ impl AudioPlayer {
                     crate::audio::engine_ipc::EngineRequest::SetAutoGainEnabled { enabled },
                 );
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -389,6 +413,8 @@ impl AudioPlayer {
                     target_lufs,
                 });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -403,6 +429,8 @@ impl AudioPlayer {
                 let _ =
                     remote_ok(crate::audio::engine_ipc::EngineRequest::SetAutoGainMode { mode });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -418,6 +446,8 @@ impl AudioPlayer {
                     crate::audio::engine_ipc::EngineRequest::SetAutoGainApplyTo { apply_to },
                 );
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -446,6 +476,8 @@ impl AudioPlayer {
                     },
                 );
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -457,14 +489,21 @@ impl AudioPlayer {
             AudioPlayerBackend::Remote(_) => {
                 let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::SetLooping { enabled });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
     pub fn set_mic_passthrough(&self, enabled: bool) -> Result<(), EngineError> {
-        let AudioPlayerBackend::Local(local) = &self.backend else {
-            return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicPassthrough {
-                enabled,
-            });
+        let local = match &self.backend {
+            AudioPlayerBackend::Local(local) => local,
+            AudioPlayerBackend::Remote(_) => {
+                return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicPassthrough {
+                    enabled,
+                });
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => return Ok(()),
         };
         let (tx, rx) = mpsc::channel();
         local
@@ -487,8 +526,13 @@ impl AudioPlayer {
     }
 
     pub fn set_mic_source(&self, source: Option<String>) -> Result<(), EngineError> {
-        let AudioPlayerBackend::Local(local) = &self.backend else {
-            return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicSource { source });
+        let local = match &self.backend {
+            AudioPlayerBackend::Local(local) => local,
+            AudioPlayerBackend::Remote(_) => {
+                return remote_ok(crate::audio::engine_ipc::EngineRequest::SetMicSource { source });
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => return Ok(()),
         };
         let (tx, rx) = mpsc::channel();
         local
@@ -511,10 +555,15 @@ impl AudioPlayer {
     }
 
     pub fn set_default_source_mode(&self, mode: DefaultSourceMode) -> Result<(), EngineError> {
-        let AudioPlayerBackend::Local(local) = &self.backend else {
-            return remote_ok(
-                crate::audio::engine_ipc::EngineRequest::SetDefaultSourceMode { mode },
-            );
+        let local = match &self.backend {
+            AudioPlayerBackend::Local(local) => local,
+            AudioPlayerBackend::Remote(_) => {
+                return remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetDefaultSourceMode { mode },
+                );
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => return Ok(()),
         };
         let (tx, rx) = mpsc::channel();
         local
@@ -534,10 +583,15 @@ impl AudioPlayer {
     }
 
     pub fn set_mic_latency_profile(&self, profile: MicLatencyProfile) -> Result<(), EngineError> {
-        let AudioPlayerBackend::Local(local) = &self.backend else {
-            return remote_ok(
-                crate::audio::engine_ipc::EngineRequest::SetMicLatencyProfile { profile },
-            );
+        let local = match &self.backend {
+            AudioPlayerBackend::Local(local) => local,
+            AudioPlayerBackend::Remote(_) => {
+                return remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetMicLatencyProfile { profile },
+                );
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => return Ok(()),
         };
         let (tx, rx) = mpsc::channel();
         local
@@ -575,6 +629,11 @@ impl AudioPlayer {
         sound_lufs: Option<f64>,
         sound_true_peak_dbtp: Option<f32>,
     ) -> Result<String, EngineError> {
+        #[cfg(test)]
+        if matches!(self.backend, AudioPlayerBackend::Noop(_)) {
+            return Ok(format!("noop-play-{sound_id}"));
+        }
+
         if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
             return match crate::audio::engine_ipc::send_request(
                 crate::audio::engine_ipc::EngineRequest::Play {
@@ -668,6 +727,8 @@ impl AudioPlayer {
                     sound_id: sound_id.to_string(),
                 })
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => Ok(()),
         }
     }
 
@@ -683,6 +744,11 @@ impl AudioPlayer {
         sound_lufs: Option<f64>,
         sound_true_peak_dbtp: Option<f32>,
     ) -> Result<String, EngineError> {
+        #[cfg(test)]
+        if matches!(self.backend, AudioPlayerBackend::Noop(_)) {
+            return Ok(format!("noop-play-{sound_id}"));
+        }
+
         if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
             return match crate::audio::engine_ipc::send_request(
                 crate::audio::engine_ipc::EngineRequest::PlayReplace {
@@ -723,6 +789,8 @@ impl AudioPlayer {
             AudioPlayerBackend::Remote(_) => {
                 let _ = remote_ok(crate::audio::engine_ipc::EngineRequest::StopAll);
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -740,6 +808,8 @@ impl AudioPlayer {
                     position_ms,
                 });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -755,6 +825,8 @@ impl AudioPlayer {
                     sound_id: sound_id.to_string(),
                 });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -770,6 +842,8 @@ impl AudioPlayer {
                     sound_id: sound_id.to_string(),
                 });
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 
@@ -812,6 +886,8 @@ impl AudioPlayer {
                     let _ = handle.join();
                 }
             }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
         }
     }
 }
@@ -900,6 +976,8 @@ fn pipewire_thread_main(
             move |_| {
                 if let Some(state_rc) = weak.upgrade() {
                     let mut state = state_rc.borrow_mut();
+                    virtual_mic_module::ensure_virtual_mic_present(&mut state);
+                    try_link_feeder_to_virtual_mic(&mut state);
                     ensure_capture_stream_present(&mut state);
                     state.publish_snapshot();
                 }

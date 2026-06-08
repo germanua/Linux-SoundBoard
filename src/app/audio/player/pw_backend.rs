@@ -224,6 +224,7 @@ fn create_pipewire_backend(
                         if source.is_our_virtual_mic
                             && state.virtual_mic_state_reset_ids.insert(source.id)
                         {
+                            state.virtual_mic_missing_since = None;
                             spawn_virtual_mic_state_reset(source.id);
                         }
                         let source_id = source.id;

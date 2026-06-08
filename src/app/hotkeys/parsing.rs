@@ -128,6 +128,7 @@ impl HotkeyCode {
             "Enter" => Some("enter".to_string()),
             "Space" => Some("space".to_string()),
             "Backspace" => Some("backspace".to_string()),
+            "CapsLock" => Some("capslock".to_string()),
             "Minus" => Some("minus".to_string()),
             "Equal" => Some("equal".to_string()),
             "BracketLeft" => Some("bracketleft".to_string()),
@@ -143,6 +144,9 @@ impl HotkeyCode {
             "Delete" => Some("delete".to_string()),
             "Home" => Some("home".to_string()),
             "End" => Some("end".to_string()),
+            "PrintScreen" => Some("print".to_string()),
+            "ScrollLock" => Some("scroll_lock".to_string()),
+            "Pause" => Some("pause".to_string()),
             "PageUp" => Some("pageup".to_string()),
             "PageDown" => Some("pagedown".to_string()),
             "ArrowUp" => Some("up".to_string()),
@@ -163,8 +167,20 @@ impl HotkeyCode {
             "NumpadMultiply" => Some("kpasterisk".to_string()),
             "NumpadSubtract" => Some("kpminus".to_string()),
             "NumpadAdd" => Some("plus".to_string()),
+            "NumpadComma" => Some("kpcomma".to_string()),
+            "NumpadEqual" => Some("kpequal".to_string()),
             "NumpadEnter" => Some("kpenter".to_string()),
             "NumpadDivide" => None,
+            "AudioVolumeUp" => Some("xf86audioraisevolume".to_string()),
+            "AudioVolumeDown" => Some("xf86audiolowervolume".to_string()),
+            "AudioVolumeMute" => Some("xf86audiomute".to_string()),
+            "AudioMicMute" => Some("xf86audiomicmute".to_string()),
+            "MediaPlayPause" => Some("xf86audioplay".to_string()),
+            "MediaTrackNext" => Some("xf86audionext".to_string()),
+            "MediaTrackPrevious" => Some("xf86audioprev".to_string()),
+            "MediaStop" => Some("xf86audiostop".to_string()),
+            "BrightnessUp" => Some("xf86monbrightnessup".to_string()),
+            "BrightnessDown" => Some("xf86monbrightnessdown".to_string()),
             _ => None,
         }
     }
@@ -266,17 +282,31 @@ fn normalize_key_name(name: &str) -> String {
         "space" | "Space" => "Space".to_string(),
         "Return" => "Enter".to_string(),
         "BackSpace" => "Backspace".to_string(),
+        "Caps_Lock" => "CapsLock".to_string(),
         "Tab" | "ISO_Left_Tab" => "Tab".to_string(),
         "Delete" => "Delete".to_string(),
         "Insert" => "Insert".to_string(),
         "Home" => "Home".to_string(),
         "End" => "End".to_string(),
+        "Print" | "Sys_Req" => "PrintScreen".to_string(),
+        "Scroll_Lock" => "ScrollLock".to_string(),
+        "Pause" | "Break" => "Pause".to_string(),
         "Page_Up" => "PageUp".to_string(),
         "Page_Down" => "PageDown".to_string(),
         "Up" => "ArrowUp".to_string(),
         "Down" => "ArrowDown".to_string(),
         "Left" => "ArrowLeft".to_string(),
         "Right" => "ArrowRight".to_string(),
+        "XF86AudioRaiseVolume" => "AudioVolumeUp".to_string(),
+        "XF86AudioLowerVolume" => "AudioVolumeDown".to_string(),
+        "XF86AudioMute" => "AudioVolumeMute".to_string(),
+        "XF86AudioMicMute" => "AudioMicMute".to_string(),
+        "XF86AudioPlay" => "MediaPlayPause".to_string(),
+        "XF86AudioNext" => "MediaTrackNext".to_string(),
+        "XF86AudioPrev" => "MediaTrackPrevious".to_string(),
+        "XF86AudioStop" => "MediaStop".to_string(),
+        "XF86MonBrightnessUp" => "BrightnessUp".to_string(),
+        "XF86MonBrightnessDown" => "BrightnessDown".to_string(),
         other => {
             if other.len() == 1 {
                 let ch = other.chars().next().unwrap();
@@ -369,10 +399,14 @@ fn canonicalize_key_token(raw: &str) -> String {
         "enter" | "return" => "Enter".to_string(),
         "esc" | "escape" => "Escape".to_string(),
         "backspace" => "Backspace".to_string(),
+        "capslock" | "caps_lock" | "caps-lock" => "CapsLock".to_string(),
         "delete" | "del" => "Delete".to_string(),
         "insert" | "ins" => "Insert".to_string(),
         "home" => "Home".to_string(),
         "end" => "End".to_string(),
+        "print" | "printscreen" | "print_screen" | "sysrq" | "sys_req" => "PrintScreen".to_string(),
+        "scrolllock" | "scroll_lock" | "scroll-lock" => "ScrollLock".to_string(),
+        "pause" | "break" => "Pause".to_string(),
         "pageup" => "PageUp".to_string(),
         "pagedown" => "PageDown".to_string(),
         "up" => "ArrowUp".to_string(),
@@ -390,6 +424,16 @@ fn canonicalize_key_token(raw: &str) -> String {
         "comma" => "Comma".to_string(),
         "period" => "Period".to_string(),
         "slash" => "Slash".to_string(),
+        "xf86audioraisevolume" | "volumeup" | "audiovolumeup" => "AudioVolumeUp".to_string(),
+        "xf86audiolowervolume" | "volumedown" | "audiovolumedown" => "AudioVolumeDown".to_string(),
+        "xf86audiomute" | "mute" | "audiovolumemute" => "AudioVolumeMute".to_string(),
+        "xf86audiomicmute" | "micmute" | "audiomicmute" => "AudioMicMute".to_string(),
+        "xf86audioplay" | "mediaplaypause" | "playpause" => "MediaPlayPause".to_string(),
+        "xf86audionext" | "mediatracknext" | "audionext" => "MediaTrackNext".to_string(),
+        "xf86audioprev" | "mediatrackprevious" | "audioprev" => "MediaTrackPrevious".to_string(),
+        "xf86audiostop" | "mediastop" | "audiostop" => "MediaStop".to_string(),
+        "xf86monbrightnessup" | "brightnessup" => "BrightnessUp".to_string(),
+        "xf86monbrightnessdown" | "brightnessdown" => "BrightnessDown".to_string(),
         other => other.to_string(),
     }
 }
@@ -418,6 +462,8 @@ fn canonicalize_numpad_alias(raw: &str) -> Option<&'static str> {
         "NumpadMultiply" => Some("NumpadMultiply"),
         "NumpadSubtract" => Some("NumpadSubtract"),
         "NumpadAdd" => Some("NumpadAdd"),
+        "NumpadComma" => Some("NumpadComma"),
+        "NumpadEqual" => Some("NumpadEqual"),
         "NumpadEnter" => Some("NumpadEnter"),
         _ => None,
     }
@@ -475,6 +521,7 @@ static HOTKEY_CODES: &[HotkeyCodeDef] = &[
     key_def!("Enter", "RTRN", Some(36)),
     key_def!("Space", "SPCE", Some(65)),
     key_def!("Backspace", "BKSP", Some(22)),
+    key_def!("CapsLock", "CAPS", Some(66)),
     key_def!("Minus", "AE11", None),
     key_def!("Equal", "AE12", None),
     key_def!("BracketLeft", "AD11", None),
@@ -490,6 +537,9 @@ static HOTKEY_CODES: &[HotkeyCodeDef] = &[
     key_def!("Delete", "DELE", Some(119)),
     key_def!("Home", "HOME", Some(110)),
     key_def!("End", "END", Some(115)),
+    key_def!("PrintScreen", "PRSC", Some(107)),
+    key_def!("ScrollLock", "SCLK", Some(78)),
+    key_def!("Pause", "PAUS", Some(127)),
     key_def!("PageUp", "PGUP", Some(112)),
     key_def!("PageDown", "PGDN", Some(117)),
     key_def!("ArrowUp", "UP", Some(111)),
@@ -508,6 +558,18 @@ static HOTKEY_CODES: &[HotkeyCodeDef] = &[
     key_def!("F10", "FK10", Some(76)),
     key_def!("F11", "FK11", Some(95)),
     key_def!("F12", "FK12", Some(96)),
+    key_def!("F13", "FK13", None),
+    key_def!("F14", "FK14", None),
+    key_def!("F15", "FK15", None),
+    key_def!("F16", "FK16", None),
+    key_def!("F17", "FK17", None),
+    key_def!("F18", "FK18", None),
+    key_def!("F19", "FK19", None),
+    key_def!("F20", "FK20", None),
+    key_def!("F21", "FK21", None),
+    key_def!("F22", "FK22", None),
+    key_def!("F23", "FK23", None),
+    key_def!("F24", "FK24", None),
     key_def!("Numpad0", "KP0", Some(90)),
     key_def!("Numpad1", "KP1", Some(87)),
     key_def!("Numpad2", "KP2", Some(88)),
@@ -523,7 +585,19 @@ static HOTKEY_CODES: &[HotkeyCodeDef] = &[
     key_def!("NumpadMultiply", "KPMU", Some(63)),
     key_def!("NumpadSubtract", "KPSU", Some(82)),
     key_def!("NumpadAdd", "KPAD", Some(86)),
+    key_def!("NumpadComma", "KPCM", None),
+    key_def!("NumpadEqual", "KPEQ", None),
     key_def!("NumpadEnter", "KPEN", Some(104)),
+    key_def!("AudioVolumeUp", "I245", None),
+    key_def!("AudioVolumeDown", "I246", None),
+    key_def!("AudioVolumeMute", "I121", None),
+    key_def!("AudioMicMute", "I248", None),
+    key_def!("MediaPlayPause", "I172", None),
+    key_def!("MediaTrackNext", "I171", None),
+    key_def!("MediaTrackPrevious", "I173", None),
+    key_def!("MediaStop", "I174", None),
+    key_def!("BrightnessUp", "I232", None),
+    key_def!("BrightnessDown", "I233", None),
 ];
 
 #[cfg(test)]
@@ -635,6 +709,45 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_lock_print_and_media_capture_keys() {
+        assert_eq!(
+            normalize_capture_key("Caps_Lock", 0).unwrap().token(),
+            "CapsLock"
+        );
+        assert_eq!(
+            normalize_capture_key("Print", 0).unwrap().token(),
+            "PrintScreen"
+        );
+        assert_eq!(
+            normalize_capture_key("Scroll_Lock", 0).unwrap().token(),
+            "ScrollLock"
+        );
+        assert_eq!(normalize_capture_key("Pause", 0).unwrap().token(), "Pause");
+        assert_eq!(
+            normalize_capture_key("XF86AudioPlay", 0).unwrap().token(),
+            "MediaPlayPause"
+        );
+        assert_eq!(
+            normalize_capture_key("XF86AudioRaiseVolume", 0)
+                .unwrap()
+                .token(),
+            "AudioVolumeUp"
+        );
+        assert_eq!(
+            normalize_capture_key("XF86AudioMicMute", 0)
+                .unwrap()
+                .token(),
+            "AudioMicMute"
+        );
+        assert_eq!(
+            normalize_capture_key("XF86MonBrightnessDown", 0)
+                .unwrap()
+                .token(),
+            "BrightnessDown"
+        );
+    }
+
+    #[test]
     fn accepts_numpad_operator_capture_keys_by_keycode() {
         assert_eq!(
             normalize_capture_key("minus", 82).unwrap().token(),
@@ -702,6 +815,34 @@ mod tests {
                 .swhkd_string()
                 .unwrap(),
             "ctrl + grave"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+CapsLock")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "ctrl + capslock"
+        );
+        assert_eq!(
+            parse_hotkey_spec("PrintScreen")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "print"
+        );
+        assert_eq!(
+            parse_hotkey_spec("MediaPlayPause")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "xf86audioplay"
+        );
+        assert_eq!(
+            parse_hotkey_spec("Ctrl+NumpadEqual")
+                .unwrap()
+                .swhkd_string()
+                .unwrap(),
+            "ctrl + kpequal"
         );
     }
 

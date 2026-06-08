@@ -33,10 +33,7 @@ fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
 }
 
 fn create_test_audio_player() -> Arc<AudioPlayer> {
-    let mut config = Config::default();
-    config.settings.local_volume = 80;
-    config.settings.mic_volume = 100;
-    Arc::new(AudioPlayer::new_with_config(&config))
+    Arc::new(AudioPlayer::new_test_noop())
 }
 
 fn wait_for_coords_idle(coords: &commands::LoudnessCoordinators) {
