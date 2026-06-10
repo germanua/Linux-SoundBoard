@@ -300,17 +300,27 @@ impl SwhkdProcesses {
 
     fn format_startup_exit_message(pid: i32, status: ExitStatus, log_path: &Path) -> String {
         let startup_log = Self::read_startup_log_tail(log_path);
+        let remediation = if startup_log
+            .to_ascii_lowercase()
+            .contains("launch the binary with pkexec")
+        {
+            "The installed swhkd build refuses direct launch. Use the Install swhkd button to rebuild the daemon with the Linux Soundboard helper."
+        } else {
+            "Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\
+             Or use the Install swhkd button to rebuild swhkd automatically."
+        };
+
         format!(
             "swhkd exited immediately after startup (PID {}, status: {}).\n\
              Linux Soundboard needs a working swhkd daemon so it can read input devices.\n\
              swhkd startup log: {}\n\
              {}\n\
-             Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\
-             Or use the hotkey Install button to rebuild swhkd automatically.",
+             {}",
             pid,
             status,
             log_path.display(),
-            startup_log
+            startup_log,
+            remediation
         )
     }
 
