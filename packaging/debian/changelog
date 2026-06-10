@@ -1,3 +1,11 @@
+linux-soundboard (2.0.2-1) unstable; urgency=medium
+
+  * Rebuild swhkd from upstream source when packaged builds require pkexec
+  * Improve Wayland hotkey startup diagnostics and recovery guidance
+  * Fix hotkey capture dialog panic after backend startup failures
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Wed, 10 Jun 2026 15:00:00 +0000
+
 linux-soundboard (2.0.0-1) unstable; urgency=medium
 
   * Promote the testing branch rework to the main release line
