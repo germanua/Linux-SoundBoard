@@ -411,8 +411,8 @@ pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
         DistroFamily::Arch => format!(
             "{intro}\n\
              Install an AUR package for Wayland hotkeys:\n\
-             • yay -S swhkd-bin\n\
-             • or yay -S swhkd-git\n\
+             • yay -S swhkd-git\n\
+             Avoid swhkd-bin; upstream marks that AUR package as unmaintained.\n\
              X11 sessions can use the native X11 backend without swhkd."
         ),
         DistroFamily::Debian => format!(

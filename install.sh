@@ -442,21 +442,75 @@ configure_swhkd_permissions() {
     [[ -u "$swhkd_path" ]] || fail "swhkd setuid bit was not applied to $swhkd_path."
 }
 
+swhkd_requires_pkexec() {
+    local swhkd_path
+    local swhks_path
+    local output_file
+    local swhks_pid=""
+    local status=0
+
+    swhkd_path="$(command -v swhkd 2>/dev/null || true)"
+    swhks_path="$(command -v swhks 2>/dev/null || true)"
+
+    [[ -n "$swhkd_path" && -n "$swhks_path" ]] || return 1
+
+    output_file="$WORK_DIR/swhkd-direct-launch-check.log"
+    : > "$output_file"
+
+    "$swhks_path" >>"$output_file" 2>&1 &
+    swhks_pid=$!
+    sleep 0.3
+
+    set +e
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 2s "$swhkd_path" >>"$output_file" 2>&1
+        status=$?
+    else
+        "$swhkd_path" >>"$output_file" 2>&1 &
+        local swhkd_pid=$!
+        sleep 2
+        if kill -0 "$swhkd_pid" >/dev/null 2>&1; then
+            kill "$swhkd_pid" >/dev/null 2>&1
+            wait "$swhkd_pid" >/dev/null 2>&1
+            status=124
+        else
+            wait "$swhkd_pid" >/dev/null 2>&1
+            status=$?
+        fi
+    fi
+    set -e
+
+    if [[ -n "$swhks_pid" ]]; then
+        kill "$swhks_pid" >/dev/null 2>&1 || true
+        wait "$swhks_pid" >/dev/null 2>&1 || true
+    fi
+
+    if grep -qiE 'launch the binary with pkexec|failed to launch swhkd' "$output_file"; then
+        warn "Installed swhkd refuses direct launch; rebuilding from upstream source."
+        return 0
+    fi
+
+    if ((status == 124)); then
+        info "swhkd direct-launch check stayed running; keeping current binary."
+    fi
+
+    return 1
+}
+
 install_swhkd() {
     if command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
         info "swhkd already installed; checking permissions."
         configure_swhkd_permissions
-        return
+        if ! swhkd_requires_pkexec; then
+            return
+        fi
     fi
 
-    info "Installing swhkd for Wayland hotkeys..."
+    info "Installing swhkd from upstream source for Wayland hotkeys..."
     case "$DISTRO_FAMILY" in
         arch)
-            if ! { aur_try() { command -v "$1" >/dev/null 2>&1 && "$1" -S --needed --noconfirm swhkd-bin; }
-                   aur_try yay || aur_try paru; }; then
-                pacman_install base-devel git
-                build_swhkd_from_source
-            fi
+            pacman_install base-devel git make rust cargo pkgconf systemd
+            build_swhkd_from_source
             ;;
         debian)
             apt_install git make build-essential pkg-config libudev-dev cargo rustc
