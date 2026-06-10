@@ -1,5 +1,5 @@
 Name:           linux-soundboard
-Version:        2.0.0
+Version:        2.0.2
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -132,6 +132,11 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Wed Jun 10 2026 germanua <noreply@linuxsoundboard.invalid> - 2.0.2-1
+- Rebuilt swhkd from upstream source when packaged builds require pkexec
+- Improved Wayland hotkey startup diagnostics and recovery guidance
+- Fixed the hotkey capture dialog panic after backend startup failures
+
 * Sat May 09 2026 germanua <noreply@linuxsoundboard.invalid> - 2.0.0-1
 - Promoted the testing branch rework to the main release line
 - Added atomic replace playback to remove stop/play snapshot races

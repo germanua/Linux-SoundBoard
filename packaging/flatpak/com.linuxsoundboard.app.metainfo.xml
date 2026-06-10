@@ -55,6 +55,16 @@
   </keywords>
   
   <releases>
+    <release version="2.0.2" date="2026-06-10">
+      <description>
+        <p>Wayland hotkey reliability update:</p>
+        <ul>
+          <li>Rebuilt swhkd from upstream source when packaged builds require pkexec</li>
+          <li>Improved swhkd startup diagnostics and recovery guidance</li>
+          <li>Fixed a hotkey capture dialog panic after backend startup failures</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.0" date="2026-05-09">
       <description>
         <p>Major update promoted from the testing branch:</p>
