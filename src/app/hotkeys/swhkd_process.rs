@@ -2,7 +2,7 @@ use log::{debug, error, info, warn};
 use nix::sys::signal::Signal;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -99,28 +99,39 @@ impl SwhkdProcesses {
 
         Self::wait_for_swhks_socket()?;
 
-        let swhkd_child = Self::spawn_swhkd(config_path)?;
+        let mut swhkd_child = Self::spawn_swhkd(config_path)?;
         let swhkd_pid = swhkd_child.id() as i32;
 
         thread::sleep(Duration::from_millis(SWHKD_STARTUP_VERIFY_WAIT_MS));
 
-        let pid = nix::unistd::Pid::from_raw(swhkd_pid);
-        match nix::sys::signal::kill(pid, None) {
-            Ok(_) => {
-                info!("swhkd process verified running (PID: {})", swhkd_pid);
+        match swhkd_child.try_wait() {
+            Ok(Some(status)) => {
+                return Err(HotkeyError::Process(Self::format_startup_exit_message(
+                    swhkd_pid, status,
+                )));
             }
-            Err(_) => {
+            Ok(None) => {}
+            Err(err) => {
                 return Err(HotkeyError::Process(format!(
-                    "swhkd process (PID {}) crashed immediately after startup.\n\
-                     This usually indicates:\n\
-                     • Permission issues with /dev/input devices\n\
-                     • Another hotkey daemon is already running\n\
-                     • Invalid configuration file\n\
-                     Check logs: ~/.local/share/swhkd/*.log",
-                    swhkd_pid
+                    "Could not verify swhkd startup state for PID {}: {}",
+                    swhkd_pid, err
                 )));
             }
         }
+
+        if !Self::pid_is_live(swhkd_pid) {
+            return Err(HotkeyError::Process(format!(
+                "swhkd process (PID {}) is not running after startup.\n\
+                 This usually indicates:\n\
+                 • Permission issues with /dev/input devices\n\
+                 • Another hotkey daemon is already running\n\
+                 • Invalid configuration file\n\
+                 Check logs: ~/.local/share/swhkd/*.log",
+                swhkd_pid
+            )));
+        }
+
+        info!("swhkd process verified running (PID: {})", swhkd_pid);
 
         Ok(Self {
             swhks_child: Some(swhks_child),
@@ -229,6 +240,34 @@ impl SwhkdProcesses {
         })
     }
 
+    fn format_startup_exit_message(pid: i32, status: ExitStatus) -> String {
+        format!(
+            "swhkd exited immediately after startup (PID {}, status: {}).\n\
+             Linux Soundboard needs a working setuid swhkd binary so it can read input devices.\n\
+             Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\
+             Or use the hotkey Install button to rebuild swhkd automatically.",
+            pid, status
+        )
+    }
+
+    pub fn pid_is_live(pid: i32) -> bool {
+        if let Some(state) = Self::proc_stat_state(pid) {
+            return state != 'Z';
+        }
+
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+    }
+
+    fn proc_stat_state(pid: i32) -> Option<char> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        Self::parse_proc_stat_state(&stat)
+    }
+
+    fn parse_proc_stat_state(stat: &str) -> Option<char> {
+        let after_name = stat.rsplit_once(") ")?;
+        after_name.1.chars().next()
+    }
+
     fn terminate_tracked_child(name: &str, child: &mut Child) {
         let pid = nix::unistd::Pid::from_raw(child.id() as i32);
         info!("Terminating tracked {} process", name);
@@ -304,8 +343,7 @@ impl SwhkdProcesses {
                     break;
                 }
 
-                let check_pid = nix::unistd::Pid::from_raw(pid);
-                if nix::sys::signal::kill(check_pid, None).is_err() {
+                if !Self::pid_is_live(pid) {
                     error!(
                         "CRITICAL: swhkd process (PID {}) has died!\n\
                          Hotkeys will stop working until the application is restarted.\n\
@@ -371,6 +409,18 @@ mod tests {
         assert_eq!(
             SwhkdProcesses::parse_real_uid_from_status("Name:\tswhkd\n"),
             None
+        );
+    }
+
+    #[test]
+    fn parses_proc_stat_state() {
+        assert_eq!(
+            SwhkdProcesses::parse_proc_stat_state("123 (swhkd) S 1 2 3"),
+            Some('S')
+        );
+        assert_eq!(
+            SwhkdProcesses::parse_proc_stat_state("123 (name with spaces) Z 1 2 3"),
+            Some('Z')
         );
     }
 }

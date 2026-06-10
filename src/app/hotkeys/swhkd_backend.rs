@@ -215,10 +215,10 @@ impl SwhkdBackend {
     fn verify_swhkd_running(&self) -> Result<(), HotkeyError> {
         let processes = self.processes.lock();
 
-        let pid = nix::unistd::Pid::from_raw(processes.swhkd_pid);
-        match nix::sys::signal::kill(pid, None) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(HotkeyError::Process(format!(
+        if SwhkdProcesses::pid_is_live(processes.swhkd_pid) {
+            Ok(())
+        } else {
+            Err(HotkeyError::Process(format!(
                 "swhkd process (PID {}) has crashed or exited.\n\
                  This usually happens due to:\n\
                  • Invalid hotkey configuration\n\
@@ -226,7 +226,7 @@ impl SwhkdBackend {
                  • Conflicting hotkey daemon already running\n\
                  Check logs: ~/.local/share/swhkd/*.log",
                 processes.swhkd_pid
-            ))),
+            )))
         }
     }
 

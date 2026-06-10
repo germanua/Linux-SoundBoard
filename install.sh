@@ -287,9 +287,13 @@ installed_native_packages() {
     fi
 
     if command -v pacman >/dev/null 2>&1; then
+        local seen_pacman=$'\n'
         for pkg in "$APP_AUR_PACKAGE" "$APP_PACKAGE"; do
-            if pacman -Q "$pkg" >/dev/null 2>&1; then
-                printf 'pacman\t%s\n' "$pkg"
+            local actual_pkg
+            actual_pkg="$(pacman -Qq "$pkg" 2>/dev/null || true)"
+            if [[ -n "$actual_pkg" && "$seen_pacman" != *$'\n'"$actual_pkg"$'\n'* ]]; then
+                printf 'pacman\t%s\n' "$actual_pkg"
+                seen_pacman+="$actual_pkg"$'\n'
                 found=1
             fi
         done
@@ -420,10 +424,30 @@ build_swhkd_from_source() {
     [[ -f /etc/swhkd/swhkdrc ]] || sudo install -Dm644 /dev/null /etc/swhkd/swhkdrc
 }
 
+configure_swhkd_permissions() {
+    local swhkd_path
+    local swhks_path
+
+    swhkd_path="$(command -v swhkd 2>/dev/null || true)"
+    swhks_path="$(command -v swhks 2>/dev/null || true)"
+
+    [[ -n "$swhkd_path" ]] || fail "swhkd was not found after installation."
+    [[ -n "$swhks_path" ]] || fail "swhks was not found after installation."
+
+    info "Configuring swhkd permissions..."
+    sudo chown root:root "$swhkd_path"
+    sudo chmod u+s "$swhkd_path"
+    sudo chmod +x "$swhks_path"
+
+    [[ -u "$swhkd_path" ]] || fail "swhkd setuid bit was not applied to $swhkd_path."
+}
+
 install_swhkd() {
-    command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1 && {
-        info "swhkd already installed."; return
-    }
+    if command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
+        info "swhkd already installed; checking permissions."
+        configure_swhkd_permissions
+        return
+    fi
 
     info "Installing swhkd for Wayland hotkeys..."
     case "$DISTRO_FAMILY" in
@@ -455,10 +479,15 @@ install_swhkd() {
             ;;
     esac
 
-    # setuid so swhkd can read /dev/input without root
-    local swhkd_path; swhkd_path="$(command -v swhkd)"
-    sudo chown root:root "$swhkd_path"
-    sudo chmod u+s "$swhkd_path"
+    configure_swhkd_permissions
+}
+
+repair_swhkd_if_needed() {
+    if is_wayland; then
+        install_swhkd
+    elif command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
+        configure_swhkd_permissions
+    fi
 }
 
 # ── PipeWire services ─────────────────────────────────────────────────────────
@@ -496,6 +525,24 @@ install_main() {
     printf '\nDone. Launch with: %s\n' "$APP_BINARY"
 }
 
+repair_main() {
+    detect_distro
+    detect_session
+
+    # On a native-package install, repair the user service only. A full repair
+    # would deploy a ~/.local copy that shadows the package. An explicit binary
+    # argument still forces a full repair (source builds).
+    if [[ $# -eq 0 ]] && installed_native_packages >/dev/null 2>&1; then
+        info "Native Linux Soundboard package detected; configuring the user service only."
+        run_user_installer_from_available_source setup-user
+    else
+        run_user_installer_from_available_source repair "$@"
+    fi
+
+    repair_swhkd_if_needed
+    ensure_pipewire_services
+}
+
 main() {
     local command="${1:-install}"
 
@@ -515,15 +562,7 @@ main() {
             ;;
         repair)
             [[ $# -gt 0 ]] && shift
-            # On a native-package install, repair the user service only. A full
-            # repair would deploy a ~/.local copy that shadows the package. An
-            # explicit binary argument still forces a full repair (source builds).
-            if [[ $# -eq 0 ]] && installed_native_packages >/dev/null 2>&1; then
-                info "Native Linux Soundboard package detected; configuring the user service only."
-                run_user_installer_from_available_source setup-user
-            else
-                run_user_installer_from_available_source repair "$@"
-            fi
+            repair_main "$@"
             ;;
         status)
             [[ $# -gt 0 ]] && shift

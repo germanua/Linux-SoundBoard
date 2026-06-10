@@ -314,9 +314,18 @@ Check the setuid bit on the installed binary:
 ls -l "$(command -v swhkd)"
 ```
 
-If needed:
+If `swhkd` prints `Make sure to launch the binary with pkexec`, or the
+permissions do not show an `s` bit on the owner execute field, repair the
+install:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
+```
+
+Or apply the permission fix directly:
+
+```bash
+sudo chown root:root "$(command -v swhkd)"
 sudo chmod u+s "$(command -v swhkd)"
 ```
 

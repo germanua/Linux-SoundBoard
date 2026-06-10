@@ -121,6 +121,8 @@ pub fn should_offer_swhkd_install(raw_error: &str) -> bool {
         || normalized.contains("swhks not found in path")
         || normalized.contains("no wayland hotkey backend available")
         || normalized.contains("swhkd requires setuid bit")
+        || normalized.contains("swhkd exited immediately")
+        || normalized.contains("working setuid swhkd binary")
 }
 
 pub fn manual_swhkd_install_commands() -> String {
@@ -507,6 +509,9 @@ mod tests {
         ));
         assert!(should_offer_swhkd_install(
             "swhkd requires setuid bit for proper operation"
+        ));
+        assert!(should_offer_swhkd_install(
+            "swhkd exited immediately after startup"
         ));
     }
 

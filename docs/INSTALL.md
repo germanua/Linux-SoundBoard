@@ -16,6 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/inst
 | Everything else              | Downloads the release tarball and runs `install-user.sh install` |
 
 On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automatically.
+If `swhkd` is already present, the installer still repairs its root ownership
+and setuid bit so Linux Soundboard can launch it directly.
 
 ---
 
@@ -148,7 +150,8 @@ curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/inst
 
 When a native package is installed, `install.sh repair` configures only the user
 service. It does not redeploy the binary, desktop entry, icons, or engine unit
-that the package already owns.
+that the package already owns. On Wayland it also rechecks `swhkd` permissions
+for global hotkeys.
 
 ### Fedora
 
