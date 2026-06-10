@@ -1,12 +1,13 @@
 use log::{debug, error, info, warn};
 use nix::sys::signal::Signal;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::error::HotkeyError;
 use super::swhkd_install::missing_swhkd_message;
@@ -22,6 +23,11 @@ pub struct SwhkdProcesses {
     pub managed: bool,
     pub monitor_running: Arc<AtomicBool>,
     pub swhkd_dead: Arc<AtomicBool>,
+}
+
+struct SpawnedSwhkd {
+    child: Child,
+    log_path: PathBuf,
 }
 
 impl SwhkdProcesses {
@@ -40,7 +46,7 @@ impl SwhkdProcesses {
             .map_err(|e| HotkeyError::Process(format!("Failed to spawn swhks: {}", e)))
     }
 
-    pub fn spawn_swhkd(config_path: &Path) -> Result<Child, HotkeyError> {
+    fn spawn_swhkd(config_path: &Path) -> Result<SpawnedSwhkd, HotkeyError> {
         info!("Spawning swhkd process");
 
         let swhkd_path = which::which("swhkd")
@@ -56,11 +62,9 @@ impl SwhkdProcesses {
             ));
         }
 
-        Command::new(swhkd_path)
-            .arg("--config")
-            .arg(config_path)
-            .spawn()
-            .map_err(|e| HotkeyError::Process(format!("Failed to spawn swhkd: {}", e)))
+        let mut command = Command::new(swhkd_path);
+        command.arg("--config").arg(config_path);
+        Self::spawn_swhkd_command(command, "direct")
     }
 
     fn has_setuid_bit(path: &Path) -> bool {
@@ -99,15 +103,17 @@ impl SwhkdProcesses {
 
         Self::wait_for_swhks_socket()?;
 
-        let mut swhkd_child = Self::spawn_swhkd(config_path)?;
-        let swhkd_pid = swhkd_child.id() as i32;
+        let mut swhkd = Self::spawn_swhkd(config_path)?;
+        let swhkd_pid = swhkd.child.id() as i32;
 
         thread::sleep(Duration::from_millis(SWHKD_STARTUP_VERIFY_WAIT_MS));
 
-        match swhkd_child.try_wait() {
+        match swhkd.child.try_wait() {
             Ok(Some(status)) => {
                 return Err(HotkeyError::Process(Self::format_startup_exit_message(
-                    swhkd_pid, status,
+                    swhkd_pid,
+                    status,
+                    &swhkd.log_path,
                 )));
             }
             Ok(None) => {}
@@ -135,7 +141,7 @@ impl SwhkdProcesses {
 
         Ok(Self {
             swhks_child: Some(swhks_child),
-            swhkd_child: Some(swhkd_child),
+            swhkd_child: Some(swhkd.child),
             swhkd_pid,
             managed: true,
             monitor_running: Arc::new(AtomicBool::new(false)),
@@ -240,14 +246,87 @@ impl SwhkdProcesses {
         })
     }
 
-    fn format_startup_exit_message(pid: i32, status: ExitStatus) -> String {
+    fn spawn_swhkd_command(
+        mut command: Command,
+        launch_label: &str,
+    ) -> Result<SpawnedSwhkd, HotkeyError> {
+        let (log_file, log_path) = Self::create_spawn_log(launch_label)?;
+        let stdout = log_file
+            .try_clone()
+            .map_err(|e| HotkeyError::Io(format!("Failed to prepare swhkd log: {e}")))?;
+
+        command
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(log_file));
+        let child = command
+            .spawn()
+            .map_err(|e| HotkeyError::Process(format!("Failed to spawn swhkd: {e}")))?;
+
+        Ok(SpawnedSwhkd { child, log_path })
+    }
+
+    fn create_spawn_log(launch_label: &str) -> Result<(File, PathBuf), HotkeyError> {
+        let uid = nix::unistd::getuid();
+        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
+        let log_dir = if runtime_dir.is_dir() {
+            runtime_dir.join("linux-soundboard")
+        } else {
+            std::env::temp_dir().join("linux-soundboard")
+        };
+        fs::create_dir_all(&log_dir)
+            .map_err(|e| HotkeyError::Io(format!("Failed to create swhkd log dir: {e}")))?;
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default();
+        let log_path = log_dir.join(format!(
+            "swhkd-startup-{}-{}-{stamp}.log",
+            std::process::id(),
+            launch_label
+        ));
+
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|e| HotkeyError::Io(format!("Failed to open swhkd log: {e}")))?;
+        writeln!(file, "linux-soundboard: launching swhkd ({launch_label})").ok();
+
+        Ok((file, log_path))
+    }
+
+    fn format_startup_exit_message(pid: i32, status: ExitStatus, log_path: &Path) -> String {
+        let startup_log = Self::read_startup_log_tail(log_path);
         format!(
             "swhkd exited immediately after startup (PID {}, status: {}).\n\
-             Linux Soundboard needs a working setuid swhkd binary so it can read input devices.\n\
+             Linux Soundboard needs a working swhkd daemon so it can read input devices.\n\
+             swhkd startup log: {}\n\
+             {}\n\
              Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\
              Or use the hotkey Install button to rebuild swhkd automatically.",
-            pid, status
+            pid,
+            status,
+            log_path.display(),
+            startup_log
         )
+    }
+
+    fn read_startup_log_tail(path: &Path) -> String {
+        let Ok(text) = fs::read_to_string(path) else {
+            return "No startup output was captured.".to_string();
+        };
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            return "No startup output was captured.".to_string();
+        }
+        let start = lines.len().saturating_sub(12);
+        format!("Last swhkd output:\n{}", lines[start..].join("\n"))
     }
 
     pub fn pid_is_live(pid: i32) -> bool {
@@ -422,6 +501,21 @@ mod tests {
             SwhkdProcesses::parse_proc_stat_state("123 (name with spaces) Z 1 2 3"),
             Some('Z')
         );
+    }
+
+    #[test]
+    fn reads_startup_log_tail() {
+        let path = std::env::temp_dir().join(format!(
+            "lsb-swhkd-test-{}-{}.log",
+            std::process::id(),
+            "tail"
+        ));
+        fs::write(&path, "one\ntwo\nthree\n").unwrap();
+        let tail = SwhkdProcesses::read_startup_log_tail(&path);
+        fs::remove_file(&path).ok();
+
+        assert!(tail.contains("Last swhkd output:"));
+        assert!(tail.contains("three"));
     }
 }
 

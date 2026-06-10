@@ -4,7 +4,8 @@ use std::sync::mpsc::Sender;
 use crate::app_meta::{BACKEND_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND};
 
 use super::backend_runtime::HotkeyBackend;
-use super::error::HotkeyError;
+use super::error::{unsupported_key_for_backend, HotkeyError};
+use super::parse_hotkey_spec;
 use super::swhkd_backend::SwhkdBackend;
 use super::x11_backend::X11Backend;
 
@@ -75,16 +76,11 @@ impl HotkeyManager {
     }
 
     pub fn validate_hotkey_blocking(&mut self, hotkey: &str) -> Result<(), HotkeyError> {
-        self.ensure_backend_started()?;
-        self.backend
-            .as_ref()
-            .ok_or_else(|| {
-                HotkeyError::BackendUnavailable(format!(
-                    "Global hotkeys unavailable: {}",
-                    self.disabled_reason.as_deref().unwrap_or("unknown")
-                ))
-            })
-            .and_then(|backend| backend.validate_hotkey(hotkey))
+        if let Some(backend) = &self.backend {
+            return backend.validate_hotkey(hotkey);
+        }
+
+        Self::validate_without_starting_backend(hotkey)
     }
 
     pub fn unregister_hotkey_blocking(&mut self, sound_id: &str) -> Result<(), HotkeyError> {
@@ -187,6 +183,20 @@ impl HotkeyManager {
                     errors.join("; ")
                 )))
             }
+        }
+    }
+
+    fn validate_without_starting_backend(hotkey: &str) -> Result<(), HotkeyError> {
+        let spec = parse_hotkey_spec(hotkey).map_err(|e| {
+            unsupported_key_for_backend("hotkey", format!("{hotkey} is invalid. {e}"))
+        })?;
+
+        match session_backend_preference() {
+            BackendPreference::Wayland => spec
+                .swhkd_string()
+                .map(|_| ())
+                .map_err(|detail| unsupported_key_for_backend("swhkd", detail.to_string())),
+            BackendPreference::X11 | BackendPreference::Auto => Ok(()),
         }
     }
 
