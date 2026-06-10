@@ -492,7 +492,10 @@ impl DialogHost {
                 return;
             };
             match response {
-                "save" => on_confirm(host.inner.captured_hotkey.borrow().clone()),
+                "save" => {
+                    let captured_hotkey = host.inner.captured_hotkey.borrow().clone();
+                    on_confirm(captured_hotkey);
+                }
                 "clear" => on_confirm(None),
                 _ => {}
             }

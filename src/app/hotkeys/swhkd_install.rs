@@ -191,19 +191,6 @@ pub fn install_swhkd_native_detailed() -> Result<SwhkdInstallReport, SwhkdInstal
         });
     }
 
-    if has_healthy_swhkd_install() {
-        info!("swhkd already installed and configured; skipping installer");
-        return Ok(SwhkdInstallReport {
-            summary: "swhkd is already installed and configured.".to_string(),
-            details: "No installation actions were needed.".to_string(),
-            states: vec![
-                SwhkdInstallState::Idle,
-                SwhkdInstallState::Checking,
-                SwhkdInstallState::Completed,
-            ],
-        });
-    }
-
     if which::which("pkexec").is_err() {
         states.push(SwhkdInstallState::Failed);
         warn!("Cannot run one-click swhkd installer because pkexec is unavailable");
