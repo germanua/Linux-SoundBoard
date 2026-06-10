@@ -29,8 +29,7 @@ makedepends=(
   'pkgconf'
 )
 optdepends=(
-  'swhkd-bin: native Wayland global hotkeys from the AUR'
-  'swhkd-git: development build of the native Wayland hotkey daemon'
+  'swhkd-git: native Wayland hotkey daemon from upstream source'
   'xorg-xwayland: enables the native X11 backend inside Wayland sessions'
 )
 provides=('linux-soundboard')
