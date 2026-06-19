@@ -138,7 +138,11 @@ jobs:
           shellcheck packaging/generate-third-party-notices.sh
 
       - name: Validate systemd service file
-        run: systemd-analyze verify packaging/linux/linux-soundboard-engine.service
+        run: |
+          # The metadata-only job does not build the application. Provide an
+          # ephemeral executable so systemd-analyze can validate ExecStart.
+          sudo install -Dm755 /bin/true /usr/local/bin/linux-soundboard
+          systemd-analyze verify packaging/linux/linux-soundboard-engine.service
 
       - name: Check desktop Icon= matches installed icon name
         run: |
