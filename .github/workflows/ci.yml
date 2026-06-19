@@ -191,12 +191,12 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-machete-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-machete-0.8.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-machete-
+            ${{ runner.os }}-cargo-machete-0.8.0-
 
       - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
+        run: cargo install cargo-machete --version 0.8.0 --locked
 
       - name: Check for unused dependencies
         run: cargo machete
