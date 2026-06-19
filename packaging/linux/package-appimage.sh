@@ -150,11 +150,16 @@ rm -rf "$APPDIR"
 rm -f "$versioned_path" "$stable_path"
 mkdir -p \
     "$APPDIR/usr/share/applications" \
+    "$APPDIR/usr/share/doc/$APP_BINARY" \
     "$APPDIR/usr/share/metainfo" \
     "$APPDIR/usr/libexec/linux-soundboard"
 
 install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
 install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/bin/install-swhkd-helper.sh"
+
+for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+    install -Dm644 "$REPO_ROOT/$legal_file" "$APPDIR/usr/share/doc/$APP_BINARY/$legal_file"
+done
 
 cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]

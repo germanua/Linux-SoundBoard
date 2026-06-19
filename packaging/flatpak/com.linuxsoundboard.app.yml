@@ -69,6 +69,12 @@ modules:
       
       # Install metainfo
       - install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml /app/share/metainfo/com.linuxsoundboard.app.metainfo.xml
+
+      # Install project and third-party legal notices
+      - |
+        for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+          install -Dm644 "$legal_file" "/app/share/doc/linux-soundboard/$legal_file"
+        done
     
     sources:
       - type: dir

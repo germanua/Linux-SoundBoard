@@ -24,6 +24,11 @@ override_dh_auto_test:
 override_dh_auto_install:
 	install -Dm755 target/release/linux-soundboard \
 		debian/linux-soundboard/usr/bin/linux-soundboard
+
+	for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do \
+		install -Dm644 $$legal_file \
+			debian/linux-soundboard/usr/share/doc/linux-soundboard/$$legal_file; \
+	done
 	
 	# Install desktop file
 	install -Dm644 packaging/debian/linux-soundboard.desktop \

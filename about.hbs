@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linux Soundboard Third-Party Notices</title>
+  <style>
+    body { font: 16px/1.5 sans-serif; margin: 0 auto; max-width: 960px; padding: 2rem; }
+    pre { border: 1px solid #bbb; overflow-x: auto; padding: 1rem; white-space: pre-wrap; }
+    .license { margin-bottom: 3rem; }
+  </style>
+</head>
+<body>
+  <h1>Linux Soundboard Third-Party Notices</h1>
+  <p>This file is generated from the locked Rust dependency graph. Do not edit it manually.</p>
+  <p>The Linux Soundboard project license is documented separately in <code>LICENSE</code>.</p>
+  <p>Package links identify the exact source release used by this build.</p>
+
+  <h2>License overview</h2>
+  <ul>
+    {{#each overview}}
+    <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+    {{/each}}
+  </ul>
+
+  <h2>License texts and packages</h2>
+  {{#each licenses}}
+  <section class="license">
+    <h3 id="{{id}}">{{name}}</h3>
+    <p>Used by:</p>
+    <ul>
+      {{#each used_by}}
+      <li><a href="https://crates.io/crates/{{crate.name}}/{{crate.version}}">{{crate.name}} {{crate.version}}</a></li>
+      {{/each}}
+    </ul>
+    <pre>{{text}}</pre>
+  </section>
+  {{/each}}
+</body>
+</html>

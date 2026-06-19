@@ -1,6 +1,17 @@
 # Third-Party Licenses
 
-Linux Soundboard's own source code is licensed separately under the PolyForm Noncommercial 1.0.0 license. This file documents major third-party components used by the project, their upstream locations, and the license notices that continue to apply to those components.
+Linux Soundboard's own source code is licensed separately under the PolyForm Noncommercial 1.0.0 license. This file is the human-readable overview of major third-party components and release obligations.
+
+The exact generated notices for Rust packages in the locked Linux release dependency graph, including package versions and full detected license texts, are in `THIRD_PARTY_NOTICES.html`. That generated file is authoritative for the corresponding `Cargo.lock` and must be regenerated whenever dependencies change:
+
+```bash
+cargo install cargo-about --version 0.8.4 --locked
+packaging/generate-third-party-notices.sh
+```
+
+Binary release artifacts must include `LICENSE`, `NOTICE.md`, this overview, and `THIRD_PARTY_NOTICES.html`.
+
+The package links in the generated notices identify the exact published source versions used by the locked build, including MPL-covered packages.
 
 ## MPL-2.0 Component
 
@@ -12,7 +23,7 @@ Linux Soundboard's own source code is licensed separately under the PolyForm Non
 
 Linux Soundboard uses Symphonia for media demuxing and audio decoding. The corresponding source code for Symphonia is available from the upstream repository linked above.
 
-## BSD-3-Clause Component Dynamically Linked At Runtime
+## BSD-3-Clause Components
 
 ### Opus codec library
 
@@ -53,6 +64,12 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+### ogg Rust crate
+
+- Component: `ogg` 0.8.0
+- License: BSD 3-Clause
+- Exact source and license text: see `THIRD_PARTY_NOTICES.html`
+
 ## LGPL Components Dynamically Linked At Runtime
 
 Linux Soundboard dynamically links against system-provided libraries on Linux. Those libraries are not relicensed under the project's PolyForm license. They remain available under their upstream LGPL terms, and users may replace those shared libraries with compatible modified versions as permitted by the LGPL.
@@ -77,9 +94,9 @@ The following direct dependencies are used under the MIT license:
 - `gtk4` 0.9.7. Copyright held by The gtk-rs Project Developers.
 - `libadwaita` 0.7.2. Copyright held by Bilal Elmoussaoui and libadwaita-rs contributors.
 - `nix` 0.29.0. Copyright (c) 2015 Carl Lerche + nix-rust Authors.
-- `ogg` 0.8.0. Copyright held by ogg crate contributors.
-- `opus` 0.3.0. Copyright held by opus crate contributors.
-- `pulse` (`libpulse-binding`) 2.x. Copyright held by libpulse-binding contributors.
+- `opus` 0.3.1. Copyright held by opus crate contributors.
+- `pulse` (`libpulse-binding`) 2.30.1. Copyright held by libpulse-binding contributors.
+- `pipewire` 0.9.2. Copyright held by the pipewire-rs contributors.
 - `which` 6.0.1. Copyright held by Harry Fei and which-rs contributors.
 - `x11` 2.21.0. Copyright held by daggerbot, Erle Pereira, AltF02, and x11-rs contributors.
 
@@ -92,7 +109,6 @@ The following direct dependencies are available under the MIT license or the Apa
 - `env_logger` 0.11.10. Copyright (c) Individual contributors.
 - `log` 0.4.29. Copyright (c) 2014 The Rust Project Developers.
 - `parking_lot` 0.12.5. Copyright (c) 2016 The Rust Project Developers.
-- `pipewire` 0.9.2. Copyright held by the pipewire-rs contributors.
 - `rayon` 1.11.0. Copyright (c) 2010 The Rust Project Developers.
 - `serde` 1.0.228. Copyright held by Erick Tryzelaar, David Tolnay, and Serde contributors.
 - `serde_json` 1.0.149. Copyright held by Erick Tryzelaar, David Tolnay, and serde_json contributors.

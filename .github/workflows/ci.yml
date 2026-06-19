@@ -135,6 +135,7 @@ jobs:
           shellcheck packaging/linux/appimage-preflight-check.sh
           shellcheck packaging/debian/package-deb.sh
           shellcheck packaging/rpm/package-rpm.sh
+          shellcheck packaging/generate-third-party-notices.sh
 
       - name: Validate systemd service file
         run: systemd-analyze verify packaging/linux/linux-soundboard-engine.service
@@ -199,3 +200,32 @@ jobs:
 
       - name: Check for unused dependencies
         run: cargo machete
+
+  license-notices:
+    name: Third-party license notices
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-about-0.8.4-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.8.4 --locked
+
+      - name: Verify generated notices
+        run: |
+          packaging/generate-third-party-notices.sh
+          git diff --exit-code -- THIRD_PARTY_NOTICES.html

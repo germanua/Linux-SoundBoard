@@ -197,7 +197,25 @@ Must exit 0 with no errors.
 
 ---
 
-## 8. Git Tag and Release
+## 8. License Compliance
+
+Generate notices from the exact locked dependency graph:
+
+```bash
+cargo install cargo-about --version 0.8.4 --locked
+packaging/generate-third-party-notices.sh
+git diff --exit-code -- THIRD_PARTY_NOTICES.html
+```
+
+- [ ] `THIRD_PARTY_NOTICES.html` is current for `Cargo.lock`.
+- [ ] `LICENSE`, `NOTICE.md`, `THIRDPARTY_LICENSES.md`, and `THIRD_PARTY_NOTICES.html` are present in every binary artifact.
+- [ ] The AppImage's bundled shared libraries have been inventoried and their required notices and source information are included.
+- [ ] The exact MPL-covered source corresponding to the release remains available and recipients are told where to obtain it.
+- [ ] Any new icons, fonts, sounds, binaries, or other assets have documented provenance and compatible licenses.
+
+---
+
+## 9. Git Tag and Release
 
 - [ ] All checks above passed.
 - [ ] Commit version bump and packaging changes: `git commit -m "release: bump to X.Y.Z"`.
@@ -213,7 +231,7 @@ Must exit 0 with no errors.
 
 ---
 
-## 9. Post-Release
+## 10. Post-Release
 
 ### AUR update (stable package)
 

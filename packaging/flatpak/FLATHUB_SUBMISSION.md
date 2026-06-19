@@ -89,7 +89,7 @@ After approval:
 
 ## Important Notes
 
-- **License**: PolyForm Noncommercial is accepted by Flathub
+- **License**: `PolyForm-Noncommercial-1.0.0` is a valid SPDX identifier, but Flathub evaluates submissions case by case and requires the app's redistribution rights to be correctly declared
 - **Screenshots**: Add actual screenshots to the repository (not just URLs)
 - **Updates**: Keep manifest in sync with upstream releases
 - **Support**: Monitor Flathub issues for user reports

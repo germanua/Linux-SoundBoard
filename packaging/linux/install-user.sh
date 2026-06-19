@@ -16,6 +16,7 @@ SYSTEM_PIPEWIRE_CONF="/usr/share/pipewire/pipewire.conf.d/$PIPEWIRE_CONF_NAME"
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/$APP_BINARY}"
 INSTALL_BINARY="$INSTALL_ROOT/$APP_BINARY"
 INSTALL_HELPER="$INSTALL_ROOT/install-swhkd-helper.sh"
+INSTALL_DOC_DIR="$INSTALL_ROOT/docs"
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -752,6 +753,33 @@ install_icons() {
     fi
 }
 
+resolve_project_file() {
+    local name=$1
+    local candidate
+
+    for candidate in "$SCRIPT_DIR/$name" "$SCRIPT_DIR/../../$name"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+install_legal_documents() {
+    local legal_file
+    local source
+
+    for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+        if source="$(resolve_project_file "$legal_file")"; then
+            install_file_from_source "$source" "$INSTALL_DOC_DIR/$legal_file" 644
+        else
+            warn "Legal document not found in installer bundle: $legal_file"
+        fi
+    done
+}
+
 install_or_repair() {
     local mode=$1
     local binary_arg=${2:-}
@@ -770,6 +798,7 @@ install_or_repair() {
         install_file_from_source "$SCRIPT_DIR/install-swhkd-helper.sh" "$INSTALL_HELPER" 755
     fi
 
+    install_legal_documents
     install_icons "$icon_source_root"
     install_file_from_content "$DESKTOP_DIR/$APP_ID.desktop" 644 "$(render_desktop_file)"
     install_file_from_content "$ENGINE_SERVICE" 644 "$(render_engine_service)"
@@ -787,6 +816,7 @@ install_or_repair() {
     printf '\n'
     printf '%s complete:\n' "$([[ "$mode" == "repair" ]] && printf 'Repair' || printf 'Install')"
     printf '  Binary:   %s\n' "$INSTALL_BINARY"
+    printf '  Notices:  %s\n' "$INSTALL_DOC_DIR"
     printf '  Launcher: %s\n' "$DESKTOP_DIR/$APP_ID.desktop"
     printf '  Engine:   %s\n' "$ENGINE_SERVICE"
 }
