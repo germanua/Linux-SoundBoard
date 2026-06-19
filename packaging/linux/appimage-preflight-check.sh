@@ -78,7 +78,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
     echo ""
     echo "Installation instructions:"
     
-    if [[ " ${MISSING_DEPS[@]} " =~ " FUSE " ]]; then
+    if [[ " ${MISSING_DEPS[*]} " =~ " FUSE " ]]; then
         echo ""
         echo "Ubuntu/Debian:"
         echo "  sudo apt install libfuse2"

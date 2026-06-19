@@ -26,6 +26,8 @@
   <a href="docs/SCREENSHOTS.md"><strong>Screenshots</strong></a>
   ·
   <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
+  ·
+  <a href="docs/LEGAL.md"><strong>Legal</strong></a>
 </p>
 
 <p align="center"><b>Install with one command — no root required:</b></p>
@@ -188,6 +190,9 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 | [Troubleshooting Guide](docs/TROUBLESHOOTING.md) | PipeWire, renderer, hotkey, and packaging issues                                       |
 | [Bug Reporting Guide](docs/BUG_REPORTS.md)       | How to file a useful bug report                                                        |
 | [Changelog](docs/CHANGELOG.md)                   | Version history                                                                        |
+| [Legal and Licensing](docs/LEGAL.md)             | Project license model, fork rules, commercial-use restrictions, and store-build notes  |
+| [Commercial Licensing](COMMERCIAL-LICENSE.md)    | Commercial-use policy for paid redistribution, store builds, and commercial bundling   |
+| [Donations and Sponsorships](DONATIONS.md)       | What voluntary support does and does not provide                                        |
 
 ---
 
@@ -223,12 +228,22 @@ Full source-build notes are in [docs/INSTALL.md](docs/INSTALL.md).
 - **Issues:** https://github.com/germanua/Linux-SoundBoard/issues
 - **Discussions:** https://github.com/germanua/Linux-SoundBoard/discussions
 - **AUR package:** https://aur.archlinux.org/packages/linux-soundboard-git
+- **Donations and sponsorships:** [support terms](DONATIONS.md)
 
 ---
 
 ## License
 
-Linux Soundboard is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) license. Commercial use requires a separate license.
+Linux Soundboard is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- SPDX identifier: `PolyForm-Noncommercial-1.0.0`
+- Required notice: `Required Notice: Copyright (c) 2026 germanua`
+- Noncommercial use, forks, and redistribution are allowed under the license terms.
+- Commercial use, paid redistribution, resale, commercial bundling, or use in a commercial product or service requires a separate written commercial license from the project owner.
+
+This project should not be described as OSI-approved open source. It is source-available under a noncommercial license.
+
+Third-party components keep their own licenses. See [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md) and [Legal and Licensing](docs/LEGAL.md).
 
 ---
 
@@ -236,4 +251,4 @@ Linux Soundboard is licensed under the [PolyForm Noncommercial 1.0.0](LICENSE) l
 
 Linux Soundboard is built on Rust, GTK4, Libadwaita, and the Linux audio ecosystem. Key components include Symphonia for audio decoding, PipeWire and WirePlumber for virtual mic routing, and `swhkd` for Wayland hotkey capture.
 
-Full third-party license notices are in [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md).
+The dependency overview is in [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md). Exact generated Rust dependency notices are in [THIRD_PARTY_NOTICES.html](THIRD_PARTY_NOTICES.html).

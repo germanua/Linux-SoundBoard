@@ -1,6 +1,7 @@
 [package]
 name = "linux-soundboard"
 version = "2.0.2"
+publish = false
 authors = ["germanua"]
 description = "Native Linux soundboard with PipeWire virtual microphone support"
 edition = "2021"
@@ -76,6 +77,12 @@ assets = [
     ["../packaging/debian/linux-soundboard.desktop", "usr/share/applications/com.linuxsoundboard.app.desktop", "644"],
     ["../packaging/debian/postinst", "DEBIAN/postinst", "755"],
     ["../packaging/debian/prerm", "DEBIAN/prerm", "755"],
+    ["../LICENSE", "usr/share/doc/linux-soundboard/LICENSE", "644"],
+    ["../NOTICE.md", "usr/share/doc/linux-soundboard/NOTICE.md", "644"],
+    ["../THIRDPARTY_LICENSES.md", "usr/share/doc/linux-soundboard/THIRDPARTY_LICENSES.md", "644"],
+    ["../THIRD_PARTY_NOTICES.html", "usr/share/doc/linux-soundboard/THIRD_PARTY_NOTICES.html", "644"],
+    ["../COMMERCIAL-LICENSE.md", "usr/share/doc/linux-soundboard/COMMERCIAL-LICENSE.md", "644"],
+    ["../DONATIONS.md", "usr/share/doc/linux-soundboard/DONATIONS.md", "644"],
     ["resources/icons/16x16/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/16x16/apps/com.linuxsoundboard.app.png", "644"],
     ["resources/icons/24x24/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/24x24/apps/com.linuxsoundboard.app.png", "644"],
     ["resources/icons/32x32/apps/com.linuxsoundboard.app.png", "usr/share/icons/hicolor/32x32/apps/com.linuxsoundboard.app.png", "644"],
@@ -96,6 +103,12 @@ summary = "Native Linux soundboard with PipeWire virtual microphone support"
 url = "https://github.com/germanua/Linux-SoundBoard"
 assets = [
     { source = "target/release/linux-soundboard", dest = "/usr/bin/linux-soundboard", mode = "755" },
+    { source = "../LICENSE", dest = "/usr/share/doc/linux-soundboard/LICENSE", mode = "644" },
+    { source = "../NOTICE.md", dest = "/usr/share/doc/linux-soundboard/NOTICE.md", mode = "644" },
+    { source = "../THIRDPARTY_LICENSES.md", dest = "/usr/share/doc/linux-soundboard/THIRDPARTY_LICENSES.md", mode = "644" },
+    { source = "../THIRD_PARTY_NOTICES.html", dest = "/usr/share/doc/linux-soundboard/THIRD_PARTY_NOTICES.html", mode = "644" },
+    { source = "../COMMERCIAL-LICENSE.md", dest = "/usr/share/doc/linux-soundboard/COMMERCIAL-LICENSE.md", mode = "644" },
+    { source = "../DONATIONS.md", dest = "/usr/share/doc/linux-soundboard/DONATIONS.md", mode = "644" },
     { source = "../packaging/rpm/linux-soundboard.desktop", dest = "/usr/share/applications/com.linuxsoundboard.app.desktop", mode = "644" },
     { source = "resources/icons/16x16/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/16x16/apps/com.linuxsoundboard.app.png", mode = "644" },
     { source = "resources/icons/24x24/apps/com.linuxsoundboard.app.png", dest = "/usr/share/icons/hicolor/24x24/apps/com.linuxsoundboard.app.png", mode = "644" },

@@ -22,7 +22,6 @@ note() { printf '[NOTE] %s\n' "$1"; }
 CARGO_TOML="$REPO_ROOT/src/Cargo.toml"
 EXPECTED_APP_ID="com.linuxsoundboard.app"
 EXPECTED_BINARY="linux-soundboard"
-EXPECTED_APP_NAME="Linux Soundboard"
 EXPECTED_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$CARGO_TOML" | head -n 1)"
 
 if [[ -z "$EXPECTED_VERSION" ]]; then

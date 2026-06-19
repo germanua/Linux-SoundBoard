@@ -37,6 +37,43 @@ fi
 
 echo ""
 
+# ── 1a. Legal and dependency notices ───────────────────────────────────────
+
+echo "==> Legal and dependency notices"
+LEGAL_FILES=(
+    "$REPO_ROOT/LICENSE"
+    "$REPO_ROOT/NOTICE.md"
+    "$REPO_ROOT/THIRDPARTY_LICENSES.md"
+    "$REPO_ROOT/THIRD_PARTY_NOTICES.html"
+    "$REPO_ROOT/COMMERCIAL-LICENSE.md"
+    "$REPO_ROOT/DONATIONS.md"
+)
+
+for legal_file in "${LEGAL_FILES[@]}"; do
+    if [[ -s "$legal_file" ]]; then
+        pass "legal file exists: ${legal_file#"$REPO_ROOT/"}"
+    else
+        fail "legal file missing or empty: $legal_file"
+    fi
+done
+
+for package_file in \
+    "$REPO_ROOT/packaging/linux/package-appimage.sh" \
+    "$REPO_ROOT/packaging/linux/install-user.sh" \
+    "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    "$REPO_ROOT/packaging/debian/rules" \
+    "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    "$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.yml"; do
+    if grep -qF "THIRD_PARTY_NOTICES.html" "$package_file"; then
+        pass "generated notices packaged by: ${package_file#"$REPO_ROOT/"}"
+    else
+        fail "generated notices not packaged by: $package_file"
+    fi
+done
+
+echo ""
+
 # ── 2. Desktop file validation ───────────────────────────────────────────────
 
 echo "==> Desktop file validation"
@@ -237,6 +274,7 @@ SHELL_SCRIPTS=(
     "$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
     "$REPO_ROOT/packaging/debian/package-deb.sh"
     "$REPO_ROOT/packaging/rpm/package-rpm.sh"
+    "$REPO_ROOT/packaging/generate-third-party-notices.sh"
     "$REPO_ROOT/packaging/common.sh"
     "$REPO_ROOT/packaging/validate-metadata.sh"
 )

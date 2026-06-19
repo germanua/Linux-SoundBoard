@@ -135,9 +135,14 @@ jobs:
           shellcheck packaging/linux/appimage-preflight-check.sh
           shellcheck packaging/debian/package-deb.sh
           shellcheck packaging/rpm/package-rpm.sh
+          shellcheck packaging/generate-third-party-notices.sh
 
       - name: Validate systemd service file
-        run: systemd-analyze verify packaging/linux/linux-soundboard-engine.service
+        run: |
+          # The metadata-only job does not build the application. Provide an
+          # ephemeral executable so systemd-analyze can validate ExecStart.
+          sudo install -Dm755 /bin/true /usr/local/bin/linux-soundboard
+          systemd-analyze verify packaging/linux/linux-soundboard-engine.service
 
       - name: Check desktop Icon= matches installed icon name
         run: |
@@ -190,12 +195,41 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-machete-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-machete-0.8.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-machete-
+            ${{ runner.os }}-cargo-machete-0.8.0-
 
       - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
+        run: cargo install cargo-machete --version 0.8.0 --locked
 
       - name: Check for unused dependencies
         run: cargo machete
+
+  license-notices:
+    name: Third-party license notices
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85"
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-about-0.8.4-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install cargo-about
+        run: cargo install cargo-about --version 0.8.4 --locked
+
+      - name: Verify generated notices
+        run: |
+          packaging/generate-third-party-notices.sh
+          git diff --exit-code -- THIRD_PARTY_NOTICES.html

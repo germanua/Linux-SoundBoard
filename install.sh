@@ -169,7 +169,11 @@ local_user_installer() {
     local script_dir
     local candidate
 
-    script_dir="$(cd -- "$(dirname -- "$script_path")" >/dev/null 2>&1 && pwd -P || pwd)"
+    if script_dir="$(cd -- "$(dirname -- "$script_path")" >/dev/null 2>&1 && pwd -P)"; then
+        :
+    else
+        script_dir="$(pwd)"
+    fi
 
     for candidate in \
         "$script_dir/packaging/linux/install-user.sh" \
@@ -219,7 +223,8 @@ install_debian() {
         install_tarball; return
     fi
 
-    local file="$WORK_DIR/$(basename "$url")"
+    local file
+    file="$WORK_DIR/$(basename "$url")"
     info "Downloading .deb..."
     fetch_progress "$url" "$file"
     apt_install "$file"
@@ -240,7 +245,8 @@ install_fedora() {
         install_tarball; return
     fi
 
-    local file="$WORK_DIR/$(basename "$url")"
+    local file
+    file="$WORK_DIR/$(basename "$url")"
     info "Downloading .rpm..."
     fetch_progress "$url" "$file"
     dnf_install "$file"
@@ -411,7 +417,11 @@ print_status() {
 build_swhkd_from_source() {
     local src="$WORK_DIR/swhkd"
     git clone --depth 1 "$SWHKD_REPO_URL" "$src"
-    (cd "$src" && make clean 2>/dev/null || true; make)
+    (
+        cd "$src"
+        make clean 2>/dev/null || true
+        make
+    )
     sudo install -Dm755 "$src/target/release/swhkd" /usr/bin/swhkd
     sudo install -Dm755 "$src/target/release/swhks" /usr/bin/swhks
     for f in "$src"/docs/*.gz; do
@@ -550,8 +560,9 @@ ensure_pipewire_services() {
     command -v systemctl >/dev/null 2>&1 || return
     local svc
     for svc in pipewire.service wireplumber.service; do
-        systemctl --user list-unit-files "$svc" >/dev/null 2>&1 \
-            && systemctl --user enable --now "$svc" >/dev/null 2>&1 || true
+        if systemctl --user list-unit-files "$svc" >/dev/null 2>&1; then
+            systemctl --user enable --now "$svc" >/dev/null 2>&1 || true
+        fi
     done
 }
 
