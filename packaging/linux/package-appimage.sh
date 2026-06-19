@@ -3,7 +3,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Resolved relative to this script at runtime.
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/app-meta.sh"
+# shellcheck source=packaging/common.sh
 source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
@@ -115,7 +118,10 @@ download_if_missing "$GTK_PLUGIN_URL" "$GTK_PLUGIN_BIN"
 chmod +x "$LINUXDEPLOY_APPIMAGE" "$GTK_PLUGIN_BIN"
 extract_linuxdeploy
 
+# The dollar expressions below are literal text patched into the plugin script.
+# shellcheck disable=SC2016
 if ! grep -q 'DEPLOY_GTK_VERSION="${DEPLOY_GTK_VERSION:-4}"' "$GTK_PLUGIN_BIN"; then
+    # shellcheck disable=SC2016
     sed -i 's/^DEPLOY_GTK_VERSION=3.*/DEPLOY_GTK_VERSION="${DEPLOY_GTK_VERSION:-4}" # Patched for Linux Soundboard GTK4 packaging/' "$GTK_PLUGIN_BIN"
 fi
 
@@ -124,7 +130,9 @@ if grep -q 'find /usr/lib\* -name libgiognutls.so' "$GTK_PLUGIN_BIN"; then
 fi
 
 # Skip VMware shim libraries; they drag host-only dependencies into the AppImage.
+# shellcheck disable=SC2016
 if grep -Fq 'done < <(find "$directory" \( -type l -o -type f \) -name "$library" -print0)' "$GTK_PLUGIN_BIN"; then
+    # shellcheck disable=SC2016
     sed -i '/done < <(find "\$directory" \\( -type l -o -type f \\) -name "\$library" -print0)/c\    done < <(find "$directory" \\( -type l -o -type f \\) ! -path "/usr/lib/vmware/*" ! -path "/usr/lib/vmware/**" -name "$library" -print0)' "$GTK_PLUGIN_BIN"
 fi
 
@@ -133,6 +141,7 @@ echo "Patching GTK plugin for Wayland support..."
 if grep -q 'export GDK_BACKEND=x11' "$GTK_PLUGIN_BIN"; then
     sed -i 's/export GDK_BACKEND=x11.*/# Prefer Wayland when available; fall back to X11 if needed/' "$GTK_PLUGIN_BIN"
     # Insert backend detection after the marker.
+    # shellcheck disable=SC2016
     sed -i '/# Prefer Wayland when available; fall back to X11 if needed/a \
 \
 # Wayland first, X11 as fallback.\
@@ -205,11 +214,11 @@ while IFS= read -r icon_path; do
     done
 done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
 
+DEPLOY_PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
+
 (
     cd "$DIST_ROOT"
-    export DEPLOY_GTK_VERSION=4
-    export PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
-    "$LINUXDEPLOY_BIN" \
+    DEPLOY_GTK_VERSION=4 PATH="$DEPLOY_PATH" "$LINUXDEPLOY_BIN" \
         --appdir "$APPDIR" \
         --executable "$BINARY_SOURCE" \
         --desktop-file "$APPDIR/usr/share/applications/$APP_ID.desktop" \
@@ -248,6 +257,7 @@ install -Dm755 "$SCRIPT_DIR/appimage-preflight-check.sh" "$APPDIR/usr/bin/appima
 # Wire the preflight check into AppRun.
 if [ -f "$APPDIR/AppRun" ]; then
     # Insert the check before the final exec line.
+    # shellcheck disable=SC2016
     sed -i '/^exec "$this_dir"\/AppRun.wrapped/i \
 # Run preflight checks (skip with SKIP_PREFLIGHT_CHECK=1).\
 if [ -z "$SKIP_PREFLIGHT_CHECK" ]; then\
@@ -259,10 +269,8 @@ fi
 
 (
     cd "$DIST_ROOT"
-    export PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
-    export ARCH="$linuxdeploy_arch"
-    export LDAI_OUTPUT="$versioned_name"
-    "$LINUXDEPLOY_BIN" \
+    PATH="$DEPLOY_PATH" ARCH="$linuxdeploy_arch" LDAI_OUTPUT="$versioned_name" \
+        "$LINUXDEPLOY_BIN" \
         --appdir "$APPDIR" \
         --output appimage
 )

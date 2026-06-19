@@ -480,6 +480,12 @@ impl SwhkdProcesses {
     }
 }
 
+impl Drop for SwhkdProcesses {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,11 +532,5 @@ mod tests {
 
         assert!(tail.contains("Last swhkd output:"));
         assert!(tail.contains("three"));
-    }
-}
-
-impl Drop for SwhkdProcesses {
-    fn drop(&mut self) {
-        self.terminate();
     }
 }

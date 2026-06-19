@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=packaging/common.sh
 source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
