@@ -3,7 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=packaging/common.sh
+# Resolved relative to this script at runtime.
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
