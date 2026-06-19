@@ -52,6 +52,11 @@ rm -rf %{buildroot}
 install -Dm755 target/release/linux-soundboard \
     %{buildroot}%{_bindir}/linux-soundboard
 
+for legal_file in NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+    install -Dm644 $legal_file \
+        %{buildroot}%{_docdir}/%{name}/$legal_file
+done
+
 # Install desktop file
 install -Dm644 packaging/rpm/linux-soundboard.desktop \
     %{buildroot}%{_datadir}/applications/com.linuxsoundboard.app.desktop
@@ -80,6 +85,11 @@ install -Dm644 packaging/linux/linux-soundboard-engine.service \
 
 %files
 %license LICENSE
+%{_docdir}/%{name}/NOTICE.md
+%{_docdir}/%{name}/THIRDPARTY_LICENSES.md
+%{_docdir}/%{name}/THIRD_PARTY_NOTICES.html
+%{_docdir}/%{name}/COMMERCIAL-LICENSE.md
+%{_docdir}/%{name}/DONATIONS.md
 %{_bindir}/linux-soundboard
 %{_datadir}/applications/com.linuxsoundboard.app.desktop
 %{_datadir}/icons/hicolor/*/apps/com.linuxsoundboard.app.png
