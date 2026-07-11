@@ -352,7 +352,7 @@ be renamed. Their folder association remains stable across refreshes.
 
 ### Delete Tab
 
-- **Trigger:** Right-click a custom tab → `Delete Tab`
+- **Trigger:** Right-click a custom tab → `Delete Tab`, or focus it and press `Delete`
 - **What it does:** Deletes the tab after confirmation
 
 > **Notes:**

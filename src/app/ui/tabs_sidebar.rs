@@ -15,6 +15,7 @@ use crate::commands;
 
 use super::dialogs::DialogHost;
 use super::icons;
+use super::is_unmodified_delete_shortcut;
 use super::menu;
 use super::tab_dnd;
 
@@ -146,6 +147,7 @@ impl TabsSidebar {
         }
 
         inner.reload_tabs_now(None);
+        inner.connect_delete_shortcut();
         inner.attach_sidebar_drop_target(&list_box);
 
         Self { inner }
@@ -179,6 +181,34 @@ impl TabsSidebar {
 }
 
 impl TabsInner {
+    fn connect_delete_shortcut(self: &Arc<Self>) {
+        let key = gtk4::EventControllerKey::new();
+        let inner_weak = Arc::downgrade(self);
+        key.connect_key_pressed(move |_, keyval, _, modifiers| {
+            let Some(inner) = inner_weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if !is_unmodified_delete_shortcut(keyval, modifiers) {
+                return glib::Propagation::Proceed;
+            }
+            let Some(row) = inner.list_box.selected_row() else {
+                return glib::Propagation::Proceed;
+            };
+            let tab_id = row.widget_name().to_string();
+            let tab_name = {
+                let config = inner.state.config.lock();
+                config.get_tab(&tab_id).map(|tab| tab.name.clone())
+            };
+            let Some(tab_name) = tab_name else {
+                return glib::Propagation::Proceed;
+            };
+
+            inner.request_tab_deletion(tab_id, tab_name);
+            glib::Propagation::Stop
+        });
+        self.list_box.add_controller(key);
+    }
+
     fn queue_reload_tabs_and_emit(self: &Arc<Self>, select_id: Option<String>) {
         let inner_weak = Arc::downgrade(self);
         glib::idle_add_local_once(move || {
@@ -658,6 +688,24 @@ impl TabsInner {
         }
     }
 
+    fn request_tab_deletion(self: &Arc<Self>, tab_id: String, tab_name: String) {
+        let inner_weak = Arc::downgrade(self);
+        let message = format!("Delete tab '{tab_name}'? Sounds will not be removed.");
+        self.dialog_host
+            .show_confirm("Delete Tab", &message, "Delete", move || {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                match commands::delete_tab(tab_id.clone(), Arc::clone(&inner.state.config)) {
+                    Ok(()) => {
+                        *inner.active_tab_id.lock() = GENERAL_TAB_ID.to_string();
+                        inner.queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
+                    }
+                    Err(err) => log::warn!("Delete tab failed: {err}"),
+                }
+            });
+    }
+
     fn show_tab_context_menu(
         self: &Arc<Self>,
         widget: &Widget,
@@ -711,31 +759,12 @@ impl TabsInner {
             let inner_weak = Arc::downgrade(self);
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
-            let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("delete", None);
             action.connect_activate(move |_, _| {
-                let Some(inner_menu) = inner_weak.upgrade() else {
+                let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                let inner_confirm_weak = Arc::downgrade(&inner_menu);
-                let tab_id = tab_id.clone();
-                let message = format!("Delete tab '{tab_name}'? Sounds will not be removed.");
-                dialog_host.show_confirm("Delete Tab", &message, "Delete", move || {
-                    let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
-                        return;
-                    };
-                    match commands::delete_tab(
-                        tab_id.clone(),
-                        Arc::clone(&inner_confirm.state.config),
-                    ) {
-                        Ok(_) => {
-                            *inner_confirm.active_tab_id.lock() = GENERAL_TAB_ID.to_string();
-                            inner_confirm
-                                .queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
-                        }
-                        Err(e) => log::warn!("Delete tab failed: {e}"),
-                    }
-                });
+                inner.request_tab_deletion(tab_id.clone(), tab_name.clone());
             });
             action_group.add_action(&action);
         }

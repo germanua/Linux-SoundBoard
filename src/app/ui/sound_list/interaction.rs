@@ -8,6 +8,7 @@ use gtk4::{DragSource, EventControllerKey, GestureClick, Widget};
 
 use crate::app_meta::GENERAL_TAB_ID;
 use crate::commands;
+use crate::ui::is_unmodified_delete_shortcut;
 
 use crate::ui::{menu, tab_dnd};
 
@@ -141,7 +142,7 @@ impl SoundListInner {
             let Some(inner) = inner_weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            if !is_remove_shortcut(keyval, modifiers) {
+            if !is_unmodified_delete_shortcut(keyval, modifiers) {
                 return glib::Propagation::Proceed;
             }
 
@@ -762,17 +763,6 @@ fn removal_confirmation(count: usize) -> String {
     }
 }
 
-fn is_remove_shortcut(keyval: gtk4::gdk::Key, modifiers: gtk4::gdk::ModifierType) -> bool {
-    let shortcut_modifiers = gtk4::gdk::ModifierType::CONTROL_MASK
-        | gtk4::gdk::ModifierType::ALT_MASK
-        | gtk4::gdk::ModifierType::SHIFT_MASK
-        | gtk4::gdk::ModifierType::SUPER_MASK
-        | gtk4::gdk::ModifierType::HYPER_MASK
-        | gtk4::gdk::ModifierType::META_MASK;
-    matches!(keyval, gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete)
-        && !modifiers.intersects(shortcut_modifiers)
-}
-
 fn parse_uri_list(uri_list: &str) -> Vec<String> {
     uri_list
         .lines()
@@ -840,11 +830,23 @@ mod tests {
     fn remove_shortcut_accepts_only_unmodified_delete_keys() {
         use gtk4::gdk::{Key, ModifierType};
 
-        assert!(is_remove_shortcut(Key::Delete, ModifierType::empty()));
-        assert!(is_remove_shortcut(Key::KP_Delete, ModifierType::LOCK_MASK));
-        assert!(!is_remove_shortcut(Key::BackSpace, ModifierType::empty()));
-        assert!(!is_remove_shortcut(Key::Delete, ModifierType::CONTROL_MASK));
-        assert!(!is_remove_shortcut(
+        assert!(is_unmodified_delete_shortcut(
+            Key::Delete,
+            ModifierType::empty()
+        ));
+        assert!(is_unmodified_delete_shortcut(
+            Key::KP_Delete,
+            ModifierType::LOCK_MASK
+        ));
+        assert!(!is_unmodified_delete_shortcut(
+            Key::BackSpace,
+            ModifierType::empty()
+        ));
+        assert!(!is_unmodified_delete_shortcut(
+            Key::Delete,
+            ModifierType::CONTROL_MASK
+        ));
+        assert!(!is_unmodified_delete_shortcut(
             Key::KP_Delete,
             ModifierType::SHIFT_MASK
         ));

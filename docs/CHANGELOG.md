@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Added
 
-- **Delete-key removal:** Pressing Delete with one or more sounds selected removes them through the same confirmation workflow as the context menu.
+- **Delete-key removal:** Pressing Delete removes selected sounds or a focused custom tab through the same confirmation workflow as its context menu.
 - **Folder-derived tabs:** Refreshing configured sound folders now creates stable tabs for immediate subfolders and assigns deeper files to their top-level folder tab.
 
 ### Changed
