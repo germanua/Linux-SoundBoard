@@ -394,34 +394,29 @@ struct SoundRemovalPlan {
     hotkey_ids: Vec<String>,
 }
 
-fn build_sound_removal_plan(
-    ids: &[String],
-    config: &Arc<Mutex<Config>>,
-) -> Result<SoundRemovalPlan, CommandError> {
+fn build_sound_removal_plan(ids: &[String], config: &Config) -> SoundRemovalPlan {
     if ids.is_empty() {
-        return Ok(SoundRemovalPlan::default());
+        return SoundRemovalPlan::default();
     }
 
     let requested_ids: HashSet<&str> = ids.iter().map(String::as_str).collect();
-    with_config(config, |cfg| {
-        let mut existing_ids = Vec::new();
-        let mut hotkey_ids = Vec::new();
-        for sound in &cfg.sounds {
-            if !requested_ids.contains(sound.id.as_str()) {
-                continue;
-            }
-
-            existing_ids.push(sound.id.clone());
-            if sound.hotkey.is_some() {
-                hotkey_ids.push(sound.id.clone());
-            }
+    let mut existing_ids = Vec::new();
+    let mut hotkey_ids = Vec::new();
+    for sound in &config.sounds {
+        if !requested_ids.contains(sound.id.as_str()) {
+            continue;
         }
 
-        SoundRemovalPlan {
-            existing_ids,
-            hotkey_ids,
+        existing_ids.push(sound.id.clone());
+        if sound.hotkey.is_some() {
+            hotkey_ids.push(sound.id.clone());
         }
-    })
+    }
+
+    SoundRemovalPlan {
+        existing_ids,
+        hotkey_ids,
+    }
 }
 
 pub fn remove_sounds(
@@ -429,17 +424,40 @@ pub fn remove_sounds(
     config: Arc<Mutex<Config>>,
     hotkeys: Arc<Mutex<HotkeyManager>>,
 ) -> Result<(), CommandError> {
-    let plan = build_sound_removal_plan(&ids, &config)?;
+    let plan = with_config_mut(&config, |cfg| {
+        let plan = build_sound_removal_plan(&ids, cfg);
+        if plan.existing_ids.is_empty() {
+            return Ok(plan);
+        }
+
+        let mut candidate = cfg.clone();
+        candidate.remove_sounds(&plan.existing_ids);
+        candidate.save().map_err(CommandError::config_save)?;
+        *cfg = candidate;
+        Ok(plan)
+    })??;
     if plan.existing_ids.is_empty() {
         return Ok(());
     }
 
     unregister_hotkeys_best_effort(&hotkeys, &plan.hotkey_ids, "remove_sounds");
+    Ok(())
+}
 
-    with_config_mut(&config, |cfg| {
-        cfg.remove_sounds(&plan.existing_ids);
-        cfg.save().map_err(CommandError::config_save)
-    })?
+pub fn remove_sounds_async<F>(
+    ids: Vec<String>,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "remove_sounds",
+        move || remove_sounds(ids, config, hotkeys),
+        on_complete,
+    )
 }
 
 pub fn add_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
@@ -451,26 +469,49 @@ pub fn add_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<()
     })
 }
 
+pub fn add_sound_folder_async<F>(
+    folder: String,
+    config: Arc<Mutex<Config>>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "add_sound_folder",
+        move || add_sound_folder(folder, config),
+        on_complete,
+    )
+}
+
 pub fn remove_sound_folder(
     folder: String,
     config: Arc<Mutex<Config>>,
     hotkeys: Arc<Mutex<HotkeyManager>>,
 ) -> Result<(), CommandError> {
     let folder_path = Path::new(&folder);
-
-    log::info!(
-        "Cancelling loudness analysis before removing folder: {}",
-        folder
-    );
-    crate::commands::cancel_loudness_analysis();
-
-    let sounds_to_remove: Vec<String> = with_config(&config, |cfg| {
-        cfg.sounds
+    let (sounds_to_remove, hotkey_ids) = with_config_mut(&config, |cfg| {
+        let sounds_to_remove = cfg
+            .sounds
             .iter()
             .filter(|sound| Path::new(effective_source_path(sound)).starts_with(folder_path))
             .map(|s| s.id.clone())
-            .collect()
-    })?;
+            .collect::<Vec<_>>();
+        let hotkey_ids = cfg
+            .sounds
+            .iter()
+            .filter(|sound| sounds_to_remove.contains(&sound.id) && sound.hotkey.is_some())
+            .map(|sound| sound.id.clone())
+            .collect::<Vec<_>>();
+
+        let mut candidate = cfg.clone();
+        candidate.remove_sounds(&sounds_to_remove);
+        detach_or_remove_tabs_for_root(&mut candidate, &folder);
+        candidate.remove_sound_folder(&folder);
+        candidate.save().map_err(CommandError::config_save)?;
+        *cfg = candidate;
+        Ok((sounds_to_remove, hotkey_ids))
+    })??;
 
     log::info!(
         "Removing {} sounds from folder: {}",
@@ -478,13 +519,24 @@ pub fn remove_sound_folder(
         folder
     );
 
-    unregister_hotkeys_best_effort(&hotkeys, &sounds_to_remove, "remove_sound_folder");
+    unregister_hotkeys_best_effort(&hotkeys, &hotkey_ids, "remove_sound_folder");
+    Ok(())
+}
 
-    with_saved_config(&config, |cfg| {
-        cfg.remove_sounds(&sounds_to_remove);
-        detach_or_remove_tabs_for_root(cfg, &folder);
-        cfg.remove_sound_folder(&folder);
-    })
+pub fn remove_sound_folder_async<F>(
+    folder: String,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "remove_sound_folder",
+        move || remove_sound_folder(folder, config, hotkeys),
+        on_complete,
+    )
 }
 
 pub fn refresh_sounds(

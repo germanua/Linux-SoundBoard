@@ -270,6 +270,69 @@ fn test_remove_sounds_batch_removes_multiple_sounds_once() {
 }
 
 #[test]
+fn test_remove_sounds_async_completes_and_updates_config() {
+    let _serial = main_context_test_lock();
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let mut config = create_test_config();
+    let sound = Sound::new("Remove".to_string(), "/tmp/remove.mp3".to_string());
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::remove_sounds_async(
+        vec![sound_id],
+        Arc::clone(&config),
+        create_mock_hotkey_manager(),
+        move |result| tx.send(result).expect("send removal result"),
+    )
+    .expect("dispatch async removal");
+
+    wait_for_async_result(&context, rx).expect("async removal succeeds");
+    assert!(config.lock().sounds.is_empty());
+}
+
+#[test]
+fn test_remove_sound_folder_async_completes_and_updates_config() {
+    let _serial = main_context_test_lock();
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let mut config = create_test_config();
+    config.sound_folders.push("/tmp".to_string());
+    let config = Arc::new(Mutex::new(config));
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::remove_sound_folder_async(
+        "/tmp".to_string(),
+        Arc::clone(&config),
+        create_mock_hotkey_manager(),
+        move |result| tx.send(result).expect("send folder removal result"),
+    )
+    .expect("dispatch async folder removal");
+
+    wait_for_async_result(&context, rx).expect("async folder removal succeeds");
+    assert!(config.lock().sound_folders.is_empty());
+}
+
+#[test]
+fn test_add_sound_folder_async_completes_and_updates_config() {
+    let _serial = main_context_test_lock();
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let config = create_test_config_state();
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::add_sound_folder_async("/tmp".to_string(), Arc::clone(&config), move |result| {
+        tx.send(result).expect("send folder addition result")
+    })
+    .expect("dispatch async folder addition");
+
+    wait_for_async_result(&context, rx).expect("async folder addition succeeds");
+    assert_eq!(config.lock().sound_folders, ["/tmp"]);
+}
+
+#[test]
 fn test_refresh_sounds_empty_folders() {
     let config = create_test_config_state();
     let hotkeys = create_mock_hotkey_manager();
@@ -467,6 +530,89 @@ fn test_refresh_sounds_disambiguates_duplicate_subfolder_names() {
 }
 
 #[test]
+fn test_refresh_sounds_uses_one_tab_owner_for_overlapping_roots() {
+    let root = std::env::temp_dir().join(format!("lsb-overlap-tabs-{}", uuid::Uuid::new_v4()));
+    let alerts = root.join("Alerts");
+    let nested = alerts.join("Nested");
+    fs::create_dir_all(&nested).expect("create test tree");
+    fs::write(nested.join("alert.mp3"), []).expect("write sound");
+
+    let mut config = create_test_config();
+    config.sound_folders = vec![
+        root.to_string_lossy().to_string(),
+        alerts.to_string_lossy().to_string(),
+    ];
+    let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
+    let coords = commands::LoudnessCoordinators::new();
+
+    let first = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
+        .expect("refresh parent-owned roots");
+    assert_eq!(first.added, 1);
+    assert_eq!(first.tabs_created, 1);
+    {
+        let cfg = config.lock();
+        assert_eq!(cfg.tabs.len(), 1);
+        assert_eq!(cfg.tabs[0].name, "Alerts");
+        assert_eq!(cfg.tabs[0].sound_ids.len(), 1);
+    }
+
+    commands::remove_sound_folder(root.to_string_lossy().to_string(), config.clone(), hotkeys)
+        .expect("remove owning root");
+    let second = commands::refresh_sounds(config.clone(), create_mock_hotkey_manager(), &coords)
+        .expect("refresh child root after handover");
+    assert_eq!(second.added, 1);
+    assert_eq!(second.tabs_created, 1);
+    {
+        let cfg = config.lock();
+        assert_eq!(cfg.tabs.len(), 1);
+        assert_eq!(cfg.tabs[0].name, "Nested");
+        assert_eq!(cfg.tabs[0].sound_ids.len(), 1);
+    }
+
+    fs::remove_dir_all(root).expect("cleanup test tree");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_refresh_sounds_deduplicates_symbolic_link_root_tabs() {
+    use std::os::unix::fs::symlink;
+
+    let base = std::env::temp_dir().join(format!("lsb-alias-tabs-{}", uuid::Uuid::new_v4()));
+    let root = base.join("actual");
+    let alias = base.join("alias");
+    let alerts = root.join("Alerts");
+    fs::create_dir_all(&alerts).expect("create test tree");
+    fs::write(alerts.join("alert.mp3"), []).expect("write sound");
+    symlink(&root, &alias).expect("create root alias");
+
+    let mut config = create_test_config();
+    config.sound_folders = vec![
+        root.to_string_lossy().to_string(),
+        alias.to_string_lossy().to_string(),
+    ];
+    let config = Arc::new(Mutex::new(config));
+
+    let summary = commands::refresh_sounds(
+        config.clone(),
+        create_mock_hotkey_manager(),
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("refresh alias roots");
+
+    assert_eq!(summary.added, 1);
+    assert_eq!(summary.tabs_created, 1);
+    let cfg = config.lock();
+    assert_eq!(cfg.sounds.len(), 1);
+    assert_eq!(cfg.tabs.len(), 1);
+    assert_eq!(cfg.tabs[0].sound_ids.len(), 1);
+    drop(cfg);
+
+    fs::remove_file(alias).expect("remove root alias");
+    fs::remove_dir_all(base).expect("cleanup test tree");
+}
+
+#[test]
 fn test_refresh_sounds_populates_duration_metadata() {
     let audio_path = create_test_audio_file("mp3");
     let mut config = create_test_config();
@@ -546,6 +692,7 @@ fn test_import_files_to_tab_populates_duration_metadata() {
 
 #[test]
 fn test_import_files_to_tab_async_completes_and_updates_config() {
+    let _serial = main_context_test_lock();
     let context = glib::MainContext::default();
     let _guard = context.acquire().expect("acquire default main context");
     let audio_path = create_test_audio_file("mp3");

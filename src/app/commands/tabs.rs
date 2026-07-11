@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crate::app_meta::GENERAL_TAB_ID;
 use crate::config::{Config, SoundTab};
 
-use super::shared::{with_saved_config_checked, with_saved_config_result};
+use super::shared::{
+    dispatch_async_result, with_config_mut, with_saved_config_checked, with_saved_config_result,
+};
 use super::CommandError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,12 +175,28 @@ pub fn rename_tab(
 }
 
 pub fn delete_tab(id: String, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
-    with_saved_config_checked(&config, |cfg| {
-        if !cfg.delete_tab(&id) {
+    with_config_mut(&config, |cfg| {
+        if cfg.get_tab(&id).is_none() {
             return Err(CommandError::NotFound("Tab"));
         }
+
+        let mut candidate = cfg.clone();
+        candidate.delete_tab(&id);
+        candidate.save().map_err(CommandError::config_save)?;
+        *cfg = candidate;
         Ok(())
-    })
+    })?
+}
+
+pub fn delete_tab_async<F>(
+    id: String,
+    config: Arc<Mutex<Config>>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result("delete_tab", move || delete_tab(id, config), on_complete)
 }
 
 pub fn add_sounds_to_tab(

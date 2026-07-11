@@ -370,7 +370,7 @@ be renamed. Their folder association remains stable across refreshes.
 - **Trigger:** `Settings` → `General` → `Sound Folders` → `Add Folder…`
 - **What it does:** Adds the folder to the scan list, then immediately refreshes and imports all supported audio files found inside
 
-> **Note:** Each immediate subfolder gets a tab. Files in deeper descendants use their top-level subfolder tab; files directly in the configured root remain in `General`.
+> **Note:** Each immediate subfolder gets a tab. Files in deeper descendants use their top-level subfolder tab; files directly in the configured root remain in `General`. If configured folders overlap, the outer folder owns the scan; aliases and nested roots do not create duplicate sounds or tabs.
 
 ---
 

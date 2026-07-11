@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -66,6 +66,7 @@ struct TabsInner {
     on_tab_selected: RefCell<Option<TabSelectedCallback>>,
     on_tab_membership_changed: RefCell<Option<TabMembershipChangedCallback>>,
     active_tab_id: Mutex<String>,
+    tab_deletion_pending: Cell<bool>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     dialog_host: DialogHost,
 }
@@ -116,6 +117,7 @@ impl TabsSidebar {
             on_tab_selected: RefCell::new(None),
             on_tab_membership_changed: RefCell::new(None),
             active_tab_id: Mutex::new(GENERAL_TAB_ID.to_string()),
+            tab_deletion_pending: Cell::new(false),
             toast_sender: Mutex::new(None),
             dialog_host,
         });
@@ -689,6 +691,10 @@ impl TabsInner {
     }
 
     fn request_tab_deletion(self: &Arc<Self>, tab_id: String, tab_name: String) {
+        if self.tab_deletion_pending.get() {
+            return;
+        }
+
         let inner_weak = Arc::downgrade(self);
         let message = format!("Delete tab '{tab_name}'? Sounds will not be removed.");
         self.dialog_host
@@ -696,12 +702,38 @@ impl TabsInner {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                match commands::delete_tab(tab_id.clone(), Arc::clone(&inner.state.config)) {
-                    Ok(()) => {
-                        *inner.active_tab_id.lock() = GENERAL_TAB_ID.to_string();
-                        inner.queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
-                    }
-                    Err(err) => log::warn!("Delete tab failed: {err}"),
+                if inner.tab_deletion_pending.replace(true) {
+                    return;
+                }
+
+                let inner_weak_complete = Arc::downgrade(&inner);
+                if let Err(err) = commands::delete_tab_async(
+                    tab_id.clone(),
+                    Arc::clone(&inner.state.config),
+                    move |result| {
+                        let Some(inner) = inner_weak_complete.upgrade() else {
+                            return;
+                        };
+                        inner.tab_deletion_pending.set(false);
+                        match result {
+                            Ok(()) => {
+                                *inner.active_tab_id.lock() = GENERAL_TAB_ID.to_string();
+                                inner.queue_reload_tabs_and_emit(Some(GENERAL_TAB_ID.to_string()));
+                            }
+                            Err(err) => {
+                                log::warn!("Delete tab failed: {err}");
+                                inner
+                                    .dialog_host
+                                    .show_error("Failed to Delete Tab", &err.to_string());
+                            }
+                        }
+                    },
+                ) {
+                    inner.tab_deletion_pending.set(false);
+                    log::warn!("Failed to dispatch tab deletion: {err}");
+                    inner
+                        .dialog_host
+                        .show_error("Failed to Delete Tab", &err.to_string());
                 }
             });
     }

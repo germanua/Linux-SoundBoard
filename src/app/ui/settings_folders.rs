@@ -59,35 +59,51 @@ fn build_sound_folder_row(
         let folder_rows2 = Rc::clone(&folder_rows);
         let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
-        remove_btn.connect_clicked(move |_| {
+        remove_btn.connect_clicked(move |button| {
             log::info!("Remove folder button clicked: {}", folder_owned);
-            if let Err(e) = commands::remove_sound_folder(
+            button.set_sensitive(false);
+            let button_done = button.clone();
+            let folders_group_done = folders_group2.clone();
+            let add_folder_row_done = add_folder_row2.clone();
+            let state_done = Arc::clone(&state2);
+            let folder_rows_done = Rc::clone(&folder_rows2);
+            let rebuild_pending_done = Rc::clone(&rebuild_pending2);
+            let on_library_changed_done = on_library_changed2.clone();
+            if let Err(e) = commands::remove_sound_folder_async(
                 folder_owned.clone(),
                 Arc::clone(&state2.config),
                 Arc::clone(&state2.hotkeys),
+                move |result| match result {
+                    Ok(()) => {
+                        log::info!("Remove folder command succeeded");
+                        let Some(folders_group2) = folders_group_done.upgrade() else {
+                            log::warn!("folders_group2 weak ref failed to upgrade");
+                            return;
+                        };
+                        let Some(add_folder_row2) = add_folder_row_done.upgrade() else {
+                            log::warn!("add_folder_row2 weak ref failed to upgrade");
+                            return;
+                        };
+                        schedule_rebuild_sound_folder_rows(
+                            &folders_group2,
+                            &add_folder_row2,
+                            Arc::clone(&state_done),
+                            Rc::clone(&folder_rows_done),
+                            Rc::clone(&rebuild_pending_done),
+                            on_library_changed_done.clone(),
+                        );
+                        if let Some(cb) = on_library_changed_done.as_ref() {
+                            cb();
+                        }
+                    }
+                    Err(e) => {
+                        button_done.set_sensitive(true);
+                        log::warn!("Remove folder failed: {e}");
+                    }
+                },
             ) {
-                log::warn!("Remove folder failed: {e}");
-                return;
-            }
-            log::info!("Remove folder command succeeded");
-            let Some(folders_group2) = folders_group2.upgrade() else {
-                log::warn!("folders_group2 weak ref failed to upgrade");
-                return;
-            };
-            let Some(add_folder_row2) = add_folder_row2.upgrade() else {
-                log::warn!("add_folder_row2 weak ref failed to upgrade");
-                return;
-            };
-            schedule_rebuild_sound_folder_rows(
-                &folders_group2,
-                &add_folder_row2,
-                Arc::clone(&state2),
-                Rc::clone(&folder_rows2),
-                Rc::clone(&rebuild_pending2),
-                on_library_changed2.clone(),
-            );
-            if let Some(cb) = on_library_changed2.as_ref() {
-                cb();
+                button.set_sensitive(true);
+                log::warn!("Failed to dispatch folder removal: {e}");
             }
         });
     }

@@ -703,6 +703,10 @@ impl SoundListInner {
     }
 
     fn request_sound_removal(self: &Arc<Self>, ids: Vec<String>) -> bool {
+        if self.removal_pending.get() {
+            return false;
+        }
+
         let ids = normalize_sound_ids(ids);
         if ids.is_empty() {
             return false;
@@ -722,26 +726,44 @@ impl SoundListInner {
     }
 
     fn remove_sounds_now(self: &Arc<Self>, ids: Vec<String>) {
+        if self.removal_pending.replace(true) {
+            return;
+        }
+
         let count = ids.len();
-        match commands::remove_sounds(
+        let inner_weak = Arc::downgrade(self);
+        if let Err(err) = commands::remove_sounds_async(
             ids.clone(),
             Arc::clone(&self.state.config),
             Arc::clone(&self.state.hotkeys),
-        ) {
-            Ok(()) => {
-                let mut invalid_ids = self.invalid_ids.lock();
-                for id in &ids {
-                    invalid_ids.remove(id);
+            move |result| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                inner.removal_pending.set(false);
+                match result {
+                    Ok(()) => {
+                        let mut invalid_ids = inner.invalid_ids.lock();
+                        for id in &ids {
+                            invalid_ids.remove(id);
+                        }
+                        drop(invalid_ids);
+                        inner.refresh_from_state_inner();
+                        inner.emit_library_changed();
+                    }
+                    Err(err) => {
+                        log::warn!("Remove failed for {count} sound(s): {err}");
+                        inner
+                            .dialog_host
+                            .show_error("Failed to Remove Sound", &err.to_string());
+                    }
                 }
-                drop(invalid_ids);
-                self.refresh_from_state_inner();
-                self.emit_library_changed();
-            }
-            Err(err) => {
-                log::warn!("Remove failed for {count} sound(s): {err}");
-                self.dialog_host
-                    .show_error("Failed to Remove Sound", &err.to_string());
-            }
+            },
+        ) {
+            self.removal_pending.set(false);
+            log::warn!("Failed to dispatch removal for {count} sound(s): {err}");
+            self.dialog_host
+                .show_error("Failed to Remove Sound", &err.to_string());
         }
     }
 }

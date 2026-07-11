@@ -31,9 +31,12 @@ impl Config {
     }
 
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let path = Self::config_path();
+        Self::load_from_path(&Self::config_path())
+    }
+
+    fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if path.exists() {
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(path)?;
             let raw: serde_json::Value = serde_json::from_str(&content)?;
 
             let version = raw
@@ -57,18 +60,24 @@ impl Config {
     }
 
     pub fn save(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::config_path();
+        self.save_to_path(&Self::config_path())
+    }
+
+    fn save_to_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         self.sanitize_for_persistence();
-        let tmp_path = save_temp_path(&path);
+        let tmp_path = save_temp_path(path);
 
         let write_result = (|| -> Result<(), Box<dyn std::error::Error>> {
             let tmp_file = fs::File::create(&tmp_path)?;
-            let mut writer = std::io::BufWriter::new(tmp_file);
-            serde_json::to_writer_pretty(&mut writer, self)?;
-            writer.flush()?;
+            {
+                let mut writer = std::io::BufWriter::new(&tmp_file);
+                serde_json::to_writer_pretty(&mut writer, self)?;
+                writer.flush()?;
+            }
+            tmp_file.sync_all()?;
             Ok(())
         })();
 
@@ -80,6 +89,13 @@ impl Config {
         if let Err(err) = fs::rename(&tmp_path, path) {
             let _ = fs::remove_file(&tmp_path);
             return Err(Box::new(err));
+        }
+        if let Some(parent) = path.parent() {
+            if let Err(err) = fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+                return Err(Box::new(std::io::Error::other(format!(
+                    "Configuration was written but its directory could not be synced: {err}"
+                ))));
+            }
         }
         Ok(())
     }
@@ -278,6 +294,10 @@ impl Config {
 mod tests {
     use super::*;
 
+    fn test_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("lsb-config-test-{}", uuid::Uuid::new_v4()))
+    }
+
     #[test]
     fn save_temp_path_is_unique_per_call() {
         let path = PathBuf::from("/tmp/linux-soundboard/config.json");
@@ -293,5 +313,49 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .starts_with("config.json.tmp."));
+    }
+
+    #[test]
+    fn save_to_path_round_trips_without_leaving_a_temp_file() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        let mut config = Config::default();
+        config.sound_folders.push("/tmp/sounds".to_string());
+
+        config.save_to_path(&path).expect("save config");
+
+        let loaded = Config::load_from_path(&path).expect("load saved config");
+        assert_eq!(loaded.sound_folders, ["/tmp/sounds"]);
+        assert!(fs::read_dir(&dir)
+            .expect("read config directory")
+            .all(|entry| !entry
+                .expect("read config entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp.")));
+
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+
+    #[test]
+    fn save_to_path_cleans_temp_file_when_replacement_fails() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let mut config = Config::default();
+
+        assert!(config.save_to_path(&dir).is_err());
+        assert!(fs::read_dir(dir.parent().expect("temp parent"))
+            .expect("read temp parent")
+            .all(|entry| !entry
+                .expect("read temp entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(&format!(
+                    "{}.tmp.",
+                    dir.file_name().unwrap().to_string_lossy()
+                ))));
+
+        fs::remove_dir_all(dir).expect("cleanup config directory");
     }
 }

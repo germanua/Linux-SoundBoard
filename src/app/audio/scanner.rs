@@ -2,7 +2,7 @@ use log::info;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "flac", "m4a", "aac", "mp4"];
@@ -26,6 +26,60 @@ pub struct ScannedSubfolder {
 pub struct AudioScan {
     pub files: Vec<AudioFile>,
     pub subfolders: Vec<ScannedSubfolder>,
+}
+
+#[derive(Debug)]
+struct ScanRoot {
+    configured: String,
+    canonical: Option<PathBuf>,
+}
+
+fn scan_roots(folders: &[String]) -> Vec<String> {
+    let mut roots = folders
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(|configured| ScanRoot {
+            canonical: fs::canonicalize(&configured).ok(),
+            configured,
+        })
+        .collect::<Vec<_>>();
+    roots.sort_by(|a, b| match (&a.canonical, &b.canonical) {
+        (Some(a_path), Some(b_path)) => a_path
+            .components()
+            .count()
+            .cmp(&b_path.components().count())
+            .then(a_path.cmp(b_path))
+            .then(a.configured.cmp(&b.configured)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.configured.cmp(&b.configured),
+    });
+
+    let mut owners = Vec::new();
+    roots
+        .into_iter()
+        .filter_map(|root| {
+            let Some(canonical) = root.canonical.as_ref() else {
+                return Some(root.configured);
+            };
+            if let Some(owner) = owners
+                .iter()
+                .find(|owner: &&PathBuf| canonical.starts_with(owner))
+            {
+                info!(
+                    "Skipping overlapping sound folder '{}' owned by '{}'",
+                    root.configured,
+                    owner.display()
+                );
+                None
+            } else {
+                owners.push(canonical.clone());
+                Some(root.configured)
+            }
+        })
+        .collect()
 }
 
 pub fn scan_folder(folder: &str) -> AudioScan {
@@ -103,9 +157,7 @@ pub fn scan_folder(folder: &str) -> AudioScan {
 }
 
 pub fn scan_folders(folders: &[String]) -> AudioScan {
-    let mut roots = folders.to_vec();
-    roots.sort();
-    roots.dedup();
+    let roots = scan_roots(folders);
 
     let scans = roots
         .par_iter()
@@ -124,9 +176,10 @@ pub fn scan_folders(folders: &[String]) -> AudioScan {
             .then(a.path.cmp(&b.path))
     });
     let mut seen_paths = HashSet::new();
-    combined
-        .files
-        .retain(|file| seen_paths.insert(file.path.clone()));
+    combined.files.retain(|file| {
+        seen_paths
+            .insert(fs::canonicalize(&file.path).unwrap_or_else(|_| PathBuf::from(&file.path)))
+    });
     combined.subfolders.sort();
     combined.subfolders.dedup();
     combined
@@ -217,5 +270,53 @@ mod tests {
         }));
 
         fs::remove_dir_all(root).expect("cleanup test tree");
+    }
+
+    #[test]
+    fn scan_folders_parent_root_owns_configured_child() {
+        let root = test_dir();
+        let alerts = root.join("Alerts");
+        fs::create_dir_all(&alerts).expect("create test tree");
+        let sound = alerts.join("alert.mp3");
+        fs::write(&sound, []).expect("write sound");
+
+        let scan = scan_folders(&[
+            alerts.to_string_lossy().to_string(),
+            root.to_string_lossy().to_string(),
+        ]);
+
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].root_folder, root.to_string_lossy());
+        assert_eq!(scan.subfolders.len(), 1);
+        assert_eq!(scan.subfolders[0].root_folder, root.to_string_lossy());
+        assert_eq!(scan.subfolders[0].relative_subfolder, "Alerts");
+
+        fs::remove_dir_all(root).expect("cleanup test tree");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_folders_deduplicates_symbolic_link_roots() {
+        use std::os::unix::fs::symlink;
+
+        let base = test_dir();
+        let root = base.join("actual");
+        let alias = base.join("alias");
+        let alerts = root.join("Alerts");
+        fs::create_dir_all(&alerts).expect("create test tree");
+        fs::write(alerts.join("alert.mp3"), []).expect("write sound");
+        symlink(&root, &alias).expect("create root alias");
+
+        let scan = scan_folders(&[
+            root.to_string_lossy().to_string(),
+            alias.to_string_lossy().to_string(),
+        ]);
+
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.subfolders.len(), 1);
+        assert_eq!(scan.files[0].root_folder, scan.subfolders[0].root_folder);
+
+        fs::remove_file(alias).expect("remove root alias");
+        fs::remove_dir_all(base).expect("cleanup test tree");
     }
 }

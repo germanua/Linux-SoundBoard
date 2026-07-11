@@ -71,6 +71,26 @@ fn test_delete_tab_not_found() {
 }
 
 #[test]
+fn test_delete_tab_async_completes_and_updates_config() {
+    let _serial = main_context_test_lock();
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let mut config = create_test_config();
+    config.tabs.push(SoundTab::new("To Delete".to_string(), 0));
+    let tab_id = config.tabs[0].id.clone();
+    let config = Arc::new(Mutex::new(config));
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::delete_tab_async(tab_id, Arc::clone(&config), move |result| {
+        tx.send(result).expect("send tab deletion result")
+    })
+    .expect("dispatch async tab deletion");
+
+    wait_for_async_result(&context, rx).expect("async tab deletion succeeds");
+    assert!(config.lock().tabs.is_empty());
+}
+
+#[test]
 fn test_add_sounds_to_tab() {
     let mut config = create_test_config();
     config.tabs.push(SoundTab::new("Test Tab".to_string(), 0));

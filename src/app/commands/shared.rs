@@ -231,13 +231,15 @@ pub fn default_sound_import_dir(
 pub fn unregister_hotkeys_best_effort(
     hotkeys: &Arc<Mutex<HotkeyManager>>,
     sound_ids: &[String],
-    _context: &'static str,
+    context: &'static str,
 ) {
     if sound_ids.is_empty() {
         return;
     }
 
-    let _ = hotkeys.lock().unregister_hotkeys_blocking(sound_ids);
+    if let Err(err) = hotkeys.lock().unregister_hotkeys_blocking(sound_ids) {
+        log::warn!("Failed to unregister hotkeys during {context}: {err}");
+    }
 }
 
 type PendingCallback = Box<dyn FnOnce(Box<dyn Any + Send>) + 'static>;

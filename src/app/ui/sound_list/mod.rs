@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -59,6 +59,7 @@ pub(super) struct SoundListInner {
     pub(super) active_sound_id: Arc<Mutex<Option<String>>>,
     pub(super) state: Arc<AppState>,
     pub(super) dialog_host: DialogHost,
+    pub(super) removal_pending: Cell<bool>,
     pub(super) on_library_changed: RefCell<Option<Box<dyn Fn() + 'static>>>,
     pub(super) visible_row_indices: RefCell<HashMap<String, u32>>,
 }
@@ -115,6 +116,7 @@ impl SoundList {
             active_sound_id: Arc::new(Mutex::new(None)),
             state,
             dialog_host,
+            removal_pending: Cell::new(false),
             on_library_changed: RefCell::new(None),
             visible_row_indices: RefCell::new(HashMap::new()),
         });

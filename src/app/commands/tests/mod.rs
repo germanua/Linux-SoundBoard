@@ -9,10 +9,17 @@ use crate::test_support::audio_fixtures::{
 };
 use parking_lot::Mutex;
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const BACKGROUND_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn main_context_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 fn create_test_config() -> Config {
     let mut cfg = Config::default();

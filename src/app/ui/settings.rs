@@ -312,45 +312,66 @@ fn build_general_page(
                         if let Some(path) = folder.path() {
                             let path_str = path.to_string_lossy().to_string();
                             log::info!("Add folder dialog result: {}", path_str);
-                            if let Err(e) =
-                                commands::add_sound_folder(path_str, Arc::clone(&state3.config))
-                            {
-                                log::warn!("Add folder failed: {e}");
+                            let Some(add_folder_row3) = add_folder_row_weak2.upgrade() else {
+                                log::warn!("add_folder_row3 weak ref failed to upgrade");
                                 return;
-                            }
-                            log::info!("Add folder command succeeded");
-                            if let Err(e) = commands::refresh_sounds_async(
+                            };
+                            add_folder_row3.set_sensitive(false);
+                            let add_folder_row_done = add_folder_row3.clone();
+                            if let Err(e) = commands::add_sound_folder_async(
+                                path_str,
                                 Arc::clone(&state3.config),
-                                Arc::clone(&state3.hotkeys),
-                                state3.loudness_coordinators.clone(),
-                                move |result| {
-                                    if let Err(e) = result {
-                                        log::warn!("Refresh after adding folder failed: {e}");
+                                move |result| match result {
+                                    Ok(()) => {
+                                        log::info!("Add folder command succeeded");
+                                        let add_folder_row_refresh = add_folder_row_done.clone();
+                                        if let Err(e) = commands::refresh_sounds_async(
+                                            Arc::clone(&state3.config),
+                                            Arc::clone(&state3.hotkeys),
+                                            state3.loudness_coordinators.clone(),
+                                            move |result| {
+                                                add_folder_row_refresh.set_sensitive(true);
+                                                if let Err(e) = result {
+                                                    log::warn!(
+                                                        "Refresh after adding folder failed: {e}"
+                                                    );
+                                                }
+                                                log::info!("Refresh sounds completed");
+                                                let Some(folders_group3) =
+                                                    folders_group_weak2.upgrade()
+                                                else {
+                                                    log::warn!(
+                                                        "folders_group3 weak ref failed to upgrade"
+                                                    );
+                                                    return;
+                                                };
+                                                schedule_rebuild_sound_folder_rows(
+                                                    &folders_group3,
+                                                    &add_folder_row_refresh,
+                                                    Arc::clone(&state3),
+                                                    Rc::clone(&folder_rows3),
+                                                    Rc::clone(&rebuild_pending3),
+                                                    on_library_changed3.clone(),
+                                                );
+                                                if let Some(cb) = on_library_changed3.as_ref() {
+                                                    cb();
+                                                }
+                                            },
+                                        ) {
+                                            add_folder_row_done.set_sensitive(true);
+                                            log::warn!(
+                                                "Failed to dispatch refresh after adding folder: {e}"
+                                            );
+                                        }
                                     }
-                                    log::info!("Refresh sounds completed");
-                                    let Some(folders_group3) = folders_group_weak2.upgrade() else {
-                                        log::warn!("folders_group3 weak ref failed to upgrade");
-                                        return;
-                                    };
-                                    let Some(add_folder_row3) = add_folder_row_weak2.upgrade()
-                                    else {
-                                        log::warn!("add_folder_row3 weak ref failed to upgrade");
-                                        return;
-                                    };
-                                    schedule_rebuild_sound_folder_rows(
-                                        &folders_group3,
-                                        &add_folder_row3,
-                                        Arc::clone(&state3),
-                                        Rc::clone(&folder_rows3),
-                                        Rc::clone(&rebuild_pending3),
-                                        on_library_changed3.clone(),
-                                    );
-                                    if let Some(cb) = on_library_changed3.as_ref() {
-                                        cb();
+                                    Err(e) => {
+                                        add_folder_row_done.set_sensitive(true);
+                                        log::warn!("Add folder failed: {e}");
                                     }
                                 },
                             ) {
-                                log::warn!("Failed to dispatch refresh after adding folder: {e}");
+                                add_folder_row3.set_sensitive(true);
+                                log::warn!("Failed to dispatch folder addition: {e}");
                             }
                         }
                     }
