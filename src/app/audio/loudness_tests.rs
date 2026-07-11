@@ -1,4 +1,7 @@
 use super::*;
+use crate::test_support::audio_fixtures::{
+    cleanup_test_audio_path, create_test_vorbis_file, TestVorbisFixture,
+};
 
 #[test]
 fn test_gain_factor_no_change() {
@@ -188,4 +191,17 @@ fn test_cancel_loudness_analysis() {
 
     reset_loudness_analysis_cancelled();
     assert!(!is_loudness_analysis_cancelled());
+}
+
+#[test]
+fn test_loudness_analysis_accepts_libvorbis_after_empty_priming_packet() {
+    let audio_path = create_test_vorbis_file(TestVorbisFixture::Mono44100);
+
+    let (loudness, true_peak) =
+        analyze_loudness_path_full(&audio_path).expect("analyze libvorbis loudness");
+
+    assert!(loudness.is_finite());
+    assert!(true_peak.is_some_and(f32::is_finite));
+
+    cleanup_test_audio_path(&audio_path);
 }

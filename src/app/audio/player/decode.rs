@@ -569,11 +569,17 @@ impl SymphoniaSource {
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     let spec = *decoded.spec();
+                    self.spec = spec;
+                    if decoded.frames() == 0 {
+                        // Vorbis may emit an empty priming packet before its first PCM frame.
+                        // The packet was consumed successfully, so keep decoding instead of
+                        // exposing the empty buffer as end-of-stream to the source iterator.
+                        continue;
+                    }
                     if self.buffer.capacity() < decoded.capacity() {
                         self.buffer = SampleBuffer::new(decoded.capacity().max(1) as u64, spec);
                     }
                     self.buffer.copy_interleaved_ref(decoded);
-                    self.spec = spec;
                     self.current_frame_offset = 0;
                     self.needs_decode = false;
                     return Some(());

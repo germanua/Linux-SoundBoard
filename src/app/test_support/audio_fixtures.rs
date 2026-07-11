@@ -3,6 +3,15 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_TEST_TONE_DURATION_MS: u32 = 200;
 
+const LIBVORBIS_MONO_44100_HEX: &str = include_str!("fixtures/libvorbis-mono-44100.ogg.hex");
+const LIBVORBIS_STEREO_48000_HEX: &str = include_str!("fixtures/libvorbis-stereo-48000.ogg.hex");
+
+#[derive(Clone, Copy)]
+pub enum TestVorbisFixture {
+    Mono44100,
+    Stereo48000,
+}
+
 pub fn build_test_wave_payload_with_duration(duration_ms: u32) -> Vec<u8> {
     let sample_rate = 44_100_u32;
     let channels = 2_u16;
@@ -53,6 +62,41 @@ pub fn create_test_audio_file_with_duration(ext: &str, duration_ms: u32) -> Path
     fs::write(&path, build_test_wave_payload_with_duration(duration_ms))
         .expect("write test audio payload");
     path
+}
+
+pub fn create_test_vorbis_file(fixture: TestVorbisFixture) -> PathBuf {
+    let encoded = match fixture {
+        TestVorbisFixture::Mono44100 => LIBVORBIS_MONO_44100_HEX,
+        TestVorbisFixture::Stereo48000 => LIBVORBIS_STEREO_48000_HEX,
+    };
+    let bytes = decode_hex_fixture(encoded);
+    let base = std::env::temp_dir().join(format!("lsb-test-audio-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&base).expect("create temp audio dir");
+    let path = base.join("tone-libvorbis.ogg");
+    fs::write(&path, bytes).expect("write libvorbis test fixture");
+    path
+}
+
+fn decode_hex_fixture(encoded: &str) -> Vec<u8> {
+    let digits = encoded
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    assert_eq!(digits.len() % 2, 0, "hex fixture must contain byte pairs");
+
+    digits
+        .chunks_exact(2)
+        .map(|pair| (decode_hex_nibble(pair[0]) << 4) | decode_hex_nibble(pair[1]))
+        .collect()
+}
+
+fn decode_hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("invalid hex digit in test fixture"),
+    }
 }
 
 pub fn cleanup_test_audio_path(path: &Path) {

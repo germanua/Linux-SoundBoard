@@ -135,6 +135,9 @@ pub fn probe_duration_ms(path: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::audio_fixtures::{
+        cleanup_test_audio_path, create_test_vorbis_file, TestVorbisFixture,
+    };
 
     #[test]
     fn time_to_ms_keeps_fractional_precision() {
@@ -144,5 +147,15 @@ mod tests {
     #[test]
     fn time_to_ms_rejects_non_finite_fraction() {
         assert_eq!(time_to_ms(Time::new(12, f64::NAN)), None);
+    }
+
+    #[test]
+    fn probe_duration_reads_libvorbis_metadata() {
+        let audio_path = create_test_vorbis_file(TestVorbisFixture::Stereo48000);
+
+        let duration_ms = probe_duration_ms(&audio_path.to_string_lossy());
+
+        assert!(duration_ms.is_some_and(|duration| (900..=1_100).contains(&duration)));
+        cleanup_test_audio_path(&audio_path);
     }
 }

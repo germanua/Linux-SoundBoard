@@ -1,7 +1,9 @@
 use super::source_routing;
 use super::*;
 use crate::app_meta::VIRTUAL_MIC_DESCRIPTION;
-use crate::test_support::audio_fixtures::{cleanup_test_audio_path, create_test_audio_file};
+use crate::test_support::audio_fixtures::{
+    cleanup_test_audio_path, create_test_audio_file, create_test_vorbis_file, TestVorbisFixture,
+};
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use opus::{Application as OpusApplication, Channels as OpusChannels, Encoder as OpusEncoder};
 use std::sync::Arc;
@@ -710,6 +712,63 @@ fn fill_output_queues_prefills_target_buffer_for_active_playback() {
     assert_eq!(queues.local.len(), target_samples);
     assert_eq!(queues.virtual_out.len(), target_samples);
     drop(queues);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn symphonia_source_decodes_and_seeks_libvorbis_streams() {
+    for (fixture, expected_channels, expected_rate) in [
+        (TestVorbisFixture::Mono44100, 1, 44_100),
+        (TestVorbisFixture::Stereo48000, 2, 48_000),
+    ] {
+        let audio_path = create_test_vorbis_file(fixture);
+        let path = audio_path.to_string_lossy();
+        let mut source = PlaybackSource::from_path(&path).expect("create libvorbis source");
+
+        assert_eq!(source.channels(), expected_channels);
+        assert_eq!(source.sample_rate(), expected_rate);
+        assert!(source
+            .total_duration()
+            .is_some_and(|duration| duration >= Duration::from_millis(900)));
+
+        let initial_samples = source.by_ref().take(2_048).collect::<Vec<_>>();
+        assert_eq!(initial_samples.len(), 2_048);
+        assert!(initial_samples.iter().any(|sample| *sample != 0));
+
+        source
+            .try_seek(Duration::from_millis(500))
+            .expect("seek libvorbis source");
+        let seeked_samples = source.by_ref().take(512).collect::<Vec<_>>();
+        assert_eq!(seeked_samples.len(), 512);
+        assert!(seeked_samples.iter().any(|sample| *sample != 0));
+
+        cleanup_test_audio_path(&audio_path);
+    }
+}
+
+#[test]
+fn active_playback_routes_libvorbis_through_common_mix_path() {
+    let audio_path = create_test_vorbis_file(TestVorbisFixture::Stereo48000);
+    let runtime = test_runtime_config();
+    let mut playback = ActivePlayback::new(
+        "play-vorbis".to_string(),
+        "sound-vorbis".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        None,
+        None,
+        &runtime,
+    )
+    .expect("create active libvorbis playback");
+
+    let mut local = vec![0.0; 512];
+    let mut virtual_out = vec![0.0; 512];
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(local.iter().any(|sample| sample.abs() > f32::EPSILON));
+    assert!(virtual_out.iter().any(|sample| sample.abs() > f32::EPSILON));
 
     cleanup_test_audio_path(&audio_path);
 }

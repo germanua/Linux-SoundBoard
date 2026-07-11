@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Fixed
 
+- **Ogg Vorbis playback:** libvorbis-encoded Ogg files no longer stop before playback when the decoder emits an empty priming packet. Playback now advances to the first packet containing PCM audio, including after seeking.
 - **Mic auto-detect selecting a screenshare source:** `Auto-detect (Default)` no longer picks a screenshare or other virtual source — Vencord/Discord screenshare, OBS virtual audio, loopback/virtual cables — as the microphone.  Auto-detect now only selects a recognised mic-enhancement chain (EasyEffects/NoiseTorch/RNNoise, preferred) or a real hardware microphone, and ignores everything else.  Hardware microphones are now detected via the PipeWire `device.id` the registry actually reports (previous builds keyed off `device.api`, which is not present at the registry layer, so hardware mics were misclassified and lost to any virtual source).  Explicit selection of any source from the dropdown is unchanged.
 
 ## [2.0.0] - 2026-05-09
