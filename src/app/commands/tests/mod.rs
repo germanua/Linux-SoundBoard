@@ -1,6 +1,8 @@
 use crate::audio::AudioPlayer;
 use crate::commands;
-use crate::config::{Config, ControlHotkeyAction, LoudnessAnalysisState, Sound, SoundTab};
+use crate::config::{
+    Config, ControlHotkeyAction, FolderTabBinding, LoudnessAnalysisState, Sound, SoundTab,
+};
 use crate::hotkeys::HotkeyManager;
 use crate::test_support::audio_fixtures::{
     cleanup_test_audio_path, create_test_audio_file, create_test_audio_file_with_duration,

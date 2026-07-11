@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Delete-key removal:** Pressing Delete with one or more sounds selected removes them through the same confirmation workflow as the context menu.
+- **Folder-derived tabs:** Refreshing configured sound folders now creates stable tabs for immediate subfolders and assigns deeper files to their top-level folder tab.
+
+### Changed
+
+- **Sound removal wording:** Soundboard actions now say “Remove” instead of “Delete” and clarify that source audio files remain on disk.
+- **Atomic folder refresh:** Folder scans now preserve root/subfolder identity, reconcile generated tabs and memberships in one saved configuration update, and avoid duplicate imports from overlapping roots.
+- **Configuration schema v7:** Existing tabs migrate as manual tabs; generated tabs store a separate folder binding without changing editable names or existing memberships.
+
 ### Fixed
 
 - **Ogg Vorbis playback:** libvorbis-encoded Ogg files no longer stop before playback when the decoder emits an empty priming packet. Playback now advances to the first packet containing PCM audio, including after seeking.

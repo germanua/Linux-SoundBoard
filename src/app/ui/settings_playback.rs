@@ -147,8 +147,8 @@ pub(super) fn build_playback_groups(
         playback_group.add(&auto_gain_row);
 
         let skip_del_row = adw::SwitchRow::builder()
-            .title("Never Ask to Confirm Delete")
-            .subtitle("Skip the confirmation dialog when deleting sounds")
+            .title("Never Ask to Confirm Removal")
+            .subtitle("Skip the confirmation dialog when removing sounds")
             .active(skip_del)
             .build();
         let state2 = Arc::clone(&state);

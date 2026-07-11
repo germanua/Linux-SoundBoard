@@ -232,11 +232,14 @@ fn test_remove_sound_removes_tab_membership() {
 
 #[test]
 fn test_remove_sounds_batch_removes_multiple_sounds_once() {
+    let source_path =
+        std::env::temp_dir().join(format!("lsb-remove-source-{}.wav", uuid::Uuid::new_v4()));
+    fs::write(&source_path, b"source audio remains untouched").expect("create source file");
     let mut config = create_test_config();
     let sound_a = Sound::new("A".to_string(), "/tmp/a.wav".to_string());
     let mut sound_b = Sound::new("B".to_string(), "/tmp/b.wav".to_string());
     sound_b.hotkey = Some("Ctrl+Alt+KeyB".to_string());
-    let sound_c = Sound::new("C".to_string(), "/tmp/c.wav".to_string());
+    let sound_c = Sound::new("C".to_string(), source_path.to_string_lossy().to_string());
 
     let kept_id = sound_a.id.clone();
     let remove_b = sound_b.id.clone();
@@ -262,6 +265,8 @@ fn test_remove_sounds_batch_removes_multiple_sounds_once() {
     assert_eq!(cfg.sounds.len(), 1);
     assert_eq!(cfg.sounds[0].id, kept_id);
     assert_eq!(cfg.tabs[0].sound_ids, vec![cfg.sounds[0].id.clone()]);
+    assert!(source_path.exists(), "removal must not delete source files");
+    fs::remove_file(source_path).expect("clean up source file");
 }
 
 #[test]
@@ -299,6 +304,166 @@ fn test_refresh_sounds_with_folder() {
     }));
 
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_refresh_sounds_reconciles_generated_tabs_and_root_removal() {
+    let root = std::env::temp_dir().join(format!("lsb-folder-tabs-{}", uuid::Uuid::new_v4()));
+    let alerts = root.join("Alerts");
+    let memes_nested = root.join("Memes").join("Nested");
+    fs::create_dir_all(&alerts).expect("create Alerts folder");
+    fs::create_dir_all(&memes_nested).expect("create nested Memes folder");
+    let root_file = root.join("root.mp3");
+    let alert_file = alerts.join("alert.mp3");
+    let meme_file = memes_nested.join("meme.ogg");
+    fs::write(&root_file, []).expect("write root file");
+    fs::write(&alert_file, []).expect("write alert file");
+    fs::write(&meme_file, []).expect("write meme file");
+
+    let mut config = create_test_config();
+    config
+        .sound_folders
+        .push(root.to_string_lossy().to_string());
+    let mut existing_alert = Sound::new(
+        "Existing Alert".to_string(),
+        alert_file.to_string_lossy().to_string(),
+    );
+    existing_alert.id = "existing-alert".to_string();
+    config.sounds.push(existing_alert);
+    let mut manual = SoundTab::new("Manual".to_string(), 1);
+    manual.id = "manual-tab".to_string();
+    manual.sound_ids.push("existing-alert".to_string());
+    config.tabs.push(manual);
+    let config = Arc::new(Mutex::new(config));
+    let hotkeys = create_mock_hotkey_manager();
+    let coords = commands::LoudnessCoordinators::new();
+
+    let first = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
+        .expect("first refresh succeeds");
+    assert_eq!(first.added, 2);
+    assert_eq!(first.tabs_created, 2);
+    assert_eq!(first.tab_memberships_added, 2);
+    {
+        let cfg = config.lock();
+        assert_eq!(cfg.sounds.len(), 3);
+        assert_eq!(cfg.tabs.len(), 3);
+        let alerts_tab = cfg.tabs.iter().find(|tab| tab.name == "Alerts").unwrap();
+        assert_eq!(alerts_tab.sound_ids, ["existing-alert"]);
+        assert_eq!(
+            alerts_tab.folder_binding,
+            Some(FolderTabBinding {
+                root_folder: root.to_string_lossy().to_string(),
+                relative_subfolder: "Alerts".to_string(),
+            })
+        );
+        let root_sound = cfg
+            .sounds
+            .iter()
+            .find(|sound| sound.path == root_file.to_string_lossy())
+            .unwrap();
+        assert!(cfg
+            .tabs
+            .iter()
+            .all(|tab| !tab.sound_ids.contains(&root_sound.id)));
+        assert_eq!(
+            cfg.get_tab("manual-tab").unwrap().sound_ids,
+            ["existing-alert"]
+        );
+    }
+
+    let second = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
+        .expect("repeat refresh succeeds");
+    assert_eq!(second.added, 0);
+    assert_eq!(second.tabs_created, 0);
+    assert_eq!(second.tab_memberships_added, 0);
+
+    let added_alert = alerts.join("second.mp3");
+    fs::write(&added_alert, []).expect("write second alert");
+    let third = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
+        .expect("new-file refresh succeeds");
+    assert_eq!(third.added, 1);
+    assert_eq!(third.tabs_created, 0);
+    assert_eq!(third.tab_memberships_added, 1);
+
+    fs::remove_dir_all(root.join("Memes")).expect("remove Memes folder");
+    let fourth = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
+        .expect("deleted-subfolder refresh succeeds");
+    assert_eq!(fourth.removed, 1);
+    assert_eq!(fourth.tabs_removed, 1);
+
+    let unrelated = root
+        .parent()
+        .unwrap()
+        .join(format!("lsb-unrelated-{}.mp3", uuid::Uuid::new_v4()));
+    fs::write(&unrelated, []).expect("write unrelated sound");
+    {
+        let mut cfg = config.lock();
+        let mut sound = Sound::new(
+            "Unrelated".to_string(),
+            unrelated.to_string_lossy().to_string(),
+        );
+        sound.id = "unrelated".to_string();
+        cfg.sounds.push(sound);
+        cfg.tabs
+            .iter_mut()
+            .find(|tab| tab.name == "Alerts")
+            .unwrap()
+            .sound_ids
+            .push("unrelated".to_string());
+    }
+
+    commands::remove_sound_folder(root.to_string_lossy().to_string(), config.clone(), hotkeys)
+        .expect("remove configured root succeeds");
+    {
+        let cfg = config.lock();
+        assert_eq!(cfg.sounds.len(), 1);
+        assert_eq!(cfg.sounds[0].id, "unrelated");
+        let retained = cfg.tabs.iter().find(|tab| tab.name == "Alerts").unwrap();
+        assert_eq!(retained.sound_ids, ["unrelated"]);
+        assert_eq!(retained.folder_binding, None);
+        assert!(cfg.get_tab("manual-tab").is_some());
+    }
+
+    fs::remove_dir_all(root).expect("cleanup root");
+    fs::remove_file(unrelated).expect("cleanup unrelated sound");
+}
+
+#[test]
+fn test_refresh_sounds_disambiguates_duplicate_subfolder_names() {
+    let base = std::env::temp_dir().join(format!("lsb-duplicate-tabs-{}", uuid::Uuid::new_v4()));
+    let first_root = base.join("First");
+    let second_root = base.join("Second");
+    fs::create_dir_all(first_root.join("Alerts")).expect("create first Alerts");
+    fs::create_dir_all(second_root.join("Alerts")).expect("create second Alerts");
+    fs::write(first_root.join("Alerts/one.mp3"), []).expect("write first sound");
+    fs::write(second_root.join("Alerts/two.mp3"), []).expect("write second sound");
+
+    let mut config = create_test_config();
+    config.sound_folders = vec![
+        second_root.to_string_lossy().to_string(),
+        first_root.to_string_lossy().to_string(),
+    ];
+    let config = Arc::new(Mutex::new(config));
+
+    let summary = commands::refresh_sounds(
+        config.clone(),
+        create_mock_hotkey_manager(),
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("duplicate-name refresh succeeds");
+
+    assert_eq!(summary.tabs_created, 2);
+    let cfg = config.lock();
+    assert_eq!(
+        cfg.tabs
+            .iter()
+            .map(|tab| tab.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Alerts (First)", "Alerts (Second)"]
+    );
+    assert_ne!(cfg.tabs[0].folder_binding, cfg.tabs[1].folder_binding);
+    drop(cfg);
+    fs::remove_dir_all(base).expect("cleanup duplicate roots");
 }
 
 #[test]

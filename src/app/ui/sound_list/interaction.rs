@@ -4,7 +4,7 @@ use std::sync::Arc;
 use gio::prelude::*;
 use glib::BoxedAnyObject;
 use gtk4::prelude::*;
-use gtk4::{DragSource, GestureClick, Widget};
+use gtk4::{DragSource, EventControllerKey, GestureClick, Widget};
 
 use crate::app_meta::GENERAL_TAB_ID;
 use crate::commands;
@@ -80,9 +80,7 @@ impl SoundListInner {
                 .clone()
                 .unwrap_or_else(|| full_sound.path.clone());
             let state_locate = Arc::clone(&inner.state);
-            let state_remove = Arc::clone(&inner.state);
             let invalid_locate = Arc::clone(&inner.invalid_ids);
-            let invalid_remove = Arc::clone(&inner.invalid_ids);
             let inner_weak_locate = Arc::downgrade(&inner);
             let inner_weak_remove = Arc::downgrade(&inner);
             let sound_id_locate = sound.id.clone();
@@ -127,22 +125,33 @@ impl SoundListInner {
                         }
                     });
                 },
-                move || match commands::remove_sound(
-                    sound_id_remove.clone(),
-                    Arc::clone(&state_remove.config),
-                    Arc::clone(&state_remove.hotkeys),
-                ) {
-                    Ok(_) => {
-                        invalid_remove.lock().remove(&sound_id_remove);
-                        if let Some(inner_remove) = inner_weak_remove.upgrade() {
-                            inner_remove.refresh_from_state_inner();
-                            inner_remove.emit_library_changed();
-                        }
+                move || {
+                    if let Some(inner_remove) = inner_weak_remove.upgrade() {
+                        inner_remove.remove_sounds_now(vec![sound_id_remove.clone()]);
                     }
-                    Err(e) => log::warn!("Remove sound failed: {e}"),
                 },
             );
         });
+    }
+
+    pub(super) fn connect_remove_shortcut(self: &Arc<Self>) {
+        let key = EventControllerKey::new();
+        let inner_weak = Arc::downgrade(self);
+        key.connect_key_pressed(move |_, keyval, _, modifiers| {
+            let Some(inner) = inner_weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if !is_remove_shortcut(keyval, modifiers) {
+                return glib::Propagation::Proceed;
+            }
+
+            if inner.request_sound_removal(inner.selected_sound_ids()) {
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        self.col_view.add_controller(key);
     }
 
     pub(super) fn setup_drag_drop(self: &Arc<Self>) {
@@ -453,11 +462,11 @@ impl SoundListInner {
         let destructive = gio::Menu::new();
         destructive.append(
             Some(if target_count > 1 {
-                "Delete Selected"
+                "Remove Selected"
             } else {
-                "Delete"
+                "Remove"
             }),
-            Some("sound-ctx.delete"),
+            Some("sound-ctx.remove"),
         );
         menu_model.append_section(None, &destructive);
 
@@ -654,47 +663,10 @@ impl SoundListInner {
 
         {
             let inner = Arc::clone(self);
-            let state = Arc::clone(&self.state);
-            let sound = sound.clone();
             let target_ids = target_ids.clone();
-            let dialog_host = self.dialog_host.clone();
-            let action = gio::SimpleAction::new("delete", None);
+            let action = gio::SimpleAction::new("remove", None);
             action.connect_activate(move |_, _| {
-                let skip_confirm = state.config.lock().settings.skip_delete_confirm;
-                let inner_confirm = Arc::clone(&inner);
-                let state_confirm = Arc::clone(&state);
-                let sound_to_delete = sound.clone();
-                let target_ids = target_ids.clone();
-                let selection_count = target_ids.len();
-                let target_ids_for_delete = target_ids.clone();
-
-                let delete_sound = move || match commands::remove_sounds(
-                    target_ids_for_delete.clone(),
-                    Arc::clone(&state_confirm.config),
-                    Arc::clone(&state_confirm.hotkeys),
-                ) {
-                    Ok(_) => {
-                        inner_confirm.refresh_from_state_inner();
-                        inner_confirm.emit_library_changed();
-                    }
-                    Err(e) => {
-                        log::warn!("Delete failed for {} sound(s): {e}", selection_count);
-                    }
-                };
-
-                if skip_confirm {
-                    delete_sound();
-                } else {
-                    let message = if target_ids.len() > 1 {
-                        format!(
-                            "Delete {} selected sounds? This cannot be undone.",
-                            target_ids.len()
-                        )
-                    } else {
-                        format!("Delete '{}'? This cannot be undone.", sound_to_delete.name)
-                    };
-                    dialog_host.show_confirm("Delete Sound", &message, "Delete", delete_sound);
-                }
+                inner.request_sound_removal(target_ids.clone());
             });
             action_group.add_action(&action);
         }
@@ -728,6 +700,77 @@ impl SoundListInner {
         }
         ids
     }
+
+    fn request_sound_removal(self: &Arc<Self>, ids: Vec<String>) -> bool {
+        let ids = normalize_sound_ids(ids);
+        if ids.is_empty() {
+            return false;
+        }
+
+        let count = ids.len();
+        let inner = Arc::clone(self);
+        let remove = move || inner.remove_sounds_now(ids.clone());
+        if self.state.config.lock().settings.skip_delete_confirm {
+            remove();
+        } else {
+            let message = removal_confirmation(count);
+            self.dialog_host
+                .show_confirm("Remove Sound", &message, "Remove", remove);
+        }
+        true
+    }
+
+    fn remove_sounds_now(self: &Arc<Self>, ids: Vec<String>) {
+        let count = ids.len();
+        match commands::remove_sounds(
+            ids.clone(),
+            Arc::clone(&self.state.config),
+            Arc::clone(&self.state.hotkeys),
+        ) {
+            Ok(()) => {
+                let mut invalid_ids = self.invalid_ids.lock();
+                for id in &ids {
+                    invalid_ids.remove(id);
+                }
+                drop(invalid_ids);
+                self.refresh_from_state_inner();
+                self.emit_library_changed();
+            }
+            Err(err) => {
+                log::warn!("Remove failed for {count} sound(s): {err}");
+                self.dialog_host
+                    .show_error("Failed to Remove Sound", &err.to_string());
+            }
+        }
+    }
+}
+
+fn normalize_sound_ids(ids: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    ids.into_iter()
+        .filter(|id| !id.is_empty() && seen.insert(id.clone()))
+        .collect()
+}
+
+fn removal_confirmation(count: usize) -> String {
+    if count == 1 {
+        "Remove this sound from the soundboard? The audio file will remain on disk.".to_string()
+    } else {
+        format!(
+            "Remove {count} selected sounds from the soundboard? The audio files will remain on disk."
+        )
+    }
+}
+
+fn is_remove_shortcut(keyval: gtk4::gdk::Key, modifiers: gtk4::gdk::ModifierType) -> bool {
+    let shortcut_modifiers = gtk4::gdk::ModifierType::CONTROL_MASK
+        | gtk4::gdk::ModifierType::ALT_MASK
+        | gtk4::gdk::ModifierType::SHIFT_MASK
+        | gtk4::gdk::ModifierType::SUPER_MASK
+        | gtk4::gdk::ModifierType::HYPER_MASK
+        | gtk4::gdk::ModifierType::META_MASK;
+    matches!(keyval, gtk4::gdk::Key::Delete | gtk4::gdk::Key::KP_Delete)
+        && !modifiers.intersects(shortcut_modifiers)
 }
 
 fn parse_uri_list(uri_list: &str) -> Vec<String> {
@@ -770,4 +813,40 @@ fn percent_decode(s: &str) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removal_helpers_normalize_ids_and_build_prompts() {
+        assert!(normalize_sound_ids(Vec::new()).is_empty());
+        assert_eq!(
+            normalize_sound_ids(vec!["one".into(), "".into(), "one".into(), "two".into()]),
+            ["one", "two"]
+        );
+        assert_eq!(
+            removal_confirmation(1),
+            "Remove this sound from the soundboard? The audio file will remain on disk."
+        );
+        assert_eq!(
+            removal_confirmation(2),
+            "Remove 2 selected sounds from the soundboard? The audio files will remain on disk."
+        );
+    }
+
+    #[test]
+    fn remove_shortcut_accepts_only_unmodified_delete_keys() {
+        use gtk4::gdk::{Key, ModifierType};
+
+        assert!(is_remove_shortcut(Key::Delete, ModifierType::empty()));
+        assert!(is_remove_shortcut(Key::KP_Delete, ModifierType::LOCK_MASK));
+        assert!(!is_remove_shortcut(Key::BackSpace, ModifierType::empty()));
+        assert!(!is_remove_shortcut(Key::Delete, ModifierType::CONTROL_MASK));
+        assert!(!is_remove_shortcut(
+            Key::KP_Delete,
+            ModifierType::SHIFT_MASK
+        ));
+    }
 }

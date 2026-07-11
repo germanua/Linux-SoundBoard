@@ -121,6 +121,7 @@ impl SoundList {
 
         inner.configure_columns();
         inner.connect_activate();
+        inner.connect_remove_shortcut();
         inner.setup_drag_drop();
 
         let sl = Self { inner };

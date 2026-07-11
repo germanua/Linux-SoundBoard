@@ -27,7 +27,7 @@ The sound list is the primary library view on the right side of the window. It d
 **What you can do:**
 
 - Browse and filter sounds by the active tab or search box
-- Select one or more sounds for tab operations, drag-and-drop, or bulk delete
+- Select one or more sounds for tab operations, drag-and-drop, or bulk removal
 
 **Interactions:**
 
@@ -187,6 +187,7 @@ The transport bar runs across the top of the main window.
   - Rescans all configured sound folders
   - Adds newly discovered supported audio files
   - Removes sounds whose stored file path no longer exists
+  - Creates and updates tabs from immediate subfolders
   - Refreshes the library and tab counts
 
 > **Note:** A toast notification appears when the refresh completes.
@@ -286,12 +287,12 @@ Right-click any row in the sound list to open the context menu.
 
 ---
 
-#### Delete / Delete Selected
+#### Remove / Remove Selected
 
-- **Trigger:** Right-click → `Delete` (single) or `Delete Selected` (multi-selection)
+- **Trigger:** Right-click → `Remove` (single), `Remove Selected` (multi-selection), or press `Delete`
 - **What it does:** Removes sound(s) from the library, removes all tab memberships, and unregisters associated hotkeys
 
-> **Note:** A confirmation dialog appears by default. Disable it in `Settings` → `General` → `Never Ask to Confirm Delete`.
+> **Note:** Source audio files remain on disk. A confirmation dialog appears by default; disable it in `Settings` → `General` → `Never Ask to Confirm Removal`.
 
 ---
 
@@ -325,6 +326,9 @@ The left sidebar contains the `General` tab and all custom tabs.
 | ---------- | -------------------------------- |
 | `General`  | Full library                     |
 | Custom tab | Only sounds assigned to that tab |
+
+Tabs generated from sound-folder subdirectories behave like custom tabs and can
+be renamed. Their folder association remains stable across refreshes.
 
 ---
 
@@ -366,16 +370,16 @@ The left sidebar contains the `General` tab and all custom tabs.
 - **Trigger:** `Settings` → `General` → `Sound Folders` → `Add Folder…`
 - **What it does:** Adds the folder to the scan list, then immediately refreshes and imports all supported audio files found inside
 
-> **Note:** Sound folders are scanned on startup and on manual refresh.
+> **Note:** Each immediate subfolder gets a tab. Files in deeper descendants use their top-level subfolder tab; files directly in the configured root remain in `General`.
 
 ---
 
 ### Remove Folder
 
 - **Trigger:** `Settings` → `General` → `Sound Folders` → remove button beside a folder
-- **What it does:** Removes the folder from the scan list
+- **What it does:** Removes the folder, its imported sounds, and its generated tabs from the soundboard
 
-> **Note:** Changes future scanning behavior only — does **not** delete sounds from disk or from the library immediately.
+> **Note:** Source audio files remain on disk. A generated tab containing unrelated manually added sounds is retained as a normal custom tab.
 
 ---
 
@@ -409,10 +413,10 @@ Open via the settings button in the transport bar.
 
 ---
 
-#### Never Ask to Confirm Delete
+#### Never Ask to Confirm Removal
 
-- **Path:** `Settings` → `General` → `Playback` → `Never Ask to Confirm Delete`
-- **What it does:** Skips the confirmation dialog when deleting sounds
+- **Path:** `Settings` → `General` → `Playback` → `Never Ask to Confirm Removal`
+- **What it does:** Skips the confirmation dialog when removing sounds from the soundboard
 
 ---
 

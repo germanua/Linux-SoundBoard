@@ -503,12 +503,20 @@ impl ControlHotkeys {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FolderTabBinding {
+    pub root_folder: String,
+    pub relative_subfolder: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoundTab {
     pub id: String,
     pub name: String,
     pub sound_ids: Vec<String>,
     pub order: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_binding: Option<FolderTabBinding>,
 }
 
 impl SoundTab {
@@ -518,6 +526,7 @@ impl SoundTab {
             name,
             sound_ids: vec![],
             order,
+            folder_binding: None,
         }
     }
 }

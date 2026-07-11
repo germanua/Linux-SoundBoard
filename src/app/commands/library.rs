@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::audio::file_link::{
     ValidationMode, ValidationReport, STARTUP_VALIDATION_CHUNK_SIZE,
 };
 use crate::audio::scanner;
-use crate::config::{Config, LoudnessAnalysisState, Sound, SoundTab};
+use crate::config::{Config, FolderTabBinding, LoudnessAnalysisState, Sound};
 use crate::hotkeys::HotkeyManager;
 
 use super::shared::{
@@ -54,6 +54,36 @@ pub struct RefreshSummary {
     pub removed: usize,
     pub refreshed: usize,
     pub invalidated: usize,
+    pub tabs_created: usize,
+    pub tabs_removed: usize,
+    pub tab_memberships_added: usize,
+}
+
+#[derive(Debug)]
+struct NewSound {
+    root_folder: String,
+    sound: Sound,
+}
+
+#[derive(Debug)]
+struct FingerprintUpdate {
+    sound: Sound,
+    invalidated: bool,
+}
+
+#[derive(Debug)]
+struct GeneratedTabPlan {
+    binding: FolderTabBinding,
+    default_name: String,
+    sound_paths: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct TabReconcileSummary {
+    changed: bool,
+    created: usize,
+    removed: usize,
+    memberships_added: usize,
 }
 
 fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRefreshOutcome {
@@ -102,6 +132,200 @@ fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRe
 
 fn effective_source_path(sound: &Sound) -> &str {
     sound.source_path.as_deref().unwrap_or(&sound.path)
+}
+
+fn build_generated_tab_plans(scan: &scanner::AudioScan) -> Vec<GeneratedTabPlan> {
+    let mut paths_by_binding = BTreeMap::<FolderTabBinding, Vec<String>>::new();
+    for subfolder in &scan.subfolders {
+        paths_by_binding
+            .entry(FolderTabBinding {
+                root_folder: subfolder.root_folder.clone(),
+                relative_subfolder: subfolder.relative_subfolder.clone(),
+            })
+            .or_default();
+    }
+    for file in &scan.files {
+        let Some(relative_subfolder) = &file.top_level_subfolder else {
+            continue;
+        };
+        paths_by_binding
+            .entry(FolderTabBinding {
+                root_folder: file.root_folder.clone(),
+                relative_subfolder: relative_subfolder.clone(),
+            })
+            .or_default()
+            .push(file.path.clone());
+    }
+
+    let mut name_counts = HashMap::<String, usize>::new();
+    for binding in paths_by_binding.keys() {
+        *name_counts
+            .entry(binding.relative_subfolder.clone())
+            .or_default() += 1;
+    }
+
+    paths_by_binding
+        .into_iter()
+        .map(|(binding, mut sound_paths)| {
+            sound_paths.sort();
+            sound_paths.dedup();
+            let default_name = if name_counts
+                .get(&binding.relative_subfolder)
+                .copied()
+                .unwrap_or_default()
+                > 1
+            {
+                let root_name = Path::new(&binding.root_folder)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| binding.root_folder.clone());
+                format!("{} ({root_name})", binding.relative_subfolder)
+            } else {
+                binding.relative_subfolder.clone()
+            };
+            GeneratedTabPlan {
+                binding,
+                default_name,
+                sound_paths,
+            }
+        })
+        .collect()
+}
+
+fn path_belongs_to_binding(path: &str, binding: &FolderTabBinding) -> bool {
+    let Ok(relative) = Path::new(path).strip_prefix(&binding.root_folder) else {
+        return false;
+    };
+    let mut components = relative.components();
+    let Some(first) = components.next() else {
+        return false;
+    };
+    components.next().is_some() && first.as_os_str().to_string_lossy() == binding.relative_subfolder
+}
+
+fn reconcile_generated_tabs(
+    config: &mut Config,
+    plans: &[GeneratedTabPlan],
+) -> TabReconcileSummary {
+    let mut summary = TabReconcileSummary::default();
+    let active_bindings = plans
+        .iter()
+        .map(|plan| plan.binding.clone())
+        .collect::<HashSet<_>>();
+
+    config.tabs.retain_mut(|tab| {
+        let Some(binding) = tab.folder_binding.as_ref() else {
+            return true;
+        };
+        if active_bindings.contains(binding) {
+            return true;
+        }
+        summary.changed = true;
+        if tab.sound_ids.is_empty() {
+            summary.removed += 1;
+            false
+        } else {
+            tab.folder_binding = None;
+            true
+        }
+    });
+
+    let sound_paths = config
+        .sounds
+        .iter()
+        .map(|sound| (sound.id.clone(), sound.path.clone()))
+        .collect::<HashMap<_, _>>();
+    let sound_ids_by_path = sound_paths
+        .iter()
+        .map(|(id, path)| (path.clone(), id.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut next_order = config
+        .tabs
+        .iter()
+        .map(|tab| tab.order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+
+    for plan in plans {
+        let desired_ids = plan
+            .sound_paths
+            .iter()
+            .filter_map(|path| sound_ids_by_path.get(path).cloned())
+            .collect::<Vec<_>>();
+        let desired_set = desired_ids.iter().cloned().collect::<HashSet<_>>();
+
+        let tab_index = config
+            .tabs
+            .iter()
+            .position(|tab| tab.folder_binding.as_ref() == Some(&plan.binding));
+        let tab = if let Some(index) = tab_index {
+            &mut config.tabs[index]
+        } else {
+            let mut tab = crate::config::SoundTab::new(plan.default_name.clone(), next_order);
+            next_order = next_order.saturating_add(1);
+            tab.folder_binding = Some(plan.binding.clone());
+            let index = config.tabs.len();
+            config.tabs.push(tab);
+            summary.changed = true;
+            summary.created += 1;
+            &mut config.tabs[index]
+        };
+
+        let before = tab.sound_ids.len();
+        tab.sound_ids.retain(|id| {
+            sound_paths.get(id).is_some_and(|path| {
+                !path_belongs_to_binding(path, &plan.binding) || desired_set.contains(id)
+            })
+        });
+        if tab.sound_ids.len() != before {
+            summary.changed = true;
+        }
+        for id in desired_ids {
+            if !tab.sound_ids.contains(&id) {
+                tab.sound_ids.push(id);
+                summary.changed = true;
+                summary.memberships_added += 1;
+            }
+        }
+    }
+
+    summary
+}
+
+fn detach_or_remove_tabs_for_root(config: &mut Config, root_folder: &str) {
+    config.tabs.retain_mut(|tab| {
+        let belongs_to_root = tab
+            .folder_binding
+            .as_ref()
+            .is_some_and(|binding| binding.root_folder == root_folder);
+        if !belongs_to_root {
+            return true;
+        }
+        if tab.sound_ids.is_empty() {
+            false
+        } else {
+            tab.folder_binding = None;
+            true
+        }
+    });
+}
+
+fn apply_fingerprint_update(current: &mut Sound, refreshed: &Sound) -> bool {
+    let changed = current.duration_ms != refreshed.duration_ms
+        || current.loudness_source_fingerprint != refreshed.loudness_source_fingerprint
+        || current.loudness_lufs != refreshed.loudness_lufs
+        || current.loudness_analysis_state != refreshed.loudness_analysis_state
+        || current.loudness_confidence != refreshed.loudness_confidence;
+    if changed {
+        current.duration_ms = refreshed.duration_ms;
+        current.loudness_source_fingerprint = refreshed.loudness_source_fingerprint.clone();
+        current.loudness_lufs = refreshed.loudness_lufs;
+        current.loudness_analysis_state = refreshed.loudness_analysis_state;
+        current.loudness_confidence = refreshed.loudness_confidence;
+    }
+    changed
 }
 
 pub fn add_sound(
@@ -257,8 +481,9 @@ pub fn remove_sound_folder(
     unregister_hotkeys_best_effort(&hotkeys, &sounds_to_remove, "remove_sound_folder");
 
     with_saved_config(&config, |cfg| {
-        cfg.remove_sound_folder(&folder);
         cfg.remove_sounds(&sounds_to_remove);
+        detach_or_remove_tabs_for_root(cfg, &folder);
+        cfg.remove_sound_folder(&folder);
     })
 }
 
@@ -271,9 +496,10 @@ pub fn refresh_sounds(
     crate::diagnostics::record_phase_with_config("refresh_sounds:start", &config.lock());
     #[derive(Debug)]
     struct RefreshWork {
-        new_sounds: Vec<Sound>,
-        removed_ids: Vec<String>,
-        removed_paths: HashSet<String>,
+        new_sounds: Vec<NewSound>,
+        removed_sounds: Vec<(String, String)>,
+        fingerprint_updates: Vec<FingerprintUpdate>,
+        tab_plans: Vec<GeneratedTabPlan>,
     }
 
     let (folders, existing_paths, known_sounds) = with_config(&config, |cfg| {
@@ -283,26 +509,23 @@ pub fn refresh_sounds(
             .iter()
             .map(|s| s.path.clone())
             .collect::<HashSet<_>>();
-        let known_sounds = cfg
-            .sounds
-            .iter()
-            .map(|s| (s.id.clone(), s.path.clone()))
-            .collect::<Vec<_>>();
+        let known_sounds = cfg.sounds.clone();
         (folders, existing_paths, known_sounds)
     })?;
 
     let work: RefreshWork = {
-        let files = scanner::scan_folders(&folders);
+        let scan = scanner::scan_folders(&folders);
 
-        let mut seen_new_paths = HashSet::new();
-        let new_files = files
-            .into_iter()
+        let new_files = scan
+            .files
+            .iter()
             .filter(|f| !existing_paths.contains(&f.path))
-            .filter(|f| seen_new_paths.insert(f.path.clone()))
+            .cloned()
             .collect::<Vec<_>>();
 
-        let build_sound = |file: &scanner::AudioFile| {
-            build_sound_with_metadata(file.name.clone(), file.path.clone())
+        let build_sound = |file: &scanner::AudioFile| NewSound {
+            root_folder: file.root_folder.clone(),
+            sound: build_sound_with_metadata(file.name.clone(), file.path.clone()),
         };
         let analysis_plan = adaptive_audio_analysis_plan(new_files.len());
         let analysis_threads = analysis_plan.threads;
@@ -326,7 +549,7 @@ pub fn refresh_sounds(
             "refresh_sounds:before_metadata_pool",
             &config.lock(),
         );
-        let new_sounds: Vec<Sound> = if new_files.is_empty() {
+        let new_sounds: Vec<NewSound> = if new_files.is_empty() {
             Vec::new()
         } else {
             match rayon::ThreadPoolBuilder::new()
@@ -344,16 +567,32 @@ pub fn refresh_sounds(
                 }
             }
         };
-        let removed: Vec<(String, String)> = known_sounds
+        let removed_sounds = known_sounds
             .iter()
-            .filter(|(_, path)| !Path::new(path).exists())
-            .cloned()
+            .filter(|sound| !Path::new(&sound.path).exists())
+            .map(|sound| (sound.id.clone(), sound.path.clone()))
+            .collect::<Vec<_>>();
+        let removed_ids = removed_sounds
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<HashSet<_>>();
+        let fingerprint_updates = known_sounds
+            .into_iter()
+            .filter(|sound| !removed_ids.contains(sound.id.as_str()))
+            .filter_map(|mut sound| {
+                let refresh = refresh_existing_sound_source_fingerprint(&mut sound);
+                refresh.changed.then_some(FingerprintUpdate {
+                    sound,
+                    invalidated: refresh.invalidated,
+                })
+            })
             .collect();
 
         RefreshWork {
-            removed_ids: removed.iter().map(|(id, _)| id.clone()).collect(),
-            removed_paths: removed.into_iter().map(|(_, path)| path).collect(),
             new_sounds,
+            removed_sounds,
+            fingerprint_updates,
+            tab_plans: build_generated_tab_plans(&scan),
         }
     };
     crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:after_metadata_pool");
@@ -362,65 +601,94 @@ pub fn refresh_sounds(
         &config.lock(),
     );
 
-    unregister_hotkeys_best_effort(&hotkeys, &work.removed_ids, "refresh_sounds");
-
     let mut cfg = config.lock();
-    let mut refreshed_existing = 0usize;
-    let mut invalidated_existing = 0usize;
-    for sound in &mut cfg.sounds {
-        if work.removed_paths.contains(&sound.path) {
+    let active_roots = cfg.sound_folders.iter().cloned().collect::<HashSet<_>>();
+    let removed_ids = work
+        .removed_sounds
+        .iter()
+        .filter_map(|(id, path)| {
+            cfg.get_sound(id)
+                .is_some_and(|sound| sound.path == *path && !Path::new(path).exists())
+                .then_some(id.clone())
+        })
+        .collect::<Vec<_>>();
+    cfg.remove_sounds(&removed_ids);
+
+    let mut refreshed_existing = 0;
+    let mut invalidated_existing = 0;
+    for update in &work.fingerprint_updates {
+        let Some(current) = cfg.get_sound_mut(&update.sound.id) else {
+            continue;
+        };
+        if current.path != update.sound.path {
             continue;
         }
-        if !Path::new(&sound.path).exists() {
-            continue;
-        }
-        let refresh = refresh_existing_sound_source_fingerprint(sound);
-        if refresh.changed {
+        if apply_fingerprint_update(current, &update.sound) {
             refreshed_existing += 1;
-        }
-        if refresh.invalidated {
-            invalidated_existing += 1;
+            if update.invalidated {
+                invalidated_existing += 1;
+            }
         }
     }
 
+    let mut added_count = 0;
+    for new_sound in work.new_sounds {
+        if active_roots.contains(&new_sound.root_folder)
+            && Path::new(&new_sound.sound.path).exists()
+            && !cfg
+                .sounds
+                .iter()
+                .any(|sound| sound.path == new_sound.sound.path)
+        {
+            cfg.sounds.push(new_sound.sound);
+            added_count += 1;
+        }
+    }
+
+    let active_tab_plans = work
+        .tab_plans
+        .into_iter()
+        .filter(|plan| active_roots.contains(&plan.binding.root_folder))
+        .collect::<Vec<_>>();
+    let tabs = reconcile_generated_tabs(&mut cfg, &active_tab_plans);
+    let removed_count = removed_ids.len();
+    let summary = RefreshSummary {
+        added: added_count,
+        removed: removed_count,
+        refreshed: refreshed_existing,
+        invalidated: invalidated_existing,
+        tabs_created: tabs.created,
+        tabs_removed: tabs.removed,
+        tab_memberships_added: tabs.memberships_added,
+    };
+
+    let should_schedule_backfill = added_count > 0 || invalidated_existing > 0;
+    let changed = added_count > 0 || removed_count > 0 || refreshed_existing > 0 || tabs.changed;
+    if changed {
+        if let Err(err) = cfg.save() {
+            crate::diagnostics::clear_work_runtime();
+            return Err(CommandError::config_save(err));
+        }
+    }
+    crate::diagnostics::record_phase_with_config("library:refresh_complete", &cfg);
+    crate::diagnostics::clear_work_runtime();
+    drop(cfg);
+
+    unregister_hotkeys_best_effort(&hotkeys, &removed_ids, "refresh_sounds");
+    if should_schedule_backfill {
+        maybe_schedule_missing_loudness_backfill(&config, coords);
+    }
     if invalidated_existing > 0 {
         log::info!(
             "Refresh invalidated loudness metadata for {} sound(s) due to source fingerprint drift",
             invalidated_existing
         );
     }
-
-    let added_count = work.new_sounds.len();
-    let removed_count = work.removed_ids.len();
-    let summary = RefreshSummary {
-        added: added_count,
-        removed: removed_count,
-        refreshed: refreshed_existing,
-        invalidated: invalidated_existing,
-    };
-
-    let should_schedule_backfill = added_count > 0 || invalidated_existing > 0;
-
-    if work.new_sounds.is_empty() && work.removed_paths.is_empty() && refreshed_existing == 0 {
-        crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:end:no_changes");
-        crate::diagnostics::record_phase_with_config("library:refresh_complete", &cfg);
-        crate::diagnostics::clear_work_runtime();
-        return Ok(summary);
-    }
-    for sound in work.new_sounds {
-        cfg.add_sound(sound);
-    }
-    if !work.removed_paths.is_empty() {
-        cfg.sounds.retain(|s| !work.removed_paths.contains(&s.path));
-    }
-    cfg.save().map_err(CommandError::config_save)?;
-    crate::diagnostics::record_phase_with_config("library:refresh_complete", &cfg);
-    crate::diagnostics::clear_work_runtime();
-    drop(cfg);
-    if should_schedule_backfill {
-        maybe_schedule_missing_loudness_backfill(&config, coords);
-    }
-    crate::diagnostics::memory::log_memory_snapshot("refresh_sounds:end:saved");
+    crate::diagnostics::memory::log_memory_snapshot(if changed {
+        "refresh_sounds:end:saved"
+    } else {
+        "refresh_sounds:end:no_changes"
+    });
     Ok(summary)
 }
 
@@ -725,5 +993,3 @@ where
         on_complete,
     )
 }
-
-fn _keep_soundtab_in_module_tree(_: &SoundTab) {}
