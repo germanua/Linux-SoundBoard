@@ -41,7 +41,6 @@ pub fn run() {
     info!("Starting Linux Soundboard (GTK4)");
 
     gtk4::init().expect("Failed to initialize GTK4");
-    normalize_legacy_dark_theme_setting();
     adw::init().expect("Failed to initialize libadwaita");
     Window::set_default_icon_name(APP_ICON_NAME);
 
@@ -81,17 +80,6 @@ linux_soundboard::audio::player=info,\
 linux_soundboard::audio::player::source_routing=info",
     );
     env_logger::Builder::from_env(env).init();
-}
-
-fn normalize_legacy_dark_theme_setting() {
-    if let Some(settings) = gtk4::Settings::default() {
-        if settings.is_gtk_application_prefer_dark_theme() {
-            info!(
-                "Disabling legacy GtkSettings:gtk-application-prefer-dark-theme in favor of AdwStyleManager"
-            );
-            settings.set_gtk_application_prefer_dark_theme(false);
-        }
-    }
 }
 
 fn configure_preferred_backend() {
@@ -183,8 +171,6 @@ fn running_in_vmware_guest() -> bool {
 
 fn build_activate_handler() -> impl Fn(&Application) + 'static {
     move |app| {
-        normalize_legacy_dark_theme_setting();
-
         if let Some(display) = gtk4::gdk::Display::default() {
             info!("GTK display backend: {:?}", display.backend());
         } else {
@@ -406,27 +392,61 @@ fn initialize_player(config: &Config) -> crate::audio::AudioPlayer {
             "LSB_ROUTE_AUDIT is enabled — running audio engine in-process to capture writes \
              (the systemd-spawned engine would not inherit the env var)"
         );
-        // Stop any existing engine so it doesn't shadow our in-process one and
-        // so its writes (which we couldn't have captured anyway) stop happening.
-        crate::audio::engine_ipc::shutdown_incompatible_engine_if_running();
-    } else if let Some(player) = crate::audio::AudioPlayer::connect_to_engine() {
-        log::info!("Connected UI to existing Linux Soundboard audio engine");
+        stop_audio_engine_service_and_process();
+    } else if let Some(player) = connect_or_start_audio_engine(
+        crate::audio::AudioPlayer::connect_to_engine,
+        crate::audio::engine_ipc::shutdown_incompatible_engine_if_running,
+        ensure_audio_engine_service_started,
+        stop_audio_engine_service_and_process,
+    ) {
+        log::info!("Connected UI to Linux Soundboard audio engine");
         return player;
-    } else {
-        crate::audio::engine_ipc::shutdown_incompatible_engine_if_running();
-        ensure_audio_engine_service_started();
-        if let Some(player) = crate::audio::AudioPlayer::connect_to_engine() {
-            log::info!("Started and connected UI to Linux Soundboard audio engine");
-            return player;
-        }
     }
 
+    let binary = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    log::warn!(
+        "Using in-process audio engine from {binary}; the systemd service was stopped to prevent duplicate virtual-mic ownership. If the installed engine is stale, run: ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard"
+    );
     let backend = if crate::audio::pipewire_detection::check_pipewire().available {
         AudioBackendKind::PipeWire
     } else {
         AudioBackendKind::PulseAudio
     };
     crate::audio::AudioPlayer::new_with_config_and_audio_backend(config, backend)
+}
+
+fn connect_or_start_audio_engine<T>(
+    mut connect: impl FnMut() -> Option<T>,
+    mut stop_incompatible: impl FnMut() -> bool,
+    start_service: impl FnOnce(),
+    cleanup_before_local: impl FnOnce(),
+) -> Option<T> {
+    if let Some(engine) = connect() {
+        return Some(engine);
+    }
+    if stop_incompatible() {
+        cleanup_before_local();
+        return None;
+    }
+
+    start_service();
+    if let Some(engine) = connect() {
+        return Some(engine);
+    }
+
+    cleanup_before_local();
+    None
+}
+
+fn stop_audio_engine_service_and_process() {
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "stop", "linux-soundboard-engine.service"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    crate::audio::engine_ipc::shutdown_engine_if_running();
 }
 
 fn ensure_audio_engine_service_started() {
@@ -538,6 +558,7 @@ Type=simple\n\
 ExecStart={} --audio-engine\n\
 Restart=on-failure\n\
 RestartSec=2\n\
+RestartPreventExitStatus=2\n\
 \n\
 [Install]\n\
 WantedBy=default.target\n",
@@ -555,6 +576,7 @@ fn systemd_quote(path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use crate::config::Sound;
+    use std::cell::{Cell, RefCell};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -654,5 +676,104 @@ mod tests {
             "After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service"
         ));
         assert!(service.contains("WantedBy=default.target"));
+        assert!(service.contains("RestartPreventExitStatus=2"));
+    }
+
+    #[test]
+    fn matching_engine_connects_without_service_changes() {
+        let events = RefCell::new(Vec::new());
+
+        let engine = connect_or_start_audio_engine(
+            || {
+                events.borrow_mut().push("connect");
+                Some(7)
+            },
+            || panic!("matching engine must not be stopped"),
+            || panic!("matching engine must not restart the service"),
+            || panic!("matching engine must not run local cleanup"),
+        );
+
+        assert_eq!(engine, Some(7));
+        assert_eq!(*events.borrow(), ["connect"]);
+    }
+
+    #[test]
+    fn absent_engine_starts_service_and_connects() {
+        let attempts = Cell::new(0);
+        let events = RefCell::new(Vec::new());
+
+        let engine = connect_or_start_audio_engine(
+            || {
+                events.borrow_mut().push("connect");
+                attempts.set(attempts.get() + 1);
+                (attempts.get() == 2).then_some(7)
+            },
+            || {
+                events.borrow_mut().push("check-incompatible");
+                false
+            },
+            || events.borrow_mut().push("start-service"),
+            || panic!("compatible service must not run local cleanup"),
+        );
+
+        assert_eq!(engine, Some(7));
+        assert_eq!(
+            *events.borrow(),
+            ["connect", "check-incompatible", "start-service", "connect"]
+        );
+    }
+
+    #[test]
+    fn incompatible_engine_is_stopped_without_restarting_service() {
+        let events = RefCell::new(Vec::new());
+
+        let engine = connect_or_start_audio_engine(
+            || {
+                events.borrow_mut().push("connect");
+                None::<u8>
+            },
+            || {
+                events.borrow_mut().push("stop-incompatible");
+                true
+            },
+            || panic!("known-incompatible service must not be restarted"),
+            || events.borrow_mut().push("cleanup-before-local"),
+        );
+
+        assert_eq!(engine, None);
+        assert_eq!(
+            *events.borrow(),
+            ["connect", "stop-incompatible", "cleanup-before-local"]
+        );
+    }
+
+    #[test]
+    fn failed_service_is_stopped_before_local_fallback() {
+        let events = RefCell::new(Vec::new());
+
+        let engine = connect_or_start_audio_engine(
+            || {
+                events.borrow_mut().push("connect");
+                None::<u8>
+            },
+            || {
+                events.borrow_mut().push("check-incompatible");
+                false
+            },
+            || events.borrow_mut().push("start-service"),
+            || events.borrow_mut().push("cleanup-before-local"),
+        );
+
+        assert_eq!(engine, None);
+        assert_eq!(
+            *events.borrow(),
+            [
+                "connect",
+                "check-incompatible",
+                "start-service",
+                "connect",
+                "cleanup-before-local"
+            ]
+        );
     }
 }

@@ -257,7 +257,13 @@ cd ..
 
 The installer detects the binary next to the script automatically when run from the repository root.
 
-After rebuilding, run `./packaging/linux/install-user.sh repair` to copy the new binary into place and restart the engine service.
+After every rebuild, run the repair command with the exact new binary before testing the installed service:
+
+```bash
+./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
+```
+
+Running `./target/release/linux-soundboard` directly is supported for development. If the installed engine is older or otherwise incompatible, the UI stops that service and uses its own in-process engine so that only one process owns the virtual microphone.
 
 ---
 

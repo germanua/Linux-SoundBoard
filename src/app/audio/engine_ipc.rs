@@ -178,6 +178,9 @@ pub fn engine_info_at(path: &Path) -> Result<EngineInfo, EngineIpcError> {
 }
 
 pub fn engine_info_compatible(info: &EngineInfo) -> bool {
+    // The engine deserializes the same config file as the UI, so schema equality
+    // is an intentional compatibility boundary. Schema bumps must deploy and
+    // restart the UI and engine from the same build.
     info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
         && info.config_schema_version == CURRENT_SCHEMA_VERSION
 }
@@ -189,6 +192,20 @@ pub fn compatible_engine_running() -> bool {
 pub fn shutdown_incompatible_engine_if_running() -> bool {
     let path = engine_socket_path();
     shutdown_incompatible_engine_at(&path, Duration::from_secs(3))
+}
+
+pub fn shutdown_engine_if_running() -> bool {
+    let path = engine_socket_path();
+    shutdown_engine_at(&path, IPC_TIMEOUT)
+}
+
+fn shutdown_engine_at(path: &Path, timeout: Duration) -> bool {
+    if !path.exists() || !engine_responds_at(path) {
+        return false;
+    }
+
+    let _ = send_request_to(path, EngineRequest::Shutdown);
+    wait_for_engine_stop(path, timeout)
 }
 
 pub fn shutdown_incompatible_engine_at(path: &Path, timeout: Duration) -> bool {
@@ -415,6 +432,47 @@ mod tests {
 
         let result = bind_engine_socket_at(&path).unwrap();
         assert!(matches!(result, BindEngineSocket::AlreadyRunning));
+        handle.join().unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shutdown_engine_stops_any_responding_engine() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsb-engine-shutdown-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(ENGINE_SOCKET_NAME);
+        let listener = UnixListener::bind(&path).unwrap();
+
+        let handle = std::thread::spawn(move || {
+            for expected in ["ping", "shutdown"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                let request = parse_request(line.trim_end()).unwrap();
+                assert_eq!(
+                    match request {
+                        EngineRequest::Ping => "ping",
+                        EngineRequest::Shutdown => "shutdown",
+                        other => panic!("unexpected request: {other:?}"),
+                    },
+                    expected
+                );
+                let response = if expected == "ping" {
+                    EngineResponse::Pong
+                } else {
+                    EngineResponse::Ok
+                };
+                write_response(&mut stream, &response).unwrap();
+            }
+        });
+
+        assert!(shutdown_engine_at(&path, Duration::from_secs(1)));
         handle.join().unwrap();
         let _ = fs::remove_dir_all(&dir);
     }

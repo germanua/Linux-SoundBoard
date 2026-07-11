@@ -19,6 +19,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Fixed
 
+- **Mixed-version audio startup:** The UI no longer restarts a known-incompatible systemd engine and then creates a competing in-process engine. Local fallback now first stops the service and any remaining engine process, preserving single ownership of the virtual microphone.
+- **Engine config safety:** The service now fails closed when it cannot load the saved configuration instead of running with defaults that disagree with the UI.
+- **Audio diagnostics:** `--diagnose` now reports the UI binary, engine binary, protocol, config schema, systemd unit path, and repair command when versions are incompatible.
+- **Libadwaita warnings:** The responsive breakpoint container now declares its minimum size, and startup no longer reads or writes the unsupported GTK dark-theme property.
 - **Folder overlap handling:** Configured parent folders and symbolic-link aliases now have one deterministic scan owner, preventing duplicate imports and derived-tab memberships.
 - **Responsive removal:** Sound, tab, and folder removal now run outside the GTK main thread; soundboard state is saved before best-effort hotkey cleanup.
 - **Configuration durability:** Saved configuration files now synchronize the replacement file and its containing directory before reporting success.

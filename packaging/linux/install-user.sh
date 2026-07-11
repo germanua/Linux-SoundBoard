@@ -307,6 +307,8 @@ Type=exec
 ExecStart=$(systemd_quote "$INSTALL_BINARY") --audio-engine
 Restart=on-failure
 RestartSec=2s
+# Exit 2 means the saved configuration is unreadable or incompatible.
+RestartPreventExitStatus=2
 
 # Hardening options tested compatible with PipeWire/PulseAudio user services.
 # ProtectHome and ProtectSystem are omitted: the engine must access user sound

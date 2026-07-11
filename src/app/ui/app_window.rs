@@ -223,6 +223,7 @@ pub fn build_window(
     // the transport bar reflows onto a second row. A `BreakpointBin` lets us drive adw
     // breakpoints without switching the window away from `gtk4::ApplicationWindow`.
     let breakpoint_bin = adw::BreakpointBin::new();
+    breakpoint_bin.set_size_request(520, 400);
     breakpoint_bin.set_child(Some(&drop_overlay));
 
     let breakpoint = adw::Breakpoint::new(adw::BreakpointCondition::new_length(

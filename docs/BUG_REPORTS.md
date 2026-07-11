@@ -29,6 +29,7 @@ echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 echo "DISPLAY=$DISPLAY"
 systemctl --user status pipewire wireplumber
 wpctl status -n
+linux-soundboard --diagnose
 ```
 
 If the issue is packaging-related, include the package filename you installed and the exact command used to install it.

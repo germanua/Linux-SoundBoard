@@ -25,7 +25,18 @@ pub fn run() -> i32 {
                 warn!("Failed to set audio engine socket nonblocking mode: {err}");
             }
 
-            let config = load_config();
+            let config = match Config::load() {
+                Ok(config) => config,
+                Err(err) => {
+                    error!(
+                        "Refusing to start audio engine with unreadable config '{}': {err}",
+                        Config::config_path().display()
+                    );
+                    drop(listener);
+                    remove_engine_socket();
+                    return 2;
+                }
+            };
             let player = Arc::new(init_player(&config));
             let stop = Arc::new(AtomicBool::new(false));
 
@@ -54,11 +65,25 @@ pub fn run() -> i32 {
             }
 
             player.shutdown();
+            drop(listener);
+            remove_engine_socket();
             0
         }
         Err(err) => {
             error!("{err}");
             1
+        }
+    }
+}
+
+fn remove_engine_socket() {
+    let path = engine_ipc::engine_socket_path();
+    if let Err(err) = std::fs::remove_file(&path) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                "Failed to remove audio engine socket '{}': {err}",
+                path.display()
+            );
         }
     }
 }
@@ -71,24 +96,6 @@ fn init_player(config: &Config) -> AudioPlayer {
         AudioBackendKind::PulseAudio
     };
     AudioPlayer::new_with_config_and_audio_backend(config, backend)
-}
-
-fn load_config() -> Config {
-    match Config::load() {
-        Ok(config) => config,
-        Err(err) => {
-            warn!(
-                "Failed to load config from '{}': {}. Starting audio engine with default settings.",
-                Config::config_path().display(),
-                err
-            );
-            fallback_config_after_load_error()
-        }
-    }
-}
-
-fn fallback_config_after_load_error() -> Config {
-    Config::default()
 }
 
 fn handle_client(stream: UnixStream, player: Arc<AudioPlayer>, stop: Arc<AtomicBool>) {
@@ -263,22 +270,5 @@ fn result_to_response(result: Result<(), EngineError>) -> EngineResponse {
         Err(e) => EngineResponse::Error {
             message: e.to_string(),
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::config::DefaultSourceMode;
-
-    use super::*;
-
-    #[test]
-    fn config_load_error_fallback_uses_default_mic_routing() {
-        let config = fallback_config_after_load_error();
-
-        assert_eq!(
-            config.settings.default_source_mode,
-            DefaultSourceMode::Default
-        );
     }
 }

@@ -175,10 +175,23 @@ Both go through the same runtime `Linux_Soundboard_Mic`, so a partial failure us
    ```
    The virtual mic should not be muted, and the target app stream should point at `linuxsoundboard.virtual_mic`.
 
-2. Restart the engine so the UI refuses any old incompatible engine and starts the current one:
+2. Inspect the UI and engine binary versions:
    ```bash
-   systemctl --user restart linux-soundboard-engine.service
+   linux-soundboard --diagnose
    ```
+
+3. If `compatibility` is `INCOMPATIBLE`, deploy the same source-build binary to the user service. Restarting a PATH-based packaged unit only starts the packaged binary again:
+   ```bash
+   ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
+   ```
+
+The UI stops an incompatible service before using its in-process engine. Do not run a second `--audio-engine` process manually; both processes would compete for `linuxsoundboard.virtual_mic`.
+
+### Adwaita warnings when launching from a terminal
+
+`AdwBreakpointBin ... does not have a minimum size` indicates an application layout bug and should not appear in current builds.
+
+`Using GtkSettings:gtk-application-prefer-dark-theme with libadwaita is unsupported` comes from a global GTK4 setting, not Linux Soundboard's theme selector. Linux Soundboard uses `AdwStyleManager`. Remove the legacy `gtk-application-prefer-dark-theme` entry from your GTK4 `settings.ini` if you want to silence the host warning; do not replace it with application launch scripts that force GTK themes.
 
 ### EasyEffects (or another virtual source) is missing from the soundboard's "Mic source" dropdown
 

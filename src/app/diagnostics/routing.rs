@@ -128,6 +128,7 @@ pub fn run() -> i32 {
     println!("Linux Soundboard — Audio Routing Diagnosis");
     println!("===========================================\n");
 
+    check_engine();
     check_pipewire();
     check_virtual_mic();
     let default_source = load_default_source();
@@ -138,6 +139,62 @@ pub fn run() -> i32 {
     0
 }
 
+fn check_engine() {
+    println!("[ Audio Engine ]");
+    let ui_binary = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "<unknown>".to_string());
+    println!("  UI binary       : {ui_binary}");
+    println!(
+        "  expected        : protocol={} schema={}",
+        crate::audio::engine_ipc::ENGINE_PROTOCOL_VERSION,
+        crate::config::CURRENT_SCHEMA_VERSION
+    );
+
+    match crate::audio::engine_ipc::engine_info() {
+        Ok(info) => {
+            println!("  engine binary   : {}", info.binary_path);
+            println!(
+                "  engine          : version={} protocol={} schema={}",
+                info.app_version, info.engine_protocol_version, info.config_schema_version
+            );
+            let compatible = crate::audio::engine_ipc::engine_info_compatible(&info);
+            println!(
+                "  compatibility   : {}",
+                if compatible { "OK" } else { "INCOMPATIBLE" }
+            );
+            if !compatible {
+                println!(
+                    "  repair           : ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard"
+                );
+            }
+        }
+        Err(err) => println!("  engine          : unavailable ({err})"),
+    }
+
+    match Command::new("systemctl")
+        .args([
+            "--user",
+            "show",
+            "linux-soundboard-engine.service",
+            "--property=FragmentPath",
+            "--property=ExecStart",
+        ])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            for line in String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|line| !line.is_empty())
+            {
+                println!("  service {line}");
+            }
+        }
+        _ => println!("  service         : unavailable"),
+    }
+    println!();
+}
+
 fn check_pipewire() {
     println!("[ PipeWire ]");
     match Command::new("pw-cli").args(["info", "0"]).output() {
@@ -145,10 +202,6 @@ fn check_pipewire() {
         _ => println!("  status : NOT RUNNING — soundboard requires PipeWire"),
     }
 
-    if let Ok(out) = Command::new("wpctl").args(["--version"]).output() {
-        let v = String::from_utf8_lossy(&out.stdout);
-        println!("  wpctl  : {}", v.trim());
-    }
     println!();
 }
 
