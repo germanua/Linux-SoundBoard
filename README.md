@@ -223,11 +223,20 @@ Full source-build notes are in [docs/INSTALL.md](docs/INSTALL.md).
 
 ---
 
-## Support
+## Support the project
+
+<p align="center">
+  <a href="https://ko-fi.com/sherpi">
+    <img src="https://img.shields.io/badge/Support%20the%20project-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Support Linux Soundboard on Ko-fi">
+  </a>
+</p>
+
+Voluntary support helps fund ongoing development and maintenance.
 
 - **Issues:** https://github.com/germanua/Linux-SoundBoard/issues
 - **Discussions:** https://github.com/germanua/Linux-SoundBoard/discussions
 - **AUR package:** https://aur.archlinux.org/packages/linux-soundboard-git
+- **Ko-fi:** https://ko-fi.com/sherpi
 - **Donations and sponsorships:** [support terms](DONATIONS.md)
 
 ---
