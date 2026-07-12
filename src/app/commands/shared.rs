@@ -308,11 +308,10 @@ where
                 elapsed.as_millis()
             );
             let cb_started_at = Instant::now();
-            PENDING_UI_CALLBACKS.with(|m| {
-                if let Some(cb) = m.borrow_mut().remove(&dispatch_id) {
-                    cb(result_any);
-                }
-            });
+            let callback = PENDING_UI_CALLBACKS.with(|m| m.borrow_mut().remove(&dispatch_id));
+            if let Some(callback) = callback {
+                callback(result_any);
+            }
             let cb_elapsed = cb_started_at.elapsed().as_millis();
             if cb_elapsed >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
                 log::debug!(

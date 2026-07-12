@@ -333,6 +333,35 @@ fn test_add_sound_folder_async_completes_and_updates_config() {
 }
 
 #[test]
+fn test_add_sound_folder_async_can_dispatch_refresh_from_completion() {
+    let _serial = main_context_test_lock();
+    let context = glib::MainContext::default();
+    let _guard = context.acquire().expect("acquire default main context");
+    let root = std::env::temp_dir().join(format!("lsb-add-refresh-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create sound folder");
+    let folder = root.to_string_lossy().to_string();
+    let config = create_test_config_state();
+    let config_for_refresh = Arc::clone(&config);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    commands::add_sound_folder_async(folder.clone(), Arc::clone(&config), move |result| {
+        result.expect("async folder addition succeeds");
+        commands::refresh_sounds_async(
+            config_for_refresh,
+            create_mock_hotkey_manager(),
+            commands::LoudnessCoordinators::new(),
+            move |result| tx.send(result).expect("send refresh result"),
+        )
+        .expect("dispatch refresh from completion");
+    })
+    .expect("dispatch async folder addition");
+
+    wait_for_async_result(&context, rx).expect("refresh succeeds");
+    assert_eq!(config.lock().sound_folders, [folder]);
+    fs::remove_dir(root).expect("clean up sound folder");
+}
+
+#[test]
 fn test_refresh_sounds_empty_folders() {
     let config = create_test_config_state();
     let hotkeys = create_mock_hotkey_manager();
