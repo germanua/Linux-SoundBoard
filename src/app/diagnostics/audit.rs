@@ -299,6 +299,7 @@ mod tests {
         // recorders themselves no-op when AUDIT is unset by writing through
         // the public API and asserting no file at the audit path was created.
         std::env::remove_var(ENV_VAR);
+        let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         let dir = tempdir();
         std::env::set_var("XDG_RUNTIME_DIR", &dir);
         // Don't call init_from_env(); confirm record_metadata_write is a noop.
@@ -320,6 +321,10 @@ mod tests {
                     .is_empty(),
             "audit file should not have been touched when env is unset"
         );
+        match previous_runtime_dir {
+            Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+            None => std::env::remove_var("XDG_RUNTIME_DIR"),
+        }
     }
 
     fn tempdir() -> PathBuf {
