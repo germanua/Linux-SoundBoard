@@ -46,7 +46,7 @@ build() {
 check() {
     cd "$srcdir/Linux-SoundBoard-$pkgver"
     export CARGO_TARGET_DIR="$srcdir/target"
-    cargo test --frozen --locked --release --manifest-path src/Cargo.toml
+    cargo test --frozen --locked --release --manifest-path src/Cargo.toml -- --test-threads=1
 }
 
 package() {
