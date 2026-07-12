@@ -17,6 +17,12 @@
 </p>
 
 <p align="center">
+  <a href="https://ko-fi.com/sherpi">
+    <img src="https://img.shields.io/badge/Support%20the%20project-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Support Linux Soundboard on Ko-fi">
+  </a>
+</p>
+
+<p align="center">
   <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest"><strong>Download</strong></a>
   ·
   <a href="docs/INSTALL.md"><strong>Install Guide</strong></a>
