@@ -19,6 +19,7 @@ BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
 BuildRequires:  pkgconfig
 BuildRequires:  ImageMagick
+BuildRequires:  systemd-rpm-macros
 
 Requires:       gtk4
 Requires:       libadwaita
