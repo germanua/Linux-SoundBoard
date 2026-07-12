@@ -55,6 +55,16 @@
   </keywords>
   
   <releases>
+    <release version="2.1.0" date="2026-07-12">
+      <description>
+        <p>Folder workflow and audio reliability update:</p>
+        <ul>
+          <li>Added folder-derived tabs and Delete-key removal</li>
+          <li>Fixed mixed-version engine startup and Ogg Vorbis playback</li>
+          <li>Hardened folder refresh, removal, and configuration persistence</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.2" date="2026-06-10">
       <description>
         <p>Wayland hotkey reliability update:</p>

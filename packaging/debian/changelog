@@ -1,3 +1,11 @@
+linux-soundboard (2.1.0-1) unstable; urgency=medium
+
+  * Add folder-derived tabs and Delete-key removal
+  * Fix mixed-version engine startup and Ogg Vorbis playback
+  * Harden folder refresh, removal, and configuration persistence
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Sun, 12 Jul 2026 12:00:00 +0000
+
 linux-soundboard (2.0.2-1) unstable; urgency=medium
 
   * Rebuild swhkd from upstream source when packaged builds require pkexec
