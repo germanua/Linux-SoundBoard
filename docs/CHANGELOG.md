@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- **Arch installation:** The recommended installer and documentation now use the tagged `linux-soundboard` AUR package. `linux-soundboard-git` remains available for development testing.
+
+### Fixed
+
+- **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
+
 ## [2.1.1] - 2026-07-15
 
 ### Changed

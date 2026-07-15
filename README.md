@@ -8,8 +8,8 @@
   <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest">
     <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github" alt="Latest Release">
   </a>
-  <a href="https://aur.archlinux.org/packages/linux-soundboard-git">
-    <img src="https://img.shields.io/aur/version/linux-soundboard-git?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR">
+  <a href="https://aur.archlinux.org/packages/linux-soundboard">
+    <img src="https://img.shields.io/aur/version/linux-soundboard?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
@@ -83,7 +83,7 @@ The command at the top of this page is all you need.
 
 | Distro                       | What happens                                                    |
 | ---------------------------- | --------------------------------------------------------------- |
-| Arch / CachyOS / EndeavourOS | Installs from the AUR via yay or paru                           |
+| Arch / CachyOS / EndeavourOS | Installs stable `linux-soundboard` from the AUR via yay or paru |
 | Debian / Ubuntu              | Downloads and installs the `.deb` package                       |
 | Fedora                       | Downloads and installs the `.rpm` package                       |
 | Everything else              | Downloads the release tarball and runs the user-space installer |
@@ -241,7 +241,8 @@ Voluntary support helps fund ongoing development and maintenance.
 
 - **Issues:** https://github.com/germanua/Linux-SoundBoard/issues
 - **Discussions:** https://github.com/germanua/Linux-SoundBoard/discussions
-- **AUR package:** https://aur.archlinux.org/packages/linux-soundboard-git
+- **Stable AUR package:** https://aur.archlinux.org/packages/linux-soundboard
+- **Development AUR package:** https://aur.archlinux.org/packages/linux-soundboard-git
 - **Ko-fi:** https://ko-fi.com/sherpi
 - **Donations and sponsorships:** [support terms](DONATIONS.md)
 

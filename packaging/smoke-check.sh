@@ -85,6 +85,27 @@ fi
 
 echo ""
 
+# ── 1b. Stable AUR default ──────────────────────────────────────────────────
+
+echo "==> Stable AUR default"
+if grep -qF 'APP_AUR_PACKAGE="linux-soundboard"' "$REPO_ROOT/install.sh"; then
+    pass "install.sh: stable AUR package selected"
+else
+    fail "install.sh: stable AUR package is not selected"
+fi
+if grep -qF "conflicts=('linux-soundboard-git')" "$REPO_ROOT/packaging/aur/PKGBUILD"; then
+    pass "AUR stable PKGBUILD: conflicts with development package"
+else
+    fail "AUR stable PKGBUILD: missing development-package conflict"
+fi
+if grep -qF 'archive/refs/tags/v${pkgver}.tar.gz' "$REPO_ROOT/packaging/aur/PKGBUILD"; then
+    pass "AUR stable PKGBUILD: uses tagged source archive"
+else
+    fail "AUR stable PKGBUILD: does not use tagged source archive"
+fi
+
+echo ""
+
 # ── 2. Desktop file validation ───────────────────────────────────────────────
 
 echo "==> Desktop file validation"

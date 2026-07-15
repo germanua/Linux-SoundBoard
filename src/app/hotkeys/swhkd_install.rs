@@ -332,13 +332,16 @@ fn resolve_install_helper_path() -> Option<PathBuf> {
         }
     }
 
-    let source_helper = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("packaging")
-        .join("linux")
-        .join("install-swhkd-helper.sh");
-    if is_executable_file(&source_helper) {
-        return Some(source_helper);
+    #[cfg(debug_assertions)]
+    {
+        let source_helper = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("packaging")
+            .join("linux")
+            .join("install-swhkd-helper.sh");
+        if is_executable_file(&source_helper) {
+            return Some(source_helper);
+        }
     }
 
     None

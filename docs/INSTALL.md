@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/inst
 
 | Distro                       | What happens                                                     |
 | ---------------------------- | ---------------------------------------------------------------- |
-| Arch / CachyOS / EndeavourOS | Installs `linux-soundboard-git` from the AUR via yay/paru        |
+| Arch / CachyOS / EndeavourOS | Installs stable `linux-soundboard` from the AUR via yay/paru     |
 | Debian / Ubuntu              | Downloads and installs the `.deb` package                        |
 | Fedora                       | Downloads and installs the `.rpm` package                        |
 | Everything else              | Downloads the release tarball and runs `install-user.sh install` |
@@ -118,12 +118,12 @@ The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It use
 ### Arch Linux, CachyOS, EndeavourOS
 
 ```bash
-yay -S linux-soundboard-git
+yay -S linux-soundboard
 # or
-paru -S linux-soundboard-git
+paru -S linux-soundboard
 ```
 
-The AUR package installs the app, icons, helper files, and the user audio-engine service. It does not install a persistent PipeWire virtual mic config.
+The stable AUR package follows tagged releases and installs the app, icons, helper files, and the user audio-engine service. Use `linux-soundboard-git` only to test the current development branch. It does not install a persistent PipeWire virtual mic config.
 
 ### Ubuntu and Debian
 

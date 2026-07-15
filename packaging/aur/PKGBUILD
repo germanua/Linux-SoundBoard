@@ -30,6 +30,7 @@ optdepends=(
   'swhkd-git: native Wayland hotkey daemon from upstream source'
   'xorg-xwayland: enables the native X11 backend inside Wayland sessions'
 )
+conflicts=('linux-soundboard-git')
 source=(
   "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
 )
@@ -40,6 +41,7 @@ build() {
     cd "$srcdir/Linux-SoundBoard-$pkgver"
     bash packaging/linux/generate-icons.sh assets/icons/icon.png
     export CARGO_TARGET_DIR="$srcdir/target"
+    export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${srcdir}=."
     cargo build --frozen --locked --release --manifest-path src/Cargo.toml
 }
 

@@ -13,7 +13,8 @@ set -euo pipefail
 APP_REPO="germanua/Linux-SoundBoard"
 APP_PACKAGE="linux-soundboard"
 APP_BINARY="linux-soundboard"
-APP_AUR_PACKAGE="linux-soundboard-git"
+APP_AUR_PACKAGE="linux-soundboard"
+APP_AUR_LEGACY_PACKAGE="linux-soundboard-git"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
 
 WORK_DIR="$(mktemp -d)"
@@ -294,7 +295,7 @@ installed_native_packages() {
 
     if command -v pacman >/dev/null 2>&1; then
         local seen_pacman=$'\n'
-        for pkg in "$APP_AUR_PACKAGE" "$APP_PACKAGE"; do
+        for pkg in "$APP_AUR_PACKAGE" "$APP_AUR_LEGACY_PACKAGE"; do
             local actual_pkg
             actual_pkg="$(pacman -Qq "$pkg" 2>/dev/null || true)"
             if [[ -n "$actual_pkg" && "$seen_pacman" != *$'\n'"$actual_pkg"$'\n'* ]]; then
