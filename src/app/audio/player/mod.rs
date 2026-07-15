@@ -102,6 +102,7 @@ const AUDIO_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const PLAY_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FINISHED_PLAYBACK_SNAPSHOTS: usize = 128;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+const SHUTDOWN_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const UI_SNAPSHOT_PROGRESS_INTERVAL_MS: u64 = 100;
 const CAPTURE_RECREATE_MISS_THRESHOLD: u8 = 2;
 
@@ -145,6 +146,18 @@ pub struct PlayerSnapshot {
 pub enum AudioBackendKind {
     PipeWire,
     PulseAudio,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShutdownPolicy {
+    Persistent,
+    Transient,
+}
+
+impl ShutdownPolicy {
+    const fn restores_default_source(self) -> bool {
+        matches!(self, Self::Transient)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,6 +247,7 @@ struct LocalAudioPlayer {
     command_tx: pw_channel::Sender<AudioCommand>,
     join_handle: Mutex<Option<thread::JoinHandle<()>>>,
     snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
+    shutdown_policy: ShutdownPolicy,
 }
 
 struct RemoteAudioPlayer {
@@ -264,8 +278,11 @@ impl AudioPlayer {
         };
         if !crate::audio::engine_ipc::engine_info_compatible(&info) {
             warn!(
-                "Refusing to use incompatible Linux Soundboard audio engine: protocol={} schema={} binary={}",
-                info.engine_protocol_version, info.config_schema_version, info.binary_path
+                "Refusing to use incompatible Linux Soundboard audio engine: version={} protocol={} schema={} binary={}",
+                info.app_version,
+                info.engine_protocol_version,
+                info.config_schema_version,
+                info.binary_path
             );
             return None;
         }
@@ -327,6 +344,18 @@ impl AudioPlayer {
         config: &crate::config::Config,
         audio_backend: AudioBackendKind,
     ) -> Self {
+        Self::new_with_config_audio_backend_and_shutdown_policy(
+            config,
+            audio_backend,
+            ShutdownPolicy::Transient,
+        )
+    }
+
+    pub(crate) fn new_with_config_audio_backend_and_shutdown_policy(
+        config: &crate::config::Config,
+        audio_backend: AudioBackendKind,
+        shutdown_policy: ShutdownPolicy,
+    ) -> Self {
         let (command_tx, command_rx) = pw_channel::channel();
         let mut runtime = RuntimeConfig::from_config(config);
         runtime.audio_backend = audio_backend;
@@ -340,6 +369,7 @@ impl AudioPlayer {
                 command_tx,
                 join_handle: Mutex::new(Some(handle)),
                 snapshot,
+                shutdown_policy,
             }),
         }
     }
@@ -862,7 +892,18 @@ impl AudioPlayer {
     pub fn shutdown(&self) {
         match &self.backend {
             AudioPlayerBackend::Local(local) => {
-                let _ = local.command_tx.send(AudioCommand::Shutdown);
+                let (done_tx, done_rx) = mpsc::channel();
+                let _ = local.command_tx.send(AudioCommand::Shutdown {
+                    policy: local.shutdown_policy,
+                    response: done_tx,
+                });
+                if done_rx.recv_timeout(SHUTDOWN_COMMAND_TIMEOUT).is_err() {
+                    warn!(
+                        "Audio backend did not complete {:?} shutdown within {} ms",
+                        local.shutdown_policy,
+                        SHUTDOWN_COMMAND_TIMEOUT.as_millis()
+                    );
+                }
                 let mut handle = local.join_handle.lock();
                 if let Some(handle) = handle.take() {
                     let (done_tx, done_rx) = mpsc::channel();

@@ -1,0 +1,60 @@
+{
+  "schema_version": 6,
+  "sound_folders": ["/home/test/Sound Library"],
+  "sounds": [
+    {
+      "id": "sound-distinctive",
+      "name": "Upgrade fixture",
+      "path": "/home/test/Sound Library/upgrade.ogg",
+      "source_path": "/home/test/source/upgrade.flac",
+      "hotkey": "Ctrl+Alt+9",
+      "duration_ms": 4321,
+      "volume": 37,
+      "enabled": false,
+      "loudness_lufs": -17.25,
+      "loudness_analysis_state": "refined",
+      "loudness_confidence": 0.88,
+      "loudness_source_fingerprint": "fixture-fingerprint",
+      "loudness_true_peak_dbtp": -1.5
+    }
+  ],
+  "tabs": [
+    {
+      "id": "tab-distinctive",
+      "name": "Upgrade tab",
+      "sound_ids": ["sound-distinctive"],
+      "order": 7
+    }
+  ],
+  "settings": {
+    "theme": "light",
+    "local_volume": 41,
+    "local_mute": true,
+    "mic_volume": 63,
+    "allow_multiple_playbacks": false,
+    "mic_passthrough": true,
+    "mic_source": "easyeffects_source",
+    "default_source_mode": "manual",
+    "mic_latency_profile": "low",
+    "excluded_apps": ["OBS"],
+    "skip_delete_confirm": true,
+    "auto_gain": true,
+    "auto_gain_mode": "dynamic",
+    "auto_gain_target_lufs": -16.0,
+    "auto_gain_apply_to": "mic_only",
+    "auto_gain_lookahead_ms": 44,
+    "auto_gain_attack_ms": 8,
+    "auto_gain_release_ms": 222,
+    "control_hotkeys": {
+      "stop_all": "Ctrl+Shift+S",
+      "play_pause": "Ctrl+Shift+P",
+      "previous_sound": "Ctrl+Shift+Left",
+      "next_sound": "Ctrl+Shift+Right",
+      "mute_headphones": "Ctrl+Shift+H",
+      "mute_real_mic": "Ctrl+Shift+R",
+      "cycle_play_mode": "Ctrl+Shift+C"
+    },
+    "play_mode": "continue",
+    "list_style": "card"
+  }
+}

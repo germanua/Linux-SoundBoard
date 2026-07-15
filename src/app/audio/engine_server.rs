@@ -11,6 +11,7 @@ use log::{error, info, warn};
 
 use crate::app_meta::APP_VERSION;
 use crate::audio::engine_ipc::{self, BindEngineSocket, EngineRequest, EngineResponse};
+use crate::audio::player::ShutdownPolicy;
 use crate::audio::{AudioBackendKind, AudioPlayer, EngineError};
 use crate::config::{Config, CURRENT_SCHEMA_VERSION};
 
@@ -95,7 +96,11 @@ fn init_player(config: &Config) -> AudioPlayer {
     } else {
         AudioBackendKind::PulseAudio
     };
-    AudioPlayer::new_with_config_and_audio_backend(config, backend)
+    AudioPlayer::new_with_config_audio_backend_and_shutdown_policy(
+        config,
+        backend,
+        ShutdownPolicy::Persistent,
+    )
 }
 
 fn handle_client(stream: UnixStream, player: Arc<AudioPlayer>, stop: Arc<AtomicBool>) {
@@ -144,9 +149,14 @@ fn handle_request(
             engine_protocol_version: engine_ipc::ENGINE_PROTOCOL_VERSION,
             app_version: APP_VERSION.to_string(),
             config_schema_version: CURRENT_SCHEMA_VERSION,
-            binary_path: std::env::current_exe()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string()),
+            binary_path: std::env::var_os("APPIMAGE")
+                .map(|path| std::path::PathBuf::from(path).display().to_string())
+                .or_else(|| {
+                    std::env::current_exe()
+                        .ok()
+                        .map(|path| path.display().to_string())
+                })
+                .unwrap_or_else(|| "unknown".to_string()),
         },
         EngineRequest::Ping => EngineResponse::Pong,
         EngineRequest::Snapshot => EngineResponse::Snapshot {

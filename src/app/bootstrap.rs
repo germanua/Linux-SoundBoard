@@ -8,6 +8,7 @@ use gtk4::gdk::prelude::DisplayExtManual;
 use gtk4::prelude::*;
 use gtk4::{Application, Window};
 use libadwaita as adw;
+use libadwaita::prelude::*;
 use log::{info, warn};
 
 use crate::app_meta::{
@@ -171,116 +172,312 @@ fn running_in_vmware_guest() -> bool {
 
 fn build_activate_handler() -> impl Fn(&Application) + 'static {
     move |app| {
-        if let Some(display) = gtk4::gdk::Display::default() {
-            info!("GTK display backend: {:?}", display.backend());
-        } else {
-            warn!("GTK display backend is unavailable during activation");
+        if let Some(window) = app.active_window() {
+            window.present();
+            return;
         }
 
-        let mut config = load_config();
-        crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
-        crate::diagnostics::record_phase_with_config("startup:config_loaded", &config);
-
-        let cleaned_count = cleanup_stale_tmp_sounds(&mut config);
-        if cleaned_count > 0 {
-            if let Err(e) = config.save() {
-                log::warn!("Failed to save config after cleanup: {}", e);
-            }
+        let kind = installation_kind();
+        let compatible_engine = compatible_stable_engine_running();
+        if should_prompt_for_appimage_install(kind, compatible_engine) {
+            prompt_appimage_startup(app);
+            return;
         }
 
-        let prebound_hotkeys = prebound_hotkeys(&config);
-        let (hotkey_sender, hotkey_receiver) = mpsc::channel::<String>();
-
-        let hotkey_manager =
-            crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
-        crate::diagnostics::set_hotkey_status(&hotkey_manager.status_message());
-        crate::diagnostics::memory::log_memory_snapshot("startup:hotkeys_ready");
-        crate::diagnostics::record_phase_with_config("startup:hotkeys_ready", &config);
-
-        let player = initialize_player(&config);
-        crate::diagnostics::set_playback_registry_count(0);
-        crate::diagnostics::memory::log_memory_snapshot("startup:player_initialized");
-        crate::diagnostics::record_phase_with_config("startup:player_initialized", &config);
-
-        let pipewire_status = crate::audio::pipewire_detection::check_pipewire();
-
-        let state = Arc::new(AppState {
-            config: Arc::new(Mutex::new(config)),
-            player: Arc::new(player),
-            hotkeys: Arc::new(Mutex::new(hotkey_manager)),
-            pipewire_status: Arc::new(Mutex::new(pipewire_status)),
-            play_dispatch_debounce: Arc::new(Mutex::new(None)),
-            loudness_coordinators: crate::commands::LoudnessCoordinators::new(),
-            first_playback_recorded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        });
-
-        let timer_registry = TimerRegistry::new();
-
-        let (window, transport) =
-            crate::ui::app_window::build_window(app, Arc::clone(&state), &timer_registry);
-        crate::diagnostics::set_validation_runtime(0, "deferred", 0);
-        crate::diagnostics::memory::log_memory_snapshot("startup:window_built");
-        record_state_phase("startup:window_built", &state);
-
-        let state_hk = Arc::clone(&state);
-        let window_hk = window.clone();
-        let transport_hk = transport.clone();
-        crate::ui_event_bridge::set_hotkey_handler(move |sound_id| {
-            crate::ui::app_window::handle_hotkey(&window_hk, &state_hk, &transport_hk, &sound_id);
-        });
-        if let Err(err) = thread::Builder::new()
-            .name("hotkey-ui-bridge".to_string())
-            .spawn(move || {
-                while let Ok(sound_id) = hotkey_receiver.recv() {
-                    crate::ui_event_bridge::post_hotkey(sound_id);
-                }
-            })
-        {
-            warn!("Failed to start hotkey UI bridge: {}", err);
-        }
-
-        let state_close = Arc::clone(&state);
-        let timers_close = timer_registry.clone();
-        window.connect_close_request(move |_| {
-            timers_close.remove_all();
-            crate::diagnostics::set_timer_count(0);
-            crate::diagnostics::set_playback_registry_count(0);
-            record_state_phase("shutdown:close_request", &state_close);
-            state_close.player.stop_all();
-            state_close.player.shutdown();
-            state_close.hotkeys.lock().shutdown();
-            if let Err(e) = crate::diagnostics::write_memory_report() {
-                log::warn!("Failed to write memory report: {}", e);
-            }
-            glib::Propagation::Proceed
-        });
-
-        window.present();
-        record_state_phase("startup:window_presented", &state);
-
-        schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
-
-        {
-            let state_idle = Arc::clone(&state);
-            glib::timeout_add_local_once(Duration::from_secs(5), move || {
-                record_state_phase("idle:5s", &state_idle);
-            });
-        }
+        let mode = startup_mode_for(kind, compatible_engine);
+        start_application(app, mode);
     }
 }
 
-fn load_config() -> Config {
-    match Config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupMode {
+    Persistent,
+    Transient,
+}
+
+fn startup_mode_for(kind: InstallationKind, compatible_stable_engine: bool) -> StartupMode {
+    if kind == InstallationKind::Stable || compatible_stable_engine {
+        StartupMode::Persistent
+    } else {
+        StartupMode::Transient
+    }
+}
+
+fn prompt_appimage_startup(app: &Application) {
+    let parent = gtk4::ApplicationWindow::builder()
+        .application(app)
+        .title(APP_TITLE)
+        .default_width(440)
+        .default_height(160)
+        .child(
+            &gtk4::Label::builder()
+                .label("Choose how Linux Soundboard should run.")
+                .margin_top(32)
+                .margin_bottom(32)
+                .margin_start(24)
+                .margin_end(24)
+                .build(),
+        )
+        .build();
+    parent.present();
+
+    let dialog = adw::AlertDialog::new(
+        Some("Set up the virtual microphone"),
+        Some(
+            "Install for a persistent virtual microphone, or run temporarily and restore your previous microphone when this window closes.",
+        ),
+    );
+    dialog.add_responses(&[
+        ("exit", "Exit"),
+        ("temporary", "Run temporarily"),
+        ("install", "Install for persistent virtual mic"),
+    ]);
+    dialog.set_close_response("exit");
+    dialog.set_default_response(Some("install"));
+    dialog.set_response_appearance("install", adw::ResponseAppearance::Suggested);
+
+    let app = app.clone();
+    let callback_parent = parent.clone();
+    dialog.choose(
+        &parent,
+        None::<&gio::Cancellable>,
+        move |response| match response.as_str() {
+            "install" => install_appimage_and_start(&app, &callback_parent),
+            "temporary" => {
+                callback_parent.close();
+                start_application(&app, StartupMode::Transient);
+            }
+            _ => {
+                callback_parent.close();
+                app.quit();
+            }
+        },
+    );
+}
+
+fn install_appimage_and_start(app: &Application, parent: &gtk4::ApplicationWindow) {
+    parent.set_child(Some(
+        &gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(12)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .build(),
+    ));
+    if let Some(container) = parent.child().and_downcast::<gtk4::Box>() {
+        let spinner = gtk4::Spinner::builder().spinning(true).build();
+        container.append(&spinner);
+        container.append(&gtk4::Label::new(Some("Installing Linux Soundboard…")));
+    }
+
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    if let Err(err) = crate::commands::dispatch_async_result(
+        "install_appimage",
+        run_bundled_appimage_installer,
+        move |result| match result {
+            Ok(()) => {
+                callback_parent.close();
+                start_application(&callback_app, StartupMode::Persistent);
+            }
+            Err(err) => show_startup_error(
+                &callback_app,
+                &callback_parent,
+                "Installation failed",
+                &format!("{err}\n\nNo audio engine was started. Exit and try again."),
+            ),
+        },
+    ) {
+        show_startup_error(
+            app,
+            parent,
+            "Installation failed",
+            &format!("Could not start the installer: {err}"),
+        );
+    }
+}
+
+fn run_bundled_appimage_installer() -> Result<(), String> {
+    let appdir = std::env::var_os("APPDIR")
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            "APPDIR is unavailable; this AppImage has no installer payload".to_string()
+        })?;
+    let appimage = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .ok_or_else(|| "APPIMAGE is unavailable; cannot install the portable image".to_string())?;
+    let installer = appdir
+        .join("usr/libexec/linux-soundboard/installer")
+        .join("install-user.sh");
+    if !installer.is_file() {
+        return Err(format!(
+            "Bundled installer is missing at '{}'",
+            installer.display()
+        ));
+    }
+
+    let output = std::process::Command::new(&installer)
+        .args(["install", appimage.to_string_lossy().as_ref()])
+        .output()
+        .map_err(|err| format!("Failed to run '{}': {err}", installer.display()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            format!("Installer exited with status {}", output.status)
+        } else {
+            detail
+        })
+    }
+}
+
+fn show_startup_error(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    title: &str,
+    message: &str,
+) {
+    let dialog = adw::AlertDialog::new(Some(title), Some(message));
+    dialog.add_response("exit", "Exit");
+    dialog.set_close_response("exit");
+    dialog.set_default_response(Some("exit"));
+    let app = app.clone();
+    dialog.choose(parent, None::<&gio::Cancellable>, move |_| app.quit());
+}
+
+fn show_config_error(app: &Application, error: &dyn std::error::Error) {
+    let parent = gtk4::ApplicationWindow::builder()
+        .application(app)
+        .title(APP_TITLE)
+        .default_width(480)
+        .default_height(160)
+        .build();
+    parent.present();
+    let path = Config::config_path();
+    show_startup_error(
+        app,
+        &parent,
+        "Configuration could not be loaded",
+        &format!(
+            "{}\n\nNo audio engine was started and '{}' was not replaced. Fix the file, or stop all Linux Soundboard processes and restore '{}.pre-v6-backup'.",
+            error,
+            path.display(),
+            path.display()
+        ),
+    );
+}
+
+fn start_application(app: &Application, startup_mode: StartupMode) {
+    if let Some(display) = gtk4::gdk::Display::default() {
+        info!("GTK display backend: {:?}", display.backend());
+    } else {
+        warn!("GTK display backend is unavailable during activation");
+    }
+
+    let mut config = match load_config() {
+        Ok(config) => config,
+        Err(err) => {
             log::error!(
-                "Failed to load config from '{}': {}. Starting with defaults.",
-                Config::config_path().display(),
-                e
+                "Refusing to start with unreadable config '{}': {err}",
+                Config::config_path().display()
             );
-            Config::default()
+            show_config_error(app, err.as_ref());
+            return;
+        }
+    };
+    crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
+    crate::diagnostics::record_phase_with_config("startup:config_loaded", &config);
+
+    let cleaned_count = cleanup_stale_tmp_sounds(&mut config);
+    if cleaned_count > 0 {
+        if let Err(e) = config.save() {
+            log::warn!("Failed to save config after cleanup: {}", e);
         }
     }
+
+    let prebound_hotkeys = prebound_hotkeys(&config);
+    let (hotkey_sender, hotkey_receiver) = mpsc::channel::<String>();
+
+    let hotkey_manager =
+        crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
+    crate::diagnostics::set_hotkey_status(&hotkey_manager.status_message());
+    crate::diagnostics::memory::log_memory_snapshot("startup:hotkeys_ready");
+    crate::diagnostics::record_phase_with_config("startup:hotkeys_ready", &config);
+
+    let player = initialize_player(&config, startup_mode);
+    crate::diagnostics::set_playback_registry_count(0);
+    crate::diagnostics::memory::log_memory_snapshot("startup:player_initialized");
+    crate::diagnostics::record_phase_with_config("startup:player_initialized", &config);
+
+    let pipewire_status = crate::audio::pipewire_detection::check_pipewire();
+
+    let state = Arc::new(AppState {
+        config: Arc::new(Mutex::new(config)),
+        player: Arc::new(player),
+        hotkeys: Arc::new(Mutex::new(hotkey_manager)),
+        pipewire_status: Arc::new(Mutex::new(pipewire_status)),
+        play_dispatch_debounce: Arc::new(Mutex::new(None)),
+        loudness_coordinators: crate::commands::LoudnessCoordinators::new(),
+        first_playback_recorded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    });
+
+    let timer_registry = TimerRegistry::new();
+
+    let (window, transport) =
+        crate::ui::app_window::build_window(app, Arc::clone(&state), &timer_registry);
+    crate::diagnostics::set_validation_runtime(0, "deferred", 0);
+    crate::diagnostics::memory::log_memory_snapshot("startup:window_built");
+    record_state_phase("startup:window_built", &state);
+
+    let state_hk = Arc::clone(&state);
+    let window_hk = window.clone();
+    let transport_hk = transport.clone();
+    crate::ui_event_bridge::set_hotkey_handler(move |sound_id| {
+        crate::ui::app_window::handle_hotkey(&window_hk, &state_hk, &transport_hk, &sound_id);
+    });
+    if let Err(err) = thread::Builder::new()
+        .name("hotkey-ui-bridge".to_string())
+        .spawn(move || {
+            while let Ok(sound_id) = hotkey_receiver.recv() {
+                crate::ui_event_bridge::post_hotkey(sound_id);
+            }
+        })
+    {
+        warn!("Failed to start hotkey UI bridge: {}", err);
+    }
+
+    let state_close = Arc::clone(&state);
+    let timers_close = timer_registry.clone();
+    window.connect_close_request(move |_| {
+        timers_close.remove_all();
+        crate::diagnostics::set_timer_count(0);
+        crate::diagnostics::set_playback_registry_count(0);
+        record_state_phase("shutdown:close_request", &state_close);
+        state_close.player.stop_all();
+        state_close.player.shutdown();
+        state_close.hotkeys.lock().shutdown();
+        if let Err(e) = crate::diagnostics::write_memory_report() {
+            log::warn!("Failed to write memory report: {}", e);
+        }
+        glib::Propagation::Proceed
+    });
+
+    window.present();
+    record_state_phase("startup:window_presented", &state);
+
+    schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
+
+    {
+        let state_idle = Arc::clone(&state);
+        glib::timeout_add_local_once(Duration::from_secs(5), move || {
+            record_state_phase("idle:5s", &state_idle);
+        });
+    }
+}
+
+fn load_config() -> Result<Config, Box<dyn std::error::Error>> {
+    Config::load()
 }
 
 fn record_config_phase(name: &str, config: &Arc<Mutex<Config>>) {
@@ -377,7 +574,62 @@ fn prebound_hotkeys(config: &Config) -> Vec<(String, String)> {
     prebound
 }
 
-fn initialize_player(config: &Config) -> crate::audio::AudioPlayer {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallationKind {
+    Stable,
+    DirectAppImage,
+    PortableOrDevelopment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceAction {
+    Start,
+    Restart,
+}
+
+fn installation_kind_for(
+    path: &std::path::Path,
+    home: &std::path::Path,
+    appimage: bool,
+) -> InstallationKind {
+    let stable_user_binary = home.join(".local/opt").join(APP_BINARY).join(APP_BINARY);
+    if path == std::path::Path::new("/usr/bin/linux-soundboard") || path == stable_user_binary {
+        InstallationKind::Stable
+    } else if appimage {
+        InstallationKind::DirectAppImage
+    } else {
+        InstallationKind::PortableOrDevelopment
+    }
+}
+
+fn installation_kind() -> InstallationKind {
+    let appimage_path = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    let executable = appimage_path
+        .clone()
+        .or_else(|| std::env::current_exe().ok())
+        .unwrap_or_default();
+    let home = dirs::home_dir().unwrap_or_default();
+    installation_kind_for(&executable, &home, appimage_path.is_some())
+}
+
+fn should_prompt_for_appimage_install(kind: InstallationKind, compatible_engine: bool) -> bool {
+    kind == InstallationKind::DirectAppImage && !compatible_engine
+}
+
+fn compatible_stable_engine_running() -> bool {
+    let Ok(info) = crate::audio::engine_ipc::engine_info() else {
+        return false;
+    };
+    let home = dirs::home_dir().unwrap_or_default();
+    crate::audio::engine_ipc::engine_info_compatible(&info)
+        && installation_kind_for(
+            std::path::Path::new(&info.binary_path),
+            &home,
+            info.binary_path.ends_with(".AppImage"),
+        ) == InstallationKind::Stable
+}
+
+fn initialize_player(config: &Config, startup_mode: StartupMode) -> crate::audio::AudioPlayer {
     use crate::audio::AudioBackendKind;
 
     // Debug aid: when route audit is requested, bypass the systemd-spawned
@@ -393,21 +645,33 @@ fn initialize_player(config: &Config) -> crate::audio::AudioPlayer {
              (the systemd-spawned engine would not inherit the env var)"
         );
         stop_audio_engine_service_and_process();
-    } else if let Some(player) = connect_or_start_audio_engine(
-        crate::audio::AudioPlayer::connect_to_engine,
-        crate::audio::engine_ipc::shutdown_incompatible_engine_if_running,
-        ensure_audio_engine_service_started,
-        stop_audio_engine_service_and_process,
-    ) {
-        log::info!("Connected UI to Linux Soundboard audio engine");
-        return player;
+    } else {
+        let remote = match startup_mode {
+            StartupMode::Persistent => connect_or_start_audio_engine(
+                crate::audio::AudioPlayer::connect_to_engine,
+                crate::audio::engine_ipc::engine_running,
+                crate::audio::engine_ipc::shutdown_incompatible_engine_if_running,
+                manage_audio_engine_service,
+                stop_audio_engine_service_and_process,
+                60,
+                || std::thread::sleep(Duration::from_millis(50)),
+            ),
+            StartupMode::Transient => {
+                stop_audio_engine_service_and_process();
+                None
+            }
+        };
+        if let Some(player) = remote {
+            log::info!("Connected UI to Linux Soundboard audio engine");
+            return player;
+        }
     }
 
     let binary = std::env::current_exe()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
     log::warn!(
-        "Using in-process audio engine from {binary}; the systemd service was stopped to prevent duplicate virtual-mic ownership. If the installed engine is stale, run: ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard"
+        "Using transient in-process audio engine from {binary}; the systemd service was stopped to prevent duplicate virtual-mic ownership"
     );
     let backend = if crate::audio::pipewire_detection::check_pipewire().available {
         AudioBackendKind::PipeWire
@@ -419,21 +683,39 @@ fn initialize_player(config: &Config) -> crate::audio::AudioPlayer {
 
 fn connect_or_start_audio_engine<T>(
     mut connect: impl FnMut() -> Option<T>,
-    mut stop_incompatible: impl FnMut() -> bool,
-    start_service: impl FnOnce(),
+    engine_running: impl FnOnce() -> bool,
+    shutdown_incompatible: impl FnOnce() -> bool,
+    mut service_action: impl FnMut(ServiceAction) -> bool,
     cleanup_before_local: impl FnOnce(),
+    max_connect_attempts: usize,
+    mut wait_between_attempts: impl FnMut(),
 ) -> Option<T> {
     if let Some(engine) = connect() {
         return Some(engine);
     }
-    if stop_incompatible() {
+
+    let action = if engine_running() {
+        if !shutdown_incompatible() {
+            cleanup_before_local();
+            return None;
+        }
+        ServiceAction::Restart
+    } else {
+        ServiceAction::Start
+    };
+
+    if !service_action(action) {
         cleanup_before_local();
         return None;
     }
 
-    start_service();
-    if let Some(engine) = connect() {
-        return Some(engine);
+    for attempt in 0..max_connect_attempts.max(1) {
+        if let Some(engine) = connect() {
+            return Some(engine);
+        }
+        if attempt + 1 < max_connect_attempts {
+            wait_between_attempts();
+        }
     }
 
     cleanup_before_local();
@@ -449,35 +731,30 @@ fn stop_audio_engine_service_and_process() {
     crate::audio::engine_ipc::shutdown_engine_if_running();
 }
 
-fn ensure_audio_engine_service_started() {
+fn manage_audio_engine_service(action: ServiceAction) -> bool {
     let service = "linux-soundboard-engine.service";
-    let status = std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", service])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    if matches!(status, Ok(status) if status.success()) {
-        return;
-    }
-
     ensure_user_audio_engine_service_file(service);
-
-    let status = std::process::Command::new("systemctl")
-        .args(["--user", "enable", "--now", service])
+    let reload = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
-    if !matches!(status, Ok(status) if status.success()) {
-        return;
+    if !matches!(reload, Ok(status) if status.success()) {
+        return false;
     }
 
-    let started_at = std::time::Instant::now();
-    while started_at.elapsed() < Duration::from_secs(2) {
-        if crate::audio::engine_ipc::compatible_engine_running() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let args: &[&str] = match action {
+        ServiceAction::Start => &["--user", "enable", "--now", service],
+        ServiceAction::Restart => &["--user", "restart", service],
+    };
+    matches!(
+        std::process::Command::new("systemctl")
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
 }
 
 fn ensure_user_audio_engine_service_file(service: &str) {
@@ -680,6 +957,59 @@ mod tests {
     }
 
     #[test]
+    fn installation_kind_uses_only_system_and_stable_user_paths() {
+        let home = Path::new("/home/test");
+        assert_eq!(
+            installation_kind_for(Path::new("/usr/bin/linux-soundboard"), home, false),
+            InstallationKind::Stable
+        );
+        assert_eq!(
+            installation_kind_for(
+                Path::new("/home/test/.local/opt/linux-soundboard/linux-soundboard"),
+                home,
+                true
+            ),
+            InstallationKind::Stable
+        );
+        assert_eq!(
+            installation_kind_for(
+                Path::new("/home/test/Downloads/Soundboard.AppImage"),
+                home,
+                true
+            ),
+            InstallationKind::DirectAppImage
+        );
+        assert_eq!(
+            installation_kind_for(Path::new("/tmp/target/debug/linux-soundboard"), home, false),
+            InstallationKind::PortableOrDevelopment
+        );
+    }
+
+    #[test]
+    fn direct_appimage_requires_approval_before_service_changes() {
+        assert!(should_prompt_for_appimage_install(
+            InstallationKind::DirectAppImage,
+            false
+        ));
+        assert!(!should_prompt_for_appimage_install(
+            InstallationKind::DirectAppImage,
+            true
+        ));
+        assert!(!should_prompt_for_appimage_install(
+            InstallationKind::Stable,
+            false
+        ));
+        assert_eq!(
+            startup_mode_for(InstallationKind::DirectAppImage, true),
+            StartupMode::Persistent
+        );
+        assert_eq!(
+            startup_mode_for(InstallationKind::DirectAppImage, false),
+            StartupMode::Transient
+        );
+    }
+
+    #[test]
     fn matching_engine_connects_without_service_changes() {
         let events = RefCell::new(Vec::new());
 
@@ -688,9 +1018,12 @@ mod tests {
                 events.borrow_mut().push("connect");
                 Some(7)
             },
+            || panic!("matching engine must not be reprobed"),
             || panic!("matching engine must not be stopped"),
-            || panic!("matching engine must not restart the service"),
+            |_| panic!("matching engine must not change the service"),
             || panic!("matching engine must not run local cleanup"),
+            1,
+            || {},
         );
 
         assert_eq!(engine, Some(7));
@@ -709,47 +1042,75 @@ mod tests {
                 (attempts.get() == 2).then_some(7)
             },
             || {
-                events.borrow_mut().push("check-incompatible");
+                events.borrow_mut().push("engine-running");
                 false
             },
-            || events.borrow_mut().push("start-service"),
+            || panic!("absent engine must not be stopped"),
+            |action| {
+                events.borrow_mut().push(match action {
+                    ServiceAction::Start => "start-service",
+                    ServiceAction::Restart => "restart-service",
+                });
+                true
+            },
             || panic!("compatible service must not run local cleanup"),
+            1,
+            || {},
         );
 
         assert_eq!(engine, Some(7));
         assert_eq!(
             *events.borrow(),
-            ["connect", "check-incompatible", "start-service", "connect"]
+            ["connect", "engine-running", "start-service", "connect"]
         );
     }
 
     #[test]
-    fn incompatible_engine_is_stopped_without_restarting_service() {
+    fn incompatible_engine_is_stopped_restarted_and_reconnected() {
+        let attempts = Cell::new(0);
         let events = RefCell::new(Vec::new());
 
         let engine = connect_or_start_audio_engine(
             || {
                 events.borrow_mut().push("connect");
-                None::<u8>
+                attempts.set(attempts.get() + 1);
+                (attempts.get() == 2).then_some(7)
+            },
+            || {
+                events.borrow_mut().push("engine-running");
+                true
             },
             || {
                 events.borrow_mut().push("stop-incompatible");
                 true
             },
-            || panic!("known-incompatible service must not be restarted"),
-            || events.borrow_mut().push("cleanup-before-local"),
+            |action| {
+                assert_eq!(action, ServiceAction::Restart);
+                events.borrow_mut().push("restart-service");
+                true
+            },
+            || panic!("compatible restarted service must not fall back locally"),
+            1,
+            || {},
         );
 
-        assert_eq!(engine, None);
+        assert_eq!(engine, Some(7));
         assert_eq!(
             *events.borrow(),
-            ["connect", "stop-incompatible", "cleanup-before-local"]
+            [
+                "connect",
+                "engine-running",
+                "stop-incompatible",
+                "restart-service",
+                "connect"
+            ]
         );
     }
 
     #[test]
-    fn failed_service_is_stopped_before_local_fallback() {
+    fn restarted_incompatible_engine_is_stopped_once_before_local_fallback() {
         let events = RefCell::new(Vec::new());
+        let cleanup_count = Cell::new(0);
 
         let engine = connect_or_start_audio_engine(
             || {
@@ -757,23 +1118,62 @@ mod tests {
                 None::<u8>
             },
             || {
-                events.borrow_mut().push("check-incompatible");
-                false
+                events.borrow_mut().push("engine-running");
+                true
             },
-            || events.borrow_mut().push("start-service"),
-            || events.borrow_mut().push("cleanup-before-local"),
+            || {
+                events.borrow_mut().push("stop-incompatible");
+                true
+            },
+            |action| {
+                assert_eq!(action, ServiceAction::Restart);
+                events.borrow_mut().push("restart-service");
+                true
+            },
+            || {
+                cleanup_count.set(cleanup_count.get() + 1);
+                events.borrow_mut().push("cleanup-before-local");
+            },
+            1,
+            || {},
         );
 
         assert_eq!(engine, None);
+        assert_eq!(cleanup_count.get(), 1);
         assert_eq!(
             *events.borrow(),
             [
                 "connect",
-                "check-incompatible",
-                "start-service",
+                "engine-running",
+                "stop-incompatible",
+                "restart-service",
                 "connect",
                 "cleanup-before-local"
             ]
         );
+    }
+
+    #[test]
+    fn unavailable_systemd_falls_back_to_one_local_owner() {
+        let events = RefCell::new(Vec::new());
+        let cleanup_count = Cell::new(0);
+
+        let engine = connect_or_start_audio_engine(
+            || None::<u8>,
+            || false,
+            || panic!("absent engine must not be stopped"),
+            |action| {
+                assert_eq!(action, ServiceAction::Start);
+                events.borrow_mut().push("systemd-unavailable");
+                false
+            },
+            || cleanup_count.set(cleanup_count.get() + 1),
+            1,
+            || {},
+        );
+
+        assert_eq!(engine, None);
+        assert_eq!(*events.borrow(), ["systemd-unavailable"]);
+        assert_eq!(cleanup_count.get(), 1);
     }
 }

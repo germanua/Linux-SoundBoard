@@ -103,20 +103,20 @@ install-user.sh remove --yes    # uninstall without prompts
 install-user.sh status          # show what is installed and service status
 ```
 
-### AppImage (portable, no install)
+### AppImage
 
 ```bash
 chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-The AppImage creates the virtual mic only while its audio engine is running and does not install the engine service or desktop entry by itself. Run `install-user.sh install linux-soundboard-x86_64.AppImage` for a full install from the AppImage.
+On first direct launch, choose **Install for persistent virtual mic**, **Run temporarily**, or **Exit**. Install copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard` and starts the user engine service. Temporary mode creates no service and restores an eligible previous microphone before removing its virtual mic on close.
 
 ---
 
 ## Quick Start
 
-1. Install using the method above. The engine creates `Linux_Soundboard_Mic` while it is running.
+1. Install using the method above. The engine creates `Linux_Soundboard_Mic` and keeps it available after the GUI closes.
 2. Launch `linux-soundboard` from your application menu or terminal.
 3. **In Discord, OBS, Zoom, or your game** — select `Linux_Soundboard_Mic` as the microphone input when the app has an input selector.
 4. Keep **Microphone Routing** set to **Default** (recommended). The soundboard claims the system default mic so apps use it automatically. Switch to **Manual** only if you manage the default mic yourself via pavucontrol or similar.

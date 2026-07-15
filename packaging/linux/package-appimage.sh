@@ -16,6 +16,8 @@ ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/target/release/$APP_BINARY"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
+INSTALLER_SOURCE="$REPO_ROOT/packaging/linux/install-user.sh"
+APP_META_SOURCE="$REPO_ROOT/packaging/linux/app-meta.sh"
 DIST_ROOT="$REPO_ROOT/dist"
 TOOLS_ROOT="$DIST_ROOT/.appimage-tools"
 
@@ -162,13 +164,18 @@ mkdir -p \
     "$APPDIR/usr/share/applications" \
     "$APPDIR/usr/share/doc/$APP_BINARY" \
     "$APPDIR/usr/share/metainfo" \
-    "$APPDIR/usr/libexec/linux-soundboard"
+    "$APPDIR/usr/libexec/linux-soundboard" \
+    "$APPDIR/usr/libexec/linux-soundboard/installer/icons"
 
 install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
 install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/bin/install-swhkd-helper.sh"
+install -Dm755 "$INSTALLER_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/installer/install-user.sh"
+install -Dm644 "$APP_META_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/installer/app-meta.sh"
+install -Dm755 "$SWHKD_HELPER_SOURCE" "$APPDIR/usr/libexec/linux-soundboard/installer/install-swhkd-helper.sh"
 
 for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
     install -Dm644 "$REPO_ROOT/$legal_file" "$APPDIR/usr/share/doc/$APP_BINARY/$legal_file"
+    install -Dm644 "$REPO_ROOT/$legal_file" "$APPDIR/usr/libexec/linux-soundboard/installer/$legal_file"
 done
 
 cat >"$DESKTOP_FILE" <<EOF
@@ -214,6 +221,11 @@ while IFS= read -r icon_path; do
         install -Dm644 "$icon_path" "$APPDIR/usr/share/icons/hicolor/$size_dir/apps/$icon_name.png"
     done
 done < <(find "$ICON_SOURCE_ROOT" -path "*/apps/$APP_ID.png" -type f | sort)
+
+while IFS= read -r icon_path; do
+    relative_path="${icon_path#"$ICON_SOURCE_ROOT/"}"
+    install -Dm644 "$icon_path" "$APPDIR/usr/libexec/linux-soundboard/installer/icons/$relative_path"
+done < <(find "$ICON_SOURCE_ROOT" -type f | sort)
 
 DEPLOY_PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
 

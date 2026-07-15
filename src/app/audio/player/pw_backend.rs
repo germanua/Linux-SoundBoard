@@ -121,6 +121,17 @@ impl BackendState {
             }
         }
     }
+
+    pub(super) fn stop_streams_for_shutdown(&mut self) {
+        match self {
+            Self::PipeWire(backend) => {
+                drop(backend.capture_stream.take());
+                drop(backend.virtual_stream.take());
+                drop(backend._local_stream.take());
+            }
+            Self::PulseAudio(backend) => backend.stop_streams_for_shutdown(),
+        }
+    }
 }
 
 pub(super) fn create_backend(

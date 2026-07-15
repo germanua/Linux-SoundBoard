@@ -72,6 +72,17 @@ for package_file in \
     fi
 done
 
+if grep -qF 'maintainer-scripts = "../packaging/debian"' "$REPO_ROOT/src/Cargo.toml"; then
+    pass "cargo-deb: maintainer scripts use the control archive"
+else
+    fail "cargo-deb: maintainer scripts are not registered for the control archive"
+fi
+if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, pipewire, wireplumber, pkexec | policykit-1"' "$REPO_ROOT/src/Cargo.toml"; then
+    pass "cargo-deb: runtime dependencies do not rely on optional auto-detection"
+else
+    fail "cargo-deb: explicit GTK, audio, and X11 runtime dependencies are incomplete"
+fi
+
 echo ""
 
 # ── 2. Desktop file validation ───────────────────────────────────────────────
@@ -259,6 +270,20 @@ else
         fail "AppImage preflight script: syntax errors detected"
     fi
 fi
+
+APPIMAGE_PACKAGER="$REPO_ROOT/packaging/linux/package-appimage.sh"
+for payload in \
+    "install-user.sh" \
+    "app-meta.sh" \
+    "installer/icons" \
+    'installer/$legal_file' \
+    "installer/install-swhkd-helper.sh"; do
+    if grep -qF "$payload" "$APPIMAGE_PACKAGER"; then
+        pass "AppImage installer payload: $payload"
+    else
+        fail "AppImage installer payload missing: $payload"
+    fi
+done
 
 echo ""
 

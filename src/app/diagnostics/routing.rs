@@ -146,7 +146,8 @@ fn check_engine() {
         .unwrap_or_else(|_| "<unknown>".to_string());
     println!("  UI binary       : {ui_binary}");
     println!(
-        "  expected        : protocol={} schema={}",
+        "  expected        : version={} protocol={} schema={}",
+        crate::app_meta::APP_VERSION,
         crate::audio::engine_ipc::ENGINE_PROTOCOL_VERSION,
         crate::config::CURRENT_SCHEMA_VERSION
     );
@@ -179,6 +180,9 @@ fn check_engine() {
             "linux-soundboard-engine.service",
             "--property=FragmentPath",
             "--property=ExecStart",
+            "--property=ActiveState",
+            "--property=SubState",
+            "--property=MainPID",
         ])
         .output()
     {

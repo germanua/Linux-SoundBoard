@@ -147,6 +147,21 @@ impl PulseAudioBackend {
         }
     }
 
+    pub(super) fn stop_streams_for_shutdown(&mut self) {
+        self.mainloop.borrow_mut().lock();
+        for stream in [
+            self.capture_stream.take(),
+            self.virtual_stream.take(),
+            self.local_stream.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let _ = stream.borrow_mut().disconnect();
+        }
+        self.mainloop.borrow_mut().unlock();
+    }
+
     fn stream_ready(&self, stream: Option<&PulseStream>) -> bool {
         let Some(stream) = stream else {
             return false;

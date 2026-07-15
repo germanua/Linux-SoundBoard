@@ -29,7 +29,7 @@ Install the host FUSE package and retry:
 Use APT to resolve dependencies instead of `dpkg -i` alone:
 
 ```bash
-sudo apt install ./linux-soundboard_2.1.0-1_amd64.deb
+sudo apt install ./linux-soundboard_2.1.1-1_amd64.deb
 ```
 
 If host audio packages are missing:
@@ -43,7 +43,7 @@ sudo apt install pipewire wireplumber
 Install with DNF:
 
 ```bash
-sudo dnf install ./linux-soundboard-2.1.0-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.1.1-1.x86_64.rpm
 ```
 
 If the audio stack is missing:
@@ -175,17 +175,45 @@ Both go through the same runtime `Linux_Soundboard_Mic`, so a partial failure us
    ```
    The virtual mic should not be muted, and the target app stream should point at `linuxsoundboard.virtual_mic`.
 
-2. Inspect the UI and engine binary versions:
+2. Inspect the expected and running app versions, protocol, schema, binary paths, PID, and service state:
    ```bash
    linux-soundboard --diagnose
    ```
 
-3. If `compatibility` is `INCOMPATIBLE`, deploy the same source-build binary to the user service. Restarting a PATH-based packaged unit only starts the packaged binary again:
+3. If `compatibility` is `INCOMPATIBLE`, repair the installed binary and service:
    ```bash
    ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
    ```
 
-The UI stops an incompatible service before using its in-process engine. Do not run a second `--audio-engine` process manually; both processes would compete for `linuxsoundboard.virtual_mic`.
+During a v2.0→v2.1 package upgrade, `/usr/bin/linux-soundboard` can be replaced while the already-running engine still executes the old mapped binary. Version 2.1.1 stops that stale engine, reloads and restarts the user service once, and connects only after protocol, schema, and app version all match. If the restarted process is still stale, it is stopped before one transient local fallback starts. Do not run a second `--audio-engine` process manually.
+
+Useful stale-engine checks:
+
+```bash
+linux-soundboard --diagnose
+systemctl --user show linux-soundboard-engine.service -p MainPID -p ExecStart -p FragmentPath
+readlink -f /proc/$(systemctl --user show linux-soundboard-engine.service -p MainPID --value)/exe
+```
+
+### Recover a schema-6 configuration backup
+
+The first valid schema-6 load by v2.1.1 creates an exact private backup at `~/.config/linux-soundboard/config.json.pre-v6-backup`. If migration cannot proceed, the GUI and engine fail closed and leave the original file unchanged.
+
+Close the GUI and stop every newer engine before recovery:
+
+```bash
+systemctl --user stop linux-soundboard-engine.service
+pgrep -af linux-soundboard   # this must print no remaining GUI or engine process
+cp -p ~/.config/linux-soundboard/config.json.pre-v6-backup \
+  ~/.config/linux-soundboard/config.json
+chmod 600 ~/.config/linux-soundboard/config.json
+```
+
+Then start the service or GUI again. Do not copy the backup while a newer process is running, because it may save migrated state over the restored file.
+
+### AppImage temporary versus installed behavior
+
+A direct AppImage asks before changing audio state. **Install for persistent virtual mic** deploys the AppImage to the stable user path and keeps the service and virtual mic alive after GUI close. **Run temporarily** creates no service and restores an eligible previous/default microphone before removing its virtual mic. **Exit** makes no configuration, service, or audio-graph change.
 
 ### Adwaita warnings when launching from a terminal
 

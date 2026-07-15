@@ -55,6 +55,17 @@
   </keywords>
   
   <releases>
+    <release version="2.1.1" date="2026-07-15">
+      <description>
+        <p>Safe upgrade and microphone lifecycle correction:</p>
+        <ul>
+          <li>Restarts stale installed audio engines and verifies the running app version</li>
+          <li>Restores a safe default microphone after temporary AppImage or development runs</li>
+          <li>Creates an exact private backup before migrating schema-6 configuration</li>
+          <li>Requires explicit approval before an AppImage installs a persistent service</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-07-12">
       <description>
         <p>Folder workflow and audio reliability update:</p>

@@ -68,5 +68,8 @@ pub(super) enum AudioCommand {
         profile: MicLatencyProfile,
         response: Sender<Result<(), EngineError>>,
     },
-    Shutdown,
+    Shutdown {
+        policy: ShutdownPolicy,
+        response: Sender<()>,
+    },
 }

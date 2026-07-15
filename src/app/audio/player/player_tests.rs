@@ -1,5 +1,11 @@
 use super::source_routing;
 use super::*;
+
+#[test]
+fn shutdown_policy_restores_only_transient_engines() {
+    assert!(!ShutdownPolicy::Persistent.restores_default_source());
+    assert!(ShutdownPolicy::Transient.restores_default_source());
+}
 use crate::app_meta::VIRTUAL_MIC_DESCRIPTION;
 use crate::test_support::audio_fixtures::{
     cleanup_test_audio_path, create_test_audio_file, create_test_vorbis_file, TestVorbisFixture,
@@ -266,6 +272,99 @@ fn restore_default_source_stops_claim_without_random_fallback() {
         state.previous_default_source_name.as_deref(),
         Some("missing.source")
     );
+}
+
+#[test]
+fn transient_shutdown_prefers_previous_valid_source() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.previous_default_source_name = Some("alsa_input.previous".to_string());
+    state
+        .sources
+        .insert(1, test_source(1, "alsa_input.previous", "Previous Mic", 1));
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "easyeffects_source".to_string(),
+            display_name: "Easy Effects Source".to_string(),
+            priority_session: 9_000,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+
+    assert_eq!(
+        source_routing::transient_restore_target(&state),
+        Some((1, "alsa_input.previous".to_string()))
+    );
+}
+
+#[test]
+fn transient_shutdown_uses_ranked_fallback_when_previous_source_is_missing() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.previous_default_source_name = Some("missing.source".to_string());
+    state.sources.insert(
+        1,
+        test_source(1, "alsa_input.hardware", "Hardware Mic", 9_000),
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "easyeffects_source".to_string(),
+            display_name: "Easy Effects Source".to_string(),
+            priority_session: 1,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+
+    assert_eq!(
+        source_routing::transient_restore_target(&state),
+        Some((2, "easyeffects_source".to_string()))
+    );
+}
+
+#[test]
+fn transient_shutdown_never_selects_monitor_or_unrelated_virtual_cable() {
+    let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
+    state.previous_default_source_name = Some("alsa_output.monitor".to_string());
+    state.sources.insert(
+        1,
+        SourceDescriptor {
+            id: 1,
+            serial: None,
+            node_name: "alsa_output.monitor".to_string(),
+            display_name: "Monitor".to_string(),
+            priority_session: 9_000,
+            is_monitor: true,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+    state.sources.insert(
+        2,
+        SourceDescriptor {
+            id: 2,
+            serial: None,
+            node_name: "virtual.cable".to_string(),
+            display_name: "Virtual Cable".to_string(),
+            priority_session: 9_999,
+            is_monitor: false,
+            is_our_virtual_mic: false,
+            is_virtual: true,
+            is_hardware_backed: false,
+        },
+    );
+
+    assert_eq!(source_routing::transient_restore_target(&state), None);
 }
 
 #[test]

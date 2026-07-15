@@ -1,5 +1,5 @@
 Name:           linux-soundboard
-Version:        2.1.0
+Version:        2.1.1
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -143,6 +143,12 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Wed Jul 15 2026 germanua <noreply@linuxsoundboard.invalid> - 2.1.1-1
+- Restart stale installed engines and verify the running app version
+- Restore a safe default microphone after temporary execution
+- Protect schema-6 upgrades with an exact private backup
+- Require explicit AppImage installation approval
+
 * Sun Jul 12 2026 germanua <noreply@linuxsoundboard.invalid> - 2.1.0-1
 - Added folder-derived tabs and Delete-key removal
 - Fixed mixed-version engine startup and Ogg Vorbis playback

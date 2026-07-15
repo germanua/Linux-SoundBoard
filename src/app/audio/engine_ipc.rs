@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::app_meta::APP_VERSION;
 use crate::audio::PlayerSnapshot;
 use crate::config::{DefaultSourceMode, MicLatencyProfile, CURRENT_SCHEMA_VERSION};
 
@@ -183,10 +184,7 @@ pub fn engine_info_compatible(info: &EngineInfo) -> bool {
     // restart the UI and engine from the same build.
     info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
         && info.config_schema_version == CURRENT_SCHEMA_VERSION
-}
-
-pub fn compatible_engine_running() -> bool {
-    matches!(engine_info(), Ok(info) if engine_info_compatible(&info))
+        && info.app_version == APP_VERSION
 }
 
 pub fn shutdown_incompatible_engine_if_running() -> bool {
@@ -217,7 +215,8 @@ pub fn shutdown_incompatible_engine_at(path: &Path, timeout: Duration) -> bool {
         Ok(info) if engine_info_compatible(&info) => return false,
         Ok(info) => {
             log::warn!(
-                "Stopping incompatible Linux Soundboard audio engine: protocol={} schema={} binary={}",
+                "Stopping incompatible Linux Soundboard audio engine: version={} protocol={} schema={} binary={}",
+                info.app_version,
                 info.engine_protocol_version,
                 info.config_schema_version,
                 info.binary_path
@@ -370,6 +369,7 @@ fn read_response(stream: UnixStream) -> Result<EngineResponse, EngineIpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_meta::APP_VERSION;
 
     #[test]
     fn socket_path_uses_runtime_dir() {
@@ -393,10 +393,10 @@ mod tests {
     }
 
     #[test]
-    fn engine_info_compatibility_requires_current_protocol_and_schema() {
+    fn engine_info_compatibility_requires_current_protocol_schema_and_app_version() {
         let current = EngineInfo {
             engine_protocol_version: ENGINE_PROTOCOL_VERSION,
-            app_version: "test".to_string(),
+            app_version: APP_VERSION.to_string(),
             config_schema_version: CURRENT_SCHEMA_VERSION,
             binary_path: "/tmp/linux-soundboard".to_string(),
         };
@@ -406,9 +406,13 @@ mod tests {
         old_protocol.engine_protocol_version = ENGINE_PROTOCOL_VERSION.saturating_sub(1);
         assert!(!engine_info_compatible(&old_protocol));
 
-        let mut old_schema = current;
+        let mut old_schema = current.clone();
         old_schema.config_schema_version = CURRENT_SCHEMA_VERSION.saturating_sub(1);
         assert!(!engine_info_compatible(&old_schema));
+
+        let mut old_app = current;
+        old_app.app_version = "2.1.0".to_string();
+        assert!(!engine_info_compatible(&old_app));
     }
 
     #[test]

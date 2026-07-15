@@ -173,6 +173,80 @@ pub(super) fn best_upstream_mic_source_name(
         .map(|candidate| candidate.node_name.clone())
 }
 
+pub(super) fn transient_restore_target(state: &LoopState) -> Option<(u32, String)> {
+    state
+        .previous_default_source_name
+        .as_deref()
+        .and_then(|name| {
+            state
+                .sources
+                .values()
+                .find(|source| source.node_name == name && auto_detect_eligible(source))
+        })
+        .or_else(|| {
+            best_upstream_mic_source_name(&state.sources)
+                .as_deref()
+                .and_then(|name| {
+                    state
+                        .sources
+                        .values()
+                        .find(|source| source.node_name == name)
+                })
+        })
+        .map(|source| (source.id, source.node_name.clone()))
+}
+
+pub(super) fn restore_default_source_for_transient_shutdown(state: &mut LoopState) {
+    let Some((source_id, source_name)) = transient_restore_target(state) else {
+        warn!(
+            "No eligible non-Soundboard microphone is available during transient shutdown; leaving the configured default unchanged"
+        );
+        state.claimed_default = false;
+        return;
+    };
+
+    #[cfg(test)]
+    let _ = (source_id, &source_name);
+
+    #[cfg(not(test))]
+    {
+        let started_at = Instant::now();
+        while state
+            .default_source_command_in_flight
+            .load(Ordering::Relaxed)
+            && started_at.elapsed() < Duration::from_secs(2)
+        {
+            thread::sleep(WPCTL_POLL_INTERVAL);
+        }
+
+        let wpctl_outcome = set_default_source(source_id);
+        let wpctl_err = wpctl_outcome.as_ref().err().map(ToString::to_string);
+        crate::diagnostics::audit::record_default_source_command(
+            "default_source.transient_restore",
+            Some(source_id),
+            Some(&source_name),
+            wpctl_err.as_deref().map_or(Ok(()), Err),
+        );
+        if let Err(err) = wpctl_outcome {
+            warn!("Failed to restore default source during transient shutdown: {err}");
+        }
+
+        let pactl_outcome = set_pulse_default_source(&source_name);
+        let pactl_err = pactl_outcome.as_ref().err().map(ToString::to_string);
+        crate::diagnostics::audit::record_default_source_command(
+            "default_source.pulse_transient_restore",
+            Some(source_id),
+            Some(&source_name),
+            pactl_err.as_deref().map_or(Ok(()), Err),
+        );
+        if let Err(err) = pactl_outcome {
+            warn!("Failed to restore PulseAudio default source during transient shutdown: {err}");
+        }
+    }
+
+    state.claimed_default = false;
+}
+
 // Excludes monitor sources (sink monitors aren't real mics) and Soundboard's
 // own virtual mic (would create a feedback loop). Used for EXPLICIT selection —
 // the user may deliberately pick any non-monitor, non-own source.

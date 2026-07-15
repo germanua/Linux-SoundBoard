@@ -1,3 +1,12 @@
+linux-soundboard (2.1.1-1) unstable; urgency=medium
+
+  * Restart stale installed engines and verify protocol, schema, and app version
+  * Restore a safe default microphone when a temporary engine exits
+  * Back up schema-6 configuration bytes before migration
+  * Require explicit approval before an AppImage installs a persistent service
+
+ -- germanua <noreply@linuxsoundboard.invalid>  Wed, 15 Jul 2026 12:00:00 +0000
+
 linux-soundboard (2.1.0-1) unstable; urgency=medium
 
   * Add folder-derived tabs and Delete-key removal

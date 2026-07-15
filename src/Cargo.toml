@@ -1,6 +1,6 @@
 [package]
 name = "linux-soundboard"
-version = "2.1.0"
+version = "2.1.1"
 publish = false
 authors = ["germanua"]
 description = "Native Linux soundboard with PipeWire virtual microphone support"
@@ -65,8 +65,9 @@ copyright = "2026, germanua"
 section = "sound"
 priority = "optional"
 revision = "1"
-depends = "$auto, libpulse0, pipewire, wireplumber, pkexec | policykit-1"
+depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, pipewire, wireplumber, pkexec | policykit-1"
 recommends = "xwayland"
+maintainer-scripts = "../packaging/debian"
 extended-description = """\
 A high-performance, native Linux soundboard built with Rust, GTK4, and \
 Libadwaita. Features include a virtual microphone for routing audio to \
@@ -75,8 +76,6 @@ on Wayland and X11/XWayland, and native PipeWire virtual microphone support."""
 assets = [
     "$auto",
     ["../packaging/debian/linux-soundboard.desktop", "usr/share/applications/com.linuxsoundboard.app.desktop", "644"],
-    ["../packaging/debian/postinst", "DEBIAN/postinst", "755"],
-    ["../packaging/debian/prerm", "DEBIAN/prerm", "755"],
     ["../LICENSE", "usr/share/doc/linux-soundboard/LICENSE", "644"],
     ["../NOTICE.md", "usr/share/doc/linux-soundboard/NOTICE.md", "644"],
     ["../THIRDPARTY_LICENSES.md", "usr/share/doc/linux-soundboard/THIRDPARTY_LICENSES.md", "644"],

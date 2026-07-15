@@ -48,11 +48,11 @@ For source builds or when you want to manage the download yourself:
 
 ```bash
 # 1. Download the latest release tarball from the Releases page
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.1.0-linux-x86_64.tar.gz
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.1.1-linux-x86_64.tar.gz
 
 # 2. Extract it
-tar -xzf linux-soundboard-2.1.0-linux-x86_64.tar.gz
-cd linux-soundboard-2.1.0-linux-x86_64
+tar -xzf linux-soundboard-2.1.1-linux-x86_64.tar.gz
+cd linux-soundboard-2.1.1-linux-x86_64
 
 # 3. Run the installer — an interactive menu guides you through the install
 ./install-user.sh
@@ -130,7 +130,7 @@ The AUR package installs the app, icons, helper files, and the user audio-engine
 Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
 
 ```bash
-sudo apt install ./linux-soundboard_2.1.0-1_amd64.deb
+sudo apt install ./linux-soundboard_2.1.1-1_amd64.deb
 ```
 
 Required runtime packages (usually already present on modern Ubuntu/Debian):
@@ -156,7 +156,7 @@ for global hotkeys.
 ### Fedora
 
 ```bash
-sudo dnf install ./linux-soundboard-2.1.0-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.1.1-1.x86_64.rpm
 ```
 
 Required runtime packages:
@@ -169,16 +169,22 @@ Same as Debian: run the smart wrapper repair command after the RPM install to co
 
 ---
 
-## AppImage (portable, no install)
+## AppImage
 
-The AppImage can run without any installation:
+The AppImage can install itself or run temporarily:
 
 ```bash
 chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-The AppImage creates the virtual mic only while its audio engine is running. It does **not** install the engine service or register a desktop entry by itself. Use `install-user.sh install linux-soundboard-x86_64.AppImage` for a proper installation from the AppImage.
+Before touching the audio graph, direct launch offers three choices:
+
+- **Install for persistent virtual mic** copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard`, registers the desktop entry and user service through the bundled `install-user.sh`, then connects the GUI to the matching service engine.
+- **Run temporarily** creates no service. The in-process engine restores the previously recorded eligible microphone, or the best eligible hardware/enhancement source, before removing the temporary virtual mic on close.
+- **Exit** changes no configuration, service, or audio-graph state.
+
+The prompt returns on every direct launch until the AppImage is installed.
 
 If AppImage reports a FUSE error:
 

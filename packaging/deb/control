@@ -1,5 +1,5 @@
 Package: linux-soundboard
-Version: 2.1.0
+Version: 2.1.1
 Section: sound
 Priority: optional
 Architecture: amd64

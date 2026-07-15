@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,6 +10,7 @@ use crate::config::defaults::{config_dir_name, CONFIG_FILE_NAME};
 use crate::config::{Config, LoudnessAnalysisState, SoundTab};
 
 static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const SCHEMA_6_BACKUP_FILE_NAME: &str = "config.json.pre-v6-backup";
 
 fn save_temp_path(path: &Path) -> PathBuf {
     let sequence = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -18,6 +20,61 @@ fn save_temp_path(path: &Path) -> PathBuf {
         std::process::id(),
         sequence
     ))
+}
+
+fn schema_6_backup_path(path: &Path) -> PathBuf {
+    path.with_file_name(SCHEMA_6_BACKUP_FILE_NAME)
+}
+
+fn ensure_schema_6_backup(path: &Path, original: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    let backup_path = schema_6_backup_path(path);
+    if backup_path.exists() {
+        if fs::read(&backup_path)? == original {
+            fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))?;
+            return Ok(());
+        }
+        return Err(format!(
+            "Refusing to replace conflicting pre-v6 backup '{}'",
+            backup_path.display()
+        )
+        .into());
+    }
+
+    let tmp_path = backup_path.with_file_name(format!(
+        "{SCHEMA_6_BACKUP_FILE_NAME}.tmp.{}.{}",
+        std::process::id(),
+        SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let mut tmp = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
+        tmp.write_all(original)?;
+        tmp.sync_all()?;
+
+        match fs::hard_link(&tmp_path, &backup_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                if fs::read(&backup_path)? != original {
+                    return Err(format!(
+                        "Refusing to replace conflicting pre-v6 backup '{}'",
+                        backup_path.display()
+                    )
+                    .into());
+                }
+            }
+            Err(err) => return Err(Box::new(err)),
+        }
+        fs::set_permissions(&backup_path, fs::Permissions::from_mode(0o600))?;
+        if let Some(parent) = backup_path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    let _ = fs::remove_file(tmp_path);
+    result
 }
 
 impl Config {
@@ -36,8 +93,8 @@ impl Config {
 
     fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if path.exists() {
-            let content = fs::read_to_string(path)?;
-            let raw: serde_json::Value = serde_json::from_str(&content)?;
+            let content = fs::read(path)?;
+            let raw: serde_json::Value = serde_json::from_slice(&content)?;
 
             let version = raw
                 .get("schema_version")
@@ -53,6 +110,9 @@ impl Config {
 
             let mut config: Config = serde_json::from_value(config_value)?;
             config.sanitize_for_persistence();
+            if version == 6 {
+                ensure_schema_6_backup(path, &content)?;
+            }
             Ok(config)
         } else {
             Ok(Self::default())
@@ -293,9 +353,175 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const SCHEMA_6_FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/config-v2.0-schema6.json");
 
     fn test_dir() -> PathBuf {
         std::env::temp_dir().join(format!("lsb-config-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn backup_path(path: &Path) -> PathBuf {
+        schema_6_backup_path(path)
+    }
+
+    #[test]
+    fn schema_6_load_creates_exact_private_backup_and_preserves_user_fields() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        fs::write(&path, SCHEMA_6_FIXTURE).expect("write schema 6 fixture");
+
+        let config = Config::load_from_path(&path).expect("migrate schema 6 fixture");
+
+        assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
+        assert_eq!(config.sound_folders, ["/home/test/Sound Library"]);
+        assert_eq!(config.sounds[0].id, "sound-distinctive");
+        assert_eq!(config.sounds[0].name, "Upgrade fixture");
+        assert_eq!(
+            config.sounds[0].source_path.as_deref(),
+            Some("/home/test/source/upgrade.flac")
+        );
+        assert_eq!(config.sounds[0].hotkey.as_deref(), Some("Ctrl+Alt+9"));
+        assert_eq!(config.sounds[0].duration_ms, Some(4321));
+        assert_eq!(config.sounds[0].volume, 37);
+        assert!(!config.sounds[0].enabled);
+        assert_eq!(config.tabs[0].id, "tab-distinctive");
+        assert_eq!(config.tabs[0].name, "Upgrade tab");
+        assert_eq!(config.tabs[0].order, 7);
+        assert_eq!(config.tabs[0].folder_binding, None);
+        assert_eq!(config.tabs[0].sound_ids, ["sound-distinctive"]);
+        assert_eq!(
+            config.settings.mic_source.as_deref(),
+            Some("easyeffects_source")
+        );
+        assert_eq!(config.settings.local_volume, 41);
+        assert!(config.settings.local_mute);
+        assert_eq!(config.settings.mic_volume, 63);
+        assert!(config.settings.mic_passthrough);
+        assert_eq!(config.settings.default_source_mode.as_str(), "manual");
+        assert_eq!(config.settings.mic_latency_profile.as_str(), "low");
+        assert_eq!(config.settings.excluded_apps, ["OBS"]);
+        assert!(config.settings.skip_delete_confirm);
+        assert_eq!(
+            config.settings.control_hotkeys.play_pause.as_deref(),
+            Some("Ctrl+Shift+P")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.stop_all.as_deref(),
+            Some("Ctrl+Shift+S")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.previous_sound.as_deref(),
+            Some("Ctrl+Shift+Left")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.next_sound.as_deref(),
+            Some("Ctrl+Shift+Right")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.mute_headphones.as_deref(),
+            Some("Ctrl+Shift+H")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.mute_real_mic.as_deref(),
+            Some("Ctrl+Shift+R")
+        );
+        assert_eq!(
+            config.settings.control_hotkeys.cycle_play_mode.as_deref(),
+            Some("Ctrl+Shift+C")
+        );
+        assert!(config.settings.auto_gain);
+        assert_eq!(config.settings.auto_gain_mode.as_str(), "dynamic");
+        assert_eq!(config.settings.auto_gain_target_lufs, -16.0);
+        assert_eq!(config.settings.auto_gain_apply_to.as_str(), "mic_only");
+        assert_eq!(config.settings.auto_gain_lookahead_ms, 44);
+        assert_eq!(config.settings.auto_gain_attack_ms, 8);
+        assert_eq!(config.settings.auto_gain_release_ms, 222);
+        assert_eq!(config.settings.play_mode.as_str(), "continue");
+        assert_eq!(config.settings.list_style.as_str(), "card");
+        assert_eq!(
+            fs::read(backup_path(&path)).expect("read backup"),
+            SCHEMA_6_FIXTURE
+        );
+        assert_eq!(
+            fs::metadata(backup_path(&path))
+                .expect("backup metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+
+    #[test]
+    fn identical_schema_6_backup_is_idempotent() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        let backup = backup_path(&path);
+        fs::write(&path, SCHEMA_6_FIXTURE).expect("write schema 6 fixture");
+        fs::write(&backup, SCHEMA_6_FIXTURE).expect("write existing backup");
+
+        Config::load_from_path(&path).expect("load with identical backup");
+
+        assert_eq!(fs::read(&path).expect("read config"), SCHEMA_6_FIXTURE);
+        assert_eq!(fs::read(&backup).expect("read backup"), SCHEMA_6_FIXTURE);
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+
+    #[test]
+    fn conflicting_schema_6_backup_fails_without_modifying_either_file() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        let backup = backup_path(&path);
+        let conflicting = b"existing backup from another configuration";
+        fs::write(&path, SCHEMA_6_FIXTURE).expect("write schema 6 fixture");
+        fs::write(&backup, conflicting).expect("write conflicting backup");
+
+        let error = Config::load_from_path(&path).expect_err("conflicting backup must fail");
+
+        assert!(error.to_string().contains("pre-v6 backup"));
+        assert_eq!(fs::read(&path).expect("read config"), SCHEMA_6_FIXTURE);
+        assert_eq!(fs::read(&backup).expect("read backup"), conflicting);
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+
+    #[test]
+    fn malformed_and_future_configs_remain_byte_for_byte_unchanged() {
+        for bytes in [
+            b"{ definitely not json".as_slice(),
+            br#"{"schema_version":99,"sound_folders":[],"sounds":[],"tabs":[],"settings":{}}"#,
+        ] {
+            let dir = test_dir();
+            fs::create_dir_all(&dir).expect("create config directory");
+            let path = dir.join("config.json");
+            fs::write(&path, bytes).expect("write invalid config");
+
+            assert!(Config::load_from_path(&path).is_err());
+            assert_eq!(fs::read(&path).expect("read unchanged config"), bytes);
+            assert!(!backup_path(&path).exists());
+            fs::remove_dir_all(dir).expect("cleanup config directory");
+        }
+    }
+
+    #[test]
+    fn oversized_future_schema_remains_byte_for_byte_unchanged() {
+        let bytes = std::str::from_utf8(SCHEMA_6_FIXTURE)
+            .expect("schema 6 fixture is UTF-8")
+            .replace("\"schema_version\": 6", "\"schema_version\": 4294967303");
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        fs::write(&path, &bytes).expect("write future config");
+
+        assert!(Config::load_from_path(&path).is_err());
+        assert_eq!(
+            fs::read(&path).expect("read future config"),
+            bytes.as_bytes()
+        );
+        assert!(!backup_path(&path).exists());
     }
 
     #[test]

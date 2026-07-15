@@ -20,7 +20,7 @@ pub(super) fn audio_command_kind(cmd: &AudioCommand) -> &'static str {
         AudioCommand::SetMicSource { .. } => "SetMicSource",
         AudioCommand::SetDefaultSourceMode { .. } => "SetDefaultSourceMode",
         AudioCommand::SetMicLatencyProfile { .. } => "SetMicLatencyProfile",
-        AudioCommand::Shutdown => "Shutdown",
+        AudioCommand::Shutdown { .. } => "Shutdown",
     }
 }
 
@@ -197,15 +197,18 @@ pub(super) fn handle_audio_command(
             let result = recreate_capture_stream(&mut state);
             let _ = response.send(result);
         }
-        AudioCommand::Shutdown => {
-            // Do NOT restore the previous default source on shutdown. The whole
-            // point of the design is that virtual_mic stays the default across
-            // engine restarts — WirePlumber's `default-nodes` persistence does
-            // its job, and when the engine restarts (at next login, or via the
-            // systemd user service), virtual_mic reappears and apps pick it up
-            // again seamlessly. Uninstall is the only path that restores the
-            // pre-install default (handled by install-user.sh).
+        AudioCommand::Shutdown { policy, response } => {
+            state.active_playback = None;
             clear_all_queues(&state.queues);
+            drop_feeder_links(&mut state);
+            if let Some(backend) = state.backend.as_mut() {
+                backend.stop_streams_for_shutdown();
+            }
+            state.active_capture_target = None;
+            if policy.restores_default_source() {
+                super::source_routing::restore_default_source_for_transient_shutdown(&mut state);
+            }
+            let _ = response.send(());
             return true;
         }
     }
