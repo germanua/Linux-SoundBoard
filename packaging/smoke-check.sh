@@ -285,6 +285,13 @@ for payload in \
     fi
 done
 
+if grep -qF 'LSB_INSTALL_VERSION' "$REPO_ROOT/src/app/bootstrap.rs" \
+    && grep -qF '.installed-version' "$REPO_ROOT/packaging/linux/install-user.sh"; then
+    pass "AppImage updater: installed version handoff is bundled"
+else
+    fail "AppImage updater: installed version handoff is incomplete"
+fi
+
 echo ""
 
 # ── 8. Shell script syntax checks ────────────────────────────────────────────

@@ -11,7 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 ### Changed
 
 - **Installed-engine handoff:** Stable installations now require protocol, configuration schema, and application version equality. A stale engine is stopped, the user unit is reloaded and restarted once, and the GUI connects only after the replacement proves compatible.
-- **AppImage startup:** A direct AppImage now asks whether to install for a persistent virtual microphone, run temporarily, or exit before it changes services, configuration, or the audio graph.
+- **AppImage startup and updates:** A first direct AppImage launch asks whether to install for a persistent virtual microphone, run temporarily, or exit. Once installed, opening a newer downloaded AppImage automatically updates the stable user copy and restarts the matching engine; version tracking prevents silent downgrades.
 
 ### Fixed
 

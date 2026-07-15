@@ -1,5 +1,6 @@
 use parking_lot::Mutex;
-use std::path::PathBuf;
+use std::cmp::Ordering;
+use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use libadwaita::prelude::*;
 use log::{info, warn};
 
 use crate::app_meta::{
-    APP_BINARY, APP_ICON_NAME, APP_ID, APP_TITLE, BACKEND_ENV_VAR, FALLBACK_RENDERER,
+    APP_BINARY, APP_ICON_NAME, APP_ID, APP_TITLE, APP_VERSION, BACKEND_ENV_VAR, FALLBACK_RENDERER,
     FORCE_X11_ENV_VAR, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
@@ -21,6 +22,7 @@ use crate::timer_registry::TimerRegistry;
 
 pub fn run() {
     init_logging();
+    handoff_to_newer_user_install_if_needed();
     crate::diagnostics::audit::init_from_env();
     if std::env::args().any(|arg| arg == "--audio-engine") {
         std::process::exit(crate::audio::engine_server::run());
@@ -179,13 +181,28 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 
         let kind = installation_kind();
         let compatible_engine = compatible_stable_engine_running();
-        if should_prompt_for_appimage_install(kind, compatible_engine) {
-            prompt_appimage_startup(app);
-            return;
+        let home = dirs::home_dir().unwrap_or_default();
+        let stable_binary = stable_user_binary_path(&home);
+        let installed_version = installed_user_version(&home);
+        match appimage_startup_action(
+            kind,
+            compatible_engine,
+            stable_binary.is_file(),
+            installed_version.as_deref(),
+            APP_VERSION,
+        ) {
+            AppImageStartupAction::Prompt => prompt_appimage_startup(app),
+            AppImageStartupAction::AutoUpdate => update_appimage_and_start(app),
+            AppImageStartupAction::StartPersistent => {
+                start_application(app, StartupMode::Persistent)
+            }
+            AppImageStartupAction::StartTransient => start_application(app, StartupMode::Transient),
+            AppImageStartupAction::LaunchInstalled => {
+                // This is handled before GTK owns the application ID.
+                log::error!("Could not hand off to the newer installed Linux Soundboard");
+                app.quit();
+            }
         }
-
-        let mode = startup_mode_for(kind, compatible_engine);
-        start_application(app, mode);
     }
 }
 
@@ -193,14 +210,6 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 enum StartupMode {
     Persistent,
     Transient,
-}
-
-fn startup_mode_for(kind: InstallationKind, compatible_stable_engine: bool) -> StartupMode {
-    if kind == InstallationKind::Stable || compatible_stable_engine {
-        StartupMode::Persistent
-    } else {
-        StartupMode::Transient
-    }
 }
 
 fn prompt_appimage_startup(app: &Application) {
@@ -242,7 +251,12 @@ fn prompt_appimage_startup(app: &Application) {
         &parent,
         None::<&gio::Cancellable>,
         move |response| match response.as_str() {
-            "install" => install_appimage_and_start(&app, &callback_parent),
+            "install" => install_appimage_and_start(
+                &app,
+                &callback_parent,
+                "Installing Linux Soundboard…",
+                "Installation failed",
+            ),
             "temporary" => {
                 callback_parent.close();
                 start_application(&app, StartupMode::Transient);
@@ -255,7 +269,23 @@ fn prompt_appimage_startup(app: &Application) {
     );
 }
 
-fn install_appimage_and_start(app: &Application, parent: &gtk4::ApplicationWindow) {
+fn update_appimage_and_start(app: &Application) {
+    let parent = gtk4::ApplicationWindow::builder()
+        .application(app)
+        .title(APP_TITLE)
+        .default_width(440)
+        .default_height(160)
+        .build();
+    parent.present();
+    install_appimage_and_start(app, &parent, "Updating Linux Soundboard…", "Update failed");
+}
+
+fn install_appimage_and_start(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    progress_message: &str,
+    failure_title: &'static str,
+) {
     parent.set_child(Some(
         &gtk4::Box::builder()
             .orientation(gtk4::Orientation::Vertical)
@@ -267,7 +297,7 @@ fn install_appimage_and_start(app: &Application, parent: &gtk4::ApplicationWindo
     if let Some(container) = parent.child().and_downcast::<gtk4::Box>() {
         let spinner = gtk4::Spinner::builder().spinning(true).build();
         container.append(&spinner);
-        container.append(&gtk4::Label::new(Some("Installing Linux Soundboard…")));
+        container.append(&gtk4::Label::new(Some(progress_message)));
     }
 
     let callback_app = app.clone();
@@ -283,7 +313,7 @@ fn install_appimage_and_start(app: &Application, parent: &gtk4::ApplicationWindo
             Err(err) => show_startup_error(
                 &callback_app,
                 &callback_parent,
-                "Installation failed",
+                failure_title,
                 &format!("{err}\n\nNo audio engine was started. Exit and try again."),
             ),
         },
@@ -291,7 +321,7 @@ fn install_appimage_and_start(app: &Application, parent: &gtk4::ApplicationWindo
         show_startup_error(
             app,
             parent,
-            "Installation failed",
+            failure_title,
             &format!("Could not start the installer: {err}"),
         );
     }
@@ -318,6 +348,7 @@ fn run_bundled_appimage_installer() -> Result<(), String> {
 
     let output = std::process::Command::new(&installer)
         .args(["install", appimage.to_string_lossy().as_ref()])
+        .env("LSB_INSTALL_VERSION", APP_VERSION)
         .output()
         .map_err(|err| format!("Failed to run '{}': {err}", installer.display()))?;
     if output.status.success() {
@@ -582,6 +613,15 @@ enum InstallationKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppImageStartupAction {
+    Prompt,
+    AutoUpdate,
+    StartPersistent,
+    StartTransient,
+    LaunchInstalled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceAction {
     Start,
     Restart,
@@ -592,7 +632,7 @@ fn installation_kind_for(
     home: &std::path::Path,
     appimage: bool,
 ) -> InstallationKind {
-    let stable_user_binary = home.join(".local/opt").join(APP_BINARY).join(APP_BINARY);
+    let stable_user_binary = stable_user_binary_path(home);
     if path == std::path::Path::new("/usr/bin/linux-soundboard") || path == stable_user_binary {
         InstallationKind::Stable
     } else if appimage {
@@ -612,8 +652,97 @@ fn installation_kind() -> InstallationKind {
     installation_kind_for(&executable, &home, appimage_path.is_some())
 }
 
-fn should_prompt_for_appimage_install(kind: InstallationKind, compatible_engine: bool) -> bool {
-    kind == InstallationKind::DirectAppImage && !compatible_engine
+fn stable_user_install_root(home: &Path) -> PathBuf {
+    home.join(".local/opt").join(APP_BINARY)
+}
+
+fn stable_user_binary_path(home: &Path) -> PathBuf {
+    stable_user_install_root(home).join(APP_BINARY)
+}
+
+fn installed_user_version(home: &Path) -> Option<String> {
+    std::fs::read_to_string(stable_user_install_root(home).join(".installed-version"))
+        .ok()
+        .map(|version| version.trim().to_string())
+        .filter(|version| !version.is_empty())
+}
+
+fn appimage_startup_action(
+    kind: InstallationKind,
+    compatible_engine: bool,
+    stable_user_binary_exists: bool,
+    installed_version: Option<&str>,
+    current_version: &str,
+) -> AppImageStartupAction {
+    if kind != InstallationKind::DirectAppImage {
+        return if kind == InstallationKind::Stable || compatible_engine {
+            AppImageStartupAction::StartPersistent
+        } else {
+            AppImageStartupAction::StartTransient
+        };
+    }
+
+    if stable_user_binary_exists {
+        return match installed_version
+            .and_then(|installed| compare_release_versions(current_version, installed))
+        {
+            Some(Ordering::Less) => AppImageStartupAction::LaunchInstalled,
+            Some(Ordering::Equal) => AppImageStartupAction::StartPersistent,
+            Some(Ordering::Greater) | None => AppImageStartupAction::AutoUpdate,
+        };
+    }
+
+    if compatible_engine {
+        AppImageStartupAction::StartPersistent
+    } else {
+        AppImageStartupAction::Prompt
+    }
+}
+
+fn compare_release_versions(left: &str, right: &str) -> Option<Ordering> {
+    fn parse(version: &str) -> Option<[u64; 3]> {
+        let mut parts = version.split('.');
+        let parsed = [
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        ];
+        parts.next().is_none().then_some(parsed)
+    }
+
+    Some(parse(left)?.cmp(&parse(right)?))
+}
+
+fn handoff_to_newer_user_install_if_needed() {
+    let kind = installation_kind();
+    if kind != InstallationKind::DirectAppImage {
+        return;
+    }
+    let home = dirs::home_dir().unwrap_or_default();
+    let stable_binary = stable_user_binary_path(&home);
+    if appimage_startup_action(
+        kind,
+        false,
+        stable_binary.is_file(),
+        installed_user_version(&home).as_deref(),
+        APP_VERSION,
+    ) != AppImageStartupAction::LaunchInstalled
+    {
+        return;
+    }
+
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(&stable_binary)
+        .args(std::env::args_os().skip(1))
+        .env_remove("APPIMAGE")
+        .env_remove("APPDIR")
+        .env_remove("OWD")
+        .exec();
+    log::error!(
+        "Failed to launch newer installed Linux Soundboard '{}': {error}",
+        stable_binary.display()
+    );
+    std::process::exit(1);
 }
 
 fn compatible_stable_engine_running() -> bool {
@@ -986,27 +1115,76 @@ mod tests {
     }
 
     #[test]
-    fn direct_appimage_requires_approval_before_service_changes() {
-        assert!(should_prompt_for_appimage_install(
-            InstallationKind::DirectAppImage,
-            false
-        ));
-        assert!(!should_prompt_for_appimage_install(
-            InstallationKind::DirectAppImage,
-            true
-        ));
-        assert!(!should_prompt_for_appimage_install(
-            InstallationKind::Stable,
-            false
-        ));
+    fn direct_appimage_auto_updates_an_existing_user_install() {
         assert_eq!(
-            startup_mode_for(InstallationKind::DirectAppImage, true),
-            StartupMode::Persistent
+            appimage_startup_action(
+                InstallationKind::DirectAppImage,
+                false,
+                true,
+                Some("2.1.0"),
+                "2.1.1",
+            ),
+            AppImageStartupAction::AutoUpdate
         );
         assert_eq!(
-            startup_mode_for(InstallationKind::DirectAppImage, false),
-            StartupMode::Transient
+            appimage_startup_action(InstallationKind::DirectAppImage, false, true, None, "2.1.1",),
+            AppImageStartupAction::AutoUpdate
         );
+    }
+
+    #[test]
+    fn direct_appimage_only_prompts_for_a_first_user_install() {
+        assert_eq!(
+            appimage_startup_action(
+                InstallationKind::DirectAppImage,
+                false,
+                false,
+                None,
+                "2.1.1",
+            ),
+            AppImageStartupAction::Prompt
+        );
+        assert_eq!(
+            appimage_startup_action(InstallationKind::DirectAppImage, true, false, None, "2.1.1",),
+            AppImageStartupAction::StartPersistent
+        );
+    }
+
+    #[test]
+    fn direct_appimage_does_not_downgrade_a_newer_user_install() {
+        assert_eq!(
+            appimage_startup_action(
+                InstallationKind::DirectAppImage,
+                false,
+                true,
+                Some("2.2.0"),
+                "2.1.1",
+            ),
+            AppImageStartupAction::LaunchInstalled
+        );
+        assert_eq!(
+            appimage_startup_action(
+                InstallationKind::DirectAppImage,
+                false,
+                true,
+                Some("2.1.1"),
+                "2.1.1",
+            ),
+            AppImageStartupAction::StartPersistent
+        );
+    }
+
+    #[test]
+    fn release_version_comparison_is_numeric() {
+        assert_eq!(
+            compare_release_versions("2.10.0", "2.9.9"),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            compare_release_versions("3.0.0", "3.0.0"),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(compare_release_versions("not-a-version", "3.0.0"), None);
     }
 
     #[test]

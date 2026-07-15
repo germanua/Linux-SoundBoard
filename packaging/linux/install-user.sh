@@ -19,6 +19,7 @@ INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/$APP_BINARY}"
 INSTALL_BINARY="$INSTALL_ROOT/$APP_BINARY"
 INSTALL_HELPER="$INSTALL_ROOT/install-swhkd-helper.sh"
 INSTALL_DOC_DIR="$INSTALL_ROOT/docs"
+INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -811,6 +812,9 @@ install_or_repair() {
     maybe_restart_audio_services
     reload_start_engine_service
     refresh_desktop_caches
+    if [[ -n "${LSB_INSTALL_VERSION:-}" ]]; then
+        install_file_from_content "$INSTALL_VERSION_FILE" 644 "$LSB_INSTALL_VERSION"
+    fi
 
     if virtual_mic_present; then
         info "Virtual microphone is visible."
@@ -1038,6 +1042,7 @@ remove_installation() {
     remove_pulse_managed_block
     remove_known_app_file "$INSTALL_HELPER" "helper"
     remove_known_app_file "$INSTALL_BINARY" "binary"
+    remove_known_app_file "$INSTALL_VERSION_FILE" "installed version marker"
 
     restart_audio_services
     refresh_desktop_caches

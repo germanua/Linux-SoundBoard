@@ -213,7 +213,7 @@ Then start the service or GUI again. Do not copy the backup while a newer proces
 
 ### AppImage temporary versus installed behavior
 
-A direct AppImage asks before changing audio state. **Install for persistent virtual mic** deploys the AppImage to the stable user path and keeps the service and virtual mic alive after GUI close. **Run temporarily** creates no service and restores an eligible previous/default microphone before removing its virtual mic. **Exit** makes no configuration, service, or audio-graph change.
+A direct AppImage asks before changing audio state only when no stable user installation exists. **Install for persistent virtual mic** deploys the AppImage to the stable user path and keeps the service and virtual mic alive after GUI close. After installation, opening a newer downloaded AppImage updates the stable copy and restarts the matching engine automatically; no `systemctl` or file-copy command is needed. **Run temporarily** creates no service and restores an eligible previous/default microphone before removing its virtual mic. **Exit** makes no configuration, service, or audio-graph change.
 
 ### Adwaita warnings when launching from a terminal
 

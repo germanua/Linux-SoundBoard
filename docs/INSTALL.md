@@ -184,7 +184,7 @@ Before touching the audio graph, direct launch offers three choices:
 - **Run temporarily** creates no service. The in-process engine restores the previously recorded eligible microphone, or the best eligible hardware/enhancement source, before removing the temporary virtual mic on close.
 - **Exit** changes no configuration, service, or audio-graph state.
 
-The prompt returns on every direct launch until the AppImage is installed.
+The prompt returns on every direct launch until the AppImage is installed. Once a user installation exists, opening a newer downloaded AppImage updates that installed copy automatically, restarts the user engine, and launches the GUI without another choice or any terminal commands. The installed version marker prevents an older downloaded AppImage from silently downgrading a newer installation.
 
 If AppImage reports a FUSE error:
 

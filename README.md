@@ -110,7 +110,7 @@ chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-On first direct launch, choose **Install for persistent virtual mic**, **Run temporarily**, or **Exit**. Install copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard` and starts the user engine service. Temporary mode creates no service and restores an eligible previous microphone before removing its virtual mic on close.
+On first direct launch, choose **Install for persistent virtual mic**, **Run temporarily**, or **Exit**. Install copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard` and starts the user engine service. After that, opening a newer downloaded AppImage automatically replaces the installed user copy, restarts the matching engine, and opens normally—no terminal or system-service steps are required. Temporary mode creates no service and restores an eligible previous microphone before removing its virtual mic on close.
 
 ---
 
