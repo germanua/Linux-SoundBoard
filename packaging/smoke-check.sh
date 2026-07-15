@@ -93,6 +93,16 @@ if grep -qF 'APP_AUR_PACKAGE="linux-soundboard"' "$REPO_ROOT/install.sh"; then
 else
     fail "install.sh: stable AUR package is not selected"
 fi
+if [[ $(grep -cF -- '--useask "$APP_AUR_PACKAGE"' "$REPO_ROOT/install.sh") -eq 2 ]]; then
+    pass "install.sh: AUR helpers replace the legacy package non-interactively"
+else
+    fail "install.sh: AUR helpers do not enable automatic conflict replacement"
+fi
+if grep -qF -- '--ask=4 "$package_file"' "$REPO_ROOT/install.sh"; then
+    pass "install.sh: manual AUR fallback replaces the legacy package atomically"
+else
+    fail "install.sh: manual AUR fallback cannot replace the legacy package"
+fi
 if grep -qF "conflicts=('linux-soundboard-git')" "$REPO_ROOT/packaging/aur/PKGBUILD"; then
     pass "AUR stable PKGBUILD: conflicts with development package"
 else

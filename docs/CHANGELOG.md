@@ -13,6 +13,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 ### Fixed
 
 - **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
+- **Arch upgrades:** The recommended installer now replaces an installed `linux-soundboard-git` package with the stable `linux-soundboard` package non-interactively for both AUR-helper and manual-build paths.
 
 ## [2.1.1] - 2026-07-15
 

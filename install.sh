@@ -208,13 +208,17 @@ install_arch() {
     info "Installing from AUR: $APP_AUR_PACKAGE"
     pacman_install base-devel git
 
-    if command -v yay  >/dev/null 2>&1; then yay  -S --needed --noconfirm "$APP_AUR_PACKAGE"; return; fi
-    if command -v paru >/dev/null 2>&1; then paru -S --needed --noconfirm "$APP_AUR_PACKAGE"; return; fi
+    if command -v yay  >/dev/null 2>&1; then yay  -S --needed --noconfirm --useask "$APP_AUR_PACKAGE"; return; fi
+    if command -v paru >/dev/null 2>&1; then paru -S --needed --noconfirm --useask "$APP_AUR_PACKAGE"; return; fi
 
     # No AUR helper — build manually
     local pkg_dir="$WORK_DIR/$APP_AUR_PACKAGE"
+    local package_file
     git clone --depth 1 "https://aur.archlinux.org/${APP_AUR_PACKAGE}.git" "$pkg_dir"
-    (cd "$pkg_dir" && makepkg -si --needed --noconfirm)
+    (cd "$pkg_dir" && makepkg -s --needed --noconfirm)
+    package_file="$(cd "$pkg_dir" && makepkg --packagelist)"
+    [[ -f "$package_file" ]] || fail "AUR build did not produce the expected package."
+    as_root pacman -U --needed --noconfirm --ask=4 "$package_file"
 }
 
 install_debian() {
