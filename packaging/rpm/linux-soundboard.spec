@@ -143,51 +143,51 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
-* Wed Jul 15 2026 germanua <noreply@linuxsoundboard.invalid> - 2.1.1-1
+* Wed Jul 15 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.1-1
 - Restart stale installed engines and verify the running app version
 - Restore a safe default microphone after temporary execution
 - Protect schema-6 upgrades with an exact private backup
 - Require explicit AppImage installation approval
 
-* Sun Jul 12 2026 germanua <noreply@linuxsoundboard.invalid> - 2.1.0-1
+* Sun Jul 12 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.0-1
 - Added folder-derived tabs and Delete-key removal
 - Fixed mixed-version engine startup and Ogg Vorbis playback
 - Hardened folder refresh, removal, and configuration persistence
 
-* Wed Jun 10 2026 germanua <noreply@linuxsoundboard.invalid> - 2.0.2-1
+* Wed Jun 10 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.0.2-1
 - Rebuilt swhkd from upstream source when packaged builds require pkexec
 - Improved Wayland hotkey startup diagnostics and recovery guidance
 - Fixed the hotkey capture dialog panic after backend startup failures
 
-* Sat May 09 2026 germanua <noreply@linuxsoundboard.invalid> - 2.0.0-1
+* Sat May 09 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.0.0-1
 - Promoted the testing branch rework to the main release line
 - Added atomic replace playback to remove stop/play snapshot races
 - Fixed continue play mode, close-time stop handling, and headphone icon states
 - Updated swhkd hotkey formatting for current native Wayland hotkey handling
 
-* Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.2-1
+* Wed Apr 01 2026 germanua <114772595+germanua@users.noreply.github.com> - 1.1.2-1
 - Fixed launcher icon lookup for native packages and AppImage builds
 - Installed icon aliases required by desktop search integrations
 - Refreshed icon and desktop caches in RPM lifecycle scripts
 
-* Wed Apr 01 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.1-1
+* Wed Apr 01 2026 germanua <114772595+germanua@users.noreply.github.com> - 1.1.1-1
 - Patch release for packaging and release metadata sync
 - Added third-party license notices and README acknowledgments
 - Refreshed release package examples and install metadata
 
-* Wed Mar 25 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-2
+* Wed Mar 25 2026 germanua <114772595+germanua@users.noreply.github.com> - 1.1.0-2
 - Migrated from Portal to swhkd for universal hotkey support
 - Added support for Wayland, X11, and TTY hotkeys
 - Improved hotkey reliability with hot reload via SIGHUP
 - Removed Portal backend dependency
 - Added automatic swhkd configuration in post-install
 
-* Tue Mar 24 2026 germanua <noreply@linuxsoundboard.invalid> - 1.1.0-1
+* Tue Mar 24 2026 germanua <114772595+germanua@users.noreply.github.com> - 1.1.0-1
 - New upstream release
 - Add native Wayland support
 - Improve AppImage compatibility
 - Add distribution-specific packages
 - Fix virtual microphone creation on modern distributions
 
-* Sun Mar 22 2026 germanua <noreply@linuxsoundboard.invalid> - 1.0.0-1
+* Sun Mar 22 2026 germanua <114772595+germanua@users.noreply.github.com> - 1.0.0-1
 - Initial RPM release

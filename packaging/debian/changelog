@@ -5,7 +5,7 @@ linux-soundboard (2.1.1-1) unstable; urgency=medium
   * Back up schema-6 configuration bytes before migration
   * Require explicit approval before an AppImage installs a persistent service
 
- -- germanua <noreply@linuxsoundboard.invalid>  Wed, 15 Jul 2026 12:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 15 Jul 2026 12:00:00 +0000
 
 linux-soundboard (2.1.0-1) unstable; urgency=medium
 
@@ -13,7 +13,7 @@ linux-soundboard (2.1.0-1) unstable; urgency=medium
   * Fix mixed-version engine startup and Ogg Vorbis playback
   * Harden folder refresh, removal, and configuration persistence
 
- -- germanua <noreply@linuxsoundboard.invalid>  Sun, 12 Jul 2026 12:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 12 Jul 2026 12:00:00 +0000
 
 linux-soundboard (2.0.2-1) unstable; urgency=medium
 
@@ -21,7 +21,7 @@ linux-soundboard (2.0.2-1) unstable; urgency=medium
   * Improve Wayland hotkey startup diagnostics and recovery guidance
   * Fix hotkey capture dialog panic after backend startup failures
 
- -- germanua <noreply@linuxsoundboard.invalid>  Wed, 10 Jun 2026 15:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 10 Jun 2026 15:00:00 +0000
 
 linux-soundboard (2.0.0-1) unstable; urgency=medium
 
@@ -30,7 +30,7 @@ linux-soundboard (2.0.0-1) unstable; urgency=medium
   * Fix continue play mode, close-time stop handling, and headphone icon states
   * Update swhkd hotkey formatting for current native Wayland hotkey handling
 
- -- germanua <noreply@linuxsoundboard.invalid>  Sat, 09 May 2026 10:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 09 May 2026 10:00:00 +0000
 
 linux-soundboard (1.1.2-1) unstable; urgency=medium
 
@@ -38,7 +38,7 @@ linux-soundboard (1.1.2-1) unstable; urgency=medium
   * Install icon aliases needed by native packages and the AppImage
   * Refresh icon and desktop caches during RPM install and removal
 
- -- germanua <noreply@linuxsoundboard.invalid>  Wed, 01 Apr 2026 16:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 01 Apr 2026 16:00:00 +0000
 
 linux-soundboard (1.1.1-1) unstable; urgency=medium
 
@@ -46,7 +46,7 @@ linux-soundboard (1.1.1-1) unstable; urgency=medium
   * Add third-party license notices and README acknowledgments
   * Refresh package examples and desktop packaging metadata
 
- -- germanua <noreply@linuxsoundboard.invalid>  Wed, 01 Apr 2026 11:40:38 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 01 Apr 2026 11:40:38 +0000
 
 linux-soundboard (1.1.0-2) unstable; urgency=medium
 
@@ -54,7 +54,7 @@ linux-soundboard (1.1.0-2) unstable; urgency=medium
   * Clarify that Wayland hotkeys need a host-installed swhkd and remove invalid apt guidance
   * Refresh release notes and packaging guidance for DEB, RPM, Flatpak, and AUR
 
- -- germanua <noreply@linuxsoundboard.invalid>  Sat, 28 Mar 2026 12:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 28 Mar 2026 12:00:00 +0000
 
 linux-soundboard (1.1.0-1) unstable; urgency=medium
 
@@ -65,10 +65,10 @@ linux-soundboard (1.1.0-1) unstable; urgency=medium
   * Fix virtual microphone creation on modern distributions
   * Update dependencies for 2026 standards
 
- -- germanua <noreply@linuxsoundboard.invalid>  Mon, 24 Mar 2026 14:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Mon, 24 Mar 2026 14:00:00 +0000
 
 linux-soundboard (1.0.0-1) unstable; urgency=low
 
   * Initial release
 
- -- germanua <noreply@linuxsoundboard.invalid>  Sat, 22 Mar 2026 00:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 22 Mar 2026 00:00:00 +0000

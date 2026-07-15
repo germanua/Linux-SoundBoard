@@ -1,7 +1,7 @@
 Source: linux-soundboard
 Section: sound
 Priority: optional
-Maintainer: germanua <noreply@linuxsoundboard.invalid>
+Maintainer: germanua <114772595+germanua@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13),
                cargo,
                rustc (>= 1.85),
