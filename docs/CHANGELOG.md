@@ -6,28 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-16
+
 ### Changed
 
 - **Arch installation:** The recommended installer and documentation now use the tagged `linux-soundboard` AUR package. `linux-soundboard-git` remains available for development testing.
-
-### Fixed
-
-- **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
-- **Arch upgrades:** The recommended installer now replaces an installed `linux-soundboard-git` package with the stable `linux-soundboard` package non-interactively for both AUR-helper and manual-build paths.
-
-## [2.1.1] - 2026-07-15
-
-### Changed
-
 - **Installed-engine handoff:** Stable installations now require protocol, configuration schema, and application version equality. A stale engine is stopped, the user unit is reloaded and restarted once, and the GUI connects only after the replacement proves compatible.
 - **AppImage startup and updates:** A first direct AppImage launch asks whether to install for a persistent virtual microphone, run temporarily, or exit. Once installed, opening a newer downloaded AppImage automatically updates the stable user copy and restarts the matching engine; version tracking prevents silent downgrades.
 
 ### Fixed
 
+- **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
+- **Arch upgrades:** The recommended installer now replaces an installed `linux-soundboard-git` package with the stable `linux-soundboard` package non-interactively for both AUR-helper and manual-build paths.
 - **Microphone state after upgrades:** The installed engine and virtual microphone now survive GUI closure. Temporary engines synchronously restore the previous eligible microphone, or the existing ranked hardware/enhancement fallback, before unloading their virtual source.
 - **Configuration upgrade safety:** Loading a valid schema-6 configuration creates an exact `0600` `config.json.pre-v6-backup`. A conflicting backup, malformed JSON, or future schema stops GUI startup without replacing the configuration or starting audio.
 - **Engine diagnostics:** Compatibility output includes the expected and running application versions so stale package processes are visible.
 - **Engine update feedback:** The GUI reports successful stale-engine replacement. A failed replacement explains the temporary fallback and opens the documented recovery steps directly.
+- **Native package builds:** Debian and RPM recipes now declare the PipeWire and Clang build dependencies required by clean build environments.
 
 ## [2.1.0] - 2026-07-12
 
