@@ -9,6 +9,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cargo >= 1.85
 BuildRequires:  rust >= 1.85
+BuildRequires:  clang-devel
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
 BuildRequires:  pulseaudio-libs-devel
