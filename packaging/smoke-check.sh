@@ -82,6 +82,11 @@ if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0,
 else
     fail "cargo-deb: explicit GTK, audio, and X11 runtime dependencies are incomplete"
 fi
+if grep -qF 'libpipewire-0.3-dev,' "$REPO_ROOT/packaging/debian/control"; then
+    pass "Debian: PipeWire build dependency is declared"
+else
+    fail "Debian: libpipewire-0.3-dev is required for the Rust PipeWire bindings"
+fi
 
 echo ""
 
