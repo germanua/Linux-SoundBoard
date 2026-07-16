@@ -194,9 +194,11 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
             AppImageStartupAction::Prompt => prompt_appimage_startup(app),
             AppImageStartupAction::AutoUpdate => update_appimage_and_start(app),
             AppImageStartupAction::StartPersistent => {
-                start_application(app, StartupMode::Persistent)
+                start_application(app, StartupMode::Persistent, None)
             }
-            AppImageStartupAction::StartTransient => start_application(app, StartupMode::Transient),
+            AppImageStartupAction::StartTransient => {
+                start_application(app, StartupMode::Transient, None)
+            }
             AppImageStartupAction::LaunchInstalled => {
                 // This is handled before GTK owns the application ID.
                 log::error!("Could not hand off to the newer installed Linux Soundboard");
@@ -210,6 +212,85 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
 enum StartupMode {
     Persistent,
     Transient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EngineUpdateNotice {
+    Updated { previous_version: String },
+    Failed { previous_version: String },
+}
+
+const ENGINE_UPDATE_HELP_URL: &str = "https://github.com/germanua/Linux-SoundBoard/blob/main/docs/TROUBLESHOOTING.md#engine-update-failed";
+
+fn incompatible_engine_version() -> Option<String> {
+    crate::audio::engine_ipc::engine_info()
+        .ok()
+        .and_then(|info| {
+            (!crate::audio::engine_ipc::engine_info_compatible(&info)).then_some(info.app_version)
+        })
+}
+
+fn engine_update_notice(
+    previous_version: Option<String>,
+    connected_remotely: bool,
+) -> Option<EngineUpdateNotice> {
+    previous_version.map(|previous_version| {
+        if connected_remotely {
+            EngineUpdateNotice::Updated { previous_version }
+        } else {
+            EngineUpdateNotice::Failed { previous_version }
+        }
+    })
+}
+
+fn show_engine_update_notice(parent: &gtk4::ApplicationWindow, notice: EngineUpdateNotice) {
+    let (title, message) = match &notice {
+        EngineUpdateNotice::Updated { previous_version } => (
+            "Audio engine updated",
+            format!(
+                "The running audio engine ({previous_version}) did not match this app and needed to be updated. Linux Soundboard restarted it as {APP_VERSION} and reconnected successfully."
+            ),
+        ),
+        EngineUpdateNotice::Failed { previous_version } => (
+            "Audio engine update failed",
+            format!(
+                "The running audio engine ({previous_version}) did not match this app, but Linux Soundboard could not start engine {APP_VERSION}. A temporary engine is running for this session."
+            ),
+        ),
+    };
+    let dialog = adw::AlertDialog::new(Some(title), Some(&message));
+
+    match notice {
+        EngineUpdateNotice::Updated { .. } => {
+            dialog.add_response("ok", "OK");
+            dialog.set_close_response("ok");
+            dialog.set_default_response(Some("ok"));
+            dialog.choose(parent, None::<&gio::Cancellable>, |_| {});
+        }
+        EngineUpdateNotice::Failed { .. } => {
+            dialog.add_responses(&[
+                ("continue", "Continue temporarily"),
+                ("help", "Open troubleshooting"),
+            ]);
+            dialog.set_close_response("continue");
+            dialog.set_default_response(Some("help"));
+            dialog.set_response_appearance("help", adw::ResponseAppearance::Suggested);
+            let launcher_parent = parent.clone();
+            dialog.choose(parent, None::<&gio::Cancellable>, move |response| {
+                if response == "help" {
+                    gtk4::UriLauncher::new(ENGINE_UPDATE_HELP_URL).launch(
+                        Some(&launcher_parent),
+                        None::<&gio::Cancellable>,
+                        |result| {
+                            if let Err(err) = result {
+                                log::warn!("Could not open engine-update troubleshooting: {err}");
+                            }
+                        },
+                    );
+                }
+            });
+        }
+    }
 }
 
 fn prompt_appimage_startup(app: &Application) {
@@ -256,10 +337,11 @@ fn prompt_appimage_startup(app: &Application) {
                 &callback_parent,
                 "Installing Linux Soundboard…",
                 "Installation failed",
+                None,
             ),
             "temporary" => {
                 callback_parent.close();
-                start_application(&app, StartupMode::Transient);
+                start_application(&app, StartupMode::Transient, None);
             }
             _ => {
                 callback_parent.close();
@@ -270,6 +352,7 @@ fn prompt_appimage_startup(app: &Application) {
 }
 
 fn update_appimage_and_start(app: &Application) {
+    let previous_engine_version = incompatible_engine_version();
     let parent = gtk4::ApplicationWindow::builder()
         .application(app)
         .title(APP_TITLE)
@@ -277,7 +360,13 @@ fn update_appimage_and_start(app: &Application) {
         .default_height(160)
         .build();
     parent.present();
-    install_appimage_and_start(app, &parent, "Updating Linux Soundboard…", "Update failed");
+    install_appimage_and_start(
+        app,
+        &parent,
+        "Updating Linux Soundboard…",
+        "Update failed",
+        previous_engine_version,
+    );
 }
 
 fn install_appimage_and_start(
@@ -285,6 +374,7 @@ fn install_appimage_and_start(
     parent: &gtk4::ApplicationWindow,
     progress_message: &str,
     failure_title: &'static str,
+    previous_engine_version: Option<String>,
 ) {
     parent.set_child(Some(
         &gtk4::Box::builder()
@@ -308,7 +398,11 @@ fn install_appimage_and_start(
         move |result| match result {
             Ok(()) => {
                 callback_parent.close();
-                start_application(&callback_app, StartupMode::Persistent);
+                start_application(
+                    &callback_app,
+                    StartupMode::Persistent,
+                    previous_engine_version,
+                );
             }
             Err(err) => show_startup_error(
                 &callback_app,
@@ -399,7 +493,11 @@ fn show_config_error(app: &Application, error: &dyn std::error::Error) {
     );
 }
 
-fn start_application(app: &Application, startup_mode: StartupMode) {
+fn start_application(
+    app: &Application,
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) {
     if let Some(display) = gtk4::gdk::Display::default() {
         info!("GTK display backend: {:?}", display.backend());
     } else {
@@ -436,7 +534,12 @@ fn start_application(app: &Application, startup_mode: StartupMode) {
     crate::diagnostics::memory::log_memory_snapshot("startup:hotkeys_ready");
     crate::diagnostics::record_phase_with_config("startup:hotkeys_ready", &config);
 
-    let player = initialize_player(&config, startup_mode);
+    let previous_engine_version = match startup_mode {
+        StartupMode::Persistent => previous_engine_version.or_else(incompatible_engine_version),
+        StartupMode::Transient => None,
+    };
+    let (player, connected_remotely) = initialize_player(&config, startup_mode);
+    let engine_update_notice = engine_update_notice(previous_engine_version, connected_remotely);
     crate::diagnostics::set_playback_registry_count(0);
     crate::diagnostics::memory::log_memory_snapshot("startup:player_initialized");
     crate::diagnostics::record_phase_with_config("startup:player_initialized", &config);
@@ -495,6 +598,9 @@ fn start_application(app: &Application, startup_mode: StartupMode) {
     });
 
     window.present();
+    if let Some(notice) = engine_update_notice {
+        show_engine_update_notice(&window, notice);
+    }
     record_state_phase("startup:window_presented", &state);
 
     schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
@@ -758,7 +864,10 @@ fn compatible_stable_engine_running() -> bool {
         ) == InstallationKind::Stable
 }
 
-fn initialize_player(config: &Config, startup_mode: StartupMode) -> crate::audio::AudioPlayer {
+fn initialize_player(
+    config: &Config,
+    startup_mode: StartupMode,
+) -> (crate::audio::AudioPlayer, bool) {
     use crate::audio::AudioBackendKind;
 
     // Debug aid: when route audit is requested, bypass the systemd-spawned
@@ -792,7 +901,7 @@ fn initialize_player(config: &Config, startup_mode: StartupMode) -> crate::audio
         };
         if let Some(player) = remote {
             log::info!("Connected UI to Linux Soundboard audio engine");
-            return player;
+            return (player, true);
         }
     }
 
@@ -807,7 +916,10 @@ fn initialize_player(config: &Config, startup_mode: StartupMode) -> crate::audio
     } else {
         AudioBackendKind::PulseAudio
     };
-    crate::audio::AudioPlayer::new_with_config_and_audio_backend(config, backend)
+    (
+        crate::audio::AudioPlayer::new_with_config_and_audio_backend(config, backend),
+        false,
+    )
 }
 
 fn connect_or_start_audio_engine<T>(
@@ -1353,5 +1465,31 @@ mod tests {
         assert_eq!(engine, None);
         assert_eq!(*events.borrow(), ["systemd-unavailable"]);
         assert_eq!(cleanup_count.get(), 1);
+    }
+
+    #[test]
+    fn successful_stale_engine_restart_reports_update() {
+        assert_eq!(
+            engine_update_notice(Some("2.0.0".to_string()), true),
+            Some(EngineUpdateNotice::Updated {
+                previous_version: "2.0.0".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn failed_stale_engine_restart_reports_temporary_fallback() {
+        assert_eq!(
+            engine_update_notice(Some("2.0.0".to_string()), false),
+            Some(EngineUpdateNotice::Failed {
+                previous_version: "2.0.0".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn matching_or_absent_engine_reports_no_update() {
+        assert_eq!(engine_update_notice(None, true), None);
+        assert_eq!(engine_update_notice(None, false), None);
     }
 }

@@ -3,6 +3,7 @@
 Version 2.1.1 is a safe-upgrade correction for the published 2.1.0 release.
 
 - Stable installs restart a stale engine once and reconnect only when protocol 1, schema 7, and app version 2.1.1 all match.
+- The GUI reports a successful background-engine update with both versions. If the service cannot be updated, it reports the temporary fallback and links directly to the recovery instructions.
 - Closing the GUI leaves an installed service and virtual microphone running.
 - Temporary AppImage and development runs restore an eligible previous/default microphone before removing their virtual source.
 - A first direct AppImage execution requires an explicit Install, Run temporarily, or Exit choice. Opening a newer AppImage after installation updates the stable user copy and engine automatically, with no terminal or service-management steps.

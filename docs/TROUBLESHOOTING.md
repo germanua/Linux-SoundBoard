@@ -195,6 +195,37 @@ systemctl --user show linux-soundboard-engine.service -p MainPID -p ExecStart -p
 readlink -f /proc/$(systemctl --user show linux-soundboard-engine.service -p MainPID --value)/exe
 ```
 
+### Engine update failed
+
+When Linux Soundboard finds an older or otherwise incompatible running engine,
+it normally stops that process, reloads the user service, starts the engine
+from the newly installed application, and reconnects automatically. A
+successful update dialog shows the previous and current versions.
+
+If the update dialog reports a failure, the app has already stopped the failed
+service before starting one temporary engine for the current GUI session. Do
+not start another `--audio-engine` process.
+
+1. Close Linux Soundboard, then inspect the installed binary and service:
+   ```bash
+   linux-soundboard --diagnose
+   systemctl --user status linux-soundboard-engine.service --no-pager
+   journalctl --user -u linux-soundboard-engine.service -n 100 --no-pager
+   ```
+2. Reload the installed unit and retry it:
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user restart linux-soundboard-engine.service
+   linux-soundboard --diagnose
+   ```
+3. If diagnostics still report `INCOMPATIBLE`, reinstall the same
+   `linux-soundboard` package through your package manager, or rerun the newer
+   downloaded AppImage. Then launch Linux Soundboard again.
+
+If `systemctl --user` reports that no user bus or manager is available, the
+temporary engine is the safe fallback. Fix the user systemd session or continue
+running the GUI while using the virtual microphone.
+
 ### Recover a schema-6 configuration backup
 
 The first valid schema-6 load by v2.1.1 creates an exact private backup at `~/.config/linux-soundboard/config.json.pre-v6-backup`. If migration cannot proceed, the GUI and engine fail closed and leave the original file unchanged.
