@@ -9,6 +9,8 @@
 #
 # Exit codes: 0 = all checks pass, 1 = one or more failures.
 
+# shellcheck disable=SC2016
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
