@@ -30,6 +30,7 @@ pub(super) struct ChannelSampleRateConverter<S: AudioSource> {
     current: [i16; 2],
     next: [i16; 2],
     out_ch: u8,
+    source_exhausted: bool,
     done: bool,
 }
 
@@ -56,7 +57,10 @@ impl<S: AudioSource> ChannelSampleRateConverter<S> {
             from_rate as f64 / to_rate as f64
         };
         let current = read_source_frame(&mut source, in_channels)?;
-        let next = read_source_frame(&mut source, in_channels).unwrap_or(current);
+        let (next, source_exhausted) = match read_source_frame(&mut source, in_channels) {
+            Some(next) => (next, false),
+            None => (current, true),
+        };
         Some(Self {
             source,
             in_channels,
@@ -65,6 +69,7 @@ impl<S: AudioSource> ChannelSampleRateConverter<S> {
             current,
             next,
             out_ch: 0,
+            source_exhausted,
             done: false,
         })
     }
@@ -87,14 +92,17 @@ impl<S: AudioSource> Iterator for ChannelSampleRateConverter<S> {
             self.out_ch = 0;
             self.frac += self.step;
             while self.frac >= 1.0 {
+                if self.source_exhausted {
+                    self.done = true;
+                    break;
+                }
                 self.current = self.next;
                 self.frac -= 1.0;
                 match read_source_frame(&mut self.source, self.in_channels) {
                     Some(frame) => self.next = frame,
                     None => {
                         self.next = self.current;
-                        self.done = true;
-                        break;
+                        self.source_exhausted = true;
                     }
                 }
             }

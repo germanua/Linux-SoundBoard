@@ -885,6 +885,29 @@ fn symphonia_source_decodes_and_seeks_libvorbis_streams() {
 }
 
 #[test]
+fn resettable_playback_preserves_last_frame_for_opus_and_vorbis() {
+    let paths = [
+        create_test_ogg_opus_file(TestOggOpusFixture::default()),
+        create_test_vorbis_file(TestVorbisFixture::Stereo48000),
+    ];
+
+    for audio_path in paths {
+        let path = audio_path.to_string_lossy().to_string();
+        let decoded = PlaybackSource::from_path(&path).expect("open source for frame count");
+        let channels = usize::from(decoded.channels());
+        let expected_samples = decoded.count() / channels * 2;
+        let factory_path = path.clone();
+        let factory: Box<dyn Fn() -> Result<PlaybackSource, EngineError>> =
+            Box::new(move || PlaybackSource::from_path(&factory_path));
+        let converted = ResettablePlaybackSource::new(factory, OPUS_SAMPLE_RATE)
+            .expect("create resettable playback source");
+
+        assert_eq!(converted.count(), expected_samples, "{path}");
+        cleanup_test_audio_path(&audio_path);
+    }
+}
+
+#[test]
 fn active_playback_routes_libvorbis_through_common_mix_path() {
     let audio_path = create_test_vorbis_file(TestVorbisFixture::Stereo48000);
     let runtime = test_runtime_config();
