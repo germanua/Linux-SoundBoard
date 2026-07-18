@@ -786,10 +786,14 @@ fn current_public_formats_decode_analyze_and_report_duration() {
         );
         let (loudness, true_peak) = analyze_loudness_path_full(&audio_path)
             .unwrap_or_else(|error| panic!("analyze real {extension} fixture: {error}"));
-        assert!(loudness.is_finite(), "real {extension} LUFS");
         assert!(
-            true_peak.is_some_and(f32::is_finite),
-            "real {extension} true peak"
+            (-24.0..=-16.0).contains(&loudness),
+            "real {extension} LUFS drifted to {loudness}"
+        );
+        let true_peak = true_peak.expect("real fixture true peak");
+        assert!(
+            (-21.0..=-12.0).contains(&true_peak),
+            "real {extension} true peak drifted to {true_peak}"
         );
 
         cleanup_test_audio_path(&audio_path);
@@ -1120,6 +1124,54 @@ fn active_playback_applies_signed_ogg_opus_header_gain() {
 
     assert!((boosted / unity - six_db).abs() < 0.01);
     assert!((attenuated / unity - six_db.recip()).abs() < 0.01);
+}
+
+#[test]
+fn active_playback_applies_static_and_dynamic_auto_gain_to_ogg_opus_outputs() {
+    let audio_path = create_test_ogg_opus_file(TestOggOpusFixture {
+        output_gain_q8: 3 * 256,
+        packet_count: 60,
+        ..Default::default()
+    });
+    let render = |runtime: &RuntimeConfig| {
+        let mut playback = ActivePlayback::new(
+            "play-opus-auto-gain".to_string(),
+            "sound-opus-auto-gain".to_string(),
+            audio_path.to_string_lossy().to_string(),
+            0,
+            1.0,
+            Some(-20.0),
+            None,
+            runtime,
+        )
+        .expect("create auto-gain Ogg Opus playback");
+        let mut local = vec![0.0; 1_024];
+        let mut virtual_out = vec![0.0; 1_024];
+        playback.render_into(&mut local, &mut virtual_out, runtime);
+        (local, virtual_out)
+    };
+
+    let disabled = test_runtime_config();
+    let (disabled_local, _) = render(&disabled);
+    let disabled_level = disabled_local.into_iter().map(f32::abs).sum::<f32>();
+
+    let mut static_gain = test_runtime_config();
+    static_gain.auto_gain.enabled = true;
+    static_gain.auto_gain.mode = AutoGainMode::Static;
+    let (static_local, static_virtual) = render(&static_gain);
+    let static_level = static_local.iter().copied().map(f32::abs).sum::<f32>();
+    assert!((static_level / disabled_level - 10.0_f32.powf(6.0 / 20.0)).abs() < 0.01);
+    assert_eq!(static_local, static_virtual);
+
+    let mut dynamic_gain = static_gain;
+    dynamic_gain.auto_gain.mode = AutoGainMode::DynamicLookAhead;
+    let (dynamic_local, dynamic_virtual) = render(&dynamic_gain);
+    assert!(dynamic_local.iter().any(|sample| sample.abs() > 0.001));
+    assert!(dynamic_virtual.iter().any(|sample| sample.abs() > 0.001));
+    assert!(dynamic_local.iter().all(|sample| sample.abs() <= 1.0));
+    assert!(dynamic_virtual.iter().all(|sample| sample.abs() <= 1.0));
+
+    cleanup_test_audio_path(&audio_path);
 }
 
 #[test]

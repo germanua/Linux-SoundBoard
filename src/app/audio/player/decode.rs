@@ -5,9 +5,9 @@ const INITIAL_DECODER_BUFFER_FRAMES: u64 = 4_096;
 
 // ── Audio source abstraction ─────────────────────────────────────────────────
 
-pub(super) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub(crate) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub(super) trait AudioSource: Iterator<Item = i16> {
+pub(crate) trait AudioSource: Iterator<Item = i16> {
     fn channels(&self) -> u16;
     fn sample_rate(&self) -> u32;
     fn total_duration(&self) -> Option<std::time::Duration>;
@@ -129,13 +129,13 @@ pub(super) fn clamp_seek_position_ms(position_ms: u64, duration_ms: Option<u64>)
     }
 }
 
-pub(super) enum PlaybackSource {
+pub(crate) enum PlaybackSource {
     Symphonia(SymphoniaSource),
     OggOpus(OggOpusSource),
 }
 
 impl PlaybackSource {
-    pub(super) fn from_path(path: &str) -> Result<Self, EngineError> {
+    pub(crate) fn from_path(path: &str) -> Result<Self, EngineError> {
         if OggOpusSource::looks_like_ogg_opus(path) {
             return OggOpusSource::from_path(path).map(Self::OggOpus);
         }
@@ -208,7 +208,7 @@ struct OggOpusHead {
     stream_serial: u32,
 }
 
-pub(super) struct OggOpusSource {
+pub(crate) struct OggOpusSource {
     path: String,
     reader: PacketReader<IoBufReader<std::fs::File>>,
     decoder: OpusDecoder,
@@ -503,7 +503,7 @@ fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result
         })
 }
 
-pub(super) struct SymphoniaSource {
+pub(crate) struct SymphoniaSource {
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
     format: Box<dyn symphonia::core::formats::FormatReader>,
     track_id: u32,

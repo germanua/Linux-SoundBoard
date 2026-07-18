@@ -2,16 +2,12 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use ebur128::{EbuR128, Mode};
 use log::{debug, warn};
-use symphonia::core::audio::{Channels, SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{Decoder, DecoderOptions, CODEC_TYPE_NULL};
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
-use symphonia::core::units::Time;
+
+use super::player::{DecodedAudioSource, DecodedPlaybackSource};
 
 /// Cap boost so very quiet files do not explode in volume.
 const MAX_GAIN_FACTOR: f32 = 8.0;
@@ -66,12 +62,10 @@ pub fn reset_loudness_analysis_cancelled() {
 }
 
 struct AnalysisDecoderContext {
-    format: Box<dyn FormatReader>,
-    decoder: Box<dyn Decoder>,
-    track_id: u32,
-    spec: SignalSpec,
+    source: DecodedPlaybackSource,
     rate: u32,
     channels: u32,
+    output_gain_factor: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,113 +99,29 @@ struct SmartPreviewWindowResult {
     true_peak_dbtp: Option<f32>,
 }
 
-fn default_channels() -> Channels {
-    Channels::FRONT_LEFT | Channels::FRONT_RIGHT
-}
-
-fn loudness_format_options() -> FormatOptions {
-    FormatOptions {
-        enable_gapless: true,
-        ..Default::default()
-    }
-}
-
-fn build_decoder_context(
-    hint: &Hint,
-    media_source: MediaSourceStream,
-    strict_audio_container: bool,
-) -> Result<AnalysisDecoderContext, LoudnessError> {
-    let probed = symphonia::default::get_probe()
-        .format(
-            hint,
-            media_source,
-            &loudness_format_options(),
-            &MetadataOptions::default(),
-        )
-        .map_err(|e| {
-            LoudnessError::Decode(format!("Failed to probe audio for loudness analysis: {e}"))
-        })?;
-
-    let format = probed.format;
-    let track = select_audio_track(&*format, strict_audio_container).ok_or_else(|| {
-        LoudnessError::NoResult("No audio tracks found for loudness analysis".to_string())
-    })?;
-
-    let track_id = track.id;
-    let codec_params = &track.codec_params;
-    let rate = codec_params.sample_rate.unwrap_or(44100);
-    let channels = codec_params.channels.map(|c| c.count()).unwrap_or(2) as u32;
-
-    let decoder = symphonia::default::get_codecs()
-        .make(codec_params, &DecoderOptions::default())
-        .map_err(|e| {
-            LoudnessError::Decode(format!(
-                "Failed to create decoder for loudness analysis: {e}"
-            ))
-        })?;
-
-    let spec = SignalSpec {
-        rate,
-        channels: codec_params.channels.unwrap_or(default_channels()),
-    };
-
-    Ok(AnalysisDecoderContext {
-        format,
-        decoder,
-        track_id,
-        spec,
-        rate,
-        channels,
-    })
-}
-
-fn is_strict_audio_container(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|ext| ext.to_ascii_lowercase()),
-        Some(ext) if matches!(ext.as_str(), "aac" | "m4a" | "mp4")
-    )
-}
-
-fn is_audio_track(track: &Track) -> bool {
-    track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
-}
-
-fn select_audio_track(format: &dyn FormatReader, strict_audio_container: bool) -> Option<&Track> {
-    format
-        .tracks()
-        .iter()
-        .find(|track| is_audio_track(track))
-        .or_else(|| {
-            (!strict_audio_container)
-                .then(|| {
-                    format
-                        .tracks()
-                        .iter()
-                        .find(|track| track.codec_params.codec != CODEC_TYPE_NULL)
-                })
-                .flatten()
-        })
-}
-
 fn build_decoder_context_for_path(
     path: &Path,
     purpose: &'static str,
 ) -> Result<AnalysisDecoderContext, LoudnessError> {
-    let file = std::fs::File::open(path).map_err(|e| {
+    std::fs::File::open(path).map_err(|error| {
         LoudnessError::Io(format!(
-            "Failed to open audio file for loudness {purpose}: {e}"
+            "Failed to open audio file for loudness {purpose}: {error}"
         ))
     })?;
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
-    build_decoder_context(&hint, mss, is_strict_audio_container(path))
+    let source = DecodedPlaybackSource::from_path(&path.to_string_lossy()).map_err(|error| {
+        LoudnessError::Decode(format!(
+            "Failed to open audio for loudness {purpose}: {error}"
+        ))
+    })?;
+    let rate = source.sample_rate();
+    let channels = u32::from(source.channels());
+    let output_gain_factor = source.output_gain_factor();
+    Ok(AnalysisDecoderContext {
+        source,
+        rate,
+        channels,
+        output_gain_factor,
+    })
 }
 
 fn seek_context_to_ms(
@@ -223,17 +133,9 @@ fn seek_context_to_ms(
         return Ok(());
     }
 
-    let time = Time::new(start_ms / 1000, (start_ms % 1000) as f64 / 1000.0);
-
     context
-        .format
-        .seek(
-            SeekMode::Coarse,
-            SeekTo::Time {
-                time,
-                track_id: Some(context.track_id),
-            },
-        )
+        .source
+        .try_seek(Duration::from_millis(start_ms))
         .map_err(|e| {
             LoudnessError::Decode(format!(
                 "Failed to seek audio for loudness preview at {}ms [{}]: {}",
@@ -241,10 +143,7 @@ fn seek_context_to_ms(
                 source_path.display(),
                 e
             ))
-        })?;
-
-    context.decoder.reset();
-    Ok(())
+        })
 }
 
 fn analyze_context_with_stats(
@@ -259,6 +158,8 @@ fn analyze_context_with_stats(
         .map(|path| format!(" ({})", path.display()))
         .unwrap_or_default();
 
+    let channels = context.channels as usize;
+    let mut samples = Vec::with_capacity(4_096 * channels);
     let mut total_frames: u64 = 0;
     loop {
         if let Some(limit) = max_frames {
@@ -267,57 +168,38 @@ fn analyze_context_with_stats(
             }
         }
 
-        if total_frames % 10000 == 0 && is_loudness_analysis_cancelled() {
+        if is_loudness_analysis_cancelled() {
             return Err(LoudnessError::Cancelled);
         }
 
-        let packet = match context.format.next_packet() {
-            Ok(packet) => packet,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(e) => {
-                warn!(
-                    "Error reading packet during loudness analysis{}: {}",
-                    source_suffix, e
-                );
-                break;
-            }
-        };
-
-        if packet.track_id() != context.track_id {
-            continue;
+        let wanted_frames = max_frames
+            .map(|limit| limit.saturating_sub(total_frames).min(4_096))
+            .unwrap_or(4_096) as usize;
+        let wanted_samples = wanted_frames * channels;
+        samples.clear();
+        samples.extend(
+            context
+                .source
+                .by_ref()
+                .take(wanted_samples)
+                .map(|sample| sample as f32 / 32768.0 * context.output_gain_factor),
+        );
+        samples.truncate(samples.len() / channels * channels);
+        if samples.is_empty() {
+            break;
         }
 
-        let decoded = match context.decoder.decode(&packet) {
-            Ok(decoded) => decoded,
-            Err(symphonia::core::errors::Error::DecodeError(msg)) => {
-                warn!(
-                    "Decode error during loudness analysis{}: {}",
-                    source_suffix, msg
-                );
-                continue;
-            }
-            Err(_) => break,
-        };
-
-        let num_frames = decoded.frames();
-        if num_frames == 0 {
-            continue;
-        }
-
-        let mut sample_buf = SampleBuffer::<i16>::new(num_frames as u64, context.spec);
-        sample_buf.copy_interleaved_ref(decoded);
-
-        ebur128.add_frames_i16(sample_buf.samples()).map_err(|e| {
+        ebur128.add_frames_f32(&samples).map_err(|e| {
             LoudnessError::Decode(format!(
                 "Failed to add frames to EBU R128 analyzer{source_suffix}: {e:?}"
             ))
         })?;
 
-        total_frames += num_frames as u64;
+        let decoded_frames = (samples.len() / channels) as u64;
+        total_frames += decoded_frames;
+        if decoded_frames < wanted_frames as u64 {
+            break;
+        }
     }
 
     if total_frames == 0 {
