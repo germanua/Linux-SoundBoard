@@ -7,8 +7,12 @@ fn shutdown_policy_restores_only_transient_engines() {
     assert!(ShutdownPolicy::Transient.restores_default_source());
 }
 use crate::app_meta::VIRTUAL_MIC_DESCRIPTION;
+use crate::audio::loudness::analyze_loudness_path_full;
+use crate::audio::metadata::probe_duration_ms;
+use crate::audio::scanner::is_audio_file;
 use crate::test_support::audio_fixtures::{
-    cleanup_test_audio_path, create_test_audio_file, create_test_vorbis_file, TestVorbisFixture,
+    cleanup_test_audio_path, create_test_audio_file, create_test_encoded_file,
+    create_test_vorbis_file, TestEncodedFixture, TestVorbisFixture,
 };
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use opus::{Application as OpusApplication, Channels as OpusChannels, Encoder as OpusEncoder};
@@ -38,10 +42,10 @@ fn test_source(id: u32, node_name: &str, display_name: &str, priority: i32) -> S
     }
 }
 
-fn create_test_ogg_opus_file() -> std::path::PathBuf {
+fn create_test_ogg_opus_file_with_extension(extension: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir().join(format!("linux-soundboard-test-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&base).expect("create ogg opus temp dir");
-    let path = base.join("tone.ogg");
+    let path = base.join(format!("tone.{extension}"));
     let serial = 0x4c53424f;
     let mut writer = PacketWriter::new(Vec::new());
     let mut head = b"OpusHead".to_vec();
@@ -105,6 +109,10 @@ fn create_test_ogg_opus_file() -> std::path::PathBuf {
 
     std::fs::write(&path, writer.into_inner()).expect("write ogg opus fixture");
     path
+}
+
+fn create_test_ogg_opus_file() -> std::path::PathBuf {
+    create_test_ogg_opus_file_with_extension("ogg")
 }
 
 #[test]
@@ -813,6 +821,81 @@ fn fill_output_queues_prefills_target_buffer_for_active_playback() {
     drop(queues);
 
     cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn current_public_formats_decode_analyze_and_report_duration() {
+    for (extension, fixture) in [
+        ("mp3", TestEncodedFixture::Mp3Mono44100),
+        ("ogg", TestEncodedFixture::VorbisMono44100),
+        ("flac", TestEncodedFixture::FlacMono44100),
+        ("aac", TestEncodedFixture::AacAdtsMono44100),
+        ("m4a", TestEncodedFixture::AacMp4Mono44100),
+        ("mp4", TestEncodedFixture::AacMp4Mono44100),
+    ] {
+        assert!(is_audio_file(&format!("/tmp/tone.{extension}")));
+        assert!(is_audio_file(&format!(
+            "/tmp/tone.{}",
+            extension.to_ascii_uppercase()
+        )));
+
+        let audio_path = create_test_encoded_file(fixture, extension);
+        let path = audio_path.to_string_lossy();
+        let mut source = PlaybackSource::from_path(&path)
+            .unwrap_or_else(|error| panic!("open real {extension} fixture: {error}"));
+        assert!(matches!(&source, PlaybackSource::Symphonia(_)));
+        assert!(source
+            .total_duration()
+            .is_some_and(|duration| { (800..=1_300).contains(&(duration.as_millis() as u64)) }));
+
+        let samples = source.by_ref().take(2_048).collect::<Vec<_>>();
+        assert_eq!(samples.len(), 2_048, "decode real {extension} fixture");
+        assert!(
+            samples.iter().any(|sample| *sample != 0),
+            "real {extension} fixture must not decode as silence"
+        );
+
+        assert!(
+            probe_duration_ms(&path).is_some_and(|duration| { (800..=1_300).contains(&duration) })
+        );
+        let (loudness, true_peak) = analyze_loudness_path_full(&audio_path)
+            .unwrap_or_else(|error| panic!("analyze real {extension} fixture: {error}"));
+        assert!(loudness.is_finite(), "real {extension} LUFS");
+        assert!(
+            true_peak.is_some_and(f32::is_finite),
+            "real {extension} true peak"
+        );
+
+        cleanup_test_audio_path(&audio_path);
+    }
+}
+
+#[test]
+fn ogg_route_selection_is_content_based() {
+    let vorbis_lower = create_test_encoded_file(TestEncodedFixture::VorbisMono44100, "ogg");
+    let vorbis_upper = create_test_encoded_file(TestEncodedFixture::VorbisMono44100, "OGG");
+    let opus_ogg = create_test_ogg_opus_file_with_extension("ogg");
+    let opus_extension = create_test_ogg_opus_file_with_extension("opus");
+    let opus_upper = create_test_ogg_opus_file_with_extension("OPUS");
+
+    for path in [&vorbis_lower, &vorbis_upper] {
+        let source = PlaybackSource::from_path(&path.to_string_lossy()).expect("open Ogg Vorbis");
+        assert!(matches!(source, PlaybackSource::Symphonia(_)));
+    }
+    for path in [&opus_ogg, &opus_extension, &opus_upper] {
+        let source = PlaybackSource::from_path(&path.to_string_lossy()).expect("open Ogg Opus");
+        assert!(matches!(source, PlaybackSource::OggOpus(_)));
+    }
+
+    for path in [
+        vorbis_lower,
+        vorbis_upper,
+        opus_ogg,
+        opus_extension,
+        opus_upper,
+    ] {
+        cleanup_test_audio_path(&path);
+    }
 }
 
 #[test]

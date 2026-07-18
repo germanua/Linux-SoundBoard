@@ -3,8 +3,21 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_TEST_TONE_DURATION_MS: u32 = 200;
 
+const MP3_MONO_44100_HEX: &str = include_str!("fixtures/mp3-mono-44100.hex");
 const LIBVORBIS_MONO_44100_HEX: &str = include_str!("fixtures/libvorbis-mono-44100.ogg.hex");
 const LIBVORBIS_STEREO_48000_HEX: &str = include_str!("fixtures/libvorbis-stereo-48000.ogg.hex");
+const FLAC_MONO_44100_HEX: &str = include_str!("fixtures/flac-mono-44100.hex");
+const AAC_ADTS_MONO_44100_HEX: &str = include_str!("fixtures/aac-adts-mono-44100.hex");
+const AAC_MP4_MONO_44100_HEX: &str = include_str!("fixtures/aac-mp4-mono-44100.hex");
+
+#[derive(Clone, Copy, Debug)]
+pub enum TestEncodedFixture {
+    Mp3Mono44100,
+    VorbisMono44100,
+    FlacMono44100,
+    AacAdtsMono44100,
+    AacMp4Mono44100,
+}
 
 #[derive(Clone, Copy)]
 pub enum TestVorbisFixture {
@@ -69,11 +82,26 @@ pub fn create_test_vorbis_file(fixture: TestVorbisFixture) -> PathBuf {
         TestVorbisFixture::Mono44100 => LIBVORBIS_MONO_44100_HEX,
         TestVorbisFixture::Stereo48000 => LIBVORBIS_STEREO_48000_HEX,
     };
+    create_encoded_file(encoded, "tone-libvorbis.ogg")
+}
+
+pub fn create_test_encoded_file(fixture: TestEncodedFixture, extension: &str) -> PathBuf {
+    let encoded = match fixture {
+        TestEncodedFixture::Mp3Mono44100 => MP3_MONO_44100_HEX,
+        TestEncodedFixture::VorbisMono44100 => LIBVORBIS_MONO_44100_HEX,
+        TestEncodedFixture::FlacMono44100 => FLAC_MONO_44100_HEX,
+        TestEncodedFixture::AacAdtsMono44100 => AAC_ADTS_MONO_44100_HEX,
+        TestEncodedFixture::AacMp4Mono44100 => AAC_MP4_MONO_44100_HEX,
+    };
+    create_encoded_file(encoded, &format!("tone.{extension}"))
+}
+
+fn create_encoded_file(encoded: &str, file_name: &str) -> PathBuf {
     let bytes = decode_hex_fixture(encoded);
     let base = std::env::temp_dir().join(format!("lsb-test-audio-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&base).expect("create temp audio dir");
-    let path = base.join("tone-libvorbis.ogg");
-    fs::write(&path, bytes).expect("write libvorbis test fixture");
+    let path = base.join(file_name);
+    fs::write(&path, bytes).expect("write encoded audio test fixture");
     path
 }
 
