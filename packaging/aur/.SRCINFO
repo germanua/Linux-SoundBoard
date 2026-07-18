@@ -13,6 +13,7 @@ pkgbase = linux-soundboard
 	depends = gtk4
 	depends = libadwaita
 	depends = libpulse
+	depends = opus
 	depends = libx11
 	depends = libxi
 	depends = libxtst

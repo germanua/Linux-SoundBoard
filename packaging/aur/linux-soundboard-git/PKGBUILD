@@ -12,6 +12,7 @@ depends=(
   'gtk4'
   'libadwaita'
   'libpulse'
+  'opus'
   'libx11'
   'libxi'
   'libxtst'

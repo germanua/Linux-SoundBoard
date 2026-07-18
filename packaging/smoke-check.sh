@@ -79,15 +79,37 @@ if grep -qF 'maintainer-scripts = "../packaging/debian"' "$REPO_ROOT/src/Cargo.t
 else
     fail "cargo-deb: maintainer scripts are not registered for the control archive"
 fi
-if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, pipewire, wireplumber, pkexec | policykit-1"' "$REPO_ROOT/src/Cargo.toml"; then
+if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pipewire, wireplumber, pkexec | policykit-1"' "$REPO_ROOT/src/Cargo.toml"; then
     pass "cargo-deb: runtime dependencies do not rely on optional auto-detection"
 else
-    fail "cargo-deb: explicit GTK, audio, and X11 runtime dependencies are incomplete"
+    fail "cargo-deb: explicit GTK, Opus, audio, and X11 runtime dependencies are incomplete"
 fi
 if grep -qF 'libpipewire-0.3-dev,' "$REPO_ROOT/packaging/debian/control"; then
     pass "Debian: PipeWire build dependency is declared"
 else
     fail "Debian: libpipewire-0.3-dev is required for the Rust PipeWire bindings"
+fi
+if grep -qF 'libopus-dev,' "$REPO_ROOT/packaging/debian/control"; then
+    pass "Debian: Opus build dependency is declared"
+else
+    fail "Debian: libopus-dev is required for the Rust Opus bindings"
+fi
+if grep -qF 'BuildRequires:  opus-devel' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
+    pass "RPM: Opus build dependency is declared"
+else
+    fail "RPM: opus-devel is required for the Rust Opus bindings"
+fi
+if grep -qFx "  'opus'" "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    && grep -qF $'\tdepends = opus' "$REPO_ROOT/packaging/aur/.SRCINFO"; then
+    pass "AUR stable package: Opus runtime dependency is declared"
+else
+    fail "AUR stable package: opus runtime dependency is incomplete"
+fi
+if grep -qFx "  'opus'" "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    && grep -qF $'\tdepends = opus' "$REPO_ROOT/packaging/aur/linux-soundboard-git/.SRCINFO"; then
+    pass "AUR development package: Opus runtime dependency is declared"
+else
+    fail "AUR development package: opus runtime dependency is incomplete"
 fi
 
 echo ""
@@ -310,6 +332,12 @@ else
 fi
 
 APPIMAGE_PACKAGER="$REPO_ROOT/packaging/linux/package-appimage.sh"
+if grep -qF 'GTK_PLUGIN_SOURCE=' "$APPIMAGE_PACKAGER" \
+    && grep -qF 'cp "$GTK_PLUGIN_SOURCE" "$GTK_PLUGIN_BIN"' "$APPIMAGE_PACKAGER"; then
+    pass "AppImage GTK plugin: pristine cache is copied before patching"
+else
+    fail "AppImage GTK plugin: cached upstream source would be patched repeatedly"
+fi
 for payload in \
     "install-user.sh" \
     "app-meta.sh" \

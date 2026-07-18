@@ -45,6 +45,7 @@ GTK_PLUGIN_URL="${GTK_PLUGIN_URL:-https://raw.githubusercontent.com/tauri-apps/t
 LINUXDEPLOY_APPIMAGE="$TOOLS_ROOT/linuxdeploy-${linuxdeploy_arch}.AppImage"
 LINUXDEPLOY_ROOT="$TOOLS_ROOT/linuxdeploy-${linuxdeploy_arch}.root"
 LINUXDEPLOY_BIN="$LINUXDEPLOY_ROOT/usr/bin/linuxdeploy"
+GTK_PLUGIN_SOURCE="$TOOLS_ROOT/linuxdeploy-plugin-gtk.pinned.sh"
 GTK_PLUGIN_BIN="$TOOLS_ROOT/linuxdeploy-plugin-gtk.sh"
 
 APPDIR="$DIST_ROOT/${APP_BINARY}.AppDir"
@@ -116,7 +117,8 @@ if [[ ! -x "$BINARY_SOURCE" ]]; then
 fi
 
 download_if_missing "$LINUXDEPLOY_URL" "$LINUXDEPLOY_APPIMAGE"
-download_if_missing "$GTK_PLUGIN_URL" "$GTK_PLUGIN_BIN"
+download_if_missing "$GTK_PLUGIN_URL" "$GTK_PLUGIN_SOURCE"
+cp "$GTK_PLUGIN_SOURCE" "$GTK_PLUGIN_BIN"
 
 chmod +x "$LINUXDEPLOY_APPIMAGE" "$GTK_PLUGIN_BIN"
 extract_linuxdeploy
