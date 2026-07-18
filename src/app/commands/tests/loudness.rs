@@ -283,6 +283,7 @@ fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
 
     let mut sound = Sound::new("Source Test".to_string(), "/tmp/original.mp3".to_string());
     sound.loudness_lufs = Some(-14.0);
+    sound.loudness_true_peak_dbtp = Some(-1.5);
     let sound_id = sound.id.clone();
     config.sounds.push(sound);
     let config = Arc::new(Mutex::new(config));
@@ -297,6 +298,7 @@ fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
     .expect("update succeeds");
 
     assert!(updated.loudness_lufs.is_none());
+    assert!(updated.loudness_true_peak_dbtp.is_none());
     assert_eq!(
         updated.loudness_analysis_state,
         LoudnessAnalysisState::Pending
@@ -309,6 +311,7 @@ fn test_update_sound_source_invalidates_loudness_and_schedules_backfill() {
     let cfg = config.lock();
     let stored = cfg.get_sound(&sound_id).expect("updated sound exists");
     assert!(stored.loudness_lufs.is_none());
+    assert!(stored.loudness_true_peak_dbtp.is_none());
     assert_ne!(
         stored.loudness_analysis_state,
         LoudnessAnalysisState::Estimated
@@ -332,6 +335,7 @@ fn test_refresh_sounds_invalidates_stale_loudness_fingerprint() {
     );
     sound.duration_ms = commands::probe_duration_ms(&sound.path);
     sound.loudness_lufs = Some(-14.5);
+    sound.loudness_true_peak_dbtp = Some(-1.0);
     sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
     sound.loudness_confidence = Some(1.0);
     sound.loudness_source_fingerprint = Some("stale-fingerprint".to_string());
@@ -362,6 +366,7 @@ fn test_refresh_sounds_invalidates_stale_loudness_fingerprint() {
     let cfg = config.lock();
     let stored = cfg.get_sound(&sound_id).expect("sound exists");
     assert!(stored.loudness_lufs.is_none());
+    assert!(stored.loudness_true_peak_dbtp.is_none());
     assert_eq!(
         stored.loudness_analysis_state,
         LoudnessAnalysisState::Pending
@@ -372,6 +377,50 @@ fn test_refresh_sounds_invalidates_stale_loudness_fingerprint() {
         stored.loudness_source_fingerprint.as_deref(),
         Some("stale-fingerprint")
     );
+    drop(cfg);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_refresh_sounds_preserves_loudness_for_unchanged_fingerprint() {
+    let audio_path = create_test_audio_file("mp3");
+    let mut config = create_test_config();
+    let mut sound = Sound::new(
+        "Unchanged Fingerprint".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.duration_ms = commands::probe_duration_ms(&sound.path);
+    sound.loudness_lufs = Some(-14.5);
+    sound.loudness_true_peak_dbtp = Some(-1.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+    sound.loudness_confidence = Some(1.0);
+    sound.loudness_source_fingerprint =
+        commands::shared::compute_sound_source_fingerprint(&sound.path, sound.duration_ms);
+    config.sound_folders.push(
+        audio_path
+            .parent()
+            .expect("audio temp dir")
+            .to_string_lossy()
+            .to_string(),
+    );
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+
+    let config = Arc::new(Mutex::new(config));
+    let summary = commands::refresh_sounds(
+        Arc::clone(&config),
+        create_mock_hotkey_manager(),
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("refresh succeeds");
+
+    assert_eq!(summary.refreshed, 0);
+    assert_eq!(summary.invalidated, 0);
+    let cfg = config.lock();
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(stored.loudness_lufs, Some(-14.5));
+    assert_eq!(stored.loudness_true_peak_dbtp, Some(-1.0));
     drop(cfg);
 
     cleanup_test_audio_path(&audio_path);

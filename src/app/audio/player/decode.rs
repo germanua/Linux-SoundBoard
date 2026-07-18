@@ -142,6 +142,10 @@ impl PlaybackSource {
 
         SymphoniaSource::from_path(path).map(Self::Symphonia)
     }
+
+    pub(crate) fn is_ogg_opus(path: &str) -> bool {
+        OggOpusSource::looks_like_ogg_opus(path)
+    }
 }
 
 impl Iterator for PlaybackSource {
