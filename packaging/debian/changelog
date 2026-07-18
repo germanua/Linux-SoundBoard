@@ -1,3 +1,12 @@
+linux-soundboard (2.1.2-1) unstable; urgency=medium
+
+  * Add correct mono and stereo Ogg Opus support
+  * Default new configurations to Dynamic auto-gain
+  * Show live Analyze and Refine status counts
+  * Fix folder tabs, stream endings, and loudness analysis recovery
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 19 Jul 2026 12:00:00 +0000
+
 linux-soundboard (2.1.1-1) unstable; urgency=medium
 
   * Restart stale installed engines and verify protocol, schema, and app version

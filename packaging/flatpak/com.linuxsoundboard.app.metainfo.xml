@@ -55,6 +55,17 @@
   </keywords>
   
   <releases>
+    <release version="2.1.2" date="2026-07-19">
+      <description>
+        <p>Ogg Opus and auto-gain reliability update:</p>
+        <ul>
+          <li>Adds mono and stereo Ogg Opus playback, seeking, duration, and LUFS normalization</li>
+          <li>Uses Dynamic auto-gain by default for new configurations</li>
+          <li>Shows live Analyze and Refine status counts</li>
+          <li>Fixes empty folder tabs, stream endings, and loudness analysis recovery</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.1" date="2026-07-15">
       <description>
         <p>Safe upgrade and microphone lifecycle correction:</p>

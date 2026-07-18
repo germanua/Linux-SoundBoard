@@ -1,5 +1,5 @@
 Name:           linux-soundboard
-Version:        2.1.1
+Version:        2.1.2
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -144,6 +144,12 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Sun Jul 19 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.2-1
+- Add correct mono and stereo Ogg Opus support
+- Default new configurations to Dynamic auto-gain
+- Show live Analyze and Refine status counts
+- Fix folder tabs, stream endings, and loudness analysis recovery
+
 * Wed Jul 15 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.1-1
 - Restart stale installed engines and verify the running app version
 - Restore a safe default microphone after temporary execution

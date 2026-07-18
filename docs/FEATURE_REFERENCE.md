@@ -442,7 +442,7 @@ _These controls appear only when auto-gain is enabled._
 | Setting                  | What it does                                                                                             |
 | ------------------------ | -------------------------------------------------------------------------------------------------------- |
 | **Target Volume (LUFS)** | Sets the loudness target used by normalization                                                           |
-| **Auto-Gain Mode**       | `Static` — uses precomputed loudness values; `Dynamic` — applies look-ahead gain shaping during playback |
+| **Auto-Gain Mode**       | `Dynamic` (default) — applies look-ahead gain shaping; `Static` — uses precomputed loudness values        |
 | **Apply To**             | `Mic only (recommended)` or `Mic + headphones`                                                           |
 | **Look-ahead (ms)**      | _(Dynamic only)_ Anticipation window for gain changes                                                    |
 | **Attack (ms)**          | _(Dynamic only)_ How quickly gain reductions are applied                                                 |
@@ -453,7 +453,14 @@ _These controls appear only when auto-gain is enabled._
 - **Trigger:** Click `Analyze`
 - **What it does:** Scans sounds that do not yet have loudness data
 
-> **Note:** The button disables while analysis runs; a spinner is shown until the job finishes.
+> **Note:** The spinner remains active while the Pending, Estimated, Refined, and Unavailable counts update after each completed sound. Click `Stop` to cancel the remaining work.
+
+#### Refine Estimated Sounds
+
+- **Trigger:** Click `Refine`
+- **What it does:** Runs full loudness analysis for sounds that currently use an estimate
+
+> **Note:** The same live status counts and `Stop` control are available while refinement runs.
 
 ---
 

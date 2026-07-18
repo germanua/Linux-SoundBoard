@@ -6,32 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-07-19
+
 ### Added
 
 - **Ogg Opus support:** Mono and stereo Ogg Opus files can be imported as `.opus` or `.ogg` and use playback, seeking, looping, exact duration, and static or dynamic LUFS normalization on local and virtual-microphone outputs. Ogg Vorbis `.ogg` files remain supported; WebM and multichannel Opus are not supported.
 
 ### Changed
 
-- **Arch installation:** The recommended installer and documentation now use the tagged `linux-soundboard` AUR package. `linux-soundboard-git` remains available for development testing.
+- **Auto-gain defaults:** New configurations use Dynamic auto-gain by default. Existing saved Static or Dynamic choices are preserved.
+- **Loudness analysis status:** Analyze and Refine now update the Pending, Estimated, Refined, and Unavailable counts as each sound completes.
+- **Native package support:** Arch, Debian, RPM, and AppImage packaging includes the Opus runtime required for Ogg Opus playback.
 
 ### Fixed
 
-- **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
-- **Arch upgrades:** The recommended installer now replaces an installed `linux-soundboard-git` package with the stable `linux-soundboard` package non-interactively for both AUR-helper and manual-build paths.
+- **Ogg Opus playback:** Header gain, pre-skip, end trimming, seeking, looping, and duration now follow the Ogg Opus stream metadata, including malformed or truncated stream rejection.
+- **Dynamic normalization:** Dynamic mode can reach louder LUFS targets while its limiter controls output peaks.
+- **Audio stream endings:** Sample-rate conversion no longer drops the final converted frame for Ogg Opus or Ogg Vorbis playback.
+- **Folder-derived tabs:** Empty subfolders and folders containing only unsupported files no longer appear in the sidebar.
+- **Loudness analysis recovery:** Analyze and Refine recover after Stop, and missing or terminally invalid sounds no longer remain indefinitely Pending or Estimated.
+- **Analysis activity indicators:** Analyze and Refine spinners continue rotating while status counts refresh instead of restarting their animation.
 
-## [2.1.1] - 2026-07-15
+## [2.1.1] - 2026-07-16
 
 ### Changed
 
+- **Arch installation:** The recommended installer and documentation now use the tagged `linux-soundboard` AUR package. `linux-soundboard-git` remains available for development testing.
 - **Installed-engine handoff:** Stable installations now require protocol, configuration schema, and application version equality. A stale engine is stopped, the user unit is reloaded and restarted once, and the GUI connects only after the replacement proves compatible.
 - **AppImage startup and updates:** A first direct AppImage launch asks whether to install for a persistent virtual microphone, run temporarily, or exit. Once installed, opening a newer downloaded AppImage automatically updates the stable user copy and restarts the matching engine; version tracking prevents silent downgrades.
 
 ### Fixed
 
+- **AUR release binaries:** Release builds no longer embed the temporary source-tree fallback path for the bundled swhkd installer helper.
+- **Arch upgrades:** The recommended installer now replaces an installed `linux-soundboard-git` package with the stable `linux-soundboard` package non-interactively for both AUR-helper and manual-build paths.
 - **Microphone state after upgrades:** The installed engine and virtual microphone now survive GUI closure. Temporary engines synchronously restore the previous eligible microphone, or the existing ranked hardware/enhancement fallback, before unloading their virtual source.
 - **Configuration upgrade safety:** Loading a valid schema-6 configuration creates an exact `0600` `config.json.pre-v6-backup`. A conflicting backup, malformed JSON, or future schema stops GUI startup without replacing the configuration or starting audio.
 - **Engine diagnostics:** Compatibility output includes the expected and running application versions so stale package processes are visible.
 - **Engine update feedback:** The GUI reports successful stale-engine replacement. A failed replacement explains the temporary fallback and opens the documented recovery steps directly.
+- **Native package builds:** Debian and RPM recipes now declare the PipeWire and Clang build dependencies required by clean build environments.
 
 ## [2.1.0] - 2026-07-12
 
