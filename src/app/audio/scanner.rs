@@ -92,20 +92,6 @@ pub fn scan_folder(folder: &str) -> AudioScan {
 
     info!("Scanning folder: {}", folder);
 
-    match fs::read_dir(path) {
-        Ok(entries) => {
-            for entry in entries.filter_map(Result::ok) {
-                if entry.path().is_dir() {
-                    scan.subfolders.push(ScannedSubfolder {
-                        root_folder: folder.to_string(),
-                        relative_subfolder: entry.file_name().to_string_lossy().to_string(),
-                    });
-                }
-            }
-        }
-        Err(err) => log::warn!("Failed to enumerate sound folder '{folder}': {err}"),
-    }
-
     for entry in WalkDir::new(folder)
         .follow_links(true)
         .into_iter()
@@ -135,6 +121,12 @@ pub fn scan_folder(folder: &str) -> AudioScan {
                     } else {
                         None
                     };
+                    if let Some(relative_subfolder) = &top_level_subfolder {
+                        scan.subfolders.push(ScannedSubfolder {
+                            root_folder: folder.to_string(),
+                            relative_subfolder: relative_subfolder.clone(),
+                        });
+                    }
 
                     scan.files.push(AudioFile {
                         path: file_path.to_string_lossy().to_string(),
@@ -252,6 +244,30 @@ mod tests {
         fs::remove_dir_all(&dir).expect("cleanup test dir");
         assert_eq!(scan.files.len(), 1);
         assert_eq!(scan.files[0].path, opus_path.to_string_lossy());
+    }
+
+    #[test]
+    fn scan_folder_omits_subfolders_without_supported_audio() {
+        let root = test_dir();
+        let with_audio = root.join("With Audio").join("Nested");
+        let empty = root.join("Empty");
+        let unsupported = root.join("Documents");
+        fs::create_dir_all(&with_audio).expect("create audio subfolder");
+        fs::create_dir_all(&empty).expect("create empty subfolder");
+        fs::create_dir_all(&unsupported).expect("create unsupported subfolder");
+        fs::write(with_audio.join("clip.OPUS"), []).expect("write supported audio");
+        fs::write(unsupported.join("notes.txt"), []).expect("write unsupported file");
+
+        let scan = scan_folder(&root.to_string_lossy());
+
+        assert_eq!(
+            scan.subfolders,
+            [ScannedSubfolder {
+                root_folder: root.to_string_lossy().to_string(),
+                relative_subfolder: "With Audio".to_string(),
+            }]
+        );
+        fs::remove_dir_all(root).expect("cleanup test tree");
     }
 
     #[test]
