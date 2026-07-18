@@ -153,7 +153,7 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 ### Playback
 
-- **LUFS normalization** — per-sound gain so every clip plays at a consistent loudness regardless of how it was recorded
+- **LUFS normalization** — per-sound gain for every supported format, including Ogg Opus, so clips play at a consistent loudness regardless of how they were recorded
 - **Three play modes** — Default (play once), Loop (repeat indefinitely), Continue (auto-advance to the next sound)
 - **Transport controls** — play/pause, stop all, previous/next, scrub bar with seek
 - **Multiple output levels** — independent sliders for local speakers and virtual microphone
@@ -168,6 +168,7 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 ### Library
 
+- **Supported formats** — MP3, Ogg Vorbis, mono/stereo Ogg Opus (`.opus` or `.ogg`), FLAC, AAC, M4A, and MP4. WebM and multichannel Opus are not supported.
 - **Tabs** — organize sounds into named tabs; the General tab shows all sounds
 - **Folder sync** — point at a folder; files added or removed from disk are picked up on startup and manual refresh
 - **Drag and drop** — drag files or folders from a file manager directly into the window

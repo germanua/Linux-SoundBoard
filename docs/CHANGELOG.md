@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Ogg Opus support:** Mono and stereo Ogg Opus files can be imported as `.opus` or `.ogg` and use playback, seeking, looping, exact duration, and static or dynamic LUFS normalization on local and virtual-microphone outputs. Ogg Vorbis `.ogg` files remain supported; WebM and multichannel Opus are not supported.
+
 ### Changed
 
 - **Arch installation:** The recommended installer and documentation now use the tagged `linux-soundboard` AUR package. `linux-soundboard-git` remains available for development testing.

@@ -365,6 +365,21 @@ be renamed. Their folder association remains stable across refreshes.
 
 ## Library Import and Sync
 
+### Supported Audio Formats
+
+| Extension(s)    | Audio format                                    |
+| --------------- | ----------------------------------------------- |
+| `.mp3`          | MP3                                             |
+| `.ogg`          | Ogg Vorbis or mono/stereo Ogg Opus              |
+| `.opus`         | Mono/stereo Ogg Opus                            |
+| `.flac`         | FLAC                                            |
+| `.aac`          | AAC/ADTS                                        |
+| `.m4a`, `.mp4`  | AAC in an M4A/MP4 container                     |
+
+Ogg Opus supports the same playback, seeking, looping, duration, and LUFS normalization features as the other supported formats. The app identifies Vorbis and Opus `.ogg` files by their contents. WebM and multichannel Opus are not supported.
+
+---
+
 ### Add Folder
 
 - **Trigger:** `Settings` → `General` → `Sound Folders` → `Add Folder…`
