@@ -802,8 +802,8 @@ fn current_public_formats_decode_analyze_and_report_duration() {
 
 #[test]
 fn ogg_route_selection_is_content_based() {
-    assert!(!is_audio_file("/tmp/tone.opus"));
-    assert!(!is_audio_file("/tmp/tone.OPUS"));
+    assert!(is_audio_file("/tmp/tone.opus"));
+    assert!(is_audio_file("/tmp/tone.OPUS"));
 
     let vorbis_lower = create_test_encoded_file(TestEncodedFixture::VorbisMono44100, "ogg");
     let vorbis_upper = create_test_encoded_file(TestEncodedFixture::VorbisMono44100, "OGG");

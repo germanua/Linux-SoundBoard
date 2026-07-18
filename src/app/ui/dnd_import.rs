@@ -290,6 +290,14 @@ fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
     overlay.add_toast(toast);
 }
 
+fn supported_audio_formats() -> String {
+    scanner::AUDIO_EXTENSIONS
+        .iter()
+        .map(|extension| extension.to_ascii_uppercase())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn set_drop_state(
     drop_zone: &GtkBox,
     title: &gtk4::Label,
@@ -310,7 +318,7 @@ fn set_drop_state(
             drop_zone.set_visible(true);
             drop_zone.add_css_class("drop-zone-ready");
             title.set_label("Drop Audio Files Here");
-            subtitle.set_label("Supported: MP3, OGG, FLAC, M4A, AAC, MP4");
+            subtitle.set_label(&format!("Supported: {}", supported_audio_formats()));
         }
         DropState::Importing => {
             drop_zone.set_visible(true);
@@ -322,7 +330,10 @@ fn set_drop_state(
             drop_zone.set_visible(true);
             drop_zone.add_css_class("drop-zone-rejected");
             title.set_label("Unsupported Drop");
-            subtitle.set_label("Drop audio files in MP3, OGG, FLAC, M4A, AAC, or MP4 format");
+            subtitle.set_label(&format!(
+                "Drop audio files in these formats: {}",
+                supported_audio_formats()
+            ));
         }
     }
 }

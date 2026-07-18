@@ -772,3 +772,131 @@ fn test_update_sound_source_refreshes_duration_metadata() {
 
     cleanup_test_audio_path(&audio_path);
 }
+
+fn assert_audio_import_paths(audio_path: &std::path::Path) {
+    let path = audio_path.to_string_lossy().to_string();
+    let coords = commands::LoudnessCoordinators::new();
+
+    let direct_config = create_test_config_state();
+    let added = commands::add_sound(
+        "Direct".to_string(),
+        path.clone(),
+        Arc::clone(&direct_config),
+        &coords,
+    )
+    .expect("direct add succeeds");
+    assert!(added.duration_ms.is_some());
+    assert!(commands::add_sound(
+        "Duplicate".to_string(),
+        path.clone(),
+        direct_config,
+        &coords,
+    )
+    .is_err());
+
+    let mut folder_config = create_test_config();
+    folder_config.sound_folders.push(
+        audio_path
+            .parent()
+            .expect("audio fixture parent")
+            .to_string_lossy()
+            .to_string(),
+    );
+    let folder_config = Arc::new(Mutex::new(folder_config));
+    let first_refresh = commands::refresh_sounds(
+        Arc::clone(&folder_config),
+        create_mock_hotkey_manager(),
+        &coords,
+    )
+    .expect("folder refresh succeeds");
+    let second_refresh = commands::refresh_sounds(
+        Arc::clone(&folder_config),
+        create_mock_hotkey_manager(),
+        &coords,
+    )
+    .expect("later folder refresh succeeds");
+    assert_eq!(first_refresh.added, 1);
+    assert_eq!(second_refresh.added, 0);
+    assert_eq!(folder_config.lock().sounds.len(), 1);
+
+    let copy_target =
+        std::env::temp_dir().join(format!("lsb-opus-copy-target-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&copy_target).expect("create copy target");
+    let mut copy_config = create_test_config();
+    copy_config
+        .sound_folders
+        .push(copy_target.to_string_lossy().to_string());
+    let copied = commands::import_dropped_files(
+        vec![path.clone()],
+        Arc::new(Mutex::new(copy_config)),
+        &coords,
+    )
+    .expect("copy import succeeds");
+    assert_eq!(copied.len(), 1);
+    assert!(copied[0].duration_ms.is_some());
+    fs::remove_dir_all(copy_target).expect("cleanup copy target");
+
+    let linked =
+        commands::import_files_as_links(vec![path.clone()], create_test_config_state(), &coords)
+            .expect("link import succeeds");
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].path, path);
+
+    let mut tab_config = create_test_config();
+    let tab = SoundTab::new("Opus".to_string(), 1);
+    let tab_id = tab.id.clone();
+    tab_config.tabs.push(tab);
+    let tab_config = Arc::new(Mutex::new(tab_config));
+    let tab_imported = commands::import_files_to_tab(
+        vec![path.clone()],
+        Some(tab_id.clone()),
+        Arc::clone(&tab_config),
+        &coords,
+    )
+    .expect("tab import succeeds");
+    assert_eq!(tab_imported.len(), 1);
+    assert!(tab_config
+        .lock()
+        .get_tab(&tab_id)
+        .expect("tab exists")
+        .sound_ids
+        .contains(&tab_imported[0].id));
+
+    let mut replacement_config = create_test_config();
+    let missing = Sound::new(
+        "Missing".to_string(),
+        format!("/tmp/lsb-missing-{}.mp3", uuid::Uuid::new_v4()),
+    );
+    let missing_id = missing.id.clone();
+    replacement_config.sounds.push(missing);
+    let replaced = commands::update_sound_source(
+        missing_id,
+        path.clone(),
+        Arc::new(Mutex::new(replacement_config)),
+        &coords,
+    )
+    .expect("source replacement succeeds");
+    assert_eq!(replaced.path, path);
+    assert!(replaced.duration_ms.is_some());
+}
+
+#[test]
+fn opus_and_vorbis_use_every_import_path() {
+    let fixtures = [
+        create_test_ogg_opus_file(TestOggOpusFixture {
+            extension: "opus",
+            ..Default::default()
+        }),
+        create_test_ogg_opus_file(TestOggOpusFixture {
+            extension: "OPUS",
+            ..Default::default()
+        }),
+        create_test_ogg_opus_file(TestOggOpusFixture::default()),
+        create_test_vorbis_file(TestVorbisFixture::Mono44100),
+    ];
+
+    for audio_path in fixtures {
+        assert_audio_import_paths(&audio_path);
+        cleanup_test_audio_path(&audio_path);
+    }
+}

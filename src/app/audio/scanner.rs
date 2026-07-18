@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "flac", "m4a", "aac", "mp4"];
+pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "opus", "flac", "m4a", "aac", "mp4"];
 
 #[derive(Debug, Clone)]
 pub struct AudioFile {
@@ -212,6 +212,12 @@ mod tests {
     }
 
     #[test]
+    fn is_audio_file_accepts_opus_case_insensitive() {
+        assert!(is_audio_file("/tmp/sound.opus"));
+        assert!(is_audio_file("/tmp/sound.OPUS"));
+    }
+
+    #[test]
     fn is_audio_file_rejects_unsupported_extensions() {
         assert!(!is_audio_file("/tmp/video.mkv"));
         assert!(!is_audio_file("/tmp/no-extension"));
@@ -232,6 +238,20 @@ mod tests {
         assert_eq!(scan.files.len(), 1);
         assert_eq!(scan.files[0].name, "clip");
         assert_eq!(scan.files[0].path, mp4_path.to_string_lossy());
+    }
+
+    #[test]
+    fn scan_folder_imports_opus_files() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create test dir");
+        let opus_path = dir.join("clip.OPUS");
+        fs::write(&opus_path, []).expect("write opus placeholder");
+
+        let scan = scan_folder(&dir.to_string_lossy());
+
+        fs::remove_dir_all(&dir).expect("cleanup test dir");
+        assert_eq!(scan.files.len(), 1);
+        assert_eq!(scan.files[0].path, opus_path.to_string_lossy());
     }
 
     #[test]
