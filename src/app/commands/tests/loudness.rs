@@ -50,8 +50,40 @@ fn test_trigger_missing_loudness_analysis_skips_unavailable_sounds() {
 }
 
 #[test]
+fn test_trigger_missing_loudness_analysis_marks_missing_file_unavailable() {
+    let missing_path =
+        std::env::temp_dir().join(format!("lsb-missing-analysis-{}.wav", uuid::Uuid::new_v4()));
+    let mut config = create_test_config();
+    config.settings.auto_gain = true;
+
+    let sound = Sound::new(
+        "Missing Sound".to_string(),
+        missing_path.to_string_lossy().to_string(),
+    );
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+
+    let config = Arc::new(Mutex::new(config));
+    let coords = commands::LoudnessCoordinators::new();
+    let result =
+        commands::trigger_missing_loudness_analysis(Arc::clone(&config), true, None, &coords);
+    assert!(matches!(
+        result,
+        Ok(commands::MissingLoudnessAnalysisTrigger::Started)
+    ));
+    wait_for_coords_idle(&coords);
+
+    let cfg = config.lock();
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Unavailable
+    );
+}
+
+#[test]
 fn test_trigger_missing_loudness_analysis_starts_refinement_for_estimated_sounds() {
-    let audio_path = create_test_audio_file("wav");
+    let audio_path = create_test_audio_file_with_duration("wav", 3_000);
 
     let mut config = create_test_config();
     config.settings.auto_gain = true;
@@ -129,6 +161,120 @@ fn test_trigger_estimated_loudness_refinement_force_refines_high_confidence_soun
     drop(cfg);
 
     cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_trigger_estimated_loudness_refinement_recovers_after_cancel() {
+    let audio_path = create_test_audio_file_with_duration("wav", 3_000);
+
+    let mut config = create_test_config();
+    let mut sound = Sound::new(
+        "Estimated After Cancel".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.loudness_lufs = Some(-16.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.98);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+    let coords = commands::LoudnessCoordinators::new();
+
+    commands::cancel_loudness_analysis();
+    let result =
+        commands::trigger_estimated_loudness_refinement(Arc::clone(&config), true, &coords);
+    assert!(matches!(
+        result,
+        Ok(commands::EstimatedLoudnessRefinementTrigger::Started)
+    ));
+    wait_for_coords_idle(&coords);
+
+    let cfg = config.lock();
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Refined
+    );
+    drop(cfg);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_trigger_estimated_loudness_refinement_marks_terminal_error_unavailable() {
+    let audio_path = create_test_audio_file("mp3");
+    fs::write(&audio_path, b"not audio").expect("replace fixture with invalid audio");
+
+    let mut config = create_test_config();
+    let mut sound = Sound::new(
+        "Invalid Estimated Sound".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    );
+    sound.loudness_lufs = Some(-16.0);
+    sound.loudness_true_peak_dbtp = Some(-1.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.98);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+    let coords = commands::LoudnessCoordinators::new();
+
+    let result =
+        commands::trigger_estimated_loudness_refinement(Arc::clone(&config), true, &coords);
+    assert!(matches!(
+        result,
+        Ok(commands::EstimatedLoudnessRefinementTrigger::Started)
+    ));
+    wait_for_coords_idle(&coords);
+
+    let cfg = config.lock();
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Unavailable
+    );
+    assert!(stored.loudness_lufs.is_none());
+    assert!(stored.loudness_true_peak_dbtp.is_none());
+    assert!(stored.loudness_confidence.is_none());
+    drop(cfg);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_trigger_estimated_loudness_refinement_marks_missing_file_unavailable() {
+    let missing_path = std::env::temp_dir().join(format!(
+        "lsb-missing-refinement-{}.wav",
+        uuid::Uuid::new_v4()
+    ));
+    let mut config = create_test_config();
+    let mut sound = Sound::new(
+        "Missing Estimated Sound".to_string(),
+        missing_path.to_string_lossy().to_string(),
+    );
+    sound.loudness_lufs = Some(-16.0);
+    sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+    sound.loudness_confidence = Some(0.98);
+    let sound_id = sound.id.clone();
+    config.sounds.push(sound);
+    let config = Arc::new(Mutex::new(config));
+    let coords = commands::LoudnessCoordinators::new();
+
+    let result =
+        commands::trigger_estimated_loudness_refinement(Arc::clone(&config), true, &coords);
+    assert!(matches!(
+        result,
+        Ok(commands::EstimatedLoudnessRefinementTrigger::Started)
+    ));
+    wait_for_coords_idle(&coords);
+
+    let cfg = config.lock();
+    let stored = cfg.get_sound(&sound_id).expect("sound exists");
+    assert_eq!(
+        stored.loudness_analysis_state,
+        LoudnessAnalysisState::Unavailable
+    );
+    assert!(stored.loudness_lufs.is_none());
 }
 
 #[test]

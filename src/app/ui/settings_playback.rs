@@ -70,7 +70,7 @@ fn apply_loudness_status_summary(
         analyze_btn.set_sensitive(true);
     } else {
         analyze_btn.set_label("Analyze");
-        analyze_btn.set_sensitive(true);
+        analyze_btn.set_sensitive(summary.pending_count > 0);
     }
     set_spinner_running(analyze_spinner, summary.in_flight_backfill);
 

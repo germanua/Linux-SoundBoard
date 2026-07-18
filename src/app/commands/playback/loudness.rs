@@ -181,6 +181,9 @@ enum RefinementOutcome {
         id: String,
         backoff_confidence: f32,
     },
+    Unavailable {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +237,7 @@ fn refine_estimated_loudness(
     force: bool,
 ) -> Result<u32, crate::audio::LoudnessError> {
     crate::diagnostics::memory::log_memory_snapshot("refine_estimated_loudness:start");
+    loudness::reset_loudness_analysis_cancelled();
 
     let candidates = with_config(&config, |cfg| collect_refinement_candidates(cfg, force))
         .map_err(|e| crate::audio::LoudnessError::Io(e.to_string()))?;
@@ -257,10 +261,7 @@ fn refine_estimated_loudness(
         }
 
         if !Path::new(&path).exists() {
-            outcomes.push(RefinementOutcome::Deferred {
-                id,
-                backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
-            });
+            outcomes.push(RefinementOutcome::Unavailable { id });
             continue;
         }
 
@@ -278,22 +279,16 @@ fn refine_estimated_loudness(
                     path,
                     lufs
                 );
-                outcomes.push(RefinementOutcome::Deferred {
-                    id,
-                    backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
-                });
+                outcomes.push(RefinementOutcome::Unavailable { id });
             }
             Err(err) => {
                 if should_mark_unavailable_loudness_error(&err) {
                     log::warn!(
-                        "Deferring refinement after terminal decode error for '{}': {}",
+                        "Marking sound as unavailable after terminal refinement error for '{}': {}",
                         path,
                         err
                     );
-                    outcomes.push(RefinementOutcome::Deferred {
-                        id,
-                        backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
-                    });
+                    outcomes.push(RefinementOutcome::Unavailable { id });
                 } else {
                     log::warn!("Failed to refine loudness for '{}': {}", path, err);
                     outcomes.push(RefinementOutcome::Deferred {
@@ -335,6 +330,14 @@ fn refine_estimated_loudness(
                                 Some(current_confidence.max(backoff_confidence).clamp(0.0, 1.0));
                         }
                     }
+                    RefinementOutcome::Unavailable { id } => {
+                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
+                            sound.loudness_lufs = None;
+                            sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+                            sound.loudness_confidence = None;
+                            sound.loudness_true_peak_dbtp = None;
+                        }
+                    }
                 }
             }
             cfg.save()
@@ -372,7 +375,7 @@ pub fn analyze_all_loudness(
                 return None;
             }
             if !Path::new(path).exists() {
-                return None;
+                return Some(BackfillOutcome::Unavailable { id: id.clone() });
             }
             match analyze_loudness_for_backfill(Path::new(path), *duration_hint_ms) {
                 Ok((lufs, state, confidence, true_peak_dbtp)) if lufs.is_finite() => {
