@@ -34,13 +34,10 @@ fn loudness_activity_text(status: &commands::LoudnessStatusSummary) -> &'static 
 }
 
 fn set_spinner_running(spinner: &gtk4::Spinner, running: bool) {
-    if running {
-        spinner.set_visible(true);
-        spinner.start();
-    } else {
-        spinner.stop();
-        spinner.set_visible(false);
+    if spinner.is_spinning() != running {
+        spinner.set_spinning(running);
     }
+    spinner.set_visible(running);
 }
 
 fn apply_loudness_status_summary(
@@ -358,8 +355,7 @@ pub(super) fn build_playback_groups(
                 ) {
                     Ok(commands::MissingLoudnessAnalysisTrigger::Started) => {
                         if let Some(spinner2) = spinner2.upgrade() {
-                            spinner2.set_visible(true);
-                            spinner2.start();
+                            set_spinner_running(&spinner2, true);
                         }
                         btn.set_sensitive(false);
                     }
@@ -407,8 +403,7 @@ pub(super) fn build_playback_groups(
                 ) {
                     Ok(commands::EstimatedLoudnessRefinementTrigger::Started) => {
                         if let Some(refine_spinner2) = refine_spinner2.upgrade() {
-                            refine_spinner2.set_visible(true);
-                            refine_spinner2.start();
+                            set_spinner_running(&refine_spinner2, true);
                         }
                         btn.set_sensitive(false);
                     }

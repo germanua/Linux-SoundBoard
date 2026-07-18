@@ -186,6 +186,68 @@ enum RefinementOutcome {
     },
 }
 
+fn apply_backfill_outcome(config: &mut Config, outcome: &BackfillOutcome) {
+    match outcome {
+        BackfillOutcome::Analyzed {
+            id,
+            lufs,
+            state,
+            confidence,
+            true_peak_dbtp,
+        } => {
+            if let Some(sound) = config.sounds.iter_mut().find(|sound| sound.id == *id) {
+                sound.loudness_lufs = Some(*lufs);
+                sound.loudness_analysis_state = *state;
+                sound.loudness_confidence = *confidence;
+                sound.loudness_true_peak_dbtp = *true_peak_dbtp;
+            }
+        }
+        BackfillOutcome::Unavailable { id } => {
+            if let Some(sound) = config.sounds.iter_mut().find(|sound| sound.id == *id) {
+                sound.loudness_lufs = None;
+                sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+                sound.loudness_confidence = None;
+                sound.loudness_true_peak_dbtp = None;
+            }
+        }
+    }
+}
+
+fn apply_refinement_outcome(config: &mut Config, outcome: &RefinementOutcome) {
+    match outcome {
+        RefinementOutcome::Refined {
+            id,
+            lufs,
+            true_peak_dbtp,
+        } => {
+            if let Some(sound) = config.sounds.iter_mut().find(|sound| sound.id == *id) {
+                sound.loudness_lufs = Some(*lufs);
+                sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
+                sound.loudness_confidence = Some(FAST_LUFS_REFINED_CONFIDENCE);
+                sound.loudness_true_peak_dbtp = *true_peak_dbtp;
+            }
+        }
+        RefinementOutcome::Deferred {
+            id,
+            backoff_confidence,
+        } => {
+            if let Some(sound) = config.sounds.iter_mut().find(|sound| sound.id == *id) {
+                let current_confidence = sound.loudness_confidence.unwrap_or(0.0);
+                sound.loudness_confidence =
+                    Some(current_confidence.max(*backoff_confidence).clamp(0.0, 1.0));
+            }
+        }
+        RefinementOutcome::Unavailable { id } => {
+            if let Some(sound) = config.sounds.iter_mut().find(|sound| sound.id == *id) {
+                sound.loudness_lufs = None;
+                sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
+                sound.loudness_confidence = None;
+                sound.loudness_true_peak_dbtp = None;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct RefinementCandidate {
     pub(super) id: String,
@@ -260,44 +322,46 @@ fn refine_estimated_loudness(
             break;
         }
 
-        if !Path::new(&path).exists() {
-            outcomes.push(RefinementOutcome::Unavailable { id });
-            continue;
-        }
-
-        match loudness::analyze_loudness_path_full(Path::new(&path)) {
-            Ok((lufs, true_peak_dbtp)) if lufs.is_finite() => {
-                outcomes.push(RefinementOutcome::Refined {
+        let outcome = if !Path::new(&path).exists() {
+            RefinementOutcome::Unavailable { id }
+        } else {
+            match loudness::analyze_loudness_path_full(Path::new(&path)) {
+                Ok((lufs, true_peak_dbtp)) if lufs.is_finite() => RefinementOutcome::Refined {
                     id,
                     lufs,
                     true_peak_dbtp,
-                });
-            }
-            Ok((lufs, _)) => {
-                log::warn!(
-                    "Deferring refinement after non-finite result for '{}': {}",
-                    path,
-                    lufs
-                );
-                outcomes.push(RefinementOutcome::Unavailable { id });
-            }
-            Err(err) => {
-                if should_mark_unavailable_loudness_error(&err) {
+                },
+                Ok((lufs, _)) => {
                     log::warn!(
+                        "Deferring refinement after non-finite result for '{}': {}",
+                        path,
+                        lufs
+                    );
+                    RefinementOutcome::Unavailable { id }
+                }
+                Err(err) => {
+                    if should_mark_unavailable_loudness_error(&err) {
+                        log::warn!(
                         "Marking sound as unavailable after terminal refinement error for '{}': {}",
                         path,
                         err
                     );
-                    outcomes.push(RefinementOutcome::Unavailable { id });
-                } else {
-                    log::warn!("Failed to refine loudness for '{}': {}", path, err);
-                    outcomes.push(RefinementOutcome::Deferred {
-                        id,
-                        backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
-                    });
+                        RefinementOutcome::Unavailable { id }
+                    } else {
+                        log::warn!("Failed to refine loudness for '{}': {}", path, err);
+                        RefinementOutcome::Deferred {
+                            id,
+                            backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
+                        }
+                    }
                 }
             }
-        }
+        };
+
+        with_config_mut(&config, |cfg| apply_refinement_outcome(cfg, &outcome))
+            .map_err(|e| crate::audio::LoudnessError::Io(e.to_string()))?;
+        crate::ui_event_bridge::post_loudness_status_refresh();
+        outcomes.push(outcome);
     }
 
     let refined_count = outcomes
@@ -306,40 +370,6 @@ fn refine_estimated_loudness(
         .count() as u32;
     if !outcomes.is_empty() {
         with_config_mut(&config, |cfg| {
-            for outcome in outcomes {
-                match outcome {
-                    RefinementOutcome::Refined {
-                        id,
-                        lufs,
-                        true_peak_dbtp,
-                    } => {
-                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
-                            sound.loudness_lufs = Some(lufs);
-                            sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
-                            sound.loudness_confidence = Some(FAST_LUFS_REFINED_CONFIDENCE);
-                            sound.loudness_true_peak_dbtp = true_peak_dbtp;
-                        }
-                    }
-                    RefinementOutcome::Deferred {
-                        id,
-                        backoff_confidence,
-                    } => {
-                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
-                            let current_confidence = sound.loudness_confidence.unwrap_or(0.0);
-                            sound.loudness_confidence =
-                                Some(current_confidence.max(backoff_confidence).clamp(0.0, 1.0));
-                        }
-                    }
-                    RefinementOutcome::Unavailable { id } => {
-                        if let Some(sound) = cfg.sounds.iter_mut().find(|sound| sound.id == id) {
-                            sound.loudness_lufs = None;
-                            sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
-                            sound.loudness_confidence = None;
-                            sound.loudness_true_peak_dbtp = None;
-                        }
-                    }
-                }
-            }
             cfg.save()
                 .map_err(|e| crate::audio::LoudnessError::Io(e.to_string()))
         })
@@ -447,6 +477,10 @@ pub fn analyze_all_loudness(
                 sounds_to_analyze
                     .par_iter()
                     .filter_map(analyze_entry)
+                    .inspect(|outcome| {
+                        apply_backfill_outcome(&mut config.lock(), outcome);
+                        crate::ui_event_bridge::post_loudness_status_refresh();
+                    })
                     .collect::<Vec<_>>()
             }),
             Err(e) => {
@@ -457,6 +491,10 @@ pub fn analyze_all_loudness(
                 sounds_to_analyze
                     .iter()
                     .filter_map(analyze_entry)
+                    .inspect(|outcome| {
+                        apply_backfill_outcome(&mut config.lock(), outcome);
+                        crate::ui_event_bridge::post_loudness_status_refresh();
+                    })
                     .collect::<Vec<_>>()
             }
         }
@@ -471,32 +509,6 @@ pub fn analyze_all_loudness(
         .count() as u32;
     if has_updates {
         with_config_mut(&config, |cfg| {
-            for result in results {
-                match result {
-                    BackfillOutcome::Analyzed {
-                        id,
-                        lufs,
-                        state,
-                        confidence,
-                        true_peak_dbtp,
-                    } => {
-                        if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
-                            sound.loudness_lufs = Some(lufs);
-                            sound.loudness_analysis_state = state;
-                            sound.loudness_confidence = confidence;
-                            sound.loudness_true_peak_dbtp = true_peak_dbtp;
-                        }
-                    }
-                    BackfillOutcome::Unavailable { id } => {
-                        if let Some(sound) = cfg.sounds.iter_mut().find(|s| s.id == id) {
-                            sound.loudness_lufs = None;
-                            sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
-                            sound.loudness_confidence = None;
-                            sound.loudness_true_peak_dbtp = None;
-                        }
-                    }
-                }
-            }
             cfg.save()
                 .map_err(|e| crate::audio::LoudnessError::Io(e.to_string()))?;
             crate::diagnostics::record_phase_with_config(
@@ -524,4 +536,57 @@ pub fn analyze_all_loudness(
         );
     }
     Ok(analyzed_count)
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn applying_each_backfill_outcome_advances_status_state() {
+        let mut config = Config::default();
+        let sound = Sound::new("Pending".to_string(), "/tmp/pending.wav".to_string());
+        let id = sound.id.clone();
+        config.sounds.push(sound);
+
+        apply_backfill_outcome(
+            &mut config,
+            &BackfillOutcome::Analyzed {
+                id,
+                lufs: -14.0,
+                state: LoudnessAnalysisState::Refined,
+                confidence: Some(1.0),
+                true_peak_dbtp: Some(-1.0),
+            },
+        );
+
+        assert_eq!(
+            config.sounds[0].loudness_analysis_state,
+            LoudnessAnalysisState::Refined
+        );
+    }
+
+    #[test]
+    fn applying_each_refinement_outcome_advances_status_state() {
+        let mut config = Config::default();
+        let mut sound = Sound::new("Estimated".to_string(), "/tmp/estimated.wav".to_string());
+        sound.loudness_lufs = Some(-16.0);
+        sound.loudness_analysis_state = LoudnessAnalysisState::Estimated;
+        let id = sound.id.clone();
+        config.sounds.push(sound);
+
+        apply_refinement_outcome(
+            &mut config,
+            &RefinementOutcome::Refined {
+                id,
+                lufs: -14.0,
+                true_peak_dbtp: Some(-1.0),
+            },
+        );
+
+        assert_eq!(
+            config.sounds[0].loudness_analysis_state,
+            LoudnessAnalysisState::Refined
+        );
+    }
 }
