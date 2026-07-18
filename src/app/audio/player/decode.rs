@@ -12,6 +12,9 @@ pub(super) trait AudioSource: Iterator<Item = i16> {
     fn sample_rate(&self) -> u32;
     fn total_duration(&self) -> Option<std::time::Duration>;
     fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), SeekError>;
+    fn output_gain_factor(&self) -> f32 {
+        1.0
+    }
 }
 
 pub(super) trait ResettableSource: AudioSource {
@@ -180,6 +183,13 @@ impl AudioSource for PlaybackSource {
             Self::OggOpus(source) => source.try_seek(position),
         }
     }
+
+    fn output_gain_factor(&self) -> f32 {
+        match self {
+            Self::Symphonia(source) => source.output_gain_factor(),
+            Self::OggOpus(source) => source.output_gain_factor(),
+        }
+    }
 }
 
 impl ResettableSource for PlaybackSource {
@@ -194,6 +204,7 @@ const OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
 struct OggOpusHead {
     channels: u16,
     pre_skip: u16,
+    output_gain_factor: f32,
     stream_serial: u32,
 }
 
@@ -204,6 +215,8 @@ pub(super) struct OggOpusSource {
     channels: u16,
     stream_serial: u32,
     pre_skip_remaining: u64,
+    remaining_playable_frames: u64,
+    output_gain_factor: f32,
     total_duration: Option<Duration>,
     buffer: Vec<i16>,
     decode_buffer: Vec<i16>,
@@ -238,7 +251,10 @@ impl OggOpusSource {
         };
         let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, opus_channels)
             .map_err(|e| EngineError::Playback(format!("Failed to create Opus decoder: {e}")))?;
-        let total_duration = scan_ogg_opus_duration(path, head.stream_serial, head.pre_skip);
+        let playable_frames = scan_ogg_opus_frames(path, head.stream_serial, head.pre_skip)?;
+        let total_duration = Some(Duration::from_secs_f64(
+            playable_frames as f64 / f64::from(OPUS_SAMPLE_RATE),
+        ));
         let decode_buffer_len = OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL * head.channels as usize;
 
         Ok(Self {
@@ -248,6 +264,8 @@ impl OggOpusSource {
             channels: head.channels,
             stream_serial: head.stream_serial,
             pre_skip_remaining: u64::from(head.pre_skip),
+            remaining_playable_frames: playable_frames,
+            output_gain_factor: head.output_gain_factor,
             total_duration,
             buffer: Vec::new(),
             decode_buffer: vec![0; decode_buffer_len],
@@ -274,6 +292,9 @@ impl OggOpusSource {
     }
 
     fn decode_next_packet(&mut self) -> Option<()> {
+        if self.remaining_playable_frames == 0 {
+            return None;
+        }
         loop {
             let packet = match self.reader.read_packet() {
                 Ok(Some(packet)) => packet,
@@ -304,7 +325,6 @@ impl OggOpusSource {
                     }
                 };
             let channels = self.channels as usize;
-            let decoded_samples = decoded_frames * channels;
             let mut start_frame = 0usize;
             if self.pre_skip_remaining > 0 {
                 let skip_frames = decoded_frames.min(self.pre_skip_remaining as usize);
@@ -312,9 +332,13 @@ impl OggOpusSource {
                 start_frame = skip_frames;
             }
             let start_sample = start_frame * channels;
+            let available_frames = decoded_frames - start_frame;
+            let kept_frames = available_frames.min(self.remaining_playable_frames as usize);
+            let end_sample = start_sample + kept_frames * channels;
             self.buffer.clear();
             self.buffer
-                .extend_from_slice(&self.decode_buffer[start_sample..decoded_samples]);
+                .extend_from_slice(&self.decode_buffer[start_sample..end_sample]);
+            self.remaining_playable_frames -= kept_frames as u64;
             self.current_sample_offset = 0;
             if !self.buffer.is_empty() {
                 return Some(());
@@ -356,6 +380,10 @@ impl AudioSource for OggOpusSource {
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
         self.seek(position)
             .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as SeekError)
+    }
+
+    fn output_gain_factor(&self) -> f32 {
+        self.output_gain_factor
     }
 }
 
@@ -403,12 +431,8 @@ fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, EngineError> {
         )));
     }
     let pre_skip = u16::from_le_bytes([data[10], data[11]]);
-    let input_rate = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
-    if input_rate != OPUS_SAMPLE_RATE {
-        return Err(EngineError::Playback(format!(
-            "Unsupported Ogg Opus input sample rate: {input_rate}. Only 48000 Hz is supported."
-        )));
-    }
+    let output_gain_q8 = i16::from_le_bytes([data[16], data[17]]);
+    let output_gain_factor = 10.0_f32.powf(output_gain_q8 as f32 / (20.0 * 256.0));
     let channel_mapping_family = data[18];
     if channel_mapping_family != 0 {
         return Err(EngineError::Playback(format!(
@@ -419,23 +443,64 @@ fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, EngineError> {
     Ok(OggOpusHead {
         channels,
         pre_skip,
+        output_gain_factor,
         stream_serial: 0,
     })
 }
 
-fn scan_ogg_opus_duration(path: &str, stream_serial: u32, pre_skip: u16) -> Option<Duration> {
-    let file = std::fs::File::open(path).ok()?;
+fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result<u64, EngineError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| EngineError::Playback(format!("Failed to scan Ogg Opus file: {e}")))?;
     let mut reader = PacketReader::new(IoBufReader::new(file));
     let mut last_granule = None;
-    while let Ok(Some(packet)) = reader.read_packet() {
-        if packet.stream_serial() == stream_serial {
-            last_granule = Some(packet.absgp_page());
+    let mut saw_audio = false;
+    let mut saw_end = false;
+    loop {
+        let packet = match reader.read_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(EngineError::Playback(format!(
+                    "Failed to scan Ogg Opus packets: {error}"
+                )))
+            }
+        };
+        if packet.stream_serial() != stream_serial {
+            continue;
+        }
+        let is_audio = !packet.data.is_empty()
+            && !packet.data.starts_with(b"OpusHead")
+            && !packet.data.starts_with(b"OpusTags");
+        if is_audio {
+            saw_audio = true;
+            if packet.absgp_page() != u64::MAX {
+                last_granule = Some(packet.absgp_page());
+            }
+        }
+        if packet.last_in_stream() {
+            saw_end = true;
         }
     }
-    let frames = last_granule?.saturating_sub(u64::from(pre_skip));
-    Some(Duration::from_secs_f64(
-        frames as f64 / f64::from(OPUS_SAMPLE_RATE),
-    ))
+    if !saw_audio {
+        return Err(EngineError::Playback(
+            "Ogg Opus stream contains no audio packets".to_string(),
+        ));
+    }
+    if !saw_end {
+        return Err(EngineError::Playback(
+            "Ogg Opus stream is truncated before its end-of-stream page".to_string(),
+        ));
+    }
+    let final_granule = last_granule.ok_or_else(|| {
+        EngineError::Playback("Ogg Opus stream has no valid final granule position".to_string())
+    })?;
+    final_granule
+        .checked_sub(u64::from(pre_skip))
+        .ok_or_else(|| {
+            EngineError::Playback(format!(
+                "Invalid Ogg Opus final granule {final_granule}: smaller than pre-skip {pre_skip}"
+            ))
+        })
 }
 
 pub(super) struct SymphoniaSource {
@@ -687,6 +752,7 @@ where
     converted: ChannelSampleRateConverter<S>,
     target_sample_rate: u32,
     total_duration: Option<Duration>,
+    output_gain_factor: f32,
 }
 
 impl<S, F> ResettablePlaybackSource<S, F>
@@ -697,6 +763,7 @@ where
     pub(super) fn new(factory: F, target_sample_rate: u32) -> Result<Self, EngineError> {
         let input = factory()?;
         let total_duration = input.total_duration();
+        let output_gain_factor = input.output_gain_factor();
         let converted =
             ChannelSampleRateConverter::new(input, target_sample_rate).ok_or_else(|| {
                 EngineError::Playback("Playback source produced no samples".to_string())
@@ -706,11 +773,16 @@ where
             converted,
             target_sample_rate,
             total_duration,
+            output_gain_factor,
         })
     }
 
     pub(super) fn total_duration_ms(&self) -> Option<u64> {
         self.total_duration.map(|d| d.as_millis() as u64)
+    }
+
+    pub(super) fn output_gain_factor(&self) -> f32 {
+        self.output_gain_factor
     }
 
     pub(super) fn seek_internal(&mut self, position: Duration) -> Result<(), SeekError> {
@@ -721,6 +793,7 @@ where
         })?;
         input.seek_resettable(position)?;
         self.total_duration = input.total_duration();
+        self.output_gain_factor = input.output_gain_factor();
         self.converted = ChannelSampleRateConverter::new(input, self.target_sample_rate)
             .ok_or_else(|| {
                 Box::new(std::io::Error::other("Rebuilt source produced no samples")) as SeekError
@@ -738,5 +811,15 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.converted.next()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ogg_opus_header_rejects_truncated_data() {
+        assert!(parse_ogg_opus_head(b"OpusHead").is_err());
     }
 }

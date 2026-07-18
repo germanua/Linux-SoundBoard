@@ -1,3 +1,5 @@
+use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+use opus::{Application as OpusApplication, Channels as OpusChannels, Encoder as OpusEncoder};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +19,33 @@ pub enum TestEncodedFixture {
     FlacMono44100,
     AacAdtsMono44100,
     AacMp4Mono44100,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TestOggOpusFixture {
+    pub extension: &'static str,
+    pub channels: u16,
+    pub input_rate: u32,
+    pub pre_skip: u16,
+    pub output_gain_q8: i16,
+    pub channel_mapping_family: u8,
+    pub packet_count: usize,
+    pub final_granule: Option<u64>,
+}
+
+impl Default for TestOggOpusFixture {
+    fn default() -> Self {
+        Self {
+            extension: "ogg",
+            channels: 1,
+            input_rate: 48_000,
+            pre_skip: 0,
+            output_gain_q8: 0,
+            channel_mapping_family: 0,
+            packet_count: 2,
+            final_granule: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +123,88 @@ pub fn create_test_encoded_file(fixture: TestEncodedFixture, extension: &str) ->
         TestEncodedFixture::AacMp4Mono44100 => AAC_MP4_MONO_44100_HEX,
     };
     create_encoded_file(encoded, &format!("tone.{extension}"))
+}
+
+pub fn create_test_ogg_opus_file(fixture: TestOggOpusFixture) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("lsb-test-audio-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&base).expect("create ogg opus temp dir");
+    let path = base.join(format!("tone.{}", fixture.extension));
+    let serial = 0x4c53424f;
+    let mut writer = PacketWriter::new(Vec::new());
+    let mut head = b"OpusHead".to_vec();
+    head.push(1);
+    head.push(fixture.channels as u8);
+    head.extend_from_slice(&fixture.pre_skip.to_le_bytes());
+    head.extend_from_slice(&fixture.input_rate.to_le_bytes());
+    head.extend_from_slice(&fixture.output_gain_q8.to_le_bytes());
+    head.push(fixture.channel_mapping_family);
+    writer
+        .write_packet(
+            head.into_boxed_slice(),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write opus head");
+
+    let vendor = b"linux-soundboard-test";
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    tags.extend_from_slice(vendor);
+    tags.extend_from_slice(&0u32.to_le_bytes());
+    writer
+        .write_packet(
+            tags.into_boxed_slice(),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write opus tags");
+
+    let opus_channels = match fixture.channels {
+        1 => OpusChannels::Mono,
+        2 => OpusChannels::Stereo,
+        channels => panic!("test Opus encoder supports one or two channels, got {channels}"),
+    };
+    let mut encoder = OpusEncoder::new(48_000, opus_channels, OpusApplication::Audio)
+        .expect("create opus encoder");
+    let frame_samples = 960usize;
+    for packet_index in 0..fixture.packet_count {
+        let mut pcm = vec![0.0f32; frame_samples * fixture.channels as usize];
+        for (sample_index, sample) in pcm.iter_mut().enumerate() {
+            let frame = packet_index * frame_samples + sample_index / fixture.channels as usize;
+            let phase = 2.0 * std::f32::consts::PI * 440.0 * frame as f32 / 48_000.0;
+            *sample = phase.sin() * 0.25;
+        }
+        let mut encoded = vec![0; 4_000];
+        let len = encoder
+            .encode_float(&pcm, &mut encoded)
+            .expect("encode opus frame");
+        encoded.truncate(len);
+        let is_last = packet_index + 1 == fixture.packet_count;
+        let granule = if is_last {
+            fixture
+                .final_granule
+                .unwrap_or((fixture.packet_count * frame_samples) as u64)
+        } else {
+            ((packet_index + 1) * frame_samples) as u64
+        };
+        writer
+            .write_packet(
+                encoded.into_boxed_slice(),
+                serial,
+                if is_last {
+                    PacketWriteEndInfo::EndStream
+                } else {
+                    PacketWriteEndInfo::NormalPacket
+                },
+                granule,
+            )
+            .expect("write opus packet");
+    }
+
+    fs::write(&path, writer.into_inner()).expect("write ogg opus fixture");
+    path
 }
 
 fn create_encoded_file(encoded: &str, file_name: &str) -> PathBuf {

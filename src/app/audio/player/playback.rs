@@ -187,7 +187,7 @@ impl ActivePlayback {
             };
 
             self.fallback_samples_written = self.fallback_samples_written.saturating_add(1);
-            let normalized = sample as f32 / 32768.0;
+            let normalized = sample as f32 / 32768.0 * self.source.output_gain_factor();
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
             let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
 
