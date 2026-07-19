@@ -358,6 +358,11 @@ if grep -qF 'GTK_PLUGIN_SOURCE=' "$APPIMAGE_PACKAGER" \
 else
     fail "AppImage GTK plugin: cached upstream source would be patched repeatedly"
 fi
+if grep -qF 'export GIO_EXTRA_MODULES="$APPDIR/usr/lib/gio/modules"' "$APPIMAGE_PACKAGER"; then
+    pass "AppImage GTK hook: generated build paths are removed"
+else
+    fail "AppImage GTK hook: generated build paths can leak into the bundle"
+fi
 for payload in \
     "install-user.sh" \
     "app-meta.sh" \

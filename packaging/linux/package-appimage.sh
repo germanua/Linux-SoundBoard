@@ -248,6 +248,13 @@ DEPLOY_PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
 
 rm -rf "$APPDIR/usr/lib32"
 
+# linuxdeploy records both discovered GIO module directories in its runtime
+# hook. Keep only the bundled path after removing the unused lib32 tree.
+gtk_hook="$APPDIR/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+if [[ -f "$gtk_hook" ]]; then
+    sed -i '/^export GIO_EXTRA_MODULES=/,/lib32\/gio\/modules"$/c\export GIO_EXTRA_MODULES="$APPDIR/usr/lib/gio/modules"' "$gtk_hook"
+fi
+
 # The AppImage uses the host audio server tools for live setup and diagnostics.
 echo "Skipping pactl/wpctl bundling; the runtime uses host PipeWire/PulseAudio services."
 
