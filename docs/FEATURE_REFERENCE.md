@@ -373,10 +373,11 @@ be renamed. Their folder association remains stable across refreshes.
 | `.ogg`          | Ogg Vorbis or mono/stereo Ogg Opus              |
 | `.opus`         | Mono/stereo Ogg Opus                            |
 | `.flac`         | FLAC                                            |
-| `.aac`          | AAC/ADTS                                        |
-| `.m4a`, `.mp4`  | AAC in an M4A/MP4 container                     |
+| `.aac`          | AAC-LC/ADTS                                     |
+| `.m4a`          | AAC-LC or ALAC                                  |
+| `.mp4`          | AAC-LC, ALAC, or mono/stereo Opus audio track   |
 
-Ogg Opus supports the same playback, seeking, looping, duration, and LUFS normalization features as the other supported formats. The app identifies Vorbis and Opus `.ogg` files by their contents. WebM and multichannel Opus are not supported.
+Every listed format supports playback, seeking, looping, duration, and static or dynamic LUFS normalization. The app identifies Vorbis and Opus `.ogg` files by their contents and selects the supported audio track from an MP4 file. WebM, HE-AAC, and multichannel Opus are not supported.
 
 ---
 
@@ -520,8 +521,8 @@ _These controls appear only when auto-gain is enabled._
 ### General → About
 
 Displays the app name, current version, and supported audio formats. The format
-list is `MP3, OGG, OPUS, FLAC, M4A, AAC, MP4`; `.ogg` files may contain Ogg
-Vorbis or mono/stereo Ogg Opus audio.
+list is `MP3, OGG, OPUS, FLAC, M4A, AAC, MP4`. M4A supports AAC-LC or ALAC;
+MP4 supports AAC-LC, ALAC, or mono/stereo Opus audio tracks.
 
 ---
 

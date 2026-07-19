@@ -118,8 +118,12 @@ use ogg::PacketReader;
 use opus::{Channels as OpusChannels, Decoder as OpusDecoder};
 use std::io::BufReader as IoBufReader;
 use std::time::Duration;
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::audio::{
+    AsAudioBufferRef, AudioBuffer, AudioBufferRef, Channels, SampleBuffer, Signal, SignalSpec,
+};
+use symphonia::core::codecs::{
+    CodecParameters, Decoder as SymphoniaDecoder, DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_OPUS,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
@@ -516,7 +520,7 @@ fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result
 }
 
 pub(crate) struct SymphoniaSource {
-    decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    decoder: SymphoniaDecoderKind,
     format: Box<dyn symphonia::core::formats::FormatReader>,
     track_id: u32,
     time_base: Option<TimeBase>,
@@ -526,6 +530,147 @@ pub(crate) struct SymphoniaSource {
     current_frame_offset: usize,
     last_ts: u64,
     needs_decode: bool,
+}
+
+const CONTAINER_OPUS_MAX_SAMPLES_PER_CHANNEL: usize = 5_760;
+
+enum SymphoniaDecoderKind {
+    Default(Box<dyn SymphoniaDecoder>),
+    ContainerOpus(ContainerOpusDecoder),
+}
+
+impl SymphoniaDecoderKind {
+    fn decode(
+        &mut self,
+        packet: &symphonia::core::formats::Packet,
+    ) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+        match self {
+            Self::Default(decoder) => decoder.decode(packet),
+            Self::ContainerOpus(decoder) => decoder.decode(packet),
+        }
+    }
+
+    fn reset_for_seek(&mut self, at_stream_start: bool) {
+        match self {
+            Self::Default(decoder) => decoder.reset(),
+            Self::ContainerOpus(decoder) => decoder.reset_for_seek(at_stream_start),
+        }
+    }
+}
+
+struct ContainerOpusDecoder {
+    decoder: OpusDecoder,
+    buffer: AudioBuffer<i16>,
+    decode_buffer: Vec<i16>,
+    channels: usize,
+    channel_mask: Channels,
+    sample_rate: u32,
+    initial_pre_skip: usize,
+    pre_skip: usize,
+}
+
+impl ContainerOpusDecoder {
+    fn new(params: &CodecParameters) -> symphonia::core::errors::Result<Self> {
+        let channels = params
+            .channels
+            .map(|channels| channels.count())
+            .or_else(|| {
+                params
+                    .extra_data
+                    .as_deref()
+                    .filter(|data| data.len() >= 10 && data.starts_with(b"OpusHead"))
+                    .map(|data| usize::from(data[9]))
+            })
+            .ok_or(SymphoniaError::Unsupported(
+                "container Opus channel layout is missing",
+            ))?;
+        let opus_channels = match channels {
+            1 => OpusChannels::Mono,
+            2 => OpusChannels::Stereo,
+            _ => {
+                return Err(SymphoniaError::Unsupported(
+                    "container Opus supports one or two channels",
+                ))
+            }
+        };
+        let sample_rate = params.sample_rate.unwrap_or(OPUS_SAMPLE_RATE);
+        let decoder = OpusDecoder::new(sample_rate, opus_channels)
+            .map_err(|_| SymphoniaError::DecodeError("failed to create container Opus decoder"))?;
+        let channel_mask = match channels {
+            1 => Channels::FRONT_LEFT,
+            _ => Channels::FRONT_LEFT | Channels::FRONT_RIGHT,
+        };
+        let pre_skip = params
+            .extra_data
+            .as_deref()
+            .and_then(container_opus_pre_skip)
+            .unwrap_or(0);
+
+        Ok(Self {
+            decoder,
+            buffer: AudioBuffer::new(960, SignalSpec::new(sample_rate, channel_mask)),
+            decode_buffer: vec![0; CONTAINER_OPUS_MAX_SAMPLES_PER_CHANNEL * channels],
+            channels,
+            channel_mask,
+            sample_rate,
+            initial_pre_skip: pre_skip,
+            pre_skip,
+        })
+    }
+
+    fn reset_for_seek(&mut self, at_stream_start: bool) {
+        let _ = self.decoder.reset_state();
+        self.pre_skip = if at_stream_start {
+            self.initial_pre_skip
+        } else {
+            0
+        };
+    }
+
+    fn decode(
+        &mut self,
+        packet: &symphonia::core::formats::Packet,
+    ) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+        let frames = self
+            .decoder
+            .decode(&packet.data, &mut self.decode_buffer, false)
+            .map_err(|_| SymphoniaError::DecodeError("container Opus packet decode failed"))?;
+        if self.buffer.capacity() != frames {
+            self.buffer = AudioBuffer::new(
+                frames as u64,
+                SignalSpec::new(self.sample_rate, self.channel_mask),
+            );
+        }
+        self.buffer.clear();
+        self.buffer.render_reserved(None);
+        if self.channels == 1 {
+            self.buffer.chan_mut(0)[..frames].copy_from_slice(&self.decode_buffer[..frames]);
+        } else {
+            let (left, right) = self.buffer.chan_pair_mut(0, 1);
+            for (frame, samples) in self.decode_buffer[..frames * 2].chunks_exact(2).enumerate() {
+                left[frame] = samples[0];
+                right[frame] = samples[1];
+            }
+        }
+        self.buffer.trim(
+            packet.trim_start() as usize + self.pre_skip,
+            packet.trim_end() as usize,
+        );
+        self.pre_skip = 0;
+        Ok(self.buffer.as_audio_buffer_ref())
+    }
+}
+
+fn container_opus_pre_skip(extra_data: &[u8]) -> Option<usize> {
+    if extra_data.len() < 12 || !extra_data.starts_with(b"OpusHead") {
+        return None;
+    }
+    let bytes = [extra_data[10], extra_data[11]];
+    Some(if extra_data[8] == 0 {
+        u16::from_be_bytes(bytes)
+    } else {
+        u16::from_le_bytes(bytes)
+    } as usize)
 }
 
 impl SymphoniaSource {
@@ -566,9 +711,18 @@ impl SymphoniaSource {
             symphonia::core::audio::Channels::FRONT_LEFT
                 | symphonia::core::audio::Channels::FRONT_RIGHT,
         );
-        let decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?;
+        let decoder = if track.codec_params.codec == CODEC_TYPE_OPUS {
+            SymphoniaDecoderKind::ContainerOpus(
+                ContainerOpusDecoder::new(&track.codec_params)
+                    .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?,
+            )
+        } else {
+            SymphoniaDecoderKind::Default(
+                symphonia::default::get_codecs()
+                    .make(&track.codec_params, &DecoderOptions::default())
+                    .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?,
+            )
+        };
 
         Ok(Self {
             decoder,
@@ -607,7 +761,7 @@ impl SymphoniaSource {
         self.last_ts = seeked_to.actual_ts;
         self.needs_decode = true;
         self.current_frame_offset = 0;
-        self.decoder.reset();
+        self.decoder.reset_for_seek(position_ms == 0);
         Ok(())
     }
 
@@ -628,7 +782,7 @@ impl SymphoniaSource {
                     return None;
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
+                    self.decoder.reset_for_seek(false);
                     continue;
                 }
                 Err(SymphoniaError::DecodeError(_)) => continue,
@@ -662,7 +816,7 @@ impl SymphoniaSource {
                     return Some(());
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
+                    self.decoder.reset_for_seek(false);
                 }
                 Err(SymphoniaError::DecodeError(_)) => {}
                 Err(err) => {

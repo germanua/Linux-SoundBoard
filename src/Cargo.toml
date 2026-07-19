@@ -49,7 +49,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Defaults already enable flac/wav/vorbis/ogg/pcm/adpcm/mkv. mp3/aac/isomp4 are
 # NOT in symphonia's defaults — required for the app's MP3/AAC/M4A/MP4 formats.
-symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+symphonia = { version = "0.5", features = ["mp3", "aac", "alac", "isomp4"] }
 thiserror = "1"
 # `serde` dropped: all IDs are `String` (Uuid::new_v4().to_string()); no Uuid-typed
 # field is ever (de)serialized.

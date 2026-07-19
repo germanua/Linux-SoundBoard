@@ -11,6 +11,8 @@ const LIBVORBIS_STEREO_48000_HEX: &str = include_str!("fixtures/libvorbis-stereo
 const FLAC_MONO_44100_HEX: &str = include_str!("fixtures/flac-mono-44100.hex");
 const AAC_ADTS_MONO_44100_HEX: &str = include_str!("fixtures/aac-adts-mono-44100.hex");
 const AAC_MP4_MONO_44100_HEX: &str = include_str!("fixtures/aac-mp4-mono-44100.hex");
+const ALAC_M4A_MONO_44100_HEX: &str = include_str!("fixtures/alac-m4a-mono-44100.hex");
+const OPUS_MP4_STEREO_48000_HEX: &str = include_str!("fixtures/opus-mp4-stereo-48000.hex");
 
 #[derive(Clone, Copy, Debug)]
 pub enum TestEncodedFixture {
@@ -19,6 +21,8 @@ pub enum TestEncodedFixture {
     FlacMono44100,
     AacAdtsMono44100,
     AacMp4Mono44100,
+    AlacM4aMono44100,
+    OpusMp4Stereo48000,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,6 +125,8 @@ pub fn create_test_encoded_file(fixture: TestEncodedFixture, extension: &str) ->
         TestEncodedFixture::FlacMono44100 => FLAC_MONO_44100_HEX,
         TestEncodedFixture::AacAdtsMono44100 => AAC_ADTS_MONO_44100_HEX,
         TestEncodedFixture::AacMp4Mono44100 => AAC_MP4_MONO_44100_HEX,
+        TestEncodedFixture::AlacM4aMono44100 => ALAC_M4A_MONO_44100_HEX,
+        TestEncodedFixture::OpusMp4Stereo48000 => OPUS_MP4_STEREO_48000_HEX,
     };
     create_encoded_file(encoded, &format!("tone.{extension}"))
 }

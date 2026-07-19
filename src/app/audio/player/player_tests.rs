@@ -816,6 +816,51 @@ fn current_public_formats_decode_analyze_and_report_duration() {
     }
 }
 
+fn assert_container_codec_support(fixture: TestEncodedFixture, extension: &str) {
+    let audio_path = create_test_encoded_file(fixture, extension);
+    let path = audio_path.to_string_lossy();
+    let source = PlaybackSource::from_path(&path)
+        .unwrap_or_else(|error| panic!("decode {extension} fixture: {error}"));
+    assert!(source.total_duration().is_some());
+
+    let (loudness, true_peak) = analyze_loudness_path_full(&audio_path)
+        .unwrap_or_else(|error| panic!("analyze {extension} fixture: {error}"));
+    for mode in [AutoGainMode::Static, AutoGainMode::DynamicLookAhead] {
+        let mut runtime = test_runtime_config();
+        runtime.auto_gain.enabled = true;
+        runtime.auto_gain.mode = mode;
+        runtime.auto_gain.target_lufs = -14.0;
+        let mut playback = ActivePlayback::new(
+            format!("play-{extension}-{mode:?}"),
+            format!("sound-{extension}"),
+            path.to_string(),
+            0,
+            1.0,
+            Some(loudness),
+            true_peak,
+            &runtime,
+        )
+        .unwrap_or_else(|error| panic!("create {mode:?} {extension} playback: {error}"));
+        let mut local = vec![0.0; 4_096];
+        let mut virtual_out = vec![0.0; 4_096];
+        playback.render_into(&mut local, &mut virtual_out, &runtime);
+        assert!(local.iter().any(|sample| *sample != 0.0));
+        assert!(virtual_out.iter().any(|sample| *sample != 0.0));
+    }
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn m4a_alac_decodes_analyzes_and_uses_auto_gain() {
+    assert_container_codec_support(TestEncodedFixture::AlacM4aMono44100, "m4a");
+}
+
+#[test]
+fn mp4_audio_decodes_analyzes_and_uses_auto_gain() {
+    assert_container_codec_support(TestEncodedFixture::OpusMp4Stereo48000, "mp4");
+}
+
 #[test]
 fn ogg_route_selection_is_content_based() {
     assert!(is_audio_file("/tmp/tone.opus"));

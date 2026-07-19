@@ -168,7 +168,7 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 ### Library
 
-- **Supported formats** — MP3, Ogg Vorbis, mono/stereo Ogg Opus (`.opus` or `.ogg`), FLAC, AAC, M4A, and MP4. WebM and multichannel Opus are not supported.
+- **Supported formats** — MP3, Ogg Vorbis, mono/stereo Ogg Opus (`.opus` or `.ogg`), FLAC, AAC-LC, M4A (AAC-LC or ALAC), and MP4 audio tracks (AAC-LC, ALAC, or mono/stereo Opus). WebM and multichannel Opus are not supported.
 - **Tabs** — organize sounds into named tabs; the General tab shows all sounds
 - **Folder sync** — point at a folder; files added or removed from disk are picked up on startup and manual refresh
 - **Drag and drop** — drag files or folders from a file manager directly into the window

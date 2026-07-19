@@ -21,6 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Fixed
 
+- **M4A and MP4 playback:** ALAC M4A and supported MP4 audio tracks now play, seek, report duration, and use static or dynamic LUFS normalization instead of failing decoder creation.
 - **Ogg Opus playback:** Header gain, pre-skip, end trimming, seeking, looping, and duration now follow the Ogg Opus stream metadata, including malformed or truncated stream rejection.
 - **Dynamic normalization:** Dynamic mode can reach louder LUFS targets while its limiter controls output peaks.
 - **Audio stream endings:** Sample-rate conversion no longer drops the final converted frame for Ogg Opus or Ogg Vorbis playback.
