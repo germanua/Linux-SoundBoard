@@ -29,6 +29,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 - **Loudness analysis recovery:** Analyze and Refine recover after Stop, and missing or terminally invalid sounds no longer remain indefinitely Pending or Estimated.
 - **Analysis activity indicators:** Analyze and Refine spinners continue rotating while status counts refresh instead of restarting their animation.
 
+### Security
+
+- **Dependency soundness:** Updated the locked `anyhow` dependency to 1.0.103, which fixes RUSTSEC-2026-0190.
+- **Release workflow:** GitHub Actions are pinned to immutable commits and use read-only repository permissions.
+
 ## [2.1.1] - 2026-07-16
 
 ### Changed
