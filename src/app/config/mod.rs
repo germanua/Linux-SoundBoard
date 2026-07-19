@@ -75,11 +75,19 @@ mod tests {
     }
 
     #[test]
+    fn auto_gain_defaults_to_dynamic() {
+        assert_eq!(
+            Config::default().settings.auto_gain_mode,
+            AutoGainMode::Dynamic
+        );
+    }
+
+    #[test]
     fn typed_settings_serialize_to_legacy_strings() {
         let cfg = Config::default();
         let value = serde_json::to_value(&cfg).unwrap();
         assert_eq!(value["settings"]["theme"], "dark");
-        assert_eq!(value["settings"]["auto_gain_mode"], "static");
+        assert_eq!(value["settings"]["auto_gain_mode"], "dynamic");
         assert_eq!(value["settings"]["auto_gain_apply_to"], "both");
         assert_eq!(value["settings"]["play_mode"], "default");
         assert_eq!(value["settings"]["list_style"], "compact");
@@ -121,7 +129,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(cfg.settings.theme, Theme::Dark);
-        assert_eq!(cfg.settings.auto_gain_mode, AutoGainMode::Static);
+        assert_eq!(cfg.settings.auto_gain_mode, AutoGainMode::Dynamic);
         assert_eq!(cfg.settings.auto_gain_apply_to, AutoGainApplyTo::MicOnly);
         assert_eq!(cfg.settings.play_mode, PlayMode::Default);
         assert_eq!(cfg.settings.list_style, ListStyle::Compact);

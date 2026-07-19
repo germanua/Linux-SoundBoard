@@ -122,6 +122,7 @@ fn refresh_existing_sound_source_fingerprint(sound: &mut Sound) -> FingerprintRe
 
     sound.loudness_source_fingerprint = Some(fingerprint);
     sound.loudness_lufs = None;
+    sound.loudness_true_peak_dbtp = None;
     sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
     sound.loudness_confidence = None;
     FingerprintRefreshOutcome {
@@ -316,12 +317,14 @@ fn apply_fingerprint_update(current: &mut Sound, refreshed: &Sound) -> bool {
     let changed = current.duration_ms != refreshed.duration_ms
         || current.loudness_source_fingerprint != refreshed.loudness_source_fingerprint
         || current.loudness_lufs != refreshed.loudness_lufs
+        || current.loudness_true_peak_dbtp != refreshed.loudness_true_peak_dbtp
         || current.loudness_analysis_state != refreshed.loudness_analysis_state
         || current.loudness_confidence != refreshed.loudness_confidence;
     if changed {
         current.duration_ms = refreshed.duration_ms;
         current.loudness_source_fingerprint = refreshed.loudness_source_fingerprint.clone();
         current.loudness_lufs = refreshed.loudness_lufs;
+        current.loudness_true_peak_dbtp = refreshed.loudness_true_peak_dbtp;
         current.loudness_analysis_state = refreshed.loudness_analysis_state;
         current.loudness_confidence = refreshed.loudness_confidence;
     }
@@ -1015,6 +1018,7 @@ pub fn update_sound_source(
                 s.loudness_source_fingerprint =
                     compute_sound_source_fingerprint(&s.path, s.duration_ms);
                 s.loudness_lufs = None;
+                s.loudness_true_peak_dbtp = None;
                 s.loudness_analysis_state = crate::config::LoudnessAnalysisState::Pending;
                 s.loudness_confidence = None;
                 let updated_sound = s.clone();

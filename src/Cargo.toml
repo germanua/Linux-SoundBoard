@@ -1,6 +1,6 @@
 [package]
 name = "linux-soundboard"
-version = "2.1.1"
+version = "2.1.2"
 publish = false
 authors = ["germanua"]
 description = "Native Linux soundboard with PipeWire virtual microphone support"
@@ -49,7 +49,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Defaults already enable flac/wav/vorbis/ogg/pcm/adpcm/mkv. mp3/aac/isomp4 are
 # NOT in symphonia's defaults — required for the app's MP3/AAC/M4A/MP4 formats.
-symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+symphonia = { version = "0.5", features = ["mp3", "aac", "alac", "isomp4"] }
 thiserror = "1"
 # `serde` dropped: all IDs are `String` (Uuid::new_v4().to_string()); no Uuid-typed
 # field is ever (de)serialized.
@@ -65,7 +65,7 @@ copyright = "2026, germanua"
 section = "sound"
 priority = "optional"
 revision = "1"
-depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, pipewire, wireplumber, pkexec | policykit-1"
+depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pipewire, wireplumber, pkexec | policykit-1"
 recommends = "xwayland"
 maintainer-scripts = "../packaging/debian"
 extended-description = """\

@@ -45,6 +45,7 @@ GTK_PLUGIN_URL="${GTK_PLUGIN_URL:-https://raw.githubusercontent.com/tauri-apps/t
 LINUXDEPLOY_APPIMAGE="$TOOLS_ROOT/linuxdeploy-${linuxdeploy_arch}.AppImage"
 LINUXDEPLOY_ROOT="$TOOLS_ROOT/linuxdeploy-${linuxdeploy_arch}.root"
 LINUXDEPLOY_BIN="$LINUXDEPLOY_ROOT/usr/bin/linuxdeploy"
+GTK_PLUGIN_SOURCE="$TOOLS_ROOT/linuxdeploy-plugin-gtk.pinned.sh"
 GTK_PLUGIN_BIN="$TOOLS_ROOT/linuxdeploy-plugin-gtk.sh"
 
 APPDIR="$DIST_ROOT/${APP_BINARY}.AppDir"
@@ -107,6 +108,11 @@ mkdir -p "$DIST_ROOT" "$TOOLS_ROOT"
 
 if [[ "$build_project" -eq 1 ]]; then
     "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
+    RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${REPO_ROOT}=."
+    if [[ -n "${HOME:-}" ]]; then
+        RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"
+    fi
+    export RUSTFLAGS
     cargo build --release --manifest-path "$MANIFEST_PATH"
 fi
 
@@ -116,7 +122,8 @@ if [[ ! -x "$BINARY_SOURCE" ]]; then
 fi
 
 download_if_missing "$LINUXDEPLOY_URL" "$LINUXDEPLOY_APPIMAGE"
-download_if_missing "$GTK_PLUGIN_URL" "$GTK_PLUGIN_BIN"
+download_if_missing "$GTK_PLUGIN_URL" "$GTK_PLUGIN_SOURCE"
+cp "$GTK_PLUGIN_SOURCE" "$GTK_PLUGIN_BIN"
 
 chmod +x "$LINUXDEPLOY_APPIMAGE" "$GTK_PLUGIN_BIN"
 extract_linuxdeploy
@@ -240,6 +247,13 @@ DEPLOY_PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
 )
 
 rm -rf "$APPDIR/usr/lib32"
+
+# linuxdeploy records both discovered GIO module directories in its runtime
+# hook. Keep only the bundled path after removing the unused lib32 tree.
+gtk_hook="$APPDIR/apprun-hooks/linuxdeploy-plugin-gtk.sh"
+if [[ -f "$gtk_hook" ]]; then
+    sed -i '/^export GIO_EXTRA_MODULES=/,/lib32\/gio\/modules"$/c\export GIO_EXTRA_MODULES="$APPDIR/usr/lib/gio/modules"' "$gtk_hook"
+fi
 
 # The AppImage uses the host audio server tools for live setup and diagnostics.
 echo "Skipping pactl/wpctl bundling; the runtime uses host PipeWire/PulseAudio services."

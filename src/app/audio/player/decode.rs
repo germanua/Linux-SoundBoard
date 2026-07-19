@@ -5,13 +5,16 @@ const INITIAL_DECODER_BUFFER_FRAMES: u64 = 4_096;
 
 // ── Audio source abstraction ─────────────────────────────────────────────────
 
-pub(super) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
+pub(crate) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub(super) trait AudioSource: Iterator<Item = i16> {
+pub(crate) trait AudioSource: Iterator<Item = i16> {
     fn channels(&self) -> u16;
     fn sample_rate(&self) -> u32;
     fn total_duration(&self) -> Option<std::time::Duration>;
     fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), SeekError>;
+    fn output_gain_factor(&self) -> f32 {
+        1.0
+    }
 }
 
 pub(super) trait ResettableSource: AudioSource {
@@ -27,6 +30,7 @@ pub(super) struct ChannelSampleRateConverter<S: AudioSource> {
     current: [i16; 2],
     next: [i16; 2],
     out_ch: u8,
+    source_exhausted: bool,
     done: bool,
 }
 
@@ -53,7 +57,10 @@ impl<S: AudioSource> ChannelSampleRateConverter<S> {
             from_rate as f64 / to_rate as f64
         };
         let current = read_source_frame(&mut source, in_channels)?;
-        let next = read_source_frame(&mut source, in_channels).unwrap_or(current);
+        let (next, source_exhausted) = match read_source_frame(&mut source, in_channels) {
+            Some(next) => (next, false),
+            None => (current, true),
+        };
         Some(Self {
             source,
             in_channels,
@@ -62,6 +69,7 @@ impl<S: AudioSource> ChannelSampleRateConverter<S> {
             current,
             next,
             out_ch: 0,
+            source_exhausted,
             done: false,
         })
     }
@@ -84,14 +92,17 @@ impl<S: AudioSource> Iterator for ChannelSampleRateConverter<S> {
             self.out_ch = 0;
             self.frac += self.step;
             while self.frac >= 1.0 {
+                if self.source_exhausted {
+                    self.done = true;
+                    break;
+                }
                 self.current = self.next;
                 self.frac -= 1.0;
                 match read_source_frame(&mut self.source, self.in_channels) {
                     Some(frame) => self.next = frame,
                     None => {
                         self.next = self.current;
-                        self.done = true;
-                        break;
+                        self.source_exhausted = true;
                     }
                 }
             }
@@ -107,8 +118,12 @@ use ogg::PacketReader;
 use opus::{Channels as OpusChannels, Decoder as OpusDecoder};
 use std::io::BufReader as IoBufReader;
 use std::time::Duration;
-use symphonia::core::audio::{SampleBuffer, SignalSpec};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::audio::{
+    AsAudioBufferRef, AudioBuffer, AudioBufferRef, Channels, SampleBuffer, Signal, SignalSpec,
+};
+use symphonia::core::codecs::{
+    CodecParameters, Decoder as SymphoniaDecoder, DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_OPUS,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, Track};
 use symphonia::core::io::MediaSourceStream;
@@ -126,18 +141,22 @@ pub(super) fn clamp_seek_position_ms(position_ms: u64, duration_ms: Option<u64>)
     }
 }
 
-pub(super) enum PlaybackSource {
+pub(crate) enum PlaybackSource {
     Symphonia(SymphoniaSource),
     OggOpus(OggOpusSource),
 }
 
 impl PlaybackSource {
-    pub(super) fn from_path(path: &str) -> Result<Self, EngineError> {
+    pub(crate) fn from_path(path: &str) -> Result<Self, EngineError> {
         if OggOpusSource::looks_like_ogg_opus(path) {
             return OggOpusSource::from_path(path).map(Self::OggOpus);
         }
 
         SymphoniaSource::from_path(path).map(Self::Symphonia)
+    }
+
+    pub(crate) fn is_ogg_opus(path: &str) -> bool {
+        OggOpusSource::looks_like_ogg_opus(path)
     }
 }
 
@@ -180,6 +199,13 @@ impl AudioSource for PlaybackSource {
             Self::OggOpus(source) => source.try_seek(position),
         }
     }
+
+    fn output_gain_factor(&self) -> f32 {
+        match self {
+            Self::Symphonia(source) => source.output_gain_factor(),
+            Self::OggOpus(source) => source.output_gain_factor(),
+        }
+    }
 }
 
 impl ResettableSource for PlaybackSource {
@@ -194,16 +220,19 @@ const OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL: usize = 5_760;
 struct OggOpusHead {
     channels: u16,
     pre_skip: u16,
+    output_gain_factor: f32,
     stream_serial: u32,
 }
 
-pub(super) struct OggOpusSource {
+pub(crate) struct OggOpusSource {
     path: String,
     reader: PacketReader<IoBufReader<std::fs::File>>,
     decoder: OpusDecoder,
     channels: u16,
     stream_serial: u32,
     pre_skip_remaining: u64,
+    remaining_playable_frames: u64,
+    output_gain_factor: f32,
     total_duration: Option<Duration>,
     buffer: Vec<i16>,
     decode_buffer: Vec<i16>,
@@ -238,7 +267,10 @@ impl OggOpusSource {
         };
         let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, opus_channels)
             .map_err(|e| EngineError::Playback(format!("Failed to create Opus decoder: {e}")))?;
-        let total_duration = scan_ogg_opus_duration(path, head.stream_serial, head.pre_skip);
+        let playable_frames = scan_ogg_opus_frames(path, head.stream_serial, head.pre_skip)?;
+        let total_duration = Some(Duration::from_secs_f64(
+            playable_frames as f64 / f64::from(OPUS_SAMPLE_RATE),
+        ));
         let decode_buffer_len = OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL * head.channels as usize;
 
         Ok(Self {
@@ -248,6 +280,8 @@ impl OggOpusSource {
             channels: head.channels,
             stream_serial: head.stream_serial,
             pre_skip_remaining: u64::from(head.pre_skip),
+            remaining_playable_frames: playable_frames,
+            output_gain_factor: head.output_gain_factor,
             total_duration,
             buffer: Vec::new(),
             decode_buffer: vec![0; decode_buffer_len],
@@ -274,6 +308,9 @@ impl OggOpusSource {
     }
 
     fn decode_next_packet(&mut self) -> Option<()> {
+        if self.remaining_playable_frames == 0 {
+            return None;
+        }
         loop {
             let packet = match self.reader.read_packet() {
                 Ok(Some(packet)) => packet,
@@ -304,7 +341,6 @@ impl OggOpusSource {
                     }
                 };
             let channels = self.channels as usize;
-            let decoded_samples = decoded_frames * channels;
             let mut start_frame = 0usize;
             if self.pre_skip_remaining > 0 {
                 let skip_frames = decoded_frames.min(self.pre_skip_remaining as usize);
@@ -312,9 +348,13 @@ impl OggOpusSource {
                 start_frame = skip_frames;
             }
             let start_sample = start_frame * channels;
+            let available_frames = decoded_frames - start_frame;
+            let kept_frames = available_frames.min(self.remaining_playable_frames as usize);
+            let end_sample = start_sample + kept_frames * channels;
             self.buffer.clear();
             self.buffer
-                .extend_from_slice(&self.decode_buffer[start_sample..decoded_samples]);
+                .extend_from_slice(&self.decode_buffer[start_sample..end_sample]);
+            self.remaining_playable_frames -= kept_frames as u64;
             self.current_sample_offset = 0;
             if !self.buffer.is_empty() {
                 return Some(());
@@ -356,6 +396,10 @@ impl AudioSource for OggOpusSource {
     fn try_seek(&mut self, position: Duration) -> Result<(), SeekError> {
         self.seek(position)
             .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as SeekError)
+    }
+
+    fn output_gain_factor(&self) -> f32 {
+        self.output_gain_factor
     }
 }
 
@@ -403,12 +447,8 @@ fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, EngineError> {
         )));
     }
     let pre_skip = u16::from_le_bytes([data[10], data[11]]);
-    let input_rate = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
-    if input_rate != OPUS_SAMPLE_RATE {
-        return Err(EngineError::Playback(format!(
-            "Unsupported Ogg Opus input sample rate: {input_rate}. Only 48000 Hz is supported."
-        )));
-    }
+    let output_gain_q8 = i16::from_le_bytes([data[16], data[17]]);
+    let output_gain_factor = 10.0_f32.powf(output_gain_q8 as f32 / (20.0 * 256.0));
     let channel_mapping_family = data[18];
     if channel_mapping_family != 0 {
         return Err(EngineError::Playback(format!(
@@ -419,27 +459,68 @@ fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, EngineError> {
     Ok(OggOpusHead {
         channels,
         pre_skip,
+        output_gain_factor,
         stream_serial: 0,
     })
 }
 
-fn scan_ogg_opus_duration(path: &str, stream_serial: u32, pre_skip: u16) -> Option<Duration> {
-    let file = std::fs::File::open(path).ok()?;
+fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result<u64, EngineError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| EngineError::Playback(format!("Failed to scan Ogg Opus file: {e}")))?;
     let mut reader = PacketReader::new(IoBufReader::new(file));
     let mut last_granule = None;
-    while let Ok(Some(packet)) = reader.read_packet() {
-        if packet.stream_serial() == stream_serial {
-            last_granule = Some(packet.absgp_page());
+    let mut saw_audio = false;
+    let mut saw_end = false;
+    loop {
+        let packet = match reader.read_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => break,
+            Err(error) => {
+                return Err(EngineError::Playback(format!(
+                    "Failed to scan Ogg Opus packets: {error}"
+                )))
+            }
+        };
+        if packet.stream_serial() != stream_serial {
+            continue;
+        }
+        let is_audio = !packet.data.is_empty()
+            && !packet.data.starts_with(b"OpusHead")
+            && !packet.data.starts_with(b"OpusTags");
+        if is_audio {
+            saw_audio = true;
+            if packet.absgp_page() != u64::MAX {
+                last_granule = Some(packet.absgp_page());
+            }
+        }
+        if packet.last_in_stream() {
+            saw_end = true;
         }
     }
-    let frames = last_granule?.saturating_sub(u64::from(pre_skip));
-    Some(Duration::from_secs_f64(
-        frames as f64 / f64::from(OPUS_SAMPLE_RATE),
-    ))
+    if !saw_audio {
+        return Err(EngineError::Playback(
+            "Ogg Opus stream contains no audio packets".to_string(),
+        ));
+    }
+    if !saw_end {
+        return Err(EngineError::Playback(
+            "Ogg Opus stream is truncated before its end-of-stream page".to_string(),
+        ));
+    }
+    let final_granule = last_granule.ok_or_else(|| {
+        EngineError::Playback("Ogg Opus stream has no valid final granule position".to_string())
+    })?;
+    final_granule
+        .checked_sub(u64::from(pre_skip))
+        .ok_or_else(|| {
+            EngineError::Playback(format!(
+                "Invalid Ogg Opus final granule {final_granule}: smaller than pre-skip {pre_skip}"
+            ))
+        })
 }
 
-pub(super) struct SymphoniaSource {
-    decoder: Box<dyn symphonia::core::codecs::Decoder>,
+pub(crate) struct SymphoniaSource {
+    decoder: SymphoniaDecoderKind,
     format: Box<dyn symphonia::core::formats::FormatReader>,
     track_id: u32,
     time_base: Option<TimeBase>,
@@ -449,6 +530,147 @@ pub(super) struct SymphoniaSource {
     current_frame_offset: usize,
     last_ts: u64,
     needs_decode: bool,
+}
+
+const CONTAINER_OPUS_MAX_SAMPLES_PER_CHANNEL: usize = 5_760;
+
+enum SymphoniaDecoderKind {
+    Default(Box<dyn SymphoniaDecoder>),
+    ContainerOpus(ContainerOpusDecoder),
+}
+
+impl SymphoniaDecoderKind {
+    fn decode(
+        &mut self,
+        packet: &symphonia::core::formats::Packet,
+    ) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+        match self {
+            Self::Default(decoder) => decoder.decode(packet),
+            Self::ContainerOpus(decoder) => decoder.decode(packet),
+        }
+    }
+
+    fn reset_for_seek(&mut self, at_stream_start: bool) {
+        match self {
+            Self::Default(decoder) => decoder.reset(),
+            Self::ContainerOpus(decoder) => decoder.reset_for_seek(at_stream_start),
+        }
+    }
+}
+
+struct ContainerOpusDecoder {
+    decoder: OpusDecoder,
+    buffer: AudioBuffer<i16>,
+    decode_buffer: Vec<i16>,
+    channels: usize,
+    channel_mask: Channels,
+    sample_rate: u32,
+    initial_pre_skip: usize,
+    pre_skip: usize,
+}
+
+impl ContainerOpusDecoder {
+    fn new(params: &CodecParameters) -> symphonia::core::errors::Result<Self> {
+        let channels = params
+            .channels
+            .map(|channels| channels.count())
+            .or_else(|| {
+                params
+                    .extra_data
+                    .as_deref()
+                    .filter(|data| data.len() >= 10 && data.starts_with(b"OpusHead"))
+                    .map(|data| usize::from(data[9]))
+            })
+            .ok_or(SymphoniaError::Unsupported(
+                "container Opus channel layout is missing",
+            ))?;
+        let opus_channels = match channels {
+            1 => OpusChannels::Mono,
+            2 => OpusChannels::Stereo,
+            _ => {
+                return Err(SymphoniaError::Unsupported(
+                    "container Opus supports one or two channels",
+                ))
+            }
+        };
+        let sample_rate = params.sample_rate.unwrap_or(OPUS_SAMPLE_RATE);
+        let decoder = OpusDecoder::new(sample_rate, opus_channels)
+            .map_err(|_| SymphoniaError::DecodeError("failed to create container Opus decoder"))?;
+        let channel_mask = match channels {
+            1 => Channels::FRONT_LEFT,
+            _ => Channels::FRONT_LEFT | Channels::FRONT_RIGHT,
+        };
+        let pre_skip = params
+            .extra_data
+            .as_deref()
+            .and_then(container_opus_pre_skip)
+            .unwrap_or(0);
+
+        Ok(Self {
+            decoder,
+            buffer: AudioBuffer::new(960, SignalSpec::new(sample_rate, channel_mask)),
+            decode_buffer: vec![0; CONTAINER_OPUS_MAX_SAMPLES_PER_CHANNEL * channels],
+            channels,
+            channel_mask,
+            sample_rate,
+            initial_pre_skip: pre_skip,
+            pre_skip,
+        })
+    }
+
+    fn reset_for_seek(&mut self, at_stream_start: bool) {
+        let _ = self.decoder.reset_state();
+        self.pre_skip = if at_stream_start {
+            self.initial_pre_skip
+        } else {
+            0
+        };
+    }
+
+    fn decode(
+        &mut self,
+        packet: &symphonia::core::formats::Packet,
+    ) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+        let frames = self
+            .decoder
+            .decode(&packet.data, &mut self.decode_buffer, false)
+            .map_err(|_| SymphoniaError::DecodeError("container Opus packet decode failed"))?;
+        if self.buffer.capacity() != frames {
+            self.buffer = AudioBuffer::new(
+                frames as u64,
+                SignalSpec::new(self.sample_rate, self.channel_mask),
+            );
+        }
+        self.buffer.clear();
+        self.buffer.render_reserved(None);
+        if self.channels == 1 {
+            self.buffer.chan_mut(0)[..frames].copy_from_slice(&self.decode_buffer[..frames]);
+        } else {
+            let (left, right) = self.buffer.chan_pair_mut(0, 1);
+            for (frame, samples) in self.decode_buffer[..frames * 2].chunks_exact(2).enumerate() {
+                left[frame] = samples[0];
+                right[frame] = samples[1];
+            }
+        }
+        self.buffer.trim(
+            packet.trim_start() as usize + self.pre_skip,
+            packet.trim_end() as usize,
+        );
+        self.pre_skip = 0;
+        Ok(self.buffer.as_audio_buffer_ref())
+    }
+}
+
+fn container_opus_pre_skip(extra_data: &[u8]) -> Option<usize> {
+    if extra_data.len() < 12 || !extra_data.starts_with(b"OpusHead") {
+        return None;
+    }
+    let bytes = [extra_data[10], extra_data[11]];
+    Some(if extra_data[8] == 0 {
+        u16::from_be_bytes(bytes)
+    } else {
+        u16::from_le_bytes(bytes)
+    } as usize)
 }
 
 impl SymphoniaSource {
@@ -489,9 +711,18 @@ impl SymphoniaSource {
             symphonia::core::audio::Channels::FRONT_LEFT
                 | symphonia::core::audio::Channels::FRONT_RIGHT,
         );
-        let decoder = symphonia::default::get_codecs()
-            .make(&track.codec_params, &DecoderOptions::default())
-            .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?;
+        let decoder = if track.codec_params.codec == CODEC_TYPE_OPUS {
+            SymphoniaDecoderKind::ContainerOpus(
+                ContainerOpusDecoder::new(&track.codec_params)
+                    .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?,
+            )
+        } else {
+            SymphoniaDecoderKind::Default(
+                symphonia::default::get_codecs()
+                    .make(&track.codec_params, &DecoderOptions::default())
+                    .map_err(|e| EngineError::Playback(format!("Failed to create decoder: {e}")))?,
+            )
+        };
 
         Ok(Self {
             decoder,
@@ -530,7 +761,7 @@ impl SymphoniaSource {
         self.last_ts = seeked_to.actual_ts;
         self.needs_decode = true;
         self.current_frame_offset = 0;
-        self.decoder.reset();
+        self.decoder.reset_for_seek(position_ms == 0);
         Ok(())
     }
 
@@ -551,7 +782,7 @@ impl SymphoniaSource {
                     return None;
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
+                    self.decoder.reset_for_seek(false);
                     continue;
                 }
                 Err(SymphoniaError::DecodeError(_)) => continue,
@@ -585,7 +816,7 @@ impl SymphoniaSource {
                     return Some(());
                 }
                 Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
+                    self.decoder.reset_for_seek(false);
                 }
                 Err(SymphoniaError::DecodeError(_)) => {}
                 Err(err) => {
@@ -687,6 +918,7 @@ where
     converted: ChannelSampleRateConverter<S>,
     target_sample_rate: u32,
     total_duration: Option<Duration>,
+    output_gain_factor: f32,
 }
 
 impl<S, F> ResettablePlaybackSource<S, F>
@@ -697,6 +929,7 @@ where
     pub(super) fn new(factory: F, target_sample_rate: u32) -> Result<Self, EngineError> {
         let input = factory()?;
         let total_duration = input.total_duration();
+        let output_gain_factor = input.output_gain_factor();
         let converted =
             ChannelSampleRateConverter::new(input, target_sample_rate).ok_or_else(|| {
                 EngineError::Playback("Playback source produced no samples".to_string())
@@ -706,11 +939,16 @@ where
             converted,
             target_sample_rate,
             total_duration,
+            output_gain_factor,
         })
     }
 
     pub(super) fn total_duration_ms(&self) -> Option<u64> {
         self.total_duration.map(|d| d.as_millis() as u64)
+    }
+
+    pub(super) fn output_gain_factor(&self) -> f32 {
+        self.output_gain_factor
     }
 
     pub(super) fn seek_internal(&mut self, position: Duration) -> Result<(), SeekError> {
@@ -721,6 +959,7 @@ where
         })?;
         input.seek_resettable(position)?;
         self.total_duration = input.total_duration();
+        self.output_gain_factor = input.output_gain_factor();
         self.converted = ChannelSampleRateConverter::new(input, self.target_sample_rate)
             .ok_or_else(|| {
                 Box::new(std::io::Error::other("Rebuilt source produced no samples")) as SeekError
@@ -738,5 +977,15 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         self.converted.next()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ogg_opus_header_rejects_truncated_data() {
+        assert!(parse_ogg_opus_head(b"OpusHead").is_err());
     }
 }

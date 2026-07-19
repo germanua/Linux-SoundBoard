@@ -48,6 +48,9 @@ use capture_watchdog::*;
 use command_handlers::{audio_command_kind, handle_audio_command};
 use command_protocol::*;
 use decode::*;
+pub(crate) use decode::{
+    AudioSource as DecodedAudioSource, PlaybackSource as DecodedPlaybackSource,
+};
 use default_source::{
     apply_default_source_mode, bind_default_metadata_from_global, claim_default_source_if_enabled,
     DefaultMetadataHandle,

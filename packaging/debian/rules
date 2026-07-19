@@ -2,6 +2,7 @@
 
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export CARGO_HOME = $(CURDIR)/debian/cargo
+export RUSTFLAGS := $(strip $(RUSTFLAGS) --remap-path-prefix=$(CURDIR)=. --remap-path-prefix=$(HOME)=~)
 
 %:
 	dh $@

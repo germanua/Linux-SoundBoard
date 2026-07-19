@@ -6,6 +6,7 @@ use crate::config::{
 use crate::hotkeys::HotkeyManager;
 use crate::test_support::audio_fixtures::{
     cleanup_test_audio_path, create_test_audio_file, create_test_audio_file_with_duration,
+    create_test_ogg_opus_file, create_test_vorbis_file, TestOggOpusFixture, TestVorbisFixture,
 };
 use parking_lot::Mutex;
 use std::fs;

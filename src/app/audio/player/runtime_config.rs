@@ -275,11 +275,13 @@ impl AutoGainState {
             return 1.0;
         }
         match sound_lufs {
-            Some(lufs) => crate::audio::loudness::compute_gain_factor(
-                lufs,
-                self.target_lufs,
-                sound_true_peak_dbtp,
-            ),
+            Some(lufs) => {
+                let true_peak = match self.mode {
+                    AutoGainMode::Static => sound_true_peak_dbtp,
+                    AutoGainMode::DynamicLookAhead => None,
+                };
+                crate::audio::loudness::compute_gain_factor(lufs, self.target_lufs, true_peak)
+            }
             None => 1.0,
         }
     }

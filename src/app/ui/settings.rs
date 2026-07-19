@@ -13,6 +13,7 @@ use crate::commands;
 use crate::config::{ListStyle, Theme};
 
 use super::dialogs::DialogHost;
+use super::dnd_import::supported_audio_formats;
 use super::icons;
 use super::settings_folders::{
     rebuild_sound_folder_rows, schedule_rebuild_sound_folder_rows, FolderRowRefs, RebuildPending,
@@ -595,10 +596,13 @@ fn build_general_page(
     about_group.add(
         &adw::ActionRow::builder()
             .title(APP_TITLE)
-            .subtitle(format!(
-                "v{} — Virtual mic + X11 global hotkeys for Linux",
-                APP_VERSION
-            ))
+            .subtitle(format!("Version {APP_VERSION}"))
+            .build(),
+    );
+    about_group.add(
+        &adw::ActionRow::builder()
+            .title("Supported Audio Formats")
+            .subtitle(supported_audio_formats())
             .build(),
     );
     page.add(&about_group);
@@ -614,5 +618,13 @@ mod tests {
     fn loudness_poll_pauses_when_dialog_hidden() {
         assert!(should_poll_loudness_summary(true));
         assert!(!should_poll_loudness_summary(false));
+    }
+
+    #[test]
+    fn about_uses_the_supported_audio_format_list() {
+        assert_eq!(
+            crate::ui::dnd_import::supported_audio_formats(),
+            "MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
+        );
     }
 }

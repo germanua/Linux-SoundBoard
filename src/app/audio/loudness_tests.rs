@@ -1,6 +1,7 @@
 use super::*;
 use crate::test_support::audio_fixtures::{
-    cleanup_test_audio_path, create_test_vorbis_file, TestVorbisFixture,
+    cleanup_test_audio_path, create_test_ogg_opus_file, create_test_vorbis_file,
+    TestOggOpusFixture, TestVorbisFixture,
 };
 
 #[test]
@@ -194,6 +195,16 @@ fn test_cancel_loudness_analysis() {
 }
 
 #[test]
+fn test_missing_file_remains_an_io_error() {
+    let path = std::env::temp_dir().join(format!("lsb-missing-audio-{}.ogg", uuid::Uuid::new_v4()));
+
+    assert!(matches!(
+        analyze_loudness_path_full(&path),
+        Err(LoudnessError::Io(_))
+    ));
+}
+
+#[test]
 fn test_loudness_analysis_accepts_libvorbis_after_empty_priming_packet() {
     let audio_path = create_test_vorbis_file(TestVorbisFixture::Mono44100);
 
@@ -204,4 +215,83 @@ fn test_loudness_analysis_accepts_libvorbis_after_empty_priming_packet() {
     assert!(true_peak.is_some_and(f32::is_finite));
 
     cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_loudness_analysis_accepts_ogg_opus() {
+    let audio_path = create_test_ogg_opus_file(TestOggOpusFixture {
+        extension: "opus",
+        pre_skip: 312,
+        packet_count: 60,
+        ..Default::default()
+    });
+
+    let (loudness, true_peak) =
+        analyze_loudness_path_full(&audio_path).expect("analyze Ogg Opus loudness");
+
+    assert!(loudness.is_finite());
+    assert!(true_peak.is_some_and(f32::is_finite));
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_ogg_opus_header_gain_shifts_loudness_and_true_peak() {
+    let unity_path = create_test_ogg_opus_file(TestOggOpusFixture {
+        packet_count: 60,
+        ..Default::default()
+    });
+    let boosted_path = create_test_ogg_opus_file(TestOggOpusFixture {
+        output_gain_q8: 6 * 256,
+        packet_count: 60,
+        ..Default::default()
+    });
+    let attenuated_path = create_test_ogg_opus_file(TestOggOpusFixture {
+        output_gain_q8: -6 * 256,
+        packet_count: 60,
+        ..Default::default()
+    });
+
+    let (unity_lufs, unity_peak) =
+        analyze_loudness_path_full(&unity_path).expect("analyze unity-gain Ogg Opus");
+    let (boosted_lufs, boosted_peak) =
+        analyze_loudness_path_full(&boosted_path).expect("analyze boosted Ogg Opus");
+    let (attenuated_lufs, attenuated_peak) =
+        analyze_loudness_path_full(&attenuated_path).expect("analyze attenuated Ogg Opus");
+
+    assert!((boosted_lufs - unity_lufs - 6.0).abs() < 0.15);
+    assert!((attenuated_lufs - unity_lufs + 6.0).abs() < 0.15);
+    assert!(
+        (boosted_peak.expect("boosted true peak") - unity_peak.expect("unity true peak") - 6.0)
+            .abs()
+            < 0.15
+    );
+    assert!(
+        (attenuated_peak.expect("attenuated true peak") - unity_peak.expect("unity true peak")
+            + 6.0)
+            .abs()
+            < 0.15
+    );
+    cleanup_test_audio_path(&unity_path);
+    cleanup_test_audio_path(&boosted_path);
+    cleanup_test_audio_path(&attenuated_path);
+}
+
+#[test]
+fn test_smart_preview_accepts_short_and_long_ogg_opus() {
+    for (packet_count, duration_ms) in [(60, 1_200), (700, 14_000)] {
+        let audio_path = create_test_ogg_opus_file(TestOggOpusFixture {
+            packet_count,
+            ..Default::default()
+        });
+
+        let metrics =
+            analyze_loudness_path_preview_smart_with_metrics(&audio_path, 4_000, Some(duration_ms))
+                .expect("analyze Ogg Opus smart preview");
+
+        assert!(metrics.lufs.is_finite());
+        assert!(metrics.true_peak_dbtp.is_some_and(f32::is_finite));
+        assert!(metrics.valid_window_count > 0);
+        assert!(metrics.decoded_coverage_ratio > 0.0);
+        cleanup_test_audio_path(&audio_path);
+    }
 }

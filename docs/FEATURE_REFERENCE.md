@@ -365,6 +365,22 @@ be renamed. Their folder association remains stable across refreshes.
 
 ## Library Import and Sync
 
+### Supported Audio Formats
+
+| Extension(s)    | Audio format                                    |
+| --------------- | ----------------------------------------------- |
+| `.mp3`          | MP3                                             |
+| `.ogg`          | Ogg Vorbis or mono/stereo Ogg Opus              |
+| `.opus`         | Mono/stereo Ogg Opus                            |
+| `.flac`         | FLAC                                            |
+| `.aac`          | AAC-LC/ADTS                                     |
+| `.m4a`          | AAC-LC or ALAC                                  |
+| `.mp4`          | AAC-LC, ALAC, or mono/stereo Opus audio track   |
+
+Every listed format supports playback, seeking, looping, duration, and static or dynamic LUFS normalization. The app identifies Vorbis and Opus `.ogg` files by their contents and selects the supported audio track from an MP4 file. WebM, HE-AAC, and multichannel Opus are not supported.
+
+---
+
 ### Add Folder
 
 - **Trigger:** `Settings` → `General` → `Sound Folders` → `Add Folder…`
@@ -427,7 +443,7 @@ _These controls appear only when auto-gain is enabled._
 | Setting                  | What it does                                                                                             |
 | ------------------------ | -------------------------------------------------------------------------------------------------------- |
 | **Target Volume (LUFS)** | Sets the loudness target used by normalization                                                           |
-| **Auto-Gain Mode**       | `Static` — uses precomputed loudness values; `Dynamic` — applies look-ahead gain shaping during playback |
+| **Auto-Gain Mode**       | `Dynamic` (default) — applies look-ahead gain shaping; `Static` — uses precomputed loudness values        |
 | **Apply To**             | `Mic only (recommended)` or `Mic + headphones`                                                           |
 | **Look-ahead (ms)**      | _(Dynamic only)_ Anticipation window for gain changes                                                    |
 | **Attack (ms)**          | _(Dynamic only)_ How quickly gain reductions are applied                                                 |
@@ -438,7 +454,14 @@ _These controls appear only when auto-gain is enabled._
 - **Trigger:** Click `Analyze`
 - **What it does:** Scans sounds that do not yet have loudness data
 
-> **Note:** The button disables while analysis runs; a spinner is shown until the job finishes.
+> **Note:** The spinner remains active while the Pending, Estimated, Refined, and Unavailable counts update after each completed sound. Click `Stop` to cancel the remaining work.
+
+#### Refine Estimated Sounds
+
+- **Trigger:** Click `Refine`
+- **What it does:** Runs full loudness analysis for sounds that currently use an estimate
+
+> **Note:** The same live status counts and `Stop` control are available while refinement runs.
 
 ---
 
@@ -497,7 +520,9 @@ _These controls appear only when auto-gain is enabled._
 
 ### General → About
 
-Displays the app name and current version.
+Displays the app name, current version, and supported audio formats. The format
+list is `MP3, OGG, OPUS, FLAC, M4A, AAC, MP4`. M4A supports AAC-LC or ALAC;
+MP4 supports AAC-LC, ALAC, or mono/stereo Opus audio tracks.
 
 ---
 

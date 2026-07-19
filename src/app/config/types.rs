@@ -61,8 +61,8 @@ impl_string_serde_enum!(Theme);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum AutoGainMode {
-    #[default]
     Static,
+    #[default]
     Dynamic,
 }
 
@@ -728,7 +728,7 @@ impl Default for Settings {
             excluded_apps: Vec::new(),
             skip_delete_confirm: false,
             auto_gain: true,
-            auto_gain_mode: AutoGainMode::Static,
+            auto_gain_mode: AutoGainMode::Dynamic,
             auto_gain_target_lufs: default_auto_gain_target(),
             auto_gain_apply_to: AutoGainApplyTo::Both,
             auto_gain_lookahead_ms: default_auto_gain_lookahead_ms(),

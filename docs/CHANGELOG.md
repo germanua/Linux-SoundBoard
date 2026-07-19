@@ -6,6 +6,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-07-19
+
+### Added
+
+- **Ogg Opus support:** Mono and stereo Ogg Opus files can be imported as `.opus` or `.ogg` and use playback, seeking, looping, exact duration, and static or dynamic LUFS normalization on local and virtual-microphone outputs. Ogg Vorbis `.ogg` files remain supported; WebM and multichannel Opus are not supported.
+
+### Changed
+
+- **Auto-gain defaults:** New configurations use Dynamic auto-gain by default. Existing saved Static or Dynamic choices are preserved.
+- **Loudness analysis status:** Analyze and Refine now update the Pending, Estimated, Refined, and Unavailable counts as each sound completes.
+- **About details:** Settings now shows the current application version and supported audio formats.
+- **Native package support:** Arch, Debian, RPM, and AppImage packaging includes the Opus runtime required for Ogg Opus playback.
+
+### Fixed
+
+- **M4A and MP4 playback:** ALAC M4A and supported MP4 audio tracks now play, seek, report duration, and use static or dynamic LUFS normalization instead of failing decoder creation.
+- **Ogg Opus playback:** Header gain, pre-skip, end trimming, seeking, looping, and duration now follow the Ogg Opus stream metadata, including malformed or truncated stream rejection.
+- **Dynamic normalization:** Dynamic mode can reach louder LUFS targets while its limiter controls output peaks.
+- **Audio stream endings:** Sample-rate conversion no longer drops the final converted frame for Ogg Opus or Ogg Vorbis playback.
+- **Folder-derived tabs:** Empty subfolders and folders containing only unsupported files no longer appear in the sidebar.
+- **Loudness analysis recovery:** Analyze and Refine recover after Stop, and missing or terminally invalid sounds no longer remain indefinitely Pending or Estimated.
+- **Analysis activity indicators:** Analyze and Refine spinners continue rotating while status counts refresh instead of restarting their animation.
+
+### Security
+
+- **Dependency soundness:** Updated the locked `anyhow` dependency to 1.0.103, which fixes RUSTSEC-2026-0190.
+- **Release workflow:** GitHub Actions are pinned to immutable commits and use read-only repository permissions.
+
 ## [2.1.1] - 2026-07-16
 
 ### Changed

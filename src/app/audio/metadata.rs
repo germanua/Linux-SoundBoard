@@ -11,6 +11,8 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
+use super::player::{DecodedAudioSource, DecodedPlaybackSource};
+
 fn time_to_ms(time: Time) -> Option<u64> {
     if !time.frac.is_finite() || time.frac.is_sign_negative() {
         return None;
@@ -74,6 +76,13 @@ fn is_audio_track(track: &Track) -> bool {
 }
 
 pub fn probe_duration_ms(path: &str) -> Option<u64> {
+    if DecodedPlaybackSource::is_ogg_opus(path) {
+        return DecodedPlaybackSource::from_path(path)
+            .ok()?
+            .total_duration()
+            .map(|duration| duration.as_millis() as u64);
+    }
+
     let file = File::open(path).ok()?;
     let _file_size = file.metadata().ok()?.len();
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -136,7 +145,8 @@ pub fn probe_duration_ms(path: &str) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::test_support::audio_fixtures::{
-        cleanup_test_audio_path, create_test_vorbis_file, TestVorbisFixture,
+        cleanup_test_audio_path, create_test_ogg_opus_file, create_test_vorbis_file,
+        TestOggOpusFixture, TestVorbisFixture,
     };
 
     #[test]
@@ -156,6 +166,20 @@ mod tests {
         let duration_ms = probe_duration_ms(&audio_path.to_string_lossy());
 
         assert!(duration_ms.is_some_and(|duration| (900..=1_100).contains(&duration)));
+        cleanup_test_audio_path(&audio_path);
+    }
+
+    #[test]
+    fn probe_duration_uses_exact_ogg_opus_playable_frames() {
+        let audio_path = create_test_ogg_opus_file(TestOggOpusFixture {
+            pre_skip: 312,
+            final_granule: Some(1_752),
+            ..Default::default()
+        });
+
+        let duration_ms = probe_duration_ms(&audio_path.to_string_lossy());
+
+        assert_eq!(duration_ms, Some(30));
         cleanup_test_audio_path(&audio_path);
     }
 }
