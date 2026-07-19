@@ -290,7 +290,7 @@ fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
     overlay.add_toast(toast);
 }
 
-fn supported_audio_formats() -> String {
+pub(super) fn supported_audio_formats() -> String {
     scanner::AUDIO_EXTENSIONS
         .iter()
         .map(|extension| extension.to_ascii_uppercase())

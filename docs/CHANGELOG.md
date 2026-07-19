@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 - **Auto-gain defaults:** New configurations use Dynamic auto-gain by default. Existing saved Static or Dynamic choices are preserved.
 - **Loudness analysis status:** Analyze and Refine now update the Pending, Estimated, Refined, and Unavailable counts as each sound completes.
+- **About details:** Settings now shows the current application version and supported audio formats.
 - **Native package support:** Arch, Debian, RPM, and AppImage packaging includes the Opus runtime required for Ogg Opus playback.
 
 ### Fixed

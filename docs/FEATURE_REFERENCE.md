@@ -519,7 +519,9 @@ _These controls appear only when auto-gain is enabled._
 
 ### General → About
 
-Displays the app name and current version.
+Displays the app name, current version, and supported audio formats. The format
+list is `MP3, OGG, OPUS, FLAC, M4A, AAC, MP4`; `.ogg` files may contain Ogg
+Vorbis or mono/stereo Ogg Opus audio.
 
 ---
 
