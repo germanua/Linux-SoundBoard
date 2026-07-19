@@ -1,4 +1,4 @@
-%global _debugsource_packages 0
+%global debug_package %{nil}
 
 Name:           linux-soundboard
 Version:        2.1.2

@@ -99,10 +99,10 @@ if grep -qF 'BuildRequires:  opus-devel' "$REPO_ROOT/packaging/rpm/linux-soundbo
 else
     fail "RPM: opus-devel is required for the Rust Opus bindings"
 fi
-if grep -qF '%global _debugsource_packages 0' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
-    pass "RPM: empty remapped debugsource package is disabled"
+if grep -qF '%global debug_package %{nil}' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
+    pass "RPM: empty remapped debug packages are disabled"
 else
-    fail "RPM: remapped Rust sources can create an empty debugsource package"
+    fail "RPM: remapped Rust sources can create empty debug packages"
 fi
 
 for package_file in \
