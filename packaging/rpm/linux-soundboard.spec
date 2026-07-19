@@ -1,3 +1,5 @@
+%global _debugsource_packages 0
+
 Name:           linux-soundboard
 Version:        2.1.2
 Release:        1%{?dist}
