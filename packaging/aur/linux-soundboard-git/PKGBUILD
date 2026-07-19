@@ -66,6 +66,7 @@ build() {
   export CARGO_HOME="${srcdir}/cargo-home"
   export CARGO_TARGET_DIR="${srcdir}/target"
   export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${srcdir}=."
+  export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"
   cargo build --frozen --locked --release --manifest-path src/Cargo.toml
 }
 

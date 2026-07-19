@@ -43,6 +43,7 @@ build() {
     bash packaging/linux/generate-icons.sh assets/icons/icon.png
     export CARGO_TARGET_DIR="$srcdir/target"
     export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${srcdir}=."
+    export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"
     cargo build --frozen --locked --release --manifest-path src/Cargo.toml
 }
 

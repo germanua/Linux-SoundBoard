@@ -99,6 +99,21 @@ if grep -qF 'BuildRequires:  opus-devel' "$REPO_ROOT/packaging/rpm/linux-soundbo
 else
     fail "RPM: opus-devel is required for the Rust Opus bindings"
 fi
+
+for package_file in \
+    "$REPO_ROOT/packaging/linux/package-appimage.sh" \
+    "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    "$REPO_ROOT/packaging/debian/rules" \
+    "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; do
+    remap_count="$(grep -o -- '--remap-path-prefix=' "$package_file" | wc -l || true)"
+    if [[ "$remap_count" -ge 2 ]]; then
+        pass "release paths remapped by: ${package_file#"$REPO_ROOT/"}"
+    else
+        fail "release build can expose source or builder paths: $package_file"
+    fi
+done
+
 if grep -qFx "  'opus'" "$REPO_ROOT/packaging/aur/PKGBUILD" \
     && grep -qF $'\tdepends = opus' "$REPO_ROOT/packaging/aur/.SRCINFO"; then
     pass "AUR stable package: Opus runtime dependency is declared"

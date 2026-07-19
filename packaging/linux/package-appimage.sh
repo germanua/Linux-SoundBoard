@@ -108,6 +108,11 @@ mkdir -p "$DIST_ROOT" "$TOOLS_ROOT"
 
 if [[ "$build_project" -eq 1 ]]; then
     "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
+    RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${REPO_ROOT}=."
+    if [[ -n "${HOME:-}" ]]; then
+        RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"
+    fi
+    export RUSTFLAGS
     cargo build --release --manifest-path "$MANIFEST_PATH"
 fi
 

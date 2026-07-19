@@ -45,6 +45,7 @@ UI with native PipeWire virtual microphone support.
 
 %build
 bash packaging/linux/generate-icons.sh assets/icons/icon.png
+export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=$(pwd)=. --remap-path-prefix=${HOME}=~"
 cargo build --release --manifest-path src/Cargo.toml
 
 %install
