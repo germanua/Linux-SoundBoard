@@ -241,6 +241,155 @@ fn duplicate_path_batch_rolls_back_without_removing_existing_rows() {
 }
 
 #[test]
+fn direct_sound_edits_keep_search_hotkeys_and_delete_cascades_consistent() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("first", "Alpha", "/music/alpha.flac"),
+            general_position: 0,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("second", "Beta", "/music/beta.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+
+    let mut updated = sound("first", "Gamma", "/music/gamma.flac");
+    updated.hotkey = None;
+    updated.volume = 42;
+    updated.enabled = true;
+    assert!(wait(store.update_sound(updated)));
+    assert_eq!(wait(store.count(LibraryScope::General, "alpha")), 0);
+    let renamed = wait(store.page(LibraryScope::General, "gamma", 0));
+    assert_eq!(renamed.total, 1);
+    assert_eq!(renamed.sounds[0].path, "/music/gamma.flac");
+    assert_eq!(renamed.sounds[0].volume, 42);
+    assert!(renamed.sounds[0].enabled);
+
+    let hotkeys = wait(store.hotkey_page(0));
+    assert_eq!(hotkeys.total, 1);
+    assert_eq!(hotkeys.sounds[0].id, "second");
+
+    assert!(wait(store.delete_sound("second")));
+    assert!(!wait(store.delete_sound("second")));
+    assert!(wait(store.sound_by_id("second")).is_none());
+    assert_eq!(wait(store.count(LibraryScope::General, "beta")), 0);
+    assert_eq!(wait(store.hotkey_page(0)).total, 0);
+}
+
+#[test]
+fn adjacent_lookup_respects_scope_search_order_and_boundaries() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("third", "Match Three", "/music/three.flac"),
+            general_position: 2,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("first", "Match One", "/music/one.flac"),
+            general_position: 0,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("second", "Skip Two", "/music/two.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+
+    let next =
+        wait(store.adjacent(LibraryScope::General, "match", 0, 1)).expect("next filtered sound");
+    assert_eq!(next.id, "third");
+    let previous = wait(store.adjacent(LibraryScope::General, "match", 1, -1))
+        .expect("previous filtered sound");
+    assert_eq!(previous.id, "first");
+    assert!(wait(store.adjacent(LibraryScope::General, "match", 0, -1)).is_none());
+    assert!(wait(store.adjacent(LibraryScope::General, "match", 1, 1)).is_none());
+}
+
+#[test]
+fn folder_navigation_pages_only_direct_children_at_arbitrary_depth() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/home/flinux/Музика".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![
+        FolderRecord {
+            root_path: "/home/flinux/Музика".to_string(),
+            relative_path: "VIRTUALSURROUND".to_string(),
+            parent_relative_path: None,
+            name: "VIRTUALSURROUND".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/home/flinux/Музика".to_string(),
+            relative_path: "sounds".to_string(),
+            parent_relative_path: None,
+            name: "sounds".to_string(),
+            position: 1,
+        },
+        FolderRecord {
+            root_path: "/home/flinux/Музика".to_string(),
+            relative_path:
+                "sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists".to_string(),
+            parent_relative_path: Some("sounds".to_string()),
+            name: "Cyberpunk 2077 Soundtrack Collection by Various Artists".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/home/flinux/Музика".to_string(),
+            relative_path:
+                "sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists/Disc 1".to_string(),
+            parent_relative_path: Some(
+                "sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists".to_string(),
+            ),
+            name: "Disc 1".to_string(),
+            position: 0,
+        },
+    ])));
+
+    let roots = wait(store.roots(0));
+    assert_eq!(roots.total, 1);
+    assert_eq!(roots.roots[0].path, "/home/flinux/Музика");
+
+    let top = wait(store.folder_children("/home/flinux/Музика", None, 0));
+    assert_eq!(top.total, 2);
+    assert_eq!(
+        top.folders
+            .iter()
+            .map(|folder| folder.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["VIRTUALSURROUND", "sounds"]
+    );
+    assert!(!top.folders[0].has_children);
+    assert!(top.folders[1].has_children);
+
+    let sounds = wait(store.folder_children("/home/flinux/Музика", Some("sounds"), 0));
+    assert_eq!(sounds.total, 1);
+    assert_eq!(
+        sounds.folders[0].relative_path,
+        "sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists"
+    );
+    assert!(sounds.folders[0].has_children);
+
+    let album = wait(store.folder_children(
+        "/home/flinux/Музика",
+        Some("sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists"),
+        0,
+    ));
+    assert_eq!(album.total, 1);
+    assert_eq!(album.folders[0].name, "Disc 1");
+    assert!(!album.folders[0].has_children);
+}
+
+#[test]
 fn opening_a_newer_database_schema_is_read_only_and_fails() {
     let temp = TestDir::new();
     let path = temp.path().join("library.sqlite3");

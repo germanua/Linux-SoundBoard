@@ -68,6 +68,33 @@ pub struct SoundPage {
 }
 
 #[derive(Debug)]
+pub struct RootItem {
+    pub id: i64,
+    pub path: String,
+}
+
+#[derive(Debug)]
+pub struct RootPage {
+    pub total: usize,
+    pub roots: Vec<RootItem>,
+}
+
+#[derive(Debug)]
+pub struct FolderItem {
+    pub id: i64,
+    pub relative_path: String,
+    pub name: String,
+    pub expanded: bool,
+    pub has_children: bool,
+}
+
+#[derive(Debug)]
+pub struct FolderPage {
+    pub total: usize,
+    pub folders: Vec<FolderItem>,
+}
+
+#[derive(Debug)]
 pub struct RootRecord {
     pub path: String,
     pub position: usize,
@@ -168,6 +195,35 @@ enum Request {
         id: String,
         reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
     },
+    Adjacent {
+        scope: LibraryScope,
+        search: String,
+        position: usize,
+        offset: i32,
+        reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
+    },
+    HotkeyPage {
+        page: usize,
+        reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
+    },
+    Roots {
+        page: usize,
+        reply: mpsc::SyncSender<Result<RootPage, LibraryError>>,
+    },
+    FolderChildren {
+        root_path: String,
+        parent_relative_path: Option<String>,
+        page: usize,
+        reply: mpsc::SyncSender<Result<FolderPage, LibraryError>>,
+    },
+    UpdateSound {
+        sound: Sound,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
+    DeleteSound {
+        id: String,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
     ApplyBatch {
         batch: LibraryBatch,
         reply: mpsc::SyncSender<Result<(), LibraryError>>,
@@ -198,10 +254,15 @@ impl RequestQueue {
             return Err(LibraryError::WorkerUnavailable);
         }
         let (queue, capacity) = match request {
-            Request::SoundById { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
-            Request::Count { .. } | Request::Page { .. } => {
-                (&mut state.visible, VISIBLE_QUEUE_CAPACITY)
+            Request::SoundById { .. } | Request::Adjacent { .. } | Request::HotkeyPage { .. } => {
+                (&mut state.control, CONTROL_QUEUE_CAPACITY)
             }
+            Request::Count { .. }
+            | Request::Page { .. }
+            | Request::Roots { .. }
+            | Request::FolderChildren { .. }
+            | Request::UpdateSound { .. }
+            | Request::DeleteSound { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
             Request::ApplyBatch { .. } => (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY),
         };
         if queue.len() >= capacity {
@@ -347,6 +408,70 @@ impl LibraryStore {
         )
     }
 
+    pub fn adjacent(
+        &self,
+        scope: LibraryScope,
+        search: &str,
+        position: usize,
+        offset: i32,
+    ) -> LibraryResponse<Option<Sound>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::Adjacent {
+                scope,
+                search: search.to_lowercase(),
+                position,
+                offset,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn hotkey_page(&self, page: usize) -> LibraryResponse<SoundPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::HotkeyPage { page, reply }, response)
+    }
+
+    pub fn roots(&self, page: usize) -> LibraryResponse<RootPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::Roots { page, reply }, response)
+    }
+
+    pub fn folder_children(
+        &self,
+        root_path: &str,
+        parent_relative_path: Option<&str>,
+        page: usize,
+    ) -> LibraryResponse<FolderPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::FolderChildren {
+                root_path: root_path.to_string(),
+                parent_relative_path: parent_relative_path.map(str::to_string),
+                page,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn update_sound(&self, sound: Sound) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::UpdateSound { sound, reply }, response)
+    }
+
+    pub fn delete_sound(&self, id: &str) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::DeleteSound {
+                id: id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
     fn enqueue<T>(
         &self,
         request: Request,
@@ -378,6 +503,42 @@ fn handle_request(connection: &mut Connection, request: Request) {
         }
         Request::SoundById { id, reply } => {
             let _ = reply.send(load_sound(connection, &id));
+        }
+        Request::Adjacent {
+            scope,
+            search,
+            position,
+            offset,
+            reply,
+        } => {
+            let _ = reply.send(load_adjacent_sound(
+                connection, &scope, &search, position, offset,
+            ));
+        }
+        Request::HotkeyPage { page, reply } => {
+            let _ = reply.send(load_hotkey_page(connection, page));
+        }
+        Request::Roots { page, reply } => {
+            let _ = reply.send(load_roots(connection, page));
+        }
+        Request::FolderChildren {
+            root_path,
+            parent_relative_path,
+            page,
+            reply,
+        } => {
+            let _ = reply.send(load_folder_children(
+                connection,
+                &root_path,
+                parent_relative_path.as_deref(),
+                page,
+            ));
+        }
+        Request::UpdateSound { sound, reply } => {
+            let _ = reply.send(update_sound(connection, sound));
+        }
+        Request::DeleteSound { id, reply } => {
+            let _ = reply.send(delete_sound(connection, &id));
         }
         Request::ApplyBatch { batch, reply } => {
             let _ = reply.send(apply_batch(connection, batch));
@@ -904,6 +1065,282 @@ fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, Librar
         )
         .optional()
         .map_err(LibraryError::from)
+}
+
+fn update_sound(connection: &Connection, sound: Sound) -> Result<bool, LibraryError> {
+    let search_name = sound.name.to_lowercase();
+    let duration_ms = sound
+        .duration_ms
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| LibraryError::InvalidData("sound duration exceeds SQLite range".into()))?;
+    let changed = connection.execute(
+        "UPDATE sounds SET
+             name = ?2, search_name = ?3, path = ?4, source_path = ?5, hotkey = ?6,
+             duration_ms = ?7, volume = ?8, enabled = ?9, loudness_lufs = ?10,
+             loudness_state = ?11, loudness_confidence = ?12,
+             loudness_fingerprint = ?13, loudness_true_peak_dbtp = ?14
+         WHERE public_id = ?1",
+        params![
+            sound.id,
+            sound.name,
+            search_name,
+            sound.path,
+            sound.source_path,
+            sound.hotkey,
+            duration_ms,
+            i64::from(sound.volume),
+            i64::from(sound.enabled),
+            sound.loudness_lufs,
+            sound.loudness_analysis_state.as_str(),
+            sound.loudness_confidence,
+            sound.loudness_source_fingerprint,
+            sound.loudness_true_peak_dbtp,
+        ],
+    )?;
+    Ok(changed == 1)
+}
+
+fn delete_sound(connection: &Connection, id: &str) -> Result<bool, LibraryError> {
+    Ok(connection.execute("DELETE FROM sounds WHERE public_id = ?1", [id])? == 1)
+}
+
+fn load_roots(connection: &Connection, page: usize) -> Result<RootPage, LibraryError> {
+    let count: i64 = connection.query_row("SELECT COUNT(*) FROM roots", [], |row| row.get(0))?;
+    let total = usize::try_from(count)
+        .map_err(|_| LibraryError::InvalidData("negative root count".to_string()))?;
+    let offset = page
+        .checked_mul(PAGE_SIZE)
+        .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let mut statement = connection.prepare(
+        "SELECT id, path FROM roots
+         ORDER BY position, id LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = statement.query_map(
+        params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
+        |row| {
+            Ok(RootItem {
+                id: row.get(0)?,
+                path: row.get(1)?,
+            })
+        },
+    )?;
+    let mut roots = Vec::with_capacity(PAGE_SIZE.min(total.saturating_sub(offset)));
+    for root in rows {
+        roots.push(root?);
+    }
+    Ok(RootPage { total, roots })
+}
+
+fn load_folder_children(
+    connection: &Connection,
+    root_path: &str,
+    parent_relative_path: Option<&str>,
+    page: usize,
+) -> Result<FolderPage, LibraryError> {
+    let offset = page
+        .checked_mul(PAGE_SIZE)
+        .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let limit = usize_to_i64(PAGE_SIZE)?;
+    let offset = usize_to_i64(offset)?;
+    let fields = "folder.id, folder.relative_path,
+                  COALESCE(pref.display_name, folder.name), COALESCE(pref.expanded, 0),
+                  EXISTS(SELECT 1 FROM folders AS child WHERE child.parent_id = folder.id)";
+    let (total, folders) = if let Some(parent_relative_path) = parent_relative_path {
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.parent_id = (
+                 SELECT parent.id FROM folders AS parent
+                 WHERE parent.root_id = root.id AND parent.relative_path = ?2
+             )",
+            params![root_path, parent_relative_path],
+            |row| row.get(0),
+        )?;
+        let sql = format!(
+            "SELECT {fields} FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+             WHERE root.path = ?1 AND folder.parent_id = (
+                 SELECT parent.id FROM folders AS parent
+                 WHERE parent.root_id = root.id AND parent.relative_path = ?2
+             )
+             ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
+             LIMIT ?3 OFFSET ?4"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(
+            params![root_path, parent_relative_path, limit, offset],
+            folder_from_row,
+        )?;
+        (count, collect_folders(rows)?)
+    } else {
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.parent_id IS NULL",
+            [root_path],
+            |row| row.get(0),
+        )?;
+        let sql = format!(
+            "SELECT {fields} FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+             WHERE root.path = ?1 AND folder.parent_id IS NULL
+             ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
+             LIMIT ?2 OFFSET ?3"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![root_path, limit, offset], folder_from_row)?;
+        (count, collect_folders(rows)?)
+    };
+    Ok(FolderPage {
+        total: usize::try_from(total)
+            .map_err(|_| LibraryError::InvalidData("negative folder count".to_string()))?,
+        folders,
+    })
+}
+
+fn folder_from_row(row: &Row<'_>) -> rusqlite::Result<FolderItem> {
+    Ok(FolderItem {
+        id: row.get(0)?,
+        relative_path: row.get(1)?,
+        name: row.get(2)?,
+        expanded: row.get::<_, i64>(3)? != 0,
+        has_children: row.get::<_, i64>(4)? != 0,
+    })
+}
+
+fn collect_folders(
+    rows: rusqlite::MappedRows<'_, impl FnMut(&Row<'_>) -> rusqlite::Result<FolderItem>>,
+) -> Result<Vec<FolderItem>, LibraryError> {
+    let mut folders = Vec::with_capacity(PAGE_SIZE);
+    for folder in rows {
+        folders.push(folder?);
+    }
+    Ok(folders)
+}
+
+fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, LibraryError> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sounds WHERE hotkey IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    let total = usize::try_from(count)
+        .map_err(|_| LibraryError::InvalidData("negative hotkey count".to_string()))?;
+    let offset = page
+        .checked_mul(PAGE_SIZE)
+        .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let mut statement = connection.prepare(
+        "SELECT public_id, name, path, source_path, hotkey, duration_ms, volume,
+                enabled, loudness_lufs, loudness_state, loudness_confidence,
+                loudness_fingerprint, loudness_true_peak_dbtp
+         FROM sounds WHERE hotkey IS NOT NULL
+         ORDER BY general_position, public_id LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = statement.query_map(
+        params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
+        sound_from_row,
+    )?;
+    let mut sounds = Vec::with_capacity(PAGE_SIZE.min(total.saturating_sub(offset)));
+    for sound in rows {
+        sounds.push(sound?);
+    }
+    Ok(SoundPage { total, sounds })
+}
+
+fn load_adjacent_sound(
+    connection: &Connection,
+    scope: &LibraryScope,
+    search: &str,
+    position: usize,
+    offset: i32,
+) -> Result<Option<Sound>, LibraryError> {
+    let distance = usize::try_from(offset.unsigned_abs())
+        .map_err(|_| LibraryError::InvalidData("adjacent offset overflow".to_string()))?;
+    let Some(target) = (if offset.is_negative() {
+        position.checked_sub(distance)
+    } else {
+        position.checked_add(distance)
+    }) else {
+        return Ok(None);
+    };
+    load_sound_at(connection, scope, search, target)
+}
+
+fn load_sound_at(
+    connection: &Connection,
+    scope: &LibraryScope,
+    search: &str,
+    position: usize,
+) -> Result<Option<Sound>, LibraryError> {
+    let fts = search_query(search);
+    let offset = usize_to_i64(position)?;
+    let fields = "sound.public_id, sound.name, sound.path, sound.source_path, sound.hotkey,
+                  sound.duration_ms, sound.volume, sound.enabled, sound.loudness_lufs,
+                  sound.loudness_state, sound.loudness_confidence, sound.loudness_fingerprint,
+                  sound.loudness_true_peak_dbtp";
+    match scope {
+        LibraryScope::General => connection
+            .query_row(
+                &format!(
+                    "SELECT {fields} FROM sounds AS sound WHERE {SEARCH_FILTER}
+                     ORDER BY sound.general_position, sound.public_id LIMIT 1 OFFSET ?3"
+                ),
+                params![search, fts, offset],
+                sound_from_row,
+            )
+            .optional()
+            .map_err(LibraryError::from),
+        LibraryScope::ManualTab(tab_id) => connection
+            .query_row(
+                &format!(
+                    "SELECT {fields} FROM manual_memberships AS membership
+                     JOIN manual_tabs AS tab ON tab.id = membership.tab_id
+                     JOIN sounds AS sound ON sound.rowid = membership.sound_id
+                     WHERE {SEARCH_FILTER} AND tab.public_id = ?3
+                     ORDER BY membership.position, sound.public_id LIMIT 1 OFFSET ?4"
+                ),
+                params![search, fts, tab_id, offset],
+                sound_from_row,
+            )
+            .optional()
+            .map_err(LibraryError::from),
+        LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } => connection
+            .query_row(
+                &format!(
+                    "WITH selected(folder_id) AS (
+                         SELECT folder.id FROM folders AS folder
+                         JOIN roots AS root ON root.id = folder.root_id
+                         WHERE root.path = ?3 AND folder.relative_path = ?4
+                     ), effective(sound_id) AS (
+                         SELECT location.sound_id FROM selected
+                         JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
+                         JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                         UNION
+                         SELECT override.sound_id FROM selected
+                         JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                         WHERE override.action = 'include'
+                         EXCEPT
+                         SELECT override.sound_id FROM selected
+                         JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                         WHERE override.action = 'exclude'
+                     )
+                     SELECT {fields} FROM effective
+                     JOIN sounds AS sound ON sound.rowid = effective.sound_id
+                     WHERE {SEARCH_FILTER}
+                     ORDER BY sound.general_position, sound.public_id LIMIT 1 OFFSET ?5"
+                ),
+                params![search, fts, root_path, relative_path, offset],
+                sound_from_row,
+            )
+            .optional()
+            .map_err(LibraryError::from),
+    }
 }
 
 fn sound_from_row(row: &Row<'_>) -> rusqlite::Result<Sound> {
