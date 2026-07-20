@@ -100,7 +100,16 @@ pub enum EngineRequest {
     SetMicLatencyProfile {
         profile: MicLatencyProfile,
     },
-    Shutdown,
+    Shutdown {
+        #[serde(default)]
+        requester_version: Option<String>,
+        #[serde(default)]
+        expected_engine_version: Option<String>,
+        #[serde(default)]
+        expected_protocol_version: Option<u32>,
+        #[serde(default)]
+        expected_config_schema_version: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,7 +211,15 @@ fn shutdown_engine_at(path: &Path, timeout: Duration) -> bool {
         return false;
     }
 
-    let _ = send_request_to(path, EngineRequest::Shutdown);
+    let _ = send_request_to(
+        path,
+        scoped_shutdown_request(Some(&EngineInfo {
+            engine_protocol_version: ENGINE_PROTOCOL_VERSION,
+            app_version: APP_VERSION.to_string(),
+            config_schema_version: CURRENT_SCHEMA_VERSION,
+            binary_path: String::new(),
+        })),
+    );
     wait_for_engine_stop(path, timeout)
 }
 
@@ -211,7 +228,7 @@ pub fn shutdown_incompatible_engine_at(path: &Path, timeout: Duration) -> bool {
         return false;
     }
 
-    match engine_info_at(path) {
+    let engine_info = match engine_info_at(path) {
         Ok(info) if engine_info_compatible(&info) => return false,
         Ok(info) => {
             log::warn!(
@@ -221,17 +238,28 @@ pub fn shutdown_incompatible_engine_at(path: &Path, timeout: Duration) -> bool {
                 info.config_schema_version,
                 info.binary_path
             );
+            Some(info)
         }
         Err(err) => {
             if !engine_responds_at(path) {
                 return false;
             }
             log::warn!("Stopping old Linux Soundboard audio engine without compatible info: {err}");
+            None
         }
-    }
+    };
 
-    let _ = send_request_to(path, EngineRequest::Shutdown);
+    let _ = send_request_to(path, scoped_shutdown_request(engine_info.as_ref()));
     wait_for_engine_stop(path, timeout)
+}
+
+fn scoped_shutdown_request(expected: Option<&EngineInfo>) -> EngineRequest {
+    EngineRequest::Shutdown {
+        requester_version: Some(APP_VERSION.to_string()),
+        expected_engine_version: expected.map(|info| info.app_version.clone()),
+        expected_protocol_version: expected.map(|info| info.engine_protocol_version),
+        expected_config_schema_version: expected.map(|info| info.config_schema_version),
+    }
 }
 
 pub fn bind_engine_socket() -> Result<BindEngineSocket, EngineIpcError> {
@@ -370,6 +398,13 @@ fn read_response(stream: UnixStream) -> Result<EngineResponse, EngineIpcError> {
 mod tests {
     use super::*;
     use crate::app_meta::APP_VERSION;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum LegacyEngineRequest {
+        Shutdown,
+    }
 
     #[test]
     fn socket_path_uses_runtime_dir() {
@@ -390,6 +425,22 @@ mod tests {
 
         let err = parse_request(r#"{"type":"not_real"}"#).unwrap_err();
         assert!(err.to_string().contains("Invalid engine request"));
+    }
+
+    #[test]
+    fn scoped_shutdown_remains_parseable_by_legacy_engines() {
+        let request = scoped_shutdown_request(Some(&EngineInfo {
+            engine_protocol_version: ENGINE_PROTOCOL_VERSION,
+            app_version: APP_VERSION.to_string(),
+            config_schema_version: CURRENT_SCHEMA_VERSION,
+            binary_path: String::new(),
+        }));
+        let encoded = serde_json::to_string(&request).expect("encode scoped shutdown");
+
+        assert!(matches!(
+            serde_json::from_str::<LegacyEngineRequest>(&encoded),
+            Ok(LegacyEngineRequest::Shutdown)
+        ));
     }
 
     #[test]
@@ -462,7 +513,7 @@ mod tests {
                 assert_eq!(
                     match request {
                         EngineRequest::Ping => "ping",
-                        EngineRequest::Shutdown => "shutdown",
+                        EngineRequest::Shutdown { .. } => "shutdown",
                         other => panic!("unexpected request: {other:?}"),
                     },
                     expected
