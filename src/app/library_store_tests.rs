@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{LoudnessAnalysisState, Sound};
 use crate::library_store::{
-    FolderOverrideAction, FolderOverrideRecord, FolderRecord, LibraryBatch, LibraryScope,
-    LibraryStore, ManualMembershipRecord, ManualTabRecord, RootRecord, SoundLocationRecord,
-    SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
+    FolderOverrideAction, FolderOverrideRecord, FolderRecord, HotkeyBindingOwner,
+    HotkeyBindingRecord, LibraryBatch, LibraryScope, LibraryStore, ManualMembershipRecord,
+    ManualTabRecord, RootRecord, SoundLocationRecord, SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
 };
 
 struct TestDir(PathBuf);
@@ -281,6 +281,106 @@ fn direct_sound_edits_keep_search_hotkeys_and_delete_cascades_consistent() {
 }
 
 #[test]
+fn hotkey_bindings_have_one_owner_and_active_accelerators_are_unique() {
+    let temp = TestDir::new();
+    let path = temp.path().join("library.sqlite3");
+    let store = LibraryStore::open(path.clone()).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("first", "First", "/music/first.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    drop(store);
+
+    let connection = rusqlite::Connection::open(path).expect("open raw database");
+    let sound_id: i64 = connection
+        .query_row(
+            "SELECT rowid FROM sounds WHERE public_id = 'first'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read sound row id");
+    let stored: (String, String) = connection
+        .query_row(
+            "SELECT accelerator, state FROM hotkey_bindings WHERE sound_id = ?1",
+            [sound_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("sound hotkey is stored in the unified table");
+    assert_eq!(stored, ("Ctrl+first".to_string(), "active".to_string()));
+
+    let duplicate = connection.execute(
+        "INSERT INTO hotkey_bindings(
+             binding_id, control_action, accelerator, normalized, state
+         ) VALUES('control:stop', 'stop', 'Ctrl+first', 'ctrl+first', 'active')",
+        [],
+    );
+    assert!(duplicate.is_err(), "active accelerators must be unique");
+
+    connection
+        .execute(
+            "INSERT INTO hotkey_bindings(
+                 binding_id, control_action, accelerator, normalized, state, issue
+             ) VALUES('control:needs-attention', 'needs-attention', 'Ctrl+first', NULL,
+                      'needs_attention', 'duplicate legacy binding')",
+            [],
+        )
+        .expect("invalid legacy bindings remain recoverable without becoming active");
+
+    let owner_error = connection.execute(
+        "INSERT INTO hotkey_bindings(
+             binding_id, sound_id, control_action, accelerator, normalized, state
+         ) VALUES('invalid-owner', ?1, 'stop', 'Ctrl+KeyS', 'ctrl+keys', 'active')",
+        [sound_id],
+    );
+    assert!(
+        owner_error.is_err(),
+        "a binding must have exactly one owner"
+    );
+
+    let sound_columns: Vec<String> = connection
+        .prepare("PRAGMA table_info(sounds)")
+        .expect("inspect sounds table")
+        .query_map([], |row| row.get(1))
+        .expect("query sounds columns")
+        .collect::<Result<_, _>>()
+        .expect("collect sounds columns");
+    assert!(!sound_columns.iter().any(|column| column == "hotkey"));
+}
+
+#[test]
+fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "control:stop".to_string(),
+        owner: HotkeyBindingOwner::Control("stop".to_string()),
+        accelerator: "Ctrl+KeyS".to_string(),
+        normalized: Some("Ctrl+KeyS".to_string()),
+        issue: None,
+    })));
+    let page = wait(store.hotkey_bindings_after(None));
+    assert_eq!(page.bindings.len(), 1);
+    assert_eq!(page.bindings[0].binding_id, "control:stop");
+    assert_eq!(page.bindings[0].normalized.as_deref(), Some("Ctrl+KeyS"));
+
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "control:stop".to_string(),
+        owner: HotkeyBindingOwner::Control("stop".to_string()),
+        accelerator: "Alt+KeyS".to_string(),
+        normalized: Some("Alt+KeyS".to_string()),
+        issue: None,
+    })));
+    let replaced = wait(store.hotkey_bindings_after(None));
+    assert_eq!(replaced.bindings.len(), 1);
+    assert_eq!(replaced.bindings[0].accelerator, "Alt+KeyS");
+
+    assert!(wait(store.delete_hotkey_binding("control:stop")));
+    assert!(wait(store.hotkey_bindings_after(None)).bindings.is_empty());
+}
+
+#[test]
 fn adjacent_lookup_respects_scope_search_order_and_boundaries() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
@@ -544,11 +644,11 @@ fn active_root_generation_hides_partial_scan_until_atomic_switch() {
              INSERT INTO folder_closure(ancestor_id, descendant_id, depth)
              SELECT id, id, 0 FROM folders WHERE relative_path = 'new';
              INSERT INTO sounds(
-                 public_id, name, search_name, path, source_path, hotkey, duration_ms,
+                 public_id, name, search_name, path, source_path, duration_ms,
                  volume, enabled, loudness_lufs, loudness_state, loudness_confidence,
                  loudness_fingerprint, loudness_true_peak_dbtp, general_position, standalone
              ) VALUES(
-                 'new', 'New', 'new', '/music/new/new.flac', NULL, NULL, NULL,
+                 'new', 'New', 'new', '/music/new/new.flac', NULL, NULL,
                  100, 1, NULL, 'pending', NULL, NULL, NULL, 2, 0
              );
              INSERT INTO sound_locations(sound_id, root_id, generation, folder_id, relative_path)
@@ -599,6 +699,65 @@ fn active_root_generation_hides_partial_scan_until_atomic_switch() {
         wait(store.folder_children("/music", None, 0)).folders[0].name,
         "New"
     );
+}
+
+#[test]
+fn schema_one_migration_preserves_duplicate_hotkeys_for_user_resolution() {
+    let temp = TestDir::new();
+    let path = temp.path().join("library.sqlite3");
+    let connection = rusqlite::Connection::open(&path).expect("create schema one database");
+    connection
+        .execute_batch(
+            "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO meta VALUES('schema_version', '1');
+             INSERT INTO meta VALUES('schema_flavor', 'bounded-generation-v1');
+             CREATE TABLE sounds(
+                 rowid INTEGER PRIMARY KEY,
+                 public_id TEXT NOT NULL UNIQUE,
+                 hotkey TEXT
+             );
+             CREATE INDEX sounds_hotkey ON sounds(hotkey) WHERE hotkey IS NOT NULL;
+             INSERT INTO sounds(public_id, hotkey) VALUES
+                 ('first', 'Ctrl+KeyA'), ('second', 'ctrl+keya'), ('third', 'Alt+KeyB');
+             PRAGMA user_version = 1;",
+        )
+        .expect("seed schema one database");
+    drop(connection);
+
+    let store = LibraryStore::open(path.clone()).expect("migrate schema one database");
+    drop(store);
+
+    let connection = rusqlite::Connection::open(path).expect("inspect migrated database");
+    type MigratedHotkeyRow = (String, String, Option<String>, String, Option<String>);
+    let rows: Vec<MigratedHotkeyRow> = connection
+        .prepare(
+            "SELECT binding_id, accelerator, normalized, state, issue
+             FROM hotkey_bindings ORDER BY binding_id",
+        )
+        .expect("prepare migrated hotkeys")
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
+        .expect("read migrated hotkeys")
+        .collect::<Result<_, _>>()
+        .expect("collect migrated hotkeys");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].2, None);
+    assert_eq!(rows[0].3, "needs_attention");
+    assert_eq!(rows[1].2, None);
+    assert_eq!(rows[2].2.as_deref(), Some("alt+keyb"));
+    assert_eq!(rows[2].3, "active");
+
+    let version: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read migrated schema version");
+    assert_eq!(version, 2);
 }
 
 #[test]
