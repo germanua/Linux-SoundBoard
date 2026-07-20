@@ -1,8 +1,9 @@
 use log::info;
-use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
 pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "opus", "flac", "m4a", "aac", "mp4"];
@@ -26,6 +27,13 @@ pub struct ScannedSubfolder {
 pub struct AudioScan {
     pub files: Vec<AudioFile>,
     pub subfolders: Vec<ScannedSubfolder>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioVisitProgress {
+    pub files: usize,
+    pub cancelled: bool,
+    pub stopped_early: bool,
 }
 
 #[derive(Debug)]
@@ -82,63 +90,90 @@ fn scan_roots(folders: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub fn scan_folder(folder: &str) -> AudioScan {
-    let mut scan = AudioScan::default();
-
-    let path = Path::new(folder);
-    if !path.exists() || !path.is_dir() {
-        return scan;
-    }
-
-    info!("Scanning folder: {}", folder);
-
-    for entry in WalkDir::new(folder)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|entry| match entry {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                log::warn!("Skipping unreadable entry while scanning '{folder}': {err}");
-                None
+pub(crate) fn visit_audio_files<F>(
+    folders: &[String],
+    cancelled: &AtomicBool,
+    mut visitor: F,
+) -> AudioVisitProgress
+where
+    F: FnMut(AudioFile) -> ControlFlow<()>,
+{
+    let mut progress = AudioVisitProgress::default();
+    for folder in scan_roots(folders) {
+        if cancelled.load(Ordering::Relaxed) {
+            progress.cancelled = true;
+            break;
+        }
+        let root = Path::new(&folder);
+        if !root.is_dir() {
+            continue;
+        }
+        info!("Scanning folder: {folder}");
+        for entry in WalkDir::new(root)
+            .follow_links(true)
+            .sort_by_file_name()
+            .into_iter()
+        {
+            if cancelled.load(Ordering::Relaxed) {
+                progress.cancelled = true;
+                return progress;
             }
-        })
-    {
-        let file_path = entry.path();
-
-        if file_path.is_file() {
-            if let Some(ext) = file_path.extension() {
-                let ext_lower = ext.to_string_lossy().to_lowercase();
-                if AUDIO_EXTENSIONS.contains(&ext_lower.as_str()) {
-                    let name = file_path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let relative = file_path.strip_prefix(path).unwrap_or(file_path);
-                    let relative_subfolders = relative
-                        .parent()
-                        .into_iter()
-                        .flat_map(Path::ancestors)
-                        .filter(|ancestor| ancestor.components().next().is_some())
-                        .map(|ancestor| ancestor.to_string_lossy().into_owned())
-                        .collect::<Vec<_>>();
-                    for relative_subfolder in &relative_subfolders {
-                        scan.subfolders.push(ScannedSubfolder {
-                            root_folder: folder.to_string(),
-                            relative_subfolder: relative_subfolder.clone(),
-                        });
-                    }
-
-                    scan.files.push(AudioFile {
-                        path: file_path.to_string_lossy().to_string(),
-                        name,
-                        root_folder: folder.to_string(),
-                        relative_path: relative.to_string_lossy().to_string(),
-                        relative_subfolders,
-                    });
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    log::warn!("Skipping unreadable entry while scanning '{folder}': {err}");
+                    continue;
                 }
+            };
+            let file_path = entry.path();
+            if !file_path.is_file() || !is_audio_path(file_path) {
+                continue;
+            }
+            let relative = file_path.strip_prefix(root).unwrap_or(file_path);
+            let relative_subfolders = relative
+                .parent()
+                .into_iter()
+                .flat_map(Path::ancestors)
+                .filter(|ancestor| ancestor.components().next().is_some())
+                .map(|ancestor| ancestor.to_string_lossy().into_owned())
+                .collect();
+            let file = AudioFile {
+                path: file_path.to_string_lossy().into_owned(),
+                name: file_path
+                    .file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                root_folder: folder.clone(),
+                relative_path: relative.to_string_lossy().into_owned(),
+                relative_subfolders,
+            };
+            progress.files += 1;
+            if visitor(file).is_break() {
+                progress.stopped_early = true;
+                return progress;
             }
         }
     }
+    progress
+}
+
+#[cfg(test)]
+fn scan_folder(folder: &str) -> AudioScan {
+    let mut scan = AudioScan::default();
+    let cancelled = AtomicBool::new(false);
+    visit_audio_files(&[folder.to_string()], &cancelled, |file| {
+        scan.subfolders
+            .extend(
+                file.relative_subfolders
+                    .iter()
+                    .map(|relative_subfolder| ScannedSubfolder {
+                        root_folder: file.root_folder.clone(),
+                        relative_subfolder: relative_subfolder.clone(),
+                    }),
+            );
+        scan.files.push(file);
+        ControlFlow::Continue(())
+    });
 
     scan.files
         .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
@@ -149,17 +184,22 @@ pub fn scan_folder(folder: &str) -> AudioScan {
 }
 
 pub fn scan_folders(folders: &[String]) -> AudioScan {
-    let roots = scan_roots(folders);
-
-    let scans = roots
-        .par_iter()
-        .map(|folder| scan_folder(folder))
-        .collect::<Vec<_>>();
     let mut combined = AudioScan::default();
-    for scan in scans {
-        combined.files.extend(scan.files);
-        combined.subfolders.extend(scan.subfolders);
-    }
+    let cancelled = AtomicBool::new(false);
+    visit_audio_files(folders, &cancelled, |file| {
+        combined
+            .subfolders
+            .extend(
+                file.relative_subfolders
+                    .iter()
+                    .map(|relative_subfolder| ScannedSubfolder {
+                        root_folder: file.root_folder.clone(),
+                        relative_subfolder: relative_subfolder.clone(),
+                    }),
+            );
+        combined.files.push(file);
+        ControlFlow::Continue(())
+    });
 
     combined.files.sort_by(|a, b| {
         a.root_folder
@@ -178,8 +218,10 @@ pub fn scan_folders(folders: &[String]) -> AudioScan {
 }
 
 pub fn is_audio_file(path: &str) -> bool {
-    let path = Path::new(path);
+    is_audio_path(Path::new(path))
+}
 
+fn is_audio_path(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext_lower = ext.to_string_lossy().to_lowercase();
         AUDIO_EXTENSIONS.contains(&ext_lower.as_str())
@@ -333,6 +375,51 @@ mod tests {
         assert_eq!(scan.subfolders[0].root_folder, root.to_string_lossy());
         assert_eq!(scan.subfolders[0].relative_subfolder, "Alerts");
 
+        fs::remove_dir_all(root).expect("cleanup test tree");
+    }
+
+    #[test]
+    fn streaming_scan_is_deterministic_and_stops_at_callback_boundary() {
+        let root = test_dir();
+        fs::create_dir_all(&root).expect("create test tree");
+        fs::write(root.join("c.mp3"), []).expect("write sound");
+        fs::write(root.join("a.mp3"), []).expect("write sound");
+        fs::write(root.join("b.mp3"), []).expect("write sound");
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let mut visited = Vec::new();
+
+        let progress =
+            visit_audio_files(&[root.to_string_lossy().to_string()], &cancelled, |file| {
+                visited.push(file.name);
+                if visited.len() == 2 {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            });
+
+        assert_eq!(visited, ["a", "b"]);
+        assert_eq!(progress.files, 2);
+        assert!(progress.stopped_early);
+        fs::remove_dir_all(root).expect("cleanup test tree");
+    }
+
+    #[test]
+    fn streaming_scan_honours_preexisting_cancellation_without_walking() {
+        let root = test_dir();
+        fs::create_dir_all(&root).expect("create test tree");
+        fs::write(root.join("sound.mp3"), []).expect("write sound");
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let mut visited = 0;
+
+        let progress = visit_audio_files(&[root.to_string_lossy().to_string()], &cancelled, |_| {
+            visited += 1;
+            std::ops::ControlFlow::Continue(())
+        });
+
+        assert_eq!(visited, 0);
+        assert_eq!(progress.files, 0);
+        assert!(progress.cancelled);
         fs::remove_dir_all(root).expect("cleanup test tree");
     }
 
