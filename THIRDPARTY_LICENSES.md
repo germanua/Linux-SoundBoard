@@ -70,6 +70,18 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 - License: BSD 3-Clause
 - Exact source and license text: see `THIRD_PARTY_NOTICES.html`
 
+## Public Domain Component
+
+### SQLite
+
+- Component: SQLite 3.51.3, bundled by `libsqlite3-sys` 0.37.0
+- License: public domain
+- Project page and source code: https://sqlite.org/
+
+Linux Soundboard compiles the upstream SQLite amalgamation into the application
+through `rusqlite`'s `bundled` feature, so installations do not depend on a
+distribution-provided SQLite library.
+
 ## LGPL Components Dynamically Linked At Runtime
 
 Linux Soundboard dynamically links against system-provided libraries on Linux. Those libraries are not relicensed under the project's PolyForm license. They remain available under their upstream LGPL terms, and users may replace those shared libraries with compatible modified versions as permitted by the LGPL.
@@ -97,6 +109,7 @@ The following direct dependencies are used under the MIT license:
 - `opus` 0.3.1. Copyright held by opus crate contributors.
 - `pulse` (`libpulse-binding`) 2.30.1. Copyright held by libpulse-binding contributors.
 - `pipewire` 0.9.2. Copyright held by the pipewire-rs contributors.
+- `rusqlite` 0.39.0. Copyright held by the rusqlite contributors.
 - `which` 6.0.1. Copyright held by Harry Fei and which-rs contributors.
 - `x11` 2.21.0. Copyright held by daggerbot, Erle Pereira, AltF02, and x11-rs contributors.
 

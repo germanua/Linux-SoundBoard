@@ -45,6 +45,7 @@ parking_lot = "0.12"
 pipewire = "0.9.2"
 pulse = { version = "2", package = "libpulse-binding" }
 rayon = "1.8"
+rusqlite = { version = "0.39", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Defaults already enable flac/wav/vorbis/ogg/pcm/adpcm/mkv. mp3/aac/isomp4 are
