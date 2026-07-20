@@ -135,6 +135,20 @@ fn effective_source_path(sound: &Sound) -> &str {
     sound.source_path.as_deref().unwrap_or(&sound.path)
 }
 
+fn insert_unique_sounds(config: &mut Config, candidates: Vec<Sound>) -> Vec<Sound> {
+    let mut existing_paths = config
+        .sounds
+        .iter()
+        .map(|sound| sound.path.clone())
+        .collect::<HashSet<_>>();
+    let inserted = candidates
+        .into_iter()
+        .filter(|sound| existing_paths.insert(sound.path.clone()))
+        .collect::<Vec<_>>();
+    config.sounds.extend(inserted.iter().cloned());
+    inserted
+}
+
 fn build_generated_tab_plans(scan: &scanner::AudioScan) -> Vec<GeneratedTabPlan> {
     let mut paths_by_binding = BTreeMap::<FolderTabBinding, Vec<String>>::new();
     for subfolder in &scan.subfolders {
@@ -283,8 +297,9 @@ fn reconcile_generated_tabs(
         if tab.sound_ids.len() != before {
             summary.changed = true;
         }
+        let mut existing_ids = tab.sound_ids.iter().cloned().collect::<HashSet<_>>();
         for id in desired_ids {
-            if !tab.sound_ids.contains(&id) {
+            if existing_ids.insert(id.clone()) {
                 tab.sound_ids.push(id);
                 summary.changed = true;
                 summary.memberships_added += 1;
@@ -687,15 +702,17 @@ pub fn refresh_sounds(
     }
 
     let mut added_count = 0;
-    for new_sound in work.new_sounds {
-        if active_roots.contains(&new_sound.root_folder)
-            && Path::new(&new_sound.sound.path).exists()
-            && !cfg
-                .sounds
-                .iter()
-                .any(|sound| sound.path == new_sound.sound.path)
+    let mut current_paths = cfg
+        .sounds
+        .iter()
+        .map(|sound| sound.path.clone())
+        .collect::<HashSet<_>>();
+    for NewSound { root_folder, sound } in work.new_sounds {
+        if active_roots.contains(&root_folder)
+            && Path::new(&sound.path).exists()
+            && current_paths.insert(sound.path.clone())
         {
-            cfg.sounds.push(new_sound.sound);
+            cfg.sounds.push(sound);
             added_count += 1;
         }
     }
@@ -768,7 +785,7 @@ pub fn import_dropped_files(
     config: Arc<Mutex<Config>>,
     coords: &LoudnessCoordinators,
 ) -> Result<Vec<Sound>, CommandError> {
-    let (target_folder, existing_paths, added_default_folder): (String, HashSet<String>, bool) =
+    let (target_folder, mut existing_paths, added_default_folder): (String, HashSet<String>, bool) =
         with_config(&config, |cfg| {
             let added_default_folder = cfg.sound_folders.is_empty();
             let existing = cfg
@@ -815,6 +832,7 @@ pub fn import_dropped_files(
         }
 
         if fs::copy(source, &dest).is_ok() {
+            existing_paths.insert(dest_str.clone());
             let name = dest
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
@@ -833,15 +851,18 @@ pub fn import_dropped_files(
         return Ok(imported);
     }
 
-    let imported_clones = imported.clone();
-    with_config_mut(&config, move |cfg| {
-        for sound in imported {
-            cfg.add_sound(sound);
+    let imported = with_config_mut(&config, move |cfg| {
+        let inserted = insert_unique_sounds(cfg, imported);
+        if inserted.is_empty() {
+            return Ok(inserted);
         }
-        cfg.save().map_err(CommandError::config_save)
+        cfg.save().map_err(CommandError::config_save)?;
+        Ok(inserted)
     })??;
-    maybe_schedule_missing_loudness_backfill(&config, coords);
-    Ok(imported_clones)
+    if !imported.is_empty() {
+        maybe_schedule_missing_loudness_backfill(&config, coords);
+    }
+    Ok(imported)
 }
 
 pub fn import_files_as_links(
@@ -858,7 +879,7 @@ pub fn import_files_to_tab(
     config: Arc<Mutex<Config>>,
     coords: &LoudnessCoordinators,
 ) -> Result<Vec<Sound>, CommandError> {
-    let existing_paths: HashSet<String> = with_config(&config, |cfg| {
+    let mut existing_paths: HashSet<String> = with_config(&config, |cfg| {
         cfg.sounds.iter().map(|s| s.path.clone()).collect()
     })?;
 
@@ -871,7 +892,7 @@ pub fn import_files_to_tab(
         if !check_file_exists(&path) {
             continue;
         }
-        if existing_paths.contains(&path) {
+        if !existing_paths.insert(path.clone()) {
             continue;
         }
 
@@ -888,21 +909,26 @@ pub fn import_files_to_tab(
         return Ok(new_sounds);
     }
 
-    with_config_mut(&config, |cfg| {
-        let mut sound_ids = Vec::new();
-        for sound in &new_sounds {
-            cfg.add_sound(sound.clone());
-            sound_ids.push(sound.id.clone());
+    let new_sounds = with_config_mut(&config, move |cfg| {
+        let inserted = insert_unique_sounds(cfg, new_sounds);
+        if inserted.is_empty() {
+            return Ok(inserted);
         }
 
         if let Some(tab_id) = tab_id.as_deref() {
-            cfg.add_sounds_to_tab(tab_id, sound_ids);
+            cfg.add_sounds_to_tab(
+                tab_id,
+                inserted.iter().map(|sound| sound.id.clone()).collect(),
+            );
         }
 
-        cfg.save().map_err(CommandError::config_save)
+        cfg.save().map_err(CommandError::config_save)?;
+        Ok(inserted)
     })??;
 
-    maybe_schedule_missing_loudness_backfill(&config, coords);
+    if !new_sounds.is_empty() {
+        maybe_schedule_missing_loudness_backfill(&config, coords);
+    }
 
     Ok(new_sounds)
 }
@@ -1048,4 +1074,26 @@ where
         move || update_sound_source(id, new_path, config, &coords),
         on_complete,
     )
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn batch_insert_returns_only_sounds_added_under_final_lock() {
+        let mut config = Config::default();
+        let existing = Sound::new("Existing".to_string(), "/tmp/existing.wav".to_string());
+        config.sounds.push(existing);
+        let duplicate = Sound::new("Duplicate".to_string(), "/tmp/existing.wav".to_string());
+        let added = Sound::new("Added".to_string(), "/tmp/added.wav".to_string());
+        let added_id = added.id.clone();
+
+        let inserted = insert_unique_sounds(&mut config, vec![duplicate, added]);
+
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0].id, added_id);
+        assert_eq!(config.sounds.len(), 2);
+        assert_eq!(config.sounds[1].id, added_id);
+    }
 }

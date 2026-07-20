@@ -313,8 +313,9 @@ impl Config {
 
     pub fn add_sounds_to_tab(&mut self, tab_id: &str, sound_ids: Vec<String>) -> bool {
         if let Some(tab) = self.get_tab_mut(tab_id) {
+            let mut existing_ids = tab.sound_ids.iter().cloned().collect::<HashSet<_>>();
             for sound_id in sound_ids {
-                if !tab.sound_ids.contains(&sound_id) {
+                if existing_ids.insert(sound_id.clone()) {
                     tab.sound_ids.push(sound_id);
                 }
             }
@@ -361,6 +362,27 @@ mod tests {
 
     fn backup_path(path: &Path) -> PathBuf {
         schema_6_backup_path(path)
+    }
+
+    #[test]
+    #[ignore = "release-scale gate for large manual-tab imports"]
+    #[allow(clippy::print_stderr)]
+    fn benchmark_large_tab_batch_membership() {
+        let mut config = Config::default();
+        let mut tab = SoundTab::new("Large manual tab".to_string(), 0);
+        tab.id = "large-manual".to_string();
+        config.tabs.push(tab);
+        let ids = (0..20_000)
+            .map(|index| format!("sound-{index:06}"))
+            .collect::<Vec<_>>();
+
+        let started = std::time::Instant::now();
+        assert!(config.add_sounds_to_tab("large-manual", ids));
+        let elapsed = started.elapsed();
+
+        eprintln!("large-tab memberships=20000 add_ms={}", elapsed.as_millis());
+        assert_eq!(config.tabs[0].sound_ids.len(), 20_000);
+        assert!(elapsed <= std::time::Duration::from_millis(100));
     }
 
     #[test]

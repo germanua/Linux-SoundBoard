@@ -700,6 +700,34 @@ fn test_import_dropped_files_populates_duration_metadata() {
 }
 
 #[test]
+fn test_import_dropped_files_deduplicates_one_batch() {
+    let audio_path = create_test_audio_file("mp3");
+    let path = audio_path.to_string_lossy().to_string();
+    let target_root =
+        std::env::temp_dir().join(format!("lsb-import-target-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&target_root).expect("create target dir");
+
+    let mut config = create_test_config();
+    config
+        .sound_folders
+        .push(target_root.to_string_lossy().to_string());
+    let config = Arc::new(Mutex::new(config));
+
+    let imported = commands::import_dropped_files(
+        vec![path.clone(), path],
+        Arc::clone(&config),
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("import succeeds");
+
+    assert_eq!(imported.len(), 1);
+    assert_eq!(config.lock().sounds.len(), 1);
+
+    cleanup_test_audio_path(&audio_path);
+    let _ = fs::remove_dir_all(&target_root);
+}
+
+#[test]
 fn test_import_files_to_tab_populates_duration_metadata() {
     let audio_path = create_test_audio_file("mp3");
     let config = create_test_config_state();
@@ -715,6 +743,26 @@ fn test_import_files_to_tab_populates_duration_metadata() {
     assert_eq!(imported.len(), 1);
     assert!(imported[0].duration_ms.is_some());
     assert!(imported[0].loudness_source_fingerprint.is_some());
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn test_import_files_to_tab_deduplicates_one_batch() {
+    let audio_path = create_test_audio_file("mp3");
+    let path = audio_path.to_string_lossy().to_string();
+    let config = create_test_config_state();
+
+    let imported = commands::import_files_to_tab(
+        vec![path.clone(), path],
+        None,
+        Arc::clone(&config),
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("import succeeds");
+
+    assert_eq!(imported.len(), 1);
+    assert_eq!(config.lock().sounds.len(), 1);
 
     cleanup_test_audio_path(&audio_path);
 }
