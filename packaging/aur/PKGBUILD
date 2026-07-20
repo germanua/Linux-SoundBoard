@@ -84,4 +84,6 @@ package() {
       "$pkgdir/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy"
     install -Dm644 packaging/linux/linux-soundboard-engine.service \
       "$pkgdir/usr/lib/systemd/user/linux-soundboard-engine.service"
+    install -Dm644 packaging/linux/linux-soundboard-engine.target \
+      "$pkgdir/usr/lib/systemd/user/linux-soundboard-engine.target"
 }

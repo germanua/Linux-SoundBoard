@@ -20,6 +20,9 @@ use crate::app_state::AppState;
 use crate::config::{Config, ControlHotkeyAction};
 use crate::timer_registry::TimerRegistry;
 
+const ENGINE_SERVICE_UNIT: &str = "linux-soundboard-engine.service";
+const ENGINE_TARGET_UNIT: &str = "linux-soundboard-engine.target";
+
 pub fn run() {
     init_logging();
     handoff_to_newer_user_install_if_needed();
@@ -884,6 +887,11 @@ fn initialize_player(
         );
         stop_audio_engine_service_and_process();
     } else {
+        if startup_mode == StartupMode::Persistent {
+            // Reload and start the target even when a compatible engine is already
+            // connected so an upgraded RefuseManualStop policy takes effect.
+            let _ = manage_audio_engine_service(ServiceAction::Start);
+        }
         let remote = match startup_mode {
             StartupMode::Persistent => connect_or_start_audio_engine(
                 crate::audio::AudioPlayer::connect_to_engine,
@@ -965,7 +973,7 @@ fn connect_or_start_audio_engine<T>(
 
 fn stop_audio_engine_service_and_process() {
     let _ = std::process::Command::new("systemctl")
-        .args(["--user", "stop", "linux-soundboard-engine.service"])
+        .args(["--user", "stop", ENGINE_TARGET_UNIT])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -973,8 +981,7 @@ fn stop_audio_engine_service_and_process() {
 }
 
 fn manage_audio_engine_service(action: ServiceAction) -> bool {
-    let service = "linux-soundboard-engine.service";
-    ensure_user_audio_engine_service_file(service);
+    ensure_user_audio_engine_units();
     let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
         .stdout(std::process::Stdio::null())
@@ -984,9 +991,15 @@ fn manage_audio_engine_service(action: ServiceAction) -> bool {
         return false;
     }
 
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "disable", ENGINE_SERVICE_UNIT])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
     let args: &[&str] = match action {
-        ServiceAction::Start => &["--user", "enable", "--now", service],
-        ServiceAction::Restart => &["--user", "restart", service],
+        ServiceAction::Start => &["--user", "enable", "--now", ENGINE_TARGET_UNIT],
+        ServiceAction::Restart => &["--user", "restart", ENGINE_TARGET_UNIT],
     };
     matches!(
         std::process::Command::new("systemctl")
@@ -998,17 +1011,18 @@ fn manage_audio_engine_service(action: ServiceAction) -> bool {
     )
 }
 
-fn ensure_user_audio_engine_service_file(service: &str) {
+fn ensure_user_audio_engine_units() {
     let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".config")))
     else {
         return;
     };
-    let service_path = config_home.join("systemd").join("user").join(service);
-    if service_path.exists()
-        || systemd_user_unit_exists(service)
-        || packaged_audio_engine_service_exists(service)
+    let unit_dir = config_home.join("systemd").join("user");
+    let service_path = unit_dir.join(ENGINE_SERVICE_UNIT);
+    let target_path = unit_dir.join(ENGINE_TARGET_UNIT);
+    if packaged_audio_engine_unit_exists(ENGINE_SERVICE_UNIT)
+        && packaged_audio_engine_unit_exists(ENGINE_TARGET_UNIT)
     {
         return;
     }
@@ -1019,15 +1033,42 @@ fn ensure_user_audio_engine_service_file(service: &str) {
     let Some(executable) = executable else {
         return;
     };
-    let Some(parent) = service_path.parent() else {
+    if service_path.exists() {
+        let Ok(existing) = std::fs::read_to_string(&service_path) else {
+            return;
+        };
+        let managed = existing.contains("X-LinuxSoundBoard-Managed=true")
+            || existing.contains("# managed-by: linux-soundboard")
+            || existing == render_legacy_audio_engine_service(&executable);
+        if !managed {
+            return;
+        }
+    } else if systemd_user_unit_exists(ENGINE_SERVICE_UNIT)
+        || packaged_audio_engine_unit_exists(ENGINE_SERVICE_UNIT)
+    {
         return;
-    };
-    if std::fs::create_dir_all(parent).is_err() {
+    }
+
+    if target_path.exists() {
+        let Ok(existing) = std::fs::read_to_string(&target_path) else {
+            return;
+        };
+        if !existing.contains("X-LinuxSoundBoard-Managed=true")
+            && !existing.contains("# managed-by: linux-soundboard")
+        {
+            return;
+        }
+    }
+
+    if std::fs::create_dir_all(&unit_dir).is_err() {
         return;
     }
 
     let body = render_audio_engine_service(&executable);
     if std::fs::write(&service_path, body).is_err() {
+        return;
+    }
+    if std::fs::write(&target_path, render_audio_engine_target()).is_err() {
         return;
     }
     let _ = std::process::Command::new("systemctl")
@@ -1049,7 +1090,7 @@ const SYSTEMD_USER_UNIT_DIRS: &[&str] = &[
     "/lib/systemd/user",
 ];
 
-fn packaged_audio_engine_service_exists(service: &str) -> bool {
+fn packaged_audio_engine_unit_exists(service: &str) -> bool {
     SYSTEMD_USER_UNIT_DIRS
         .iter()
         .any(|dir| PathBuf::from(dir).join(service).exists())
@@ -1066,6 +1107,39 @@ fn systemd_user_unit_exists(service: &str) -> bool {
 }
 
 fn render_audio_engine_service(executable: &std::path::Path) -> String {
+    format!(
+        "[Unit]\n\
+Description=Linux Soundboard audio engine\n\
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service\n\
+PartOf=linux-soundboard-engine.target\n\
+RefuseManualStop=yes\n\
+X-LinuxSoundBoard-Managed=true\n\
+\n\
+[Service]\n\
+Type=exec\n\
+ExecStart={} --audio-engine\n\
+Restart=on-failure\n\
+RestartSec=2\n\
+RestartPreventExitStatus=2\n\
+NoNewPrivileges=yes\n\
+RestrictSUIDSGID=yes\n\
+LockPersonality=yes\n\
+",
+        systemd_quote(executable)
+    )
+}
+
+fn render_audio_engine_target() -> &'static str {
+    "[Unit]\n\
+Description=Linux Soundboard persistent audio engine\n\
+Wants=linux-soundboard-engine.service\n\
+X-LinuxSoundBoard-Managed=true\n\
+\n\
+[Install]\n\
+WantedBy=default.target\n"
+}
+
+fn render_legacy_audio_engine_service(executable: &std::path::Path) -> String {
     format!(
         "[Unit]\n\
 Description=Linux Soundboard audio engine\n\
@@ -1193,8 +1267,18 @@ mod tests {
         assert!(service.contains(
             "After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service"
         ));
-        assert!(service.contains("WantedBy=default.target"));
+        assert!(service.contains("X-LinuxSoundBoard-Managed=true"));
+        assert!(service.contains("PartOf=linux-soundboard-engine.target"));
+        assert!(service.contains("RefuseManualStop=yes"));
+        assert!(!service.contains("WantedBy=default.target"));
         assert!(service.contains("RestartPreventExitStatus=2"));
+    }
+
+    #[test]
+    fn packaged_engine_target_owns_the_protected_service() {
+        let target = include_str!("../../packaging/linux/linux-soundboard-engine.target");
+        assert!(target.contains("Wants=linux-soundboard-engine.service"));
+        assert!(target.contains("WantedBy=default.target"));
     }
 
     #[test]

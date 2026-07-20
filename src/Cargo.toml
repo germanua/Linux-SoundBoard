@@ -95,6 +95,7 @@ assets = [
     ["../packaging/linux/install-swhkd-helper.sh", "usr/libexec/linux-soundboard/install-swhkd-helper.sh", "755"],
     ["../packaging/linux/com.linuxsoundboard.install-swhkd.policy", "usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", "644"],
     ["../packaging/linux/linux-soundboard-engine.service", "usr/lib/systemd/user/linux-soundboard-engine.service", "644"],
+    ["../packaging/linux/linux-soundboard-engine.target", "usr/lib/systemd/user/linux-soundboard-engine.target", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -122,6 +123,7 @@ assets = [
     { source = "../packaging/linux/install-swhkd-helper.sh", dest = "/usr/libexec/linux-soundboard/install-swhkd-helper.sh", mode = "755" },
     { source = "../packaging/linux/com.linuxsoundboard.install-swhkd.policy", dest = "/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy", mode = "644" },
     { source = "../packaging/linux/linux-soundboard-engine.service", dest = "/usr/lib/systemd/user/linux-soundboard-engine.service", mode = "644" },
+    { source = "../packaging/linux/linux-soundboard-engine.target", dest = "/usr/lib/systemd/user/linux-soundboard-engine.target", mode = "644" },
 ]
 
 [package.metadata.generate-rpm.requires]

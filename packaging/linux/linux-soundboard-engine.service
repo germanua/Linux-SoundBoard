@@ -2,6 +2,9 @@
 Description=Linux Soundboard audio engine
 Documentation=https://github.com/germanua/Linux-SoundBoard
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+PartOf=linux-soundboard-engine.target
+RefuseManualStop=yes
+X-LinuxSoundBoard-Managed=true
 
 [Service]
 # Type=exec: systemd tracks the exec'd process PID and reports exec failures
@@ -20,6 +23,3 @@ RestartPreventExitStatus=2
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-
-[Install]
-WantedBy=default.target

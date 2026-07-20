@@ -231,23 +231,31 @@ echo ""
 
 echo "==> Systemd service file"
 SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
+TARGET="$REPO_ROOT/packaging/linux/linux-soundboard-engine.target"
 
-if [[ ! -f "$SERVICE" ]]; then
-    fail "engine service file not found: $SERVICE"
+if [[ ! -f "$SERVICE" || ! -f "$TARGET" ]]; then
+    fail "engine service or target file not found"
 else
     if command -v systemd-analyze >/dev/null 2>&1; then
-        if systemd-analyze verify "$SERVICE" 2>&1; then
-            pass "systemd-analyze verify: engine service"
+        if systemd-analyze verify "$SERVICE" "$TARGET" 2>&1; then
+            pass "systemd-analyze verify: engine service and target"
         else
-            fail "systemd-analyze verify: engine service"
+            fail "systemd-analyze verify: engine service and target"
         fi
     else
-        skip "systemd-analyze not available; checking service fields manually"
-        for field in "Description=" "ExecStart=" "Type=exec" "Restart=" "WantedBy=default.target"; do
+        skip "systemd-analyze not available; checking unit fields manually"
+        for field in "Description=" "ExecStart=" "Type=exec" "Restart=" "PartOf=linux-soundboard-engine.target" "RefuseManualStop=yes"; do
             if grep -qF "$field" "$SERVICE"; then
                 pass "engine service: $field"
             else
                 fail "engine service: missing '$field'"
+            fi
+        done
+        for field in "Wants=linux-soundboard-engine.service" "WantedBy=default.target"; do
+            if grep -qF "$field" "$TARGET"; then
+                pass "engine target: $field"
+            else
+                fail "engine target: missing '$field'"
             fi
         done
     fi

@@ -179,14 +179,26 @@ echo ""
 # ── Service file fields ──────────────────────────────────────────────────────
 
 SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
+TARGET="$REPO_ROOT/packaging/linux/linux-soundboard-engine.target"
 if [[ ! -f "$SERVICE" ]]; then
     fail "engine service: file not found"
 else
-    for field in "Description=" "ExecStart=" "Type=" "Restart=" "WantedBy="; do
+    for field in "Description=" "ExecStart=" "Type=" "Restart=" "PartOf=linux-soundboard-engine.target" "RefuseManualStop=yes"; do
         if grep -qF "$field" "$SERVICE"; then
             pass "engine service: $field present"
         else
             fail "engine service: missing $field"
+        fi
+    done
+fi
+if [[ ! -f "$TARGET" ]]; then
+    fail "engine target: file not found"
+else
+    for field in "Wants=linux-soundboard-engine.service" "WantedBy=default.target"; do
+        if grep -qF "$field" "$TARGET"; then
+            pass "engine target: $field present"
+        else
+            fail "engine target: missing $field"
         fi
     done
 fi

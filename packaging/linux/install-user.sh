@@ -12,6 +12,7 @@ MANAGED_MARKER_LINE="# $MANAGED_MARKER"
 END_MANAGED_MARKER_LINE="# end-managed-by: linux-soundboard"
 VIRTUAL_SOURCE_NAME="linuxsoundboard.virtual_mic"
 ENGINE_SERVICE_NAME="linux-soundboard-engine.service"
+ENGINE_TARGET_NAME="linux-soundboard-engine.target"
 PIPEWIRE_CONF_NAME="99-linuxsoundboard.conf"
 SYSTEM_PIPEWIRE_CONF="/usr/share/pipewire/pipewire.conf.d/$PIPEWIRE_CONF_NAME"
 
@@ -30,6 +31,7 @@ DESKTOP_DIR="$XDG_DATA_HOME/applications"
 ICON_THEME_DIR="$XDG_DATA_HOME/icons/hicolor"
 SYSTEMD_USER_DIR="$XDG_CONFIG_HOME/systemd/user"
 ENGINE_SERVICE="$SYSTEMD_USER_DIR/$ENGINE_SERVICE_NAME"
+ENGINE_TARGET="$SYSTEMD_USER_DIR/$ENGINE_TARGET_NAME"
 PIPEWIRE_USER_CONF="$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/$PIPEWIRE_CONF_NAME"
 PULSE_DEFAULT_PA="$XDG_CONFIG_HOME/pulse/default.pa"
 
@@ -300,6 +302,9 @@ $MANAGED_MARKER_LINE
 Description=$APP_NAME audio engine
 Documentation=$APP_URL
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+PartOf=$ENGINE_TARGET_NAME
+RefuseManualStop=yes
+X-LinuxSoundBoard-Managed=true
 
 [Service]
 # Type=exec: systemd tracks the exec'd process PID and reports exec failures
@@ -317,6 +322,17 @@ RestartPreventExitStatus=2
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
+EOF
+}
+
+render_engine_target() {
+    cat <<EOF
+$MANAGED_MARKER_LINE
+[Unit]
+Description=$APP_NAME persistent audio engine
+Documentation=$APP_URL
+Wants=$ENGINE_SERVICE_NAME
+X-LinuxSoundBoard-Managed=true
 
 [Install]
 WantedBy=default.target
@@ -716,14 +732,16 @@ reload_start_engine_service() {
     command -v systemctl >/dev/null 2>&1 || return 0
 
     systemctl --user daemon-reload >/dev/null 2>&1 || true
-    systemctl --user enable "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
-    systemctl --user restart "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl --user disable "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl --user enable "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
+    systemctl --user restart "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
 }
 
 stop_disable_engine_service() {
     command -v systemctl >/dev/null 2>&1 || return 0
 
-    systemctl --user disable --now "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl --user disable --now "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
+    systemctl --user disable "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl --user daemon-reload >/dev/null 2>&1 || true
 }
 
@@ -808,6 +826,7 @@ install_or_repair() {
     install_icons "$icon_source_root"
     install_file_from_content "$DESKTOP_DIR/$APP_ID.desktop" 644 "$(render_desktop_file)"
     install_file_from_content "$ENGINE_SERVICE" 644 "$(render_engine_service)"
+    install_file_from_content "$ENGINE_TARGET" 644 "$(render_engine_target)"
     install_audio_config
     maybe_restart_audio_services
     reload_start_engine_service
@@ -1036,6 +1055,7 @@ remove_installation() {
     restore_preinstall_default_source "$DEFAULT_SOURCE_POLICY"
 
     remove_known_app_file "$ENGINE_SERVICE" "engine service"
+    remove_known_app_file "$ENGINE_TARGET" "engine target"
     remove_known_app_file "$DESKTOP_DIR/$APP_ID.desktop" "desktop entry"
     remove_icons
     remove_pipewire_config
@@ -1079,7 +1099,7 @@ print_status() {
 
     if command -v systemctl >/dev/null 2>&1; then
         service_state="$(systemctl --user is-active "$ENGINE_SERVICE_NAME" 2>/dev/null || true)"
-        service_enabled="$(systemctl --user is-enabled "$ENGINE_SERVICE_NAME" 2>/dev/null || true)"
+        service_enabled="$(systemctl --user is-enabled "$ENGINE_TARGET_NAME" 2>/dev/null || true)"
     fi
 
     default_source="$(current_default_source_name)"
@@ -1088,6 +1108,7 @@ print_status() {
     printf '  Binary:        %s\n' "$([[ -x "$INSTALL_BINARY" ]] && printf '%s' "$INSTALL_BINARY" || printf 'missing')"
     printf '  Launcher:      %s\n' "$([[ -f "$DESKTOP_DIR/$APP_ID.desktop" ]] && printf '%s' "$DESKTOP_DIR/$APP_ID.desktop" || printf 'missing')"
     printf '  Engine unit:   %s\n' "$([[ -f "$ENGINE_SERVICE" ]] && printf '%s' "$ENGINE_SERVICE" || printf 'missing')"
+    printf '  Engine target: %s\n' "$([[ -f "$ENGINE_TARGET" ]] && printf '%s' "$ENGINE_TARGET" || printf 'missing')"
     printf '  Engine active: %s\n' "${service_state:-unknown}"
     printf '  Engine enable: %s\n' "${service_enabled:-unknown}"
     printf '  Legacy conf:   %s\n' "$([[ -f "$PIPEWIRE_USER_CONF" ]] && printf '%s' "$PIPEWIRE_USER_CONF" || printf 'missing')"

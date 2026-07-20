@@ -56,3 +56,5 @@ override_dh_auto_install:
 	# Install user service for boot-ready audio engine
 	install -Dm644 packaging/linux/linux-soundboard-engine.service \
 		debian/linux-soundboard/usr/lib/systemd/user/linux-soundboard-engine.service
+	install -Dm644 packaging/linux/linux-soundboard-engine.target \
+		debian/linux-soundboard/usr/lib/systemd/user/linux-soundboard-engine.target
