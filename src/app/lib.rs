@@ -3,6 +3,7 @@ pub mod audio;
 pub mod bootstrap;
 pub mod commands;
 pub mod config;
+pub mod legacy_migration;
 pub mod library_store;
 
 // Implementation-only modules — accessible within this crate but not

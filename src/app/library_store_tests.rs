@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use crate::config::{LoudnessAnalysisState, Sound};
 use crate::library_store::{
     FolderOverrideAction, FolderOverrideRecord, FolderRecord, HotkeyBindingOwner,
-    HotkeyBindingRecord, LibraryBatch, LibraryScope, LibraryStore, ManualMembershipRecord,
-    ManualTabRecord, RootRecord, SoundLocationRecord, SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
+    HotkeyBindingRecord, LegacyGeneratedMembershipRecord, LegacyGeneratedTabRecord, LibraryBatch,
+    LibraryScope, LibraryStore, ManualMembershipRecord, ManualTabRecord, RootRecord,
+    SoundLocationRecord, SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
 };
 
 struct TestDir(PathBuf);
@@ -962,6 +963,90 @@ fn removing_a_root_hides_its_orphaned_sounds_but_preserves_manual_sounds() {
 }
 
 #[test]
+fn first_root_scan_converts_legacy_generated_membership_to_sparse_overrides() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("included", "Included", "/music/included.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    wait(store.apply_batch(LibraryBatch::LegacyGeneratedTabs(vec![
+        LegacyGeneratedTabRecord {
+            public_id: "legacy-album".to_string(),
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+            name: "My Album".to_string(),
+            position: 4,
+        },
+    ])));
+    wait(
+        store.apply_batch(LibraryBatch::LegacyGeneratedMemberships(vec![
+            LegacyGeneratedMembershipRecord {
+                tab_public_id: "legacy-album".to_string(),
+                sound_public_id: "included".to_string(),
+                position: 0,
+            },
+        ])),
+    );
+
+    let generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        generation,
+        vec![FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+            parent_relative_path: None,
+            name: "album".to_string(),
+            position: 0,
+        }],
+        vec![
+            SoundRecord {
+                sound: sound("included", "Included", "/music/included.flac"),
+                general_position: 0,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: None,
+                    relative_path: "included.flac".to_string(),
+                }],
+            },
+            SoundRecord {
+                sound: sound("excluded", "Excluded", "/music/album/excluded.flac"),
+                general_position: 1,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: Some("album".to_string()),
+                    relative_path: "album/excluded.flac".to_string(),
+                }],
+            },
+        ],
+    ));
+    assert!(wait(store.finish_root_scan("/music", generation)));
+
+    let album = wait(store.page(
+        LibraryScope::Folder {
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+        },
+        "",
+        0,
+    ));
+    assert_eq!(
+        album
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["included"]
+    );
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0)).folders[0].name,
+        "My Album"
+    );
+}
+
+#[test]
 fn schema_one_migration_preserves_duplicate_hotkeys_for_user_resolution() {
     let temp = TestDir::new();
     let path = temp.path().join("library.sqlite3");
@@ -1017,7 +1102,7 @@ fn schema_one_migration_preserves_duplicate_hotkeys_for_user_resolution() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read migrated schema version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
 }
 
 #[test]

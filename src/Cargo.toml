@@ -48,6 +48,7 @@ rayon = "1.8"
 rusqlite = { version = "0.39", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 # Defaults already enable flac/wav/vorbis/ogg/pcm/adpcm/mkv. mp3/aac/isomp4 are
 # NOT in symphonia's defaults — required for the app's MP3/AAC/M4A/MP4 formats.
 symphonia = { version = "0.5", features = ["mp3", "aac", "alac", "isomp4"] }

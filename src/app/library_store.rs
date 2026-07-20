@@ -11,7 +11,7 @@ use crate::config::{Config, ControlHotkeyAction, LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
-const DATABASE_SCHEMA_VERSION: i64 = 2;
+const DATABASE_SCHEMA_VERSION: i64 = 3;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
 const VISIBLE_QUEUE_CAPACITY: usize = 64;
 const MAINTENANCE_QUEUE_CAPACITY: usize = 2;
@@ -167,6 +167,22 @@ pub struct ManualMembershipRecord {
     pub position: usize,
 }
 
+#[derive(Debug)]
+pub struct LegacyGeneratedTabRecord {
+    pub public_id: String,
+    pub root_path: String,
+    pub relative_path: String,
+    pub name: String,
+    pub position: usize,
+}
+
+#[derive(Debug)]
+pub struct LegacyGeneratedMembershipRecord {
+    pub tab_public_id: String,
+    pub sound_public_id: String,
+    pub position: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum FolderOverrideAction {
     Include,
@@ -188,6 +204,8 @@ pub enum LibraryBatch {
     Sounds(Vec<SoundRecord>),
     ManualTabs(Vec<ManualTabRecord>),
     ManualMemberships(Vec<ManualMembershipRecord>),
+    LegacyGeneratedTabs(Vec<LegacyGeneratedTabRecord>),
+    LegacyGeneratedMemberships(Vec<LegacyGeneratedMembershipRecord>),
     FolderOverrides(Vec<FolderOverrideRecord>),
     HotkeyBindings(Vec<HotkeyBindingRecord>),
 }
@@ -228,6 +246,8 @@ impl LibraryBatch {
                 .fold(0, usize::saturating_add),
             Self::ManualTabs(rows) => rows.len(),
             Self::ManualMemberships(rows) => rows.len(),
+            Self::LegacyGeneratedTabs(rows) => rows.len(),
+            Self::LegacyGeneratedMemberships(rows) => rows.len(),
             Self::FolderOverrides(rows) => rows.len(),
             Self::HotkeyBindings(rows) => rows.len(),
         }
@@ -439,7 +459,7 @@ impl Drop for LibraryStoreInner {
 #[derive(Clone)]
 pub struct LibraryStore(Arc<LibraryStoreInner>);
 
-fn legacy_hotkey_binding(
+pub(crate) fn legacy_hotkey_binding(
     binding_id: String,
     owner: HotkeyBindingOwner,
     raw: &str,
@@ -1140,6 +1160,9 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
         create_schema(&connection)?;
     } else if schema_version == 1 {
         migrate_schema_1_to_2(&connection)?;
+        migrate_schema_2_to_3(&connection)?;
+    } else if schema_version == 2 {
+        migrate_schema_2_to_3(&connection)?;
     } else {
         let meta_version: String = connection.query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -1151,7 +1174,7 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
             [],
             |row| row.get(0),
         )?;
-        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-generation-v2"
+        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-generation-v3"
         {
             return Err(LibraryError::InvalidData(
                 "library metadata does not match the bounded schema".to_string(),
@@ -1254,6 +1277,22 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
          );
          CREATE INDEX manual_memberships_order ON manual_memberships(tab_id, position, sound_id);
          CREATE INDEX manual_memberships_sound ON manual_memberships(sound_id);
+         CREATE TABLE legacy_generated_tabs(
+             id INTEGER PRIMARY KEY,
+             public_id TEXT NOT NULL UNIQUE,
+             root_path TEXT NOT NULL,
+             relative_path TEXT NOT NULL,
+             name TEXT NOT NULL,
+             position INTEGER NOT NULL
+         );
+         CREATE INDEX legacy_generated_tabs_root
+             ON legacy_generated_tabs(root_path, relative_path, id);
+         CREATE TABLE legacy_generated_memberships(
+             tab_id INTEGER NOT NULL REFERENCES legacy_generated_tabs(id) ON DELETE CASCADE,
+             sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
+             position INTEGER NOT NULL,
+             PRIMARY KEY(tab_id, sound_id)
+         );
          CREATE TABLE folder_prefs(
              folder_id INTEGER PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
              display_name TEXT,
@@ -1284,9 +1323,9 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              VALUES('delete', old.rowid, old.search_name);
              INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
          END;
-         INSERT INTO meta(key, value) VALUES('schema_version', '2');
-         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v2');
-         PRAGMA user_version = 2;
+         INSERT INTO meta(key, value) VALUES('schema_version', '3');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v3');
+         PRAGMA user_version = 3;
          COMMIT;",
     )?;
     Ok(())
@@ -1341,6 +1380,43 @@ fn migrate_schema_1_to_2(connection: &Connection) -> Result<(), LibraryError> {
     Ok(())
 }
 
+fn migrate_schema_2_to_3(connection: &Connection) -> Result<(), LibraryError> {
+    let flavor: String = connection.query_row(
+        "SELECT value FROM meta WHERE key = 'schema_flavor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if flavor != "bounded-generation-v2" {
+        return Err(LibraryError::InvalidData(
+            "library metadata does not match schema 2".to_string(),
+        ));
+    }
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE legacy_generated_tabs(
+             id INTEGER PRIMARY KEY,
+             public_id TEXT NOT NULL UNIQUE,
+             root_path TEXT NOT NULL,
+             relative_path TEXT NOT NULL,
+             name TEXT NOT NULL,
+             position INTEGER NOT NULL
+         );
+         CREATE INDEX legacy_generated_tabs_root
+             ON legacy_generated_tabs(root_path, relative_path, id);
+         CREATE TABLE legacy_generated_memberships(
+             tab_id INTEGER NOT NULL REFERENCES legacy_generated_tabs(id) ON DELETE CASCADE,
+             sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
+             position INTEGER NOT NULL,
+             PRIMARY KEY(tab_id, sound_id)
+         );
+         UPDATE meta SET value = '3' WHERE key = 'schema_version';
+         UPDATE meta SET value = 'bounded-generation-v3' WHERE key = 'schema_flavor';
+         PRAGMA user_version = 3;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
 fn apply_batch(connection: &mut Connection, batch: LibraryBatch) -> Result<(), LibraryError> {
     let transaction = connection.transaction()?;
     match batch {
@@ -1349,6 +1425,12 @@ fn apply_batch(connection: &mut Connection, batch: LibraryBatch) -> Result<(), L
         LibraryBatch::Sounds(rows) => insert_sounds(&transaction, rows)?,
         LibraryBatch::ManualTabs(rows) => insert_manual_tabs(&transaction, rows)?,
         LibraryBatch::ManualMemberships(rows) => insert_manual_memberships(&transaction, rows)?,
+        LibraryBatch::LegacyGeneratedTabs(rows) => {
+            insert_legacy_generated_tabs(&transaction, rows)?
+        }
+        LibraryBatch::LegacyGeneratedMemberships(rows) => {
+            insert_legacy_generated_memberships(&transaction, rows)?
+        }
         LibraryBatch::FolderOverrides(rows) => insert_folder_overrides(&transaction, rows)?,
         LibraryBatch::HotkeyBindings(rows) => insert_hotkey_bindings(&transaction, rows)?,
     }
@@ -1601,6 +1683,7 @@ fn finish_root_scan(
         return Ok(false);
     }
     let transaction = connection.transaction()?;
+    reconcile_legacy_generated_tabs(&transaction, root_path, generation)?;
     let changed = transaction.execute(
         "UPDATE roots SET active_generation = ?2 WHERE path = ?1",
         params![root_path, generation],
@@ -1611,6 +1694,114 @@ fn finish_root_scan(
     )?;
     transaction.commit()?;
     Ok(changed == 1)
+}
+
+fn reconcile_legacy_generated_tabs(
+    transaction: &Transaction<'_>,
+    root_path: &str,
+    generation: i64,
+) -> Result<(), LibraryError> {
+    transaction.execute(
+        "INSERT INTO folder_prefs(folder_id, display_name, sibling_position, expanded)
+         SELECT folder.id, legacy.name, legacy.position, 0
+         FROM legacy_generated_tabs AS legacy
+         JOIN roots AS root ON root.path = legacy.root_path
+         JOIN folders AS folder ON folder.root_id = root.id
+             AND folder.relative_path = legacy.relative_path
+         JOIN folder_presence AS presence ON presence.folder_id = folder.id
+             AND presence.generation = ?2
+         WHERE legacy.root_path = ?1
+         ON CONFLICT(folder_id) DO UPDATE SET
+             display_name = excluded.display_name,
+             sibling_position = excluded.sibling_position",
+        params![root_path, generation],
+    )?;
+    transaction.execute(
+        "WITH targets(tab_id, folder_id, root_id) AS (
+             SELECT legacy.id, folder.id, root.id
+             FROM legacy_generated_tabs AS legacy
+             JOIN roots AS root ON root.path = legacy.root_path
+             JOIN folders AS folder ON folder.root_id = root.id
+                 AND folder.relative_path = legacy.relative_path
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = ?2
+             WHERE legacy.root_path = ?1
+         )
+         INSERT INTO folder_overrides(folder_id, sound_id, action)
+         SELECT target.folder_id, membership.sound_id, 'include'
+         FROM targets AS target
+         JOIN legacy_generated_memberships AS membership ON membership.tab_id = target.tab_id
+         WHERE NOT EXISTS (
+             SELECT 1
+             FROM folder_closure AS closure
+             JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+             WHERE closure.ancestor_id = target.folder_id
+               AND location.root_id = target.root_id
+               AND location.generation = ?2
+               AND location.sound_id = membership.sound_id
+         )
+         ON CONFLICT(folder_id, sound_id) DO UPDATE SET action = excluded.action",
+        params![root_path, generation],
+    )?;
+    transaction.execute(
+        "WITH targets(tab_id, folder_id, root_id) AS (
+             SELECT legacy.id, folder.id, root.id
+             FROM legacy_generated_tabs AS legacy
+             JOIN roots AS root ON root.path = legacy.root_path
+             JOIN folders AS folder ON folder.root_id = root.id
+                 AND folder.relative_path = legacy.relative_path
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = ?2
+             WHERE legacy.root_path = ?1
+         ), physical(tab_id, folder_id, sound_id) AS (
+             SELECT DISTINCT target.tab_id, target.folder_id, location.sound_id
+             FROM targets AS target
+             JOIN folder_closure AS closure ON closure.ancestor_id = target.folder_id
+             JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                 AND location.root_id = target.root_id
+                 AND location.generation = ?2
+         )
+         INSERT INTO folder_overrides(folder_id, sound_id, action)
+         SELECT physical.folder_id, physical.sound_id, 'exclude'
+         FROM physical
+         WHERE NOT EXISTS (
+             SELECT 1 FROM legacy_generated_memberships AS membership
+             WHERE membership.tab_id = physical.tab_id
+               AND membership.sound_id = physical.sound_id
+         )
+         ON CONFLICT(folder_id, sound_id) DO UPDATE SET action = excluded.action",
+        params![root_path, generation],
+    )?;
+    transaction.execute(
+        "INSERT INTO manual_tabs(public_id, name, position)
+         SELECT legacy.public_id, legacy.name, legacy.position
+         FROM legacy_generated_tabs AS legacy
+         WHERE legacy.root_path = ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM roots AS root
+               JOIN folders AS folder ON folder.root_id = root.id
+               JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                   AND presence.generation = ?2
+               WHERE root.path = legacy.root_path
+                 AND folder.relative_path = legacy.relative_path
+           )",
+        params![root_path, generation],
+    )?;
+    transaction.execute(
+        "INSERT INTO manual_memberships(tab_id, sound_id, position)
+         SELECT manual.id, membership.sound_id, membership.position
+         FROM legacy_generated_tabs AS legacy
+         JOIN manual_tabs AS manual ON manual.public_id = legacy.public_id
+         JOIN legacy_generated_memberships AS membership ON membership.tab_id = legacy.id
+         WHERE legacy.root_path = ?1
+         ON CONFLICT(tab_id, sound_id) DO UPDATE SET position = excluded.position",
+        [root_path],
+    )?;
+    transaction.execute(
+        "DELETE FROM legacy_generated_tabs WHERE root_path = ?1",
+        [root_path],
+    )?;
+    Ok(())
 }
 
 fn cancel_root_scan(
@@ -1947,6 +2138,52 @@ fn insert_manual_memberships(
         if transaction.changes() != 1 {
             return Err(LibraryError::InvalidData(
                 "manual membership references a missing tab or sound".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_legacy_generated_tabs(
+    transaction: &Transaction<'_>,
+    rows: Vec<LegacyGeneratedTabRecord>,
+) -> Result<(), LibraryError> {
+    let mut statement = transaction.prepare(
+        "INSERT INTO legacy_generated_tabs(
+             public_id, root_path, relative_path, name, position
+         ) VALUES(?1, ?2, ?3, ?4, ?5)",
+    )?;
+    for row in rows {
+        statement.execute(params![
+            row.public_id,
+            row.root_path,
+            row.relative_path,
+            row.name,
+            usize_to_i64(row.position)?
+        ])?;
+    }
+    Ok(())
+}
+
+fn insert_legacy_generated_memberships(
+    transaction: &Transaction<'_>,
+    rows: Vec<LegacyGeneratedMembershipRecord>,
+) -> Result<(), LibraryError> {
+    for row in rows {
+        transaction.execute(
+            "INSERT INTO legacy_generated_memberships(tab_id, sound_id, position)
+             SELECT tab.id, sound.rowid, ?3
+             FROM legacy_generated_tabs AS tab, sounds AS sound
+             WHERE tab.public_id = ?1 AND sound.public_id = ?2",
+            params![
+                row.tab_public_id,
+                row.sound_public_id,
+                usize_to_i64(row.position)?
+            ],
+        )?;
+        if transaction.changes() != 1 {
+            return Err(LibraryError::InvalidData(
+                "legacy generated membership references a missing tab or sound".to_string(),
             ));
         }
     }
