@@ -241,17 +241,15 @@ fn handle_drop_import(
     let drop_zone_done = drop_zone.clone();
     let title_done = title.clone();
     let subtitle_done = subtitle.clone();
-    if let Err(e) = commands::import_files_to_tab_async(
+    if let Err(e) = commands::import_files_to_tab_with_store_async(
         valid_paths,
         tab_id_opt,
-        Arc::clone(&state.config),
-        state.loudness_coordinators.clone(),
+        state.library.clone(),
         move |result| {
             match result {
-                Ok(new_sounds) => {
-                    let imported_count = new_sounds.len();
+                Ok(imported_count) => {
                     if imported_count > 0 {
-                        sound_list_done.append_sounds(new_sounds);
+                        sound_list_done.refresh_from_state();
                     }
                     let message = match (imported_count, skipped_paths) {
                         (0, 0) => "Dropped files were already in the soundboard".to_string(),

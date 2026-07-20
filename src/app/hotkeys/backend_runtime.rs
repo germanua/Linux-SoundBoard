@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{SyncSender, TrySendError};
 
 use super::error::HotkeyError;
 
@@ -22,10 +22,30 @@ pub trait HotkeyBackend: Send + Sync {
         }
         Ok(())
     }
-    fn start_listener(&self, sender: Sender<String>);
+    fn start_listener(&self, sender: SyncSender<String>);
     /// Release any resources owned by the backend (e.g. spawned daemons) before
     /// the application exits. Default is a no-op for backends with nothing to
     /// tear down.
     fn shutdown(&self) {}
     fn as_any(&self) -> &dyn Any;
+}
+
+pub(super) fn try_dispatch_hotkey(sender: &SyncSender<String>, binding_id: String) -> bool {
+    match sender.try_send(binding_id) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_hotkey_queue_drops_repeat_without_blocking() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(try_dispatch_hotkey(&sender, "first".to_string()));
+        assert!(!try_dispatch_hotkey(&sender, "repeat".to_string()));
+        assert_eq!(receiver.recv().unwrap(), "first");
+    }
 }

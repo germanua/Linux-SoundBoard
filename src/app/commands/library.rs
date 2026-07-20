@@ -1,7 +1,9 @@
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -13,6 +15,10 @@ use crate::audio::file_link::{
 use crate::audio::scanner;
 use crate::config::{Config, FolderTabBinding, LoudnessAnalysisState, Sound};
 use crate::hotkeys::HotkeyManager;
+use crate::library_store::{
+    FolderRecord, LibraryBatch, LibraryScope, LibraryStore, SoundLocationRecord, SoundRecord,
+    MAX_BATCH_ROWS,
+};
 
 use super::shared::{
     adaptive_audio_analysis_plan, build_sound_with_metadata, compute_sound_source_fingerprint,
@@ -57,6 +63,103 @@ pub struct RefreshSummary {
     pub tabs_created: usize,
     pub tabs_removed: usize,
     pub tab_memberships_added: usize,
+}
+
+#[derive(Default)]
+struct StoreScanBatch {
+    root: String,
+    generation: i64,
+    folders: Vec<FolderRecord>,
+    folder_paths: HashSet<String>,
+    sounds: Vec<SoundRecord>,
+    rows: usize,
+}
+
+impl StoreScanBatch {
+    fn reset_for(&mut self, root: String, generation: i64) {
+        self.root = root;
+        self.generation = generation;
+        self.folders.clear();
+        self.folder_paths.clear();
+        self.sounds.clear();
+        self.rows = 0;
+    }
+
+    fn flush(&mut self, library: &LibraryStore) -> Result<(), CommandError> {
+        if self.folders.is_empty() && self.sounds.is_empty() {
+            return Ok(());
+        }
+        library
+            .apply_root_scan_batch(
+                &self.root,
+                self.generation,
+                std::mem::take(&mut self.folders),
+                std::mem::take(&mut self.sounds),
+            )
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+        self.folder_paths.clear();
+        self.rows = 0;
+        Ok(())
+    }
+
+    fn push_file(
+        &mut self,
+        file: scanner::AudioFile,
+        position: usize,
+        library: &LibraryStore,
+    ) -> Result<(), CommandError> {
+        let parent = Path::new(&file.relative_path)
+            .parent()
+            .filter(|path| path.components().next().is_some())
+            .map(|path| path.to_string_lossy().into_owned());
+        let new_folder_rows = parent
+            .as_ref()
+            .filter(|path| !self.folder_paths.contains(*path))
+            .map(|path| Path::new(path).components().count())
+            .unwrap_or(0);
+        let required_rows = 2_usize.saturating_add(new_folder_rows);
+        if required_rows > MAX_BATCH_ROWS {
+            return Err(CommandError::Library(format!(
+                "folder nesting exceeds the {MAX_BATCH_ROWS}-row scan transaction limit"
+            )));
+        }
+        if self.rows.saturating_add(required_rows) > MAX_BATCH_ROWS {
+            self.flush(library)?;
+        }
+
+        if let Some(relative_path) = parent.as_ref() {
+            if self.folder_paths.insert(relative_path.clone()) {
+                let path = Path::new(relative_path);
+                self.folders.push(FolderRecord {
+                    root_path: self.root.clone(),
+                    relative_path: relative_path.clone(),
+                    parent_relative_path: path
+                        .parent()
+                        .filter(|parent| parent.components().next().is_some())
+                        .map(|parent| parent.to_string_lossy().into_owned()),
+                    name: path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| relative_path.clone()),
+                    position: 0,
+                });
+                self.rows = self.rows.saturating_add(new_folder_rows);
+            }
+        }
+
+        self.sounds.push(SoundRecord {
+            sound: build_sound_with_metadata(file.name, file.path),
+            general_position: position,
+            locations: vec![SoundLocationRecord {
+                root_path: self.root.clone(),
+                folder_relative_path: parent,
+                relative_path: file.relative_path,
+            }],
+        });
+        self.rows = self.rows.saturating_add(2);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -373,6 +476,47 @@ pub fn add_sound(
     Ok(sound_clone)
 }
 
+pub fn add_sound_with_store(
+    name: String,
+    path: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    coords: &LoudnessCoordinators,
+) -> Result<Sound, CommandError> {
+    if !Path::new(&path).exists() {
+        return Err(CommandError::Invalid(ERR_FILE_DOES_NOT_EXIST.to_string()));
+    }
+    if !scanner::is_audio_file(&path) {
+        return Err(CommandError::Invalid(
+            ERR_UNSUPPORTED_AUDIO_FILE.to_string(),
+        ));
+    }
+    let position = library
+        .count(LibraryScope::General, "")
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    let sound = build_sound_with_metadata(name, path);
+    library
+        .apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+            sound: sound.clone(),
+            general_position: position,
+            locations: Vec::new(),
+        }]))
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    if let Err(error) = with_config_mut(&config, |candidate| {
+        if candidate.sounds.iter().all(|item| item.id != sound.id) {
+            candidate.sounds.push(sound.clone());
+            candidate.save().map_err(CommandError::config_save)?;
+        }
+        Ok::<(), CommandError>(())
+    }) {
+        log::warn!("Legacy library mirror failed after adding sound: {error}");
+    }
+    maybe_schedule_missing_loudness_backfill(&config, coords);
+    Ok(sound)
+}
+
 pub fn rename_sound(
     id: String,
     name: String,
@@ -392,6 +536,38 @@ pub fn rename_sound(
             .cloned()
             .ok_or(CommandError::SoundNotFound)
     })??;
+    Ok(sound)
+}
+
+pub fn rename_sound_with_store(
+    id: String,
+    name: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<Sound, CommandError> {
+    let new_name = name.trim().to_string();
+    if new_name.is_empty() {
+        return Err(CommandError::Invalid("Name cannot be empty".to_string()));
+    }
+    let mut sound = library
+        .sound_by_id(&id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .ok_or(CommandError::SoundNotFound)?;
+    sound.name = new_name;
+    library
+        .update_sound(sound.clone())
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    if let Err(error) = with_config_mut(&config, |candidate| {
+        if let Some(existing) = candidate.get_sound_mut(&id) {
+            existing.name = sound.name.clone();
+            candidate.save().map_err(CommandError::config_save)?;
+        }
+        Ok::<(), CommandError>(())
+    }) {
+        log::warn!("Legacy library mirror failed after renaming sound: {error}");
+    }
     Ok(sound)
 }
 
@@ -475,6 +651,55 @@ where
     )
 }
 
+pub fn remove_sounds_with_store(
+    ids: Vec<String>,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    let mut removed = Vec::new();
+    for id in &ids {
+        if library
+            .delete_sound(id)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+        {
+            removed.push(id.clone());
+        }
+    }
+    if !removed.is_empty() {
+        if let Err(error) = with_config_mut(&config, |candidate| {
+            let before = candidate.sounds.len();
+            candidate.remove_sounds(&removed);
+            if candidate.sounds.len() != before {
+                candidate.save().map_err(CommandError::config_save)?;
+            }
+            Ok::<(), CommandError>(())
+        }) {
+            log::warn!("Legacy library mirror failed after removing sounds: {error}");
+        }
+        unregister_hotkeys_best_effort(&hotkeys, &removed, "remove_sounds_with_store");
+    }
+    Ok(())
+}
+
+pub fn remove_sounds_with_store_async<F>(
+    ids: Vec<String>,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "remove_sounds",
+        move || remove_sounds_with_store(ids, config, hotkeys, library),
+        on_complete,
+    )
+}
+
 pub fn add_sound_folder(folder: String, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
     if !Path::new(&folder).is_dir() {
         return Err(CommandError::Invalid("Folder does not exist".to_string()));
@@ -550,6 +775,36 @@ where
     dispatch_async_result(
         "remove_sound_folder",
         move || remove_sound_folder(folder, config, hotkeys),
+        on_complete,
+    )
+}
+
+pub fn remove_sound_folder_with_store(
+    folder: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    library
+        .remove_root(&folder)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    with_saved_config(&config, |candidate| {
+        candidate.remove_sound_folder(&folder);
+    })
+}
+
+pub fn remove_sound_folder_with_store_async<F>(
+    folder: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "remove_sound_folder",
+        move || remove_sound_folder_with_store(folder, config, library),
         on_complete,
     )
 }
@@ -777,6 +1032,117 @@ where
     )
 }
 
+pub fn refresh_sounds_with_store(
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<RefreshSummary, CommandError> {
+    let folders = config.lock().sound_folders.clone();
+    let before = library
+        .count(LibraryScope::General, "")
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+
+    let mut roots = Vec::new();
+    let mut seen_roots = HashSet::new();
+    for folder in folders {
+        if seen_roots.insert(folder.clone()) {
+            roots.push(folder);
+        }
+    }
+
+    let mut generations = BTreeMap::new();
+    for (position, root) in roots.iter().enumerate() {
+        match library.begin_root_scan(root, position).recv() {
+            Ok(generation) => {
+                generations.insert(root.clone(), generation);
+            }
+            Err(error) => {
+                for (started_root, generation) in &generations {
+                    let _ = library.cancel_root_scan(started_root, *generation).recv();
+                }
+                return Err(CommandError::Library(error.to_string()));
+            }
+        }
+    }
+
+    let cancelled = AtomicBool::new(false);
+    let mut batch = StoreScanBatch::default();
+    let mut next_position = 0_usize;
+    let mut scan_error = None;
+    let progress = scanner::visit_audio_files(&roots, &cancelled, |file| {
+        let Some(&generation) = generations.get(&file.root_folder) else {
+            scan_error = Some(CommandError::Library(format!(
+                "scanner returned an unknown root: {}",
+                file.root_folder
+            )));
+            return ControlFlow::Break(());
+        };
+        if batch.root != file.root_folder {
+            if let Err(error) = batch.flush(&library) {
+                scan_error = Some(error);
+                return ControlFlow::Break(());
+            }
+            batch.reset_for(file.root_folder.clone(), generation);
+        }
+        if let Err(error) = batch.push_file(file, next_position, &library) {
+            scan_error = Some(error);
+            return ControlFlow::Break(());
+        }
+        next_position = next_position.saturating_add(1);
+        ControlFlow::Continue(())
+    });
+
+    if scan_error.is_none() {
+        scan_error = batch.flush(&library).err();
+    }
+    if progress.cancelled || progress.stopped_early || scan_error.is_some() {
+        for (root, generation) in &generations {
+            let _ = library.cancel_root_scan(root, *generation).recv();
+        }
+        return Err(scan_error.unwrap_or_else(|| {
+            CommandError::Library("sound folder refresh was cancelled".to_string())
+        }));
+    }
+
+    for (root, generation) in &generations {
+        if !library
+            .finish_root_scan(root, *generation)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+        {
+            return Err(CommandError::Library(format!(
+                "sound folder refresh for '{root}' was superseded"
+            )));
+        }
+    }
+
+    let after = library
+        .count(LibraryScope::General, "")
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    Ok(RefreshSummary {
+        added: after.saturating_sub(before),
+        removed: before.saturating_sub(after),
+        refreshed: progress.files,
+        ..RefreshSummary::default()
+    })
+}
+
+pub fn refresh_sounds_with_store_async<F>(
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<RefreshSummary, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "refresh_sounds",
+        move || refresh_sounds_with_store(config, library),
+        on_complete,
+    )
+}
+
 pub fn import_dropped_files(
     paths: Vec<String>,
     config: Arc<Mutex<Config>>,
@@ -947,6 +1313,105 @@ where
     )
 }
 
+pub fn import_files_to_tab_with_store(
+    paths: Vec<String>,
+    tab_id: Option<String>,
+    library: LibraryStore,
+) -> Result<usize, CommandError> {
+    let mut position = library
+        .count(LibraryScope::General, "")
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    let mut imported = 0_usize;
+    let mut membership_position = if let Some(tab_id) = tab_id.as_ref() {
+        library
+            .count(LibraryScope::ManualTab(tab_id.clone()), "")
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+    } else {
+        0
+    };
+    let mut accepted_paths = HashSet::new();
+    let mut sounds = Vec::with_capacity(MAX_BATCH_ROWS / 2);
+    let mut memberships = Vec::with_capacity(MAX_BATCH_ROWS / 2);
+
+    let flush = |sounds: &mut Vec<SoundRecord>,
+                 memberships: &mut Vec<crate::library_store::ManualMembershipRecord>|
+     -> Result<(), CommandError> {
+        if !sounds.is_empty() {
+            library
+                .apply_batch(LibraryBatch::Sounds(std::mem::take(sounds)))
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?;
+        }
+        if !memberships.is_empty() {
+            library
+                .apply_batch(LibraryBatch::ManualMemberships(std::mem::take(memberships)))
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?;
+        }
+        Ok(())
+    };
+
+    for path in paths {
+        if !scanner::is_audio_file(&path)
+            || !check_file_exists(&path)
+            || !accepted_paths.insert(path.clone())
+        {
+            continue;
+        }
+        if library
+            .sound_by_path(&path)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+            .is_some()
+        {
+            continue;
+        }
+        let name = Path::new(&path)
+            .file_stem()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unknown".to_string());
+        let sound = build_sound_with_metadata(name, path);
+        if let Some(tab_id) = tab_id.as_ref() {
+            memberships.push(crate::library_store::ManualMembershipRecord {
+                tab_public_id: tab_id.clone(),
+                sound_public_id: sound.id.clone(),
+                position: membership_position,
+            });
+            membership_position = membership_position.saturating_add(1);
+        }
+        sounds.push(SoundRecord {
+            sound,
+            general_position: position,
+            locations: Vec::new(),
+        });
+        imported = imported.saturating_add(1);
+        position = position.saturating_add(1);
+        if sounds.len() >= MAX_BATCH_ROWS / 2 {
+            flush(&mut sounds, &mut memberships)?;
+        }
+    }
+    flush(&mut sounds, &mut memberships)?;
+    Ok(imported)
+}
+
+pub fn import_files_to_tab_with_store_async<F>(
+    paths: Vec<String>,
+    tab_id: Option<String>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<usize, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "import_files_to_tab",
+        move || import_files_to_tab_with_store(paths, tab_id, library),
+        on_complete,
+    )
+}
+
 pub fn validate_all_sources(config: Arc<Mutex<Config>>) -> Result<Vec<String>, CommandError> {
     let sounds = source_validation_inputs(config)?;
     let report = validate_sounds_batch_with_report(&sounds);
@@ -1069,6 +1534,72 @@ where
     dispatch_async_result(
         "update_sound_source",
         move || update_sound_source(id, new_path, config, &coords),
+        on_complete,
+    )
+}
+
+pub fn update_sound_source_with_store(
+    id: String,
+    new_path: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    coords: &LoudnessCoordinators,
+) -> Result<Sound, CommandError> {
+    if !check_file_exists(&new_path) {
+        return Err(CommandError::Invalid(
+            "New file path does not exist".to_string(),
+        ));
+    }
+    if !scanner::is_audio_file(&new_path) {
+        return Err(CommandError::Invalid(
+            ERR_UNSUPPORTED_AUDIO_FILE.to_string(),
+        ));
+    }
+    let mut sound = library
+        .sound_by_id(&id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .ok_or(CommandError::SoundNotFound)?;
+    sound.path = new_path;
+    sound.source_path = None;
+    sound.duration_ms = probe_duration_ms(&sound.path);
+    sound.loudness_source_fingerprint =
+        compute_sound_source_fingerprint(&sound.path, sound.duration_ms);
+    sound.loudness_lufs = None;
+    sound.loudness_true_peak_dbtp = None;
+    sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
+    sound.loudness_confidence = None;
+    library
+        .update_sound(sound.clone())
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    if let Err(error) = with_config_mut(&config, |candidate| {
+        if let Some(existing) = candidate.get_sound_mut(&id) {
+            *existing = sound.clone();
+            candidate.save().map_err(CommandError::config_save)?;
+        }
+        Ok::<(), CommandError>(())
+    }) {
+        log::warn!("Legacy library mirror failed after relinking sound: {error}");
+    }
+    maybe_schedule_missing_loudness_backfill(&config, coords);
+    Ok(sound)
+}
+
+pub fn update_sound_source_with_store_async<F>(
+    id: String,
+    new_path: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    coords: LoudnessCoordinators,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Sound, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "update_sound_source",
+        move || update_sound_source_with_store(id, new_path, config, library, &coords),
         on_complete,
     )
 }

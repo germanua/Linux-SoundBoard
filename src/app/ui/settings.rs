@@ -326,10 +326,9 @@ fn build_general_page(
                                     Ok(()) => {
                                         log::info!("Add folder command succeeded");
                                         let add_folder_row_refresh = add_folder_row_done.clone();
-                                        if let Err(e) = commands::refresh_sounds_async(
+                                        if let Err(e) = commands::refresh_sounds_with_store_async(
                                             Arc::clone(&state3.config),
-                                            Arc::clone(&state3.hotkeys),
-                                            state3.loudness_coordinators.clone(),
+                                            state3.library.clone(),
                                             move |result| {
                                                 add_folder_row_refresh.set_sensitive(true);
                                                 if let Err(e) = result {

@@ -154,6 +154,7 @@ fn build_hotkey_row(
                             Some(hk.clone()),
                             Arc::clone(&state3.config),
                             Arc::clone(&state3.hotkeys),
+                            state3.library.clone(),
                         ) {
                             Ok(_) => {
                                 if let Some(lbl2) = lbl2.upgrade() {
@@ -189,6 +190,7 @@ fn build_hotkey_row(
                             None,
                             Arc::clone(&state3.config),
                             Arc::clone(&state3.hotkeys),
+                            state3.library.clone(),
                         ) {
                             Ok(_) => {
                                 if let Some(lbl2) = lbl2.upgrade() {
@@ -224,6 +226,7 @@ fn build_hotkey_row(
                 None,
                 Arc::clone(&state2.config),
                 Arc::clone(&state2.hotkeys),
+                state2.library.clone(),
             ) {
                 Ok(_) => {
                     if let Some(lbl) = lbl.upgrade() {

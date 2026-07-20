@@ -31,6 +31,9 @@ impl SoundListInner {
                 return;
             };
             let sound = obj.borrow::<SoundRowData>().clone();
+            if sound.id.is_empty() {
+                return;
+            }
             let is_invalid = invalid_ids.lock().contains(&sound.id);
             let is_missing_on_demand = is_invalid;
 
@@ -103,10 +106,11 @@ impl SoundListInner {
                         if let Ok(file) = result {
                             if let Some(path) = file.path() {
                                 let new_path = path.to_string_lossy().to_string();
-                                if let Err(e) = commands::update_sound_source_async(
+                                if let Err(e) = commands::update_sound_source_with_store_async(
                                     sound_id.clone(),
                                     new_path,
                                     Arc::clone(&state.config),
+                                    state.library.clone(),
                                     state.loudness_coordinators.clone(),
                                     move |result| match result {
                                         Ok(_) => {
@@ -227,15 +231,14 @@ impl SoundListInner {
         };
 
         let inner_weak = Arc::downgrade(self);
-        match commands::import_files_to_tab_async(
+        match commands::import_files_to_tab_with_store_async(
             paths,
             tab_id_opt,
-            Arc::clone(&self.state.config),
-            self.state.loudness_coordinators.clone(),
+            self.state.library.clone(),
             move |result| match result {
-                Ok(new_sounds) => {
-                    log::info!("Successfully imported {} sounds", new_sounds.len());
-                    if !new_sounds.is_empty() {
+                Ok(imported_count) => {
+                    log::info!("Successfully imported {imported_count} sounds");
+                    if imported_count > 0 {
                         if let Some(inner) = inner_weak.upgrade() {
                             inner.refresh_from_state_inner();
                             inner.emit_library_changed();
@@ -488,10 +491,11 @@ impl SoundListInner {
                     "Enter a new name:",
                     &sound.name,
                     "Rename",
-                    move |new_name| match commands::rename_sound(
+                    move |new_name| match commands::rename_sound_with_store(
                         sound.id.clone(),
                         new_name,
                         Arc::clone(&state_confirm.config),
+                        state_confirm.library.clone(),
                     ) {
                         Ok(_) => inner_confirm.refresh_from_state_inner(),
                         Err(e) => log::warn!("Rename failed: {e}"),
@@ -537,6 +541,7 @@ impl SoundListInner {
                         hotkey,
                         Arc::clone(&state_confirm.config),
                         Arc::clone(&state_confirm.hotkeys),
+                        state_confirm.library.clone(),
                     ) {
                         Ok(_) => inner_confirm.refresh_from_state_inner(),
                         Err(e) => {
@@ -621,10 +626,11 @@ impl SoundListInner {
             let action_name = format!("add-to-tab-{}", tab.id);
             let action = gio::SimpleAction::new(&action_name, None);
             action.connect_activate(move |_, _| {
-                match commands::add_sounds_to_tab(
+                match commands::add_sounds_to_tab_with_store(
                     tab_id.clone(),
                     sound_ids.clone(),
                     Arc::clone(&state.config),
+                    state.library.clone(),
                 ) {
                     Ok(_) => {
                         inner.refresh_from_state_inner();
@@ -645,10 +651,11 @@ impl SoundListInner {
             action.connect_activate(move |_, _| {
                 let mut any_success = false;
                 for sound_id in &sound_ids {
-                    match commands::remove_sound_from_tab(
+                    match commands::remove_sound_from_tab_with_store(
                         tab_id.clone(),
                         sound_id.clone(),
                         Arc::clone(&state.config),
+                        state.library.clone(),
                     ) {
                         Ok(_) => any_success = true,
                         Err(e) => log::warn!("Remove from tab failed for {}: {e}", sound_id),
@@ -697,7 +704,9 @@ impl SoundListInner {
                 continue;
             };
             let sound = obj.borrow::<SoundRowData>();
-            ids.push(sound.id.clone());
+            if !sound.id.is_empty() {
+                ids.push(sound.id.clone());
+            }
         }
         ids
     }
@@ -732,10 +741,11 @@ impl SoundListInner {
 
         let count = ids.len();
         let inner_weak = Arc::downgrade(self);
-        if let Err(err) = commands::remove_sounds_async(
+        if let Err(err) = commands::remove_sounds_with_store_async(
             ids.clone(),
             Arc::clone(&self.state.config),
             Arc::clone(&self.state.hotkeys),
+            self.state.library.clone(),
             move |result| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;

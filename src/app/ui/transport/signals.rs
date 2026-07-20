@@ -38,7 +38,7 @@ impl TransportBar {
     }
 
     pub fn set_sound_list_provider<
-        F: Fn() -> Vec<crate::ui::sound_list::NavigationSound> + Send + Sync + 'static,
+        F: Fn() -> crate::ui::sound_list::NavigationContext + Send + Sync + 'static,
     >(
         &self,
         f: F,
@@ -398,10 +398,9 @@ impl TransportBar {
                 let inner_weak_done = Rc::downgrade(&inner_refresh);
                 let btn_done = btn.clone();
                 btn.set_sensitive(false);
-                if let Err(e) = commands::refresh_sounds_async(
+                if let Err(e) = commands::refresh_sounds_with_store_async(
                     Arc::clone(&state_refresh.config),
-                    Arc::clone(&state_refresh.hotkeys),
-                    state_refresh.loudness_coordinators.clone(),
+                    state_refresh.library.clone(),
                     move |result| {
                         match result {
                             Ok(_) => {

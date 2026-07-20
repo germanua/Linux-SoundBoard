@@ -529,6 +529,157 @@ fn test_refresh_sounds_reconciles_generated_tabs_and_root_removal() {
 }
 
 #[test]
+fn store_refresh_streams_nested_folders_without_generated_tabs() {
+    let root = std::env::temp_dir().join(format!("lsb-store-refresh-{}", uuid::Uuid::new_v4()));
+    let cyberpunk = root
+        .join("sounds")
+        .join("Cyberpunk 2077 Soundtrack Collection by Various Artists");
+    fs::create_dir_all(&cyberpunk).expect("create nested music folder");
+    fs::write(cyberpunk.join("track.opus"), []).expect("write sound placeholder");
+
+    let mut config = create_test_config();
+    config
+        .sound_folders
+        .push(root.to_string_lossy().into_owned());
+    let config = Arc::new(Mutex::new(config));
+    let library = create_test_library(&config);
+
+    let summary = commands::refresh_sounds_with_store(Arc::clone(&config), library.clone())
+        .expect("store refresh succeeds");
+
+    assert_eq!(summary.added, 1);
+    assert!(config.lock().tabs.is_empty());
+    let root_path = root.to_string_lossy();
+    let top = library
+        .folder_children(&root_path, None, 0)
+        .recv()
+        .expect("load top folders");
+    assert_eq!(top.folders[0].relative_path, "sounds");
+    let children = library
+        .folder_children(&root_path, Some("sounds"), 0)
+        .recv()
+        .expect("load nested folders");
+    assert_eq!(
+        children.folders[0].relative_path,
+        "sounds/Cyberpunk 2077 Soundtrack Collection by Various Artists"
+    );
+    assert_eq!(
+        library
+            .count(
+                crate::library_store::LibraryScope::Folder {
+                    root_path: root_path.into_owned(),
+                    relative_path: "sounds".to_string(),
+                },
+                "",
+            )
+            .recv()
+            .expect("count aggregate folder"),
+        1
+    );
+
+    fs::remove_dir_all(root).expect("remove test folder");
+}
+
+#[test]
+fn store_backed_rename_and_remove_work_for_scanned_sounds_absent_from_legacy_json() {
+    let audio_path = create_test_audio_file("mp3");
+    let config = create_test_config_state();
+    let library = create_test_library(&config);
+    let mut scanned = Sound::new(
+        "Scanned".to_string(),
+        audio_path.to_string_lossy().into_owned(),
+    );
+    scanned.id = "scanned".to_string();
+    library
+        .apply_batch(crate::library_store::LibraryBatch::Sounds(vec![
+            crate::library_store::SoundRecord {
+                sound: scanned,
+                general_position: 0,
+                locations: Vec::new(),
+            },
+        ]))
+        .recv()
+        .expect("insert scanned sound");
+
+    let renamed = commands::rename_sound_with_store(
+        "scanned".to_string(),
+        "Renamed".to_string(),
+        Arc::clone(&config),
+        library.clone(),
+    )
+    .expect("rename database-only sound");
+    assert_eq!(renamed.name, "Renamed");
+    assert_eq!(
+        library
+            .sound_by_id("scanned")
+            .recv()
+            .expect("lookup renamed sound")
+            .expect("renamed sound exists")
+            .name,
+        "Renamed"
+    );
+
+    commands::remove_sounds_with_store(
+        vec!["scanned".to_string()],
+        config,
+        create_mock_hotkey_manager(),
+        library.clone(),
+    )
+    .expect("remove database-only sound");
+    assert!(library
+        .sound_by_id("scanned")
+        .recv()
+        .expect("lookup removed sound")
+        .is_none());
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
+    let first = create_test_audio_file("mp3");
+    let second = create_test_audio_file("ogg");
+    let config = create_test_config_state();
+    let library = create_test_library(&config);
+    let tab = commands::create_tab_with_store(
+        "Imported".to_string(),
+        Arc::clone(&config),
+        library.clone(),
+    )
+    .expect("create store-backed tab");
+
+    let imported = commands::import_files_to_tab_with_store(
+        vec![
+            first.to_string_lossy().into_owned(),
+            first.to_string_lossy().into_owned(),
+            second.to_string_lossy().into_owned(),
+        ],
+        Some(tab.id.clone()),
+        library.clone(),
+    )
+    .expect("import files");
+
+    assert_eq!(imported, 2);
+    assert_eq!(
+        library
+            .count(crate::library_store::LibraryScope::General, "")
+            .recv()
+            .expect("count imported sounds"),
+        2
+    );
+    assert_eq!(
+        library
+            .count(crate::library_store::LibraryScope::ManualTab(tab.id), "")
+            .recv()
+            .expect("count tab sounds"),
+        2
+    );
+
+    cleanup_test_audio_path(&first);
+    cleanup_test_audio_path(&second);
+}
+
+#[test]
 fn test_refresh_sounds_disambiguates_duplicate_subfolder_names() {
     let base = std::env::temp_dir().join(format!("lsb-duplicate-tabs-{}", uuid::Uuid::new_v4()));
     let first_root = base.join("First");

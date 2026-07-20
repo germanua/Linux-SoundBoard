@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::app_meta::GENERAL_TAB_ID;
 use crate::config::{Config, SoundTab};
+use crate::library_store::{LibraryStore, ManualMembershipRecord, ManualTabRecord};
 
 use super::shared::{
     dispatch_async_result, with_config_mut, with_saved_config_checked, with_saved_config_result,
@@ -155,6 +156,40 @@ pub fn create_tab(name: String, config: Arc<Mutex<Config>>) -> Result<SoundTab, 
     with_saved_config_result(&config, |cfg| Ok(cfg.create_tab(trimmed_name)))
 }
 
+pub fn create_tab_with_store(
+    name: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<SoundTab, CommandError> {
+    let trimmed_name = name.trim().to_string();
+    if trimmed_name.is_empty() {
+        return Err(CommandError::Invalid(
+            "Tab name cannot be empty".to_string(),
+        ));
+    }
+    let order = config
+        .lock()
+        .tabs
+        .iter()
+        .map(|tab| tab.order)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let tab = SoundTab::new(trimmed_name, order);
+    library
+        .upsert_manual_tab(ManualTabRecord {
+            public_id: tab.id.clone(),
+            name: tab.name.clone(),
+            position: tab.order as usize,
+        })
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    with_saved_config_result(&config, |cfg| {
+        cfg.tabs.push(tab.clone());
+        Ok(tab)
+    })
+}
+
 pub fn rename_tab(
     id: String,
     name: String,
@@ -172,6 +207,34 @@ pub fn rename_tab(
         }
         Ok(())
     })
+}
+
+pub fn rename_tab_with_store(
+    id: String,
+    name: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    let trimmed_name = name.trim().to_string();
+    if trimmed_name.is_empty() {
+        return Err(CommandError::Invalid(
+            "Tab name cannot be empty".to_string(),
+        ));
+    }
+    let position = config
+        .lock()
+        .get_tab(&id)
+        .map(|tab| tab.order as usize)
+        .ok_or(CommandError::NotFound("Tab"))?;
+    library
+        .upsert_manual_tab(ManualTabRecord {
+            public_id: id.clone(),
+            name: trimmed_name.clone(),
+            position,
+        })
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    rename_tab(id, trimmed_name, config)
 }
 
 pub fn delete_tab(id: String, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
@@ -199,6 +262,28 @@ where
     dispatch_async_result("delete_tab", move || delete_tab(id, config), on_complete)
 }
 
+pub fn delete_tab_with_store_async<F>(
+    id: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "delete_tab",
+        move || {
+            library
+                .delete_manual_tab(&id)
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?;
+            delete_tab(id, config)
+        },
+        on_complete,
+    )
+}
+
 pub fn add_sounds_to_tab(
     tab_id: String,
     sound_ids: Vec<String>,
@@ -212,6 +297,30 @@ pub fn add_sounds_to_tab(
     })
 }
 
+pub fn add_sounds_to_tab_with_store(
+    tab_id: String,
+    sound_ids: Vec<String>,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    let base = config
+        .lock()
+        .get_tab(&tab_id)
+        .map(|tab| tab.sound_ids.len())
+        .ok_or(CommandError::NotFound("Tab"))?;
+    for (offset, sound_id) in sound_ids.iter().enumerate() {
+        library
+            .set_manual_membership(ManualMembershipRecord {
+                tab_public_id: tab_id.clone(),
+                sound_public_id: sound_id.clone(),
+                position: base.saturating_add(offset),
+            })
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+    }
+    add_sounds_to_tab(tab_id, sound_ids, config)
+}
+
 pub fn remove_sound_from_tab(
     tab_id: String,
     sound_id: String,
@@ -223,6 +332,19 @@ pub fn remove_sound_from_tab(
         }
         Ok(())
     })
+}
+
+pub fn remove_sound_from_tab_with_store(
+    tab_id: String,
+    sound_id: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    library
+        .remove_manual_membership(&tab_id, &sound_id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    remove_sound_from_tab(tab_id, sound_id, config)
 }
 
 pub fn remove_sounds_from_tab(
@@ -261,6 +383,53 @@ pub fn apply_sound_tab_drop(
     with_saved_config_result(&config, |cfg| {
         apply_sound_tab_drop_to_config(cfg, &source_tab_id, &target_tab_id, &sound_ids)
     })
+}
+
+pub fn apply_sound_tab_drop_with_store(
+    source_tab_id: String,
+    target_tab_id: String,
+    sound_ids: Vec<String>,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+) -> Result<bool, CommandError> {
+    let sound_ids = normalize_sound_ids(sound_ids);
+    if sound_ids.is_empty() {
+        return Ok(false);
+    }
+    let operation = resolve_tab_drop_operation(&source_tab_id, &target_tab_id);
+    let target_base = config
+        .lock()
+        .get_tab(&target_tab_id)
+        .map(|tab| tab.sound_ids.len())
+        .unwrap_or(0);
+    match operation {
+        TabDropOperation::Noop => return Ok(false),
+        TabDropOperation::AddToTarget | TabDropOperation::MoveBetweenCustomTabs => {
+            for (offset, sound_id) in sound_ids.iter().enumerate() {
+                library
+                    .set_manual_membership(ManualMembershipRecord {
+                        tab_public_id: target_tab_id.clone(),
+                        sound_public_id: sound_id.clone(),
+                        position: target_base.saturating_add(offset),
+                    })
+                    .recv()
+                    .map_err(|error| CommandError::Library(error.to_string()))?;
+            }
+        }
+        TabDropOperation::RemoveFromSource => {}
+    }
+    if matches!(
+        operation,
+        TabDropOperation::RemoveFromSource | TabDropOperation::MoveBetweenCustomTabs
+    ) {
+        for sound_id in &sound_ids {
+            library
+                .remove_manual_membership(&source_tab_id, sound_id)
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?;
+        }
+    }
+    apply_sound_tab_drop(source_tab_id, target_tab_id, sound_ids, config)
 }
 
 #[cfg(test)]

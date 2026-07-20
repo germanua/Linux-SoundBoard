@@ -8,7 +8,7 @@ use gtk4::{Box as GtkBox, Button, Entry, Label, Scale, SearchEntry, ToggleButton
 
 use crate::app_state::AppState;
 
-use super::sound_list::NavigationSound;
+use super::sound_list::NavigationContext;
 
 mod build;
 mod helpers;
@@ -16,7 +16,7 @@ mod playback;
 mod scrub;
 mod signals;
 
-type SoundListProvider = Box<dyn Fn() -> Vec<NavigationSound> + Send + Sync>;
+type SoundListProvider = Box<dyn Fn() -> NavigationContext + Send + Sync>;
 type HasSoundsChecker = Box<dyn Fn() -> bool + Send + Sync>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;

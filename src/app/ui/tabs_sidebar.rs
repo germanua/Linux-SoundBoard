@@ -232,7 +232,11 @@ impl TabsInner {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                match commands::create_tab(name, Arc::clone(&inner.state.config)) {
+                match commands::create_tab_with_store(
+                    name,
+                    Arc::clone(&inner.state.config),
+                    inner.state.library.clone(),
+                ) {
                     Ok(tab) => {
                         *inner.active_tab_id.lock() = tab.id.clone();
                         inner.queue_reload_tabs_and_emit(Some(tab.id));
@@ -624,11 +628,12 @@ impl TabsInner {
                                     return;
                                 }
 
-                                match commands::apply_sound_tab_drop(
+                                match commands::apply_sound_tab_drop_with_store(
                                     payload.source_tab_id.clone(),
                                     target_tab_id_for_read.clone(),
                                     payload.sound_ids.clone(),
                                     Arc::clone(&inner.state.config),
+                                    inner.state.library.clone(),
                                 ) {
                                     Ok(changed) => {
                                         if !changed {
@@ -707,9 +712,10 @@ impl TabsInner {
                 }
 
                 let inner_weak_complete = Arc::downgrade(&inner);
-                if let Err(err) = commands::delete_tab_async(
+                if let Err(err) = commands::delete_tab_with_store_async(
                     tab_id.clone(),
                     Arc::clone(&inner.state.config),
+                    inner.state.library.clone(),
                     move |result| {
                         let Some(inner) = inner_weak_complete.upgrade() else {
                             return;
@@ -773,10 +779,11 @@ impl TabsInner {
                         let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
                             return;
                         };
-                        match commands::rename_tab(
+                        match commands::rename_tab_with_store(
                             tab_id.clone(),
                             new_name,
                             Arc::clone(&inner_confirm.state.config),
+                            inner_confirm.state.library.clone(),
                         ) {
                             Ok(_) => inner_confirm.queue_reload_tabs_and_emit(Some(tab_id.clone())),
                             Err(e) => log::warn!("Rename tab failed: {e}"),

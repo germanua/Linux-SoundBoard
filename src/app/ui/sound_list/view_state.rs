@@ -80,19 +80,16 @@ impl SoundListInner {
 
         let scroll_offsets = self.capture_scroll_offsets();
         let mut replacements = Vec::new();
-        {
-            let indices = self.visible_row_indices.borrow();
-            for sound_id in sound_ids {
-                if let Some(position) = indices.get(sound_id) {
-                    let Some(obj) = self
-                        .store
-                        .item(*position)
-                        .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
-                    else {
-                        continue;
-                    };
-                    replacements.push((*position, obj.borrow::<SoundRowData>().clone()));
-                }
+        for sound_id in sound_ids {
+            if let Some(position) = self.store.position_for_id(sound_id) {
+                let Some(obj) = self
+                    .store
+                    .item(position)
+                    .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
+                else {
+                    continue;
+                };
+                replacements.push((position, obj.borrow::<SoundRowData>().clone()));
             }
         }
 

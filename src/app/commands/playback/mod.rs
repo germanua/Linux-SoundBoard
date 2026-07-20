@@ -230,6 +230,13 @@ pub fn play_sound(
             .ok_or(CommandError::SoundNotFound)
     })??;
 
+    play_resolved_sound(sound, player)
+}
+
+fn play_resolved_sound(
+    sound: Sound,
+    player: Arc<dyn PlaybackEngine>,
+) -> Result<String, CommandError> {
     if !sound.enabled {
         return Err(CommandError::SoundDisabled);
     }
@@ -244,6 +251,7 @@ pub fn play_sound(
     let base_volume = sound.volume as f32 / 100.0;
     let sound_lufs = sound.loudness_lufs;
     let sound_true_peak_dbtp = sound.loudness_true_peak_dbtp;
+    let id = sound.id;
     let result = player
         .play(
             &id,
@@ -266,9 +274,101 @@ pub fn play_sound(
     result
 }
 
+fn play_sound_from_library(
+    id: &str,
+    binding_lookup: bool,
+    library: &crate::library_store::LibraryStore,
+    player: Arc<dyn PlaybackEngine>,
+) -> Result<String, CommandError> {
+    let sound = if binding_lookup {
+        library.sound_for_binding(id)
+    } else {
+        library.sound_by_id(id)
+    }
+    .recv()
+    .map_err(|error| CommandError::Library(error.to_string()))?
+    .ok_or(CommandError::SoundNotFound)?;
+    play_resolved_sound(sound, player)
+}
+
+fn play_adjacent_from_library(
+    scope: crate::library_store::LibraryScope,
+    search: &str,
+    position: Option<usize>,
+    offset: i32,
+    library: &crate::library_store::LibraryStore,
+    player: Arc<dyn PlaybackEngine>,
+) -> Result<String, CommandError> {
+    let total = library
+        .count(scope.clone(), search)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    if total == 0 {
+        return Err(CommandError::SoundNotFound);
+    }
+    let mut sound = match position {
+        Some(position) => library
+            .adjacent(scope.clone(), search, position, offset)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?,
+        None => None,
+    };
+    if sound.is_none() {
+        let boundary = if offset < 0 { total - 1 } else { 0 };
+        sound = library
+            .adjacent(scope, search, boundary, 0)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+    }
+    play_resolved_sound(sound.ok_or(CommandError::SoundNotFound)?, player)
+}
+
 pub fn play_sound_async<F>(
     id: String,
     state: Arc<AppState>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<String, CommandError>) + 'static,
+{
+    dispatch_play_sound_async(id, state, false, on_complete)
+}
+
+pub fn play_hotkey_sound_async<F>(
+    binding_id: String,
+    state: Arc<AppState>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<String, CommandError>) + 'static,
+{
+    dispatch_play_sound_async(binding_id, state, true, on_complete)
+}
+
+pub fn play_adjacent_sound_async<F>(
+    scope: crate::library_store::LibraryScope,
+    search: String,
+    position: Option<usize>,
+    offset: i32,
+    state: Arc<AppState>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<String, CommandError>) + 'static,
+{
+    let library = state.library.clone();
+    let player = Arc::clone(&state.player);
+    dispatch_async_result(
+        "play_adjacent_sound",
+        move || play_adjacent_from_library(scope, &search, position, offset, &library, player),
+        on_complete,
+    )
+}
+
+fn dispatch_play_sound_async<F>(
+    id: String,
+    state: Arc<AppState>,
+    binding_lookup: bool,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -293,13 +393,13 @@ where
         on_complete(Ok(String::new()));
         return Ok(());
     }
-    let config = Arc::clone(&state.config);
+    let library = state.library.clone();
     let player = Arc::clone(&state.player);
     let first_recorded = Arc::clone(&state.first_playback_recorded);
     let state_diag = Arc::clone(&state);
     dispatch_async_result(
         "play_sound",
-        move || play_sound(id, config, player),
+        move || play_sound_from_library(&id, binding_lookup, &library, player),
         move |result: Result<String, CommandError>| {
             if result.is_ok()
                 && first_recorded

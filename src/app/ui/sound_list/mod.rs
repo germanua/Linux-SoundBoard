@@ -1,23 +1,24 @@
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use gio::prelude::*;
-use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{ColumnView, MultiSelection, ScrolledWindow, Widget};
 
 use crate::app_meta::GENERAL_TAB_ID;
 use crate::app_state::AppState;
-use crate::config::{ListStyle, Sound};
+use crate::config::ListStyle;
 
 use super::dialogs::DialogHost;
+use paged_model::PagedSoundModel;
 
 mod columns;
 mod interaction;
 mod model;
+mod paged_model;
 mod view_state;
 
 pub(super) const SOUND_CONTEXT_NAMESPACE: &str = "sound-ctx";
@@ -31,9 +32,10 @@ pub(super) struct SoundRowData {
 }
 
 #[derive(Debug, Clone)]
-pub struct NavigationSound {
-    pub id: String,
-    pub name: String,
+pub struct NavigationContext {
+    pub scope: crate::library_store::LibraryScope,
+    pub search: String,
+    pub position: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -51,7 +53,7 @@ pub(super) struct SoundListInner {
     pub(super) scroll: ScrolledWindow,
     pub(super) col_view: ColumnView,
     pub(super) selection: MultiSelection,
-    pub(super) store: gio::ListStore,
+    pub(super) store: PagedSoundModel,
     pub(super) active_tab_id: Mutex<String>,
     pub(super) search_query: Mutex<String>,
     pub(super) playing_ids: Arc<Mutex<HashSet<String>>>,
@@ -61,12 +63,10 @@ pub(super) struct SoundListInner {
     pub(super) dialog_host: DialogHost,
     pub(super) removal_pending: Cell<bool>,
     pub(super) on_library_changed: RefCell<Option<Box<dyn Fn() + 'static>>>,
-    pub(super) visible_row_indices: RefCell<HashMap<String, u32>>,
 }
 
 // SAFETY: SoundListInner is only ever constructed, accessed, and dropped on
-// the GTK main thread. The `RefCell` fields (`on_library_changed`,
-// `visible_row_indices`) and all GTK widget fields are not thread-safe, but
+// the GTK main thread. The `RefCell` field (`on_library_changed`) and all GTK widget fields are not thread-safe, but
 // no code path ever sends this value to another thread. The `Arc<SoundListInner>`
 // is held exclusively by GTK signal closures and the `SoundList` owner, all of
 // which fire on the main thread. This invariant must never be violated — any
@@ -78,7 +78,7 @@ unsafe impl Sync for SoundListInner {}
 
 impl SoundList {
     pub fn new(state: Arc<AppState>, dialog_host: DialogHost) -> Self {
-        let store = gio::ListStore::new::<BoxedAnyObject>();
+        let store = PagedSoundModel::new(state.library.clone());
         let selection = MultiSelection::new(Some(store.clone()));
         let col_view = ColumnView::new(Some(selection.clone()));
         col_view.set_vexpand(true);
@@ -118,7 +118,6 @@ impl SoundList {
             dialog_host,
             removal_pending: Cell::new(false),
             on_library_changed: RefCell::new(None),
-            visible_row_indices: RefCell::new(HashMap::new()),
         });
 
         inner.configure_columns();
@@ -214,17 +213,29 @@ impl SoundList {
         self.inner.refresh_from_state_inner();
     }
 
-    pub fn append_sounds(&self, _new_sounds: Vec<Sound>) {
-        self.refresh_from_state();
-        self.inner.emit_library_changed();
-    }
-
-    pub fn get_navigation_sounds(&self) -> Vec<NavigationSound> {
-        self.inner.filtered_navigation_sounds_from_state()
+    pub fn navigation_context(&self) -> NavigationContext {
+        let tab_id = self.inner.current_tab_id();
+        let scope = if tab_id == GENERAL_TAB_ID {
+            crate::library_store::LibraryScope::General
+        } else {
+            crate::library_store::LibraryScope::ManualTab(tab_id)
+        };
+        let position = self
+            .inner
+            .active_sound_id
+            .lock()
+            .as_deref()
+            .and_then(|id| self.inner.store.position_for_id(id))
+            .map(|position| position as usize);
+        NavigationContext {
+            scope,
+            search: self.inner.current_search_query(),
+            position,
+        }
     }
 
     pub fn has_navigation_sounds(&self) -> bool {
-        self.inner.has_navigation_sounds_from_state()
+        self.inner.store.n_items() > 0
     }
 
     pub fn active_tab_id(&self) -> String {
@@ -241,8 +252,7 @@ impl SoundList {
 
     pub fn cleanup(&self) {
         *self.inner.on_library_changed.borrow_mut() = None;
-        self.inner.store.remove_all();
-        self.inner.visible_row_indices.borrow_mut().clear();
+        self.inner.store.clear();
     }
 
     pub fn set_list_style(&self, style: &str) {

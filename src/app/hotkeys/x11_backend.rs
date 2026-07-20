@@ -1,11 +1,14 @@
 use log::{debug, info, warn};
 use parking_lot::Mutex;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::io::{Read, Write};
+use std::os::fd::{AsFd, BorrowedFd};
+use std::os::unix::net::UnixStream;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
 use x11::xinput2;
@@ -13,16 +16,17 @@ use x11::xlib;
 
 use crate::app_meta::{BACKEND_ENV_VAR, FORCE_X11_ENV_VAR, X11_BACKEND};
 
-use super::backend_runtime::HotkeyBackend;
+use super::backend_runtime::{try_dispatch_hotkey, HotkeyBackend};
 use super::error::{hotkey_conflict, HotkeyError};
-use super::HOTKEYS_POLL_INTERVAL_MS;
-use super::{normalize_capture_key, parse_hotkey_spec, HotkeyCode, HotkeyModifier};
+use super::{normalize_capture_key, parse_hotkey_spec, HotkeyCode, HotkeyModifier, HotkeySpec};
 
 pub struct X11Backend {
-    bindings: Arc<Mutex<HashMap<String, Binding>>>,
+    bindings: Arc<Mutex<BindingIndex>>,
     started: AtomicBool,
     stop_flag: Arc<AtomicBool>,
     display_ptr: Arc<Mutex<Option<NonNullXDisplay>>>,
+    wake_reader: Mutex<Option<UnixStream>>,
+    wake_writer: Mutex<UnixStream>,
 }
 
 #[derive(Debug)]
@@ -43,10 +47,53 @@ impl NonNullXDisplay {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct Binding {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Chord {
     key: HotkeyCode,
-    modifiers: Vec<HotkeyModifier>,
+    modifiers: u8,
+}
+
+impl Chord {
+    fn from_spec(spec: HotkeySpec) -> Self {
+        Self {
+            key: spec.key,
+            modifiers: spec
+                .modifiers
+                .into_iter()
+                .fold(0, |mask, modifier| mask | modifier_mask(modifier)),
+        }
+    }
+}
+
+#[derive(Default)]
+struct BindingIndex {
+    by_id: HashMap<String, Chord>,
+    by_chord: HashMap<Chord, String>,
+}
+
+impl BindingIndex {
+    fn insert(&mut self, id: &str, chord: Chord) -> Result<(), HotkeyError> {
+        if let Some(existing_id) = self.by_chord.get(&chord) {
+            if existing_id != id {
+                return Err(hotkey_conflict(existing_id));
+            }
+        }
+        if let Some(previous) = self.by_id.insert(id.to_string(), chord) {
+            self.by_chord.remove(&previous);
+        }
+        self.by_chord.insert(chord, id.to_string());
+        Ok(())
+    }
+
+    fn remove(&mut self, id: &str) {
+        if let Some(chord) = self.by_id.remove(id) {
+            self.by_chord.remove(&chord);
+        }
+    }
+
+    fn id_for(&self, chord: Chord) -> Option<&str> {
+        self.by_chord.get(&chord).map(String::as_str)
+    }
 }
 
 impl X11Backend {
@@ -95,16 +142,18 @@ impl X11Backend {
             }
         }
 
+        let (wake_reader, wake_writer) = UnixStream::pair().map_err(|error| {
+            HotkeyError::Io(format!("Failed to create X11 wake socket: {error}"))
+        })?;
+
         Ok(Self {
-            bindings: Arc::new(Mutex::new(HashMap::new())),
+            bindings: Arc::new(Mutex::new(BindingIndex::default())),
             started: AtomicBool::new(false),
             stop_flag: Arc::new(AtomicBool::new(false)),
             display_ptr: Arc::new(Mutex::new(None)),
+            wake_reader: Mutex::new(Some(wake_reader)),
+            wake_writer: Mutex::new(wake_writer),
         })
-    }
-
-    fn modifiers_match(expected: &[HotkeyModifier], active: &HashSet<HotkeyModifier>) -> bool {
-        expected.len() == active.len() && expected.iter().all(|modifier| active.contains(modifier))
     }
 
     // SAFETY: `display` must be a live Xlib display pointer. XKeysymToString returns a
@@ -190,16 +239,7 @@ fn should_disable_x11_backend() -> bool {
 impl Drop for X11Backend {
     fn drop(&mut self) {
         self.stop_flag.store(true, Ordering::SeqCst);
-
-        if let Some(display) = self.display_ptr.lock().take() {
-            // SAFETY: `display` was just taken out of the mutex-guarded Option, so no
-            // other code can observe or call Xlib functions on it. XCloseDisplay runs
-            // exactly once per backend instance on this Drop path.
-            unsafe {
-                display.close();
-                debug!("X11 display closed via Drop");
-            }
-        }
+        let _ = self.wake_writer.lock().write_all(&[1]);
     }
 }
 
@@ -221,21 +261,9 @@ impl HotkeyBackend for X11Backend {
             spec.modifiers
         );
 
-        let mut bindings = self.bindings.lock();
-        for (id, existing) in bindings.iter() {
-            if id != sound_id && existing.key == spec.key && existing.modifiers == spec.modifiers {
-                return Err(hotkey_conflict(id));
-            }
-        }
-
-        bindings.insert(
-            sound_id.to_string(),
-            Binding {
-                key: spec.key,
-                modifiers: spec.modifiers,
-            },
-        );
-        Ok(())
+        self.bindings
+            .lock()
+            .insert(sound_id, Chord::from_spec(spec))
     }
 
     fn unregister(&self, sound_id: &str) -> Result<(), HotkeyError> {
@@ -256,7 +284,7 @@ impl HotkeyBackend for X11Backend {
     }
 
     #[allow(clippy::multiple_unsafe_ops_per_block)]
-    fn start_listener(&self, sender: Sender<String>) {
+    fn start_listener(&self, sender: SyncSender<String>) {
         if self.started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -264,6 +292,10 @@ impl HotkeyBackend for X11Backend {
         let bindings = Arc::clone(&self.bindings);
         let stop_flag = self.stop_flag();
         let display_ptr = self.display_ptr();
+        let Some(mut wake_reader) = self.wake_reader.lock().take() else {
+            warn!("X11 backend listener has no wake socket");
+            return;
+        };
 
         // SAFETY: the spawned thread opens its own Xlib display and is the sole user of
         // that pointer until it hands ownership to `display_ptr` (mutex-guarded) for Drop
@@ -295,23 +327,35 @@ impl HotkeyBackend for X11Backend {
             xlib::XFlush(display);
             info!("X11 backend listener started");
 
-            let mut active_mods = HashSet::new();
+            let mut active_mods = 0_u8;
             let mut event: xlib::XEvent = std::mem::zeroed();
 
+            let connection_fd = xlib::XConnectionNumber(display);
             loop {
-                if stop_flag.load(Ordering::SeqCst) {
+                // SAFETY: Xlib owns this descriptor for the lifetime of `display`, which
+                // remains open until the listener exits below.
+                let x_fd = BorrowedFd::borrow_raw(connection_fd);
+                let mut poll_fds = [
+                    nix::poll::PollFd::new(x_fd, nix::poll::PollFlags::POLLIN),
+                    nix::poll::PollFd::new(wake_reader.as_fd(), nix::poll::PollFlags::POLLIN),
+                ];
+                match nix::poll::poll(&mut poll_fds, nix::poll::PollTimeout::NONE) {
+                    Ok(_) => {}
+                    Err(nix::errno::Errno::EINTR) => continue,
+                    Err(error) => {
+                        warn!("X11 listener poll failed: {error}");
+                        break;
+                    }
+                }
+                if poll_fds[1]
+                    .revents()
+                    .is_some_and(|events| events.contains(nix::poll::PollFlags::POLLIN))
+                {
+                    let mut byte = [0_u8; 1];
+                    let _ = wake_reader.read(&mut byte);
                     info!("X11 listener received stop signal");
                     break;
                 }
-
-                while xlib::XPending(display) == 0 {
-                    if stop_flag.load(Ordering::SeqCst) {
-                        info!("X11 listener received stop signal (in pending loop)");
-                        break;
-                    }
-                    thread::sleep(std::time::Duration::from_millis(HOTKEYS_POLL_INTERVAL_MS));
-                }
-
                 if stop_flag.load(Ordering::SeqCst) {
                     break;
                 }
@@ -353,21 +397,15 @@ impl HotkeyBackend for X11Backend {
                             }
                             _ if is_press => {
                                 if let Some(code) = normalize_capture_key(&key_name, keycode) {
-                                    let snapshot: Vec<(String, Binding)> = bindings
-                                        .lock()
-                                        .iter()
-                                        .map(|(id, binding)| (id.clone(), binding.clone()))
-                                        .collect();
-
-                                    for (id, binding) in snapshot {
-                                        if binding.key == code
-                                            && X11Backend::modifiers_match(
-                                                &binding.modifiers,
-                                                &active_mods,
-                                            )
-                                        {
-                                            debug!("X11 hotkey triggered: {}", id);
-                                            let _ = sender.send(id);
+                                    let chord = Chord {
+                                        key: code,
+                                        modifiers: active_mods,
+                                    };
+                                    let id = bindings.lock().id_for(chord).map(str::to_string);
+                                    if let Some(id) = id {
+                                        debug!("X11 hotkey triggered: {}", id);
+                                        if !try_dispatch_hotkey(&sender, id) {
+                                            debug!("Dropped X11 hotkey repeat because the queue is full");
                                         }
                                     }
                                 }
@@ -388,17 +426,45 @@ impl HotkeyBackend for X11Backend {
     }
 }
 
-fn update_modifier(active: &mut HashSet<HotkeyModifier>, modifier: HotkeyModifier, pressed: bool) {
+fn modifier_mask(modifier: HotkeyModifier) -> u8 {
+    match modifier {
+        HotkeyModifier::Ctrl => 1 << 0,
+        HotkeyModifier::Alt => 1 << 1,
+        HotkeyModifier::Shift => 1 << 2,
+        HotkeyModifier::Super => 1 << 3,
+        HotkeyModifier::AltGr => 1 << 4,
+    }
+}
+
+fn update_modifier(active: &mut u8, modifier: HotkeyModifier, pressed: bool) {
+    let mask = modifier_mask(modifier);
     if pressed {
-        active.insert(modifier);
+        *active |= mask;
     } else {
-        active.remove(&modifier);
+        *active &= !mask;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binding_index_resolves_chords_without_scanning_ids() {
+        let mut index = BindingIndex::default();
+        let chord = Chord::from_spec(parse_hotkey_spec("Ctrl+Alt+KeyP").unwrap());
+        index.insert("sound-1", chord).unwrap();
+
+        assert_eq!(index.id_for(chord), Some("sound-1"));
+        assert!(index
+            .insert("sound-2", chord)
+            .unwrap_err()
+            .to_string()
+            .contains("sound-1"));
+
+        index.remove("sound-1");
+        assert_eq!(index.id_for(chord), None);
+    }
 
     #[test]
     fn test_x11_backend_creation_without_display() {

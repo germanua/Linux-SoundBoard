@@ -1,17 +1,32 @@
 use chrono::Local;
 use log::{debug, info};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::error::HotkeyError;
 use super::parse_hotkey_spec;
 
 pub struct SwhkdConfig {
-    pub(crate) hotkeys: HashMap<String, String>,
+    pub(crate) hotkeys: BTreeMap<String, String>,
     pub(crate) config_path: PathBuf,
     pub(crate) pipe_path: PathBuf,
+}
+
+static CONFIG_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn valid_binding_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 impl SwhkdConfig {
@@ -25,7 +40,7 @@ impl SwhkdConfig {
         }
 
         Ok(Self {
-            hotkeys: HashMap::new(),
+            hotkeys: BTreeMap::new(),
             config_path,
             pipe_path,
         })
@@ -44,6 +59,11 @@ impl SwhkdConfig {
     }
 
     pub fn add_hotkey(&mut self, sound_id: &str, hotkey: &str) -> Result<(), HotkeyError> {
+        if !valid_binding_id(sound_id) {
+            return Err(HotkeyError::Io(
+                "Hotkey binding ID contains unsupported characters".to_string(),
+            ));
+        }
         let swhkd_hotkey = Self::convert_to_swhkd_format(hotkey)?;
         debug!(
             "Adding hotkey: {} -> {} (swhkd format: {})",
@@ -82,39 +102,71 @@ impl SwhkdConfig {
     pub fn write_to_file(&self) -> Result<(), HotkeyError> {
         info!("Writing swhkd config to: {}", self.config_path.display());
 
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-        let mut content = format!(
-            "# LinuxSoundBoard swhkd config\n\
-             # Do not edit manually; changes will be overwritten\n\
-             # Last updated: {}\n\
-             \n",
-            timestamp
-        );
+        let candidate = self.config_path.with_file_name(format!(
+            ".swhkdrc.tmp.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let write_result = (|| -> Result<(), HotkeyError> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&candidate)
+                .map_err(|error| {
+                    HotkeyError::Io(format!("Failed to create swhkd candidate: {error}"))
+                })?;
+            {
+                let mut writer = BufWriter::new(&mut file);
+                writeln!(writer, "# LinuxSoundBoard swhkd config")
+                    .and_then(|_| {
+                        writeln!(
+                            writer,
+                            "# Do not edit manually; changes will be overwritten"
+                        )
+                    })
+                    .and_then(|_| {
+                        writeln!(
+                            writer,
+                            "# Last updated: {}\n",
+                            Local::now().format("%Y-%m-%d %H:%M:%S")
+                        )
+                    })
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
 
-        let mut sorted_hotkeys: Vec<_> = self.hotkeys.iter().collect();
-        sorted_hotkeys.sort_by_key(|(id, _)| *id);
-
-        for (sound_id, hotkey) in sorted_hotkeys {
-            let comment = if let Some(control_id) = sound_id.strip_prefix("control:") {
-                format!("# Control: {}", control_id)
-            } else {
-                format!("# Sound: {}", sound_id)
-            };
-
-            content.push_str(&format!(
-                "{}\n{}\n    echo \"{}\" > {}\n\n",
-                comment,
-                hotkey,
-                sound_id,
-                self.pipe_path.display()
-            ));
+                let pipe = shell_quote(&self.pipe_path.to_string_lossy());
+                for (binding_id, hotkey) in &self.hotkeys {
+                    let kind = if binding_id.starts_with("control:") {
+                        "Control"
+                    } else {
+                        "Sound"
+                    };
+                    writeln!(
+                        writer,
+                        "# {kind}: {binding_id}\n{hotkey}\n    printf '%s\\n' {} > {pipe}\n",
+                        shell_quote(binding_id)
+                    )
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
+                }
+                writer
+                    .flush()
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            }
+            file.sync_all()
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::rename(&candidate, &self.config_path)
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            if let Some(parent) = self.config_path.parent() {
+                fs::File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            }
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&candidate);
         }
-
-        let mut file = fs::File::create(&self.config_path)
-            .map_err(|e| HotkeyError::Io(format!("Failed to create config file: {}", e)))?;
-
-        file.write_all(content.as_bytes())
-            .map_err(|e| HotkeyError::Io(format!("Failed to write config file: {}", e)))?;
+        write_result?;
 
         debug!("Config file written with {} hotkeys", self.hotkeys.len());
         Ok(())
@@ -199,7 +251,7 @@ mod tests {
     fn test_add_remove_hotkey() {
         let pipe_path = PathBuf::from("/tmp/test.pipe");
         let mut config = SwhkdConfig {
-            hotkeys: HashMap::new(),
+            hotkeys: BTreeMap::new(),
             config_path: PathBuf::from("/tmp/test_swhkdrc"),
             pipe_path,
         };
@@ -218,7 +270,7 @@ mod tests {
     fn test_rejects_unsupported_hotkey() {
         let pipe_path = PathBuf::from("/tmp/test.pipe");
         let mut config = SwhkdConfig {
-            hotkeys: HashMap::new(),
+            hotkeys: BTreeMap::new(),
             config_path: PathBuf::from("/tmp/test_swhkdrc"),
             pipe_path,
         };
@@ -230,6 +282,20 @@ mod tests {
             err.to_string(),
             "Ctrl+NumpadDivide cannot be represented by swhkd."
         );
+        assert!(config.hotkeys.is_empty());
+    }
+
+    #[test]
+    fn rejects_binding_ids_that_could_modify_the_generated_shell_command() {
+        let mut config = SwhkdConfig {
+            hotkeys: Default::default(),
+            config_path: PathBuf::from("/tmp/test_swhkdrc"),
+            pipe_path: PathBuf::from("/tmp/test.pipe"),
+        };
+
+        assert!(config
+            .add_hotkey("../sound;touch /tmp/x", "Ctrl+KeyA")
+            .is_err());
         assert!(config.hotkeys.is_empty());
     }
 }

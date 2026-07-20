@@ -37,9 +37,17 @@ fn create_test_config_state() -> Arc<Mutex<Config>> {
 
 fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     use std::sync::mpsc;
-    let (sender, _) = mpsc::channel();
+    let (sender, _) = mpsc::sync_channel(1);
     let manager = HotkeyManager::new_blocking(sender, &[]);
     Arc::new(Mutex::new(manager))
+}
+
+fn create_test_library(config: &Arc<Mutex<Config>>) -> crate::library_store::LibraryStore {
+    let path = std::env::temp_dir()
+        .join(format!("lsb-command-library-{}", uuid::Uuid::new_v4()))
+        .join("library.sqlite3");
+    crate::library_store::LibraryStore::open_seeded(path, &config.lock())
+        .expect("create command test library")
 }
 
 fn create_test_audio_player() -> Arc<AudioPlayer> {
@@ -275,6 +283,7 @@ fn test_set_hotkey_valid() {
         Some("Ctrl+1".to_string()),
         config.clone(),
         hotkeys,
+        create_test_library(&config),
     );
     match result {
         Ok(_) => {
@@ -303,7 +312,13 @@ fn test_set_hotkey_clear() {
     let sound_id = config_guard.sounds[0].id.clone();
     drop(config_guard);
 
-    let result = commands::set_hotkey(sound_id, None, config.clone(), hotkeys);
+    let result = commands::set_hotkey(
+        sound_id,
+        None,
+        config.clone(),
+        hotkeys,
+        create_test_library(&config),
+    );
     match result {
         Ok(_) => {
             let cfg = config.lock();
@@ -328,8 +343,9 @@ fn test_set_control_hotkey_rejects_duplicate_control_binding() {
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
-        config,
+        config.clone(),
         hotkeys,
+        create_test_library(&config),
     );
 
     let err = result.expect_err("duplicate control hotkey must be rejected");
@@ -351,8 +367,9 @@ fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
-        config,
+        config.clone(),
         hotkeys,
+        create_test_library(&config),
     );
 
     let err = result.expect_err("duplicate sound hotkey must be rejected");

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 
-use crate::config::{LoudnessAnalysisState, Sound};
+use crate::config::{Config, ControlHotkeyAction, LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
@@ -39,7 +39,6 @@ impl<T> LibraryResponse<T> {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn recv(self) -> Result<T, LibraryError> {
         self.0.recv().map_err(|_| LibraryError::WorkerUnavailable)?
     }
@@ -190,6 +189,7 @@ pub enum LibraryBatch {
     ManualTabs(Vec<ManualTabRecord>),
     ManualMemberships(Vec<ManualMembershipRecord>),
     FolderOverrides(Vec<FolderOverrideRecord>),
+    HotkeyBindings(Vec<HotkeyBindingRecord>),
 }
 
 enum LibraryEdit {
@@ -229,6 +229,7 @@ impl LibraryBatch {
             Self::ManualTabs(rows) => rows.len(),
             Self::ManualMemberships(rows) => rows.len(),
             Self::FolderOverrides(rows) => rows.len(),
+            Self::HotkeyBindings(rows) => rows.len(),
         }
     }
 }
@@ -247,6 +248,14 @@ enum Request {
     },
     SoundById {
         id: String,
+        reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
+    },
+    SoundByPath {
+        path: String,
+        reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
+    },
+    SoundForBinding {
+        binding_id: String,
         reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
     },
     Adjacent {
@@ -270,6 +279,32 @@ enum Request {
     },
     DeleteHotkeyBinding {
         binding_id: String,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
+    BeginRootScan {
+        root_path: String,
+        position: usize,
+        reply: mpsc::SyncSender<Result<i64, LibraryError>>,
+    },
+    RootScanBatch {
+        root_path: String,
+        generation: i64,
+        folders: Vec<FolderRecord>,
+        sounds: Vec<SoundRecord>,
+        reply: mpsc::SyncSender<Result<(), LibraryError>>,
+    },
+    FinishRootScan {
+        root_path: String,
+        generation: i64,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
+    CancelRootScan {
+        root_path: String,
+        generation: i64,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
+    RemoveRoot {
+        root_path: String,
         reply: mpsc::SyncSender<Result<bool, LibraryError>>,
     },
     Roots {
@@ -329,6 +364,8 @@ impl RequestQueue {
         }
         let (queue, capacity) = match request {
             Request::SoundById { .. }
+            | Request::SoundByPath { .. }
+            | Request::SoundForBinding { .. }
             | Request::Adjacent { .. }
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
@@ -342,7 +379,13 @@ impl RequestQueue {
             | Request::Edit { .. }
             | Request::UpdateSound { .. }
             | Request::DeleteSound { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
-            Request::ApplyBatch { .. } => (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY),
+            Request::BeginRootScan { .. }
+            | Request::FinishRootScan { .. }
+            | Request::CancelRootScan { .. }
+            | Request::RemoveRoot { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
+            Request::ApplyBatch { .. } | Request::RootScanBatch { .. } => {
+                (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY)
+            }
         };
         if queue.len() >= capacity {
             return Err(LibraryError::QueueFull);
@@ -396,7 +439,198 @@ impl Drop for LibraryStoreInner {
 #[derive(Clone)]
 pub struct LibraryStore(Arc<LibraryStoreInner>);
 
+fn legacy_hotkey_binding(
+    binding_id: String,
+    owner: HotkeyBindingOwner,
+    raw: &str,
+) -> HotkeyBindingRecord {
+    match crate::hotkeys::canonicalize_hotkey_string(raw) {
+        Ok(canonical) => HotkeyBindingRecord {
+            binding_id,
+            owner,
+            accelerator: canonical,
+            normalized: None,
+            issue: Some("valid legacy candidate".to_string()),
+        },
+        Err(error) => HotkeyBindingRecord {
+            binding_id,
+            owner,
+            accelerator: raw.to_string(),
+            normalized: None,
+            issue: Some(format!("invalid legacy binding: {error}")),
+        },
+    }
+}
+
 impl LibraryStore {
+    pub fn open_seeded(path: PathBuf, legacy: &Config) -> Result<Self, LibraryError> {
+        if path.exists() {
+            return Self::open(path);
+        }
+
+        let candidate = path.with_file_name(format!(
+            ".library.sqlite3.importing.{}.{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let seed_result = (|| -> Result<(), LibraryError> {
+            let store = Self::open(candidate.clone())?;
+            for (batch_index, roots) in legacy.sound_folders.chunks(MAX_BATCH_ROWS).enumerate() {
+                let base = batch_index * MAX_BATCH_ROWS;
+                store
+                    .apply_batch(LibraryBatch::Roots(
+                        roots
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, path)| RootRecord {
+                                path: path.clone(),
+                                position: base + offset,
+                            })
+                            .collect(),
+                    ))
+                    .recv()?;
+            }
+
+            for (batch_index, sounds) in legacy.sounds.chunks(MAX_BATCH_ROWS).enumerate() {
+                let base = batch_index * MAX_BATCH_ROWS;
+                store
+                    .apply_batch(LibraryBatch::Sounds(
+                        sounds
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, sound)| {
+                                let mut sound = sound.clone();
+                                sound.hotkey = None;
+                                SoundRecord {
+                                    sound,
+                                    general_position: base + offset,
+                                    locations: Vec::new(),
+                                }
+                            })
+                            .collect(),
+                    ))
+                    .recv()?;
+
+                let bindings = sounds
+                    .iter()
+                    .filter_map(|sound| {
+                        sound.hotkey.as_deref().map(|hotkey| {
+                            legacy_hotkey_binding(
+                                sound.id.clone(),
+                                HotkeyBindingOwner::Sound(sound.id.clone()),
+                                hotkey,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if !bindings.is_empty() {
+                    store
+                        .apply_batch(LibraryBatch::HotkeyBindings(bindings))
+                        .recv()?;
+                }
+            }
+
+            let manual_tabs = legacy
+                .tabs
+                .iter()
+                .filter(|tab| tab.folder_binding.is_none())
+                .collect::<Vec<_>>();
+            for tabs in manual_tabs.chunks(MAX_BATCH_ROWS) {
+                store
+                    .apply_batch(LibraryBatch::ManualTabs(
+                        tabs.iter()
+                            .map(|tab| ManualTabRecord {
+                                public_id: tab.id.clone(),
+                                name: tab.name.clone(),
+                                position: tab.order as usize,
+                            })
+                            .collect(),
+                    ))
+                    .recv()?;
+            }
+            for tab in manual_tabs {
+                for (batch_index, ids) in tab.sound_ids.chunks(MAX_BATCH_ROWS).enumerate() {
+                    let base = batch_index * MAX_BATCH_ROWS;
+                    store
+                        .apply_batch(LibraryBatch::ManualMemberships(
+                            ids.iter()
+                                .enumerate()
+                                .map(|(offset, sound_id)| ManualMembershipRecord {
+                                    tab_public_id: tab.id.clone(),
+                                    sound_public_id: sound_id.clone(),
+                                    position: base + offset,
+                                })
+                                .collect(),
+                        ))
+                        .recv()?;
+                }
+            }
+
+            let control_bindings = ControlHotkeyAction::all()
+                .iter()
+                .filter_map(|meta| {
+                    legacy
+                        .settings
+                        .control_hotkeys
+                        .get_cloned(meta.action)
+                        .map(|hotkey| {
+                            legacy_hotkey_binding(
+                                meta.binding_id.to_string(),
+                                HotkeyBindingOwner::Control(meta.id.to_string()),
+                                &hotkey,
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+            if !control_bindings.is_empty() {
+                store
+                    .apply_batch(LibraryBatch::HotkeyBindings(control_bindings))
+                    .recv()?;
+            }
+            drop(store);
+
+            let connection = Connection::open(&candidate)?;
+            connection.execute_batch(
+                "UPDATE hotkey_bindings AS binding
+                 SET issue = 'duplicate legacy binding'
+                 WHERE issue = 'valid legacy candidate'
+                   AND (SELECT COUNT(*) FROM hotkey_bindings AS other
+                        WHERE other.accelerator = binding.accelerator
+                          AND other.issue = 'valid legacy candidate') > 1;
+                 UPDATE hotkey_bindings AS binding
+                 SET normalized = accelerator, state = 'active', issue = NULL
+                 WHERE issue = 'valid legacy candidate'
+                   AND (SELECT COUNT(*) FROM hotkey_bindings AS other
+                        WHERE other.accelerator = binding.accelerator
+                          AND other.issue = 'valid legacy candidate') = 1;",
+            )?;
+            let integrity: String =
+                connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(LibraryError::InvalidData(format!(
+                    "seeded library failed integrity check: {integrity}"
+                )));
+            }
+            drop(connection);
+            std::fs::File::open(&candidate)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| LibraryError::InvalidData(error.to_string()))?;
+            std::fs::rename(&candidate, &path)
+                .map_err(|error| LibraryError::InvalidData(error.to_string()))?;
+            if let Some(parent) = path.parent() {
+                std::fs::File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| LibraryError::InvalidData(error.to_string()))?;
+            }
+            Ok(())
+        })();
+        if seed_result.is_err() {
+            let _ = std::fs::remove_file(&candidate);
+        }
+        seed_result?;
+        Self::open(path)
+    }
+
     pub fn open(path: PathBuf) -> Result<Self, LibraryError> {
         let queue = Arc::new(RequestQueue::default());
         let worker_queue = Arc::clone(&queue);
@@ -487,6 +721,28 @@ impl LibraryStore {
         )
     }
 
+    pub fn sound_by_path(&self, path: &str) -> LibraryResponse<Option<Sound>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::SoundByPath {
+                path: path.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn sound_for_binding(&self, binding_id: &str) -> LibraryResponse<Option<Sound>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::SoundForBinding {
+                binding_id: binding_id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
     pub fn adjacent(
         &self,
         scope: LibraryScope,
@@ -533,6 +789,88 @@ impl LibraryStore {
         self.enqueue(
             Request::DeleteHotkeyBinding {
                 binding_id: binding_id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn begin_root_scan(&self, root_path: &str, position: usize) -> LibraryResponse<i64> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::BeginRootScan {
+                root_path: root_path.to_string(),
+                position,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn apply_root_scan_batch(
+        &self,
+        root_path: &str,
+        generation: i64,
+        folders: Vec<FolderRecord>,
+        sounds: Vec<SoundRecord>,
+    ) -> LibraryResponse<()> {
+        let row_count = folders
+            .iter()
+            .map(|folder| Path::new(&folder.relative_path).components().count().max(1))
+            .fold(0_usize, usize::saturating_add)
+            .saturating_add(
+                sounds
+                    .iter()
+                    .map(|sound| 1_usize.saturating_add(sound.locations.len()))
+                    .sum(),
+            );
+        if row_count > MAX_BATCH_ROWS {
+            return LibraryResponse::ready(Err(LibraryError::InvalidData(format!(
+                "root scan batches are limited to {MAX_BATCH_ROWS} rows"
+            ))));
+        }
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::RootScanBatch {
+                root_path: root_path.to_string(),
+                generation,
+                folders,
+                sounds,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn finish_root_scan(&self, root_path: &str, generation: i64) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::FinishRootScan {
+                root_path: root_path.to_string(),
+                generation,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn cancel_root_scan(&self, root_path: &str, generation: i64) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::CancelRootScan {
+                root_path: root_path.to_string(),
+                generation,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn remove_root(&self, root_path: &str) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::RemoveRoot {
+                root_path: root_path.to_string(),
                 reply,
             },
             response,
@@ -680,6 +1018,12 @@ fn handle_request(connection: &mut Connection, request: Request) {
         Request::SoundById { id, reply } => {
             let _ = reply.send(load_sound(connection, &id));
         }
+        Request::SoundByPath { path, reply } => {
+            let _ = reply.send(load_sound_by_path(connection, &path));
+        }
+        Request::SoundForBinding { binding_id, reply } => {
+            let _ = reply.send(load_sound_for_binding(connection, &binding_id));
+        }
         Request::Adjacent {
             scope,
             search,
@@ -702,6 +1046,41 @@ fn handle_request(connection: &mut Connection, request: Request) {
         }
         Request::DeleteHotkeyBinding { binding_id, reply } => {
             let _ = reply.send(delete_hotkey_binding(connection, &binding_id));
+        }
+        Request::BeginRootScan {
+            root_path,
+            position,
+            reply,
+        } => {
+            let _ = reply.send(begin_root_scan(connection, &root_path, position));
+        }
+        Request::RootScanBatch {
+            root_path,
+            generation,
+            folders,
+            sounds,
+            reply,
+        } => {
+            let _ = reply.send(apply_root_scan_batch(
+                connection, &root_path, generation, folders, sounds,
+            ));
+        }
+        Request::FinishRootScan {
+            root_path,
+            generation,
+            reply,
+        } => {
+            let _ = reply.send(finish_root_scan(connection, &root_path, generation));
+        }
+        Request::CancelRootScan {
+            root_path,
+            generation,
+            reply,
+        } => {
+            let _ = reply.send(cancel_root_scan(connection, &root_path, generation));
+        }
+        Request::RemoveRoot { root_path, reply } => {
+            let _ = reply.send(remove_root(connection, &root_path));
         }
         Request::Roots { page, reply } => {
             let _ = reply.send(load_roots(connection, page));
@@ -971,9 +1350,319 @@ fn apply_batch(connection: &mut Connection, batch: LibraryBatch) -> Result<(), L
         LibraryBatch::ManualTabs(rows) => insert_manual_tabs(&transaction, rows)?,
         LibraryBatch::ManualMemberships(rows) => insert_manual_memberships(&transaction, rows)?,
         LibraryBatch::FolderOverrides(rows) => insert_folder_overrides(&transaction, rows)?,
+        LibraryBatch::HotkeyBindings(rows) => insert_hotkey_bindings(&transaction, rows)?,
     }
     transaction.commit()?;
     Ok(())
+}
+
+fn scan_meta_key(root_path: &str) -> String {
+    format!("active_scan:{root_path}")
+}
+
+fn begin_root_scan(
+    connection: &mut Connection,
+    root_path: &str,
+    position: usize,
+) -> Result<i64, LibraryError> {
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "INSERT INTO roots(path, position) VALUES(?1, ?2)
+         ON CONFLICT(path) DO UPDATE SET position = excluded.position",
+        params![root_path, usize_to_i64(position)?],
+    )?;
+    let root_id: i64 =
+        transaction.query_row("SELECT id FROM roots WHERE path = ?1", [root_path], |row| {
+            row.get(0)
+        })?;
+    let highest: i64 = transaction
+        .query_row(
+            "SELECT max(generation) FROM (
+             SELECT active_generation AS generation FROM roots WHERE id = ?1
+             UNION ALL
+             SELECT generation FROM folder_presence AS presence
+             JOIN folders AS folder ON folder.id = presence.folder_id
+             WHERE folder.root_id = ?1
+             UNION ALL
+             SELECT generation FROM sound_locations WHERE root_id = ?1
+         )",
+            [root_id],
+            |row| row.get::<_, Option<i64>>(0),
+        )?
+        .unwrap_or(0);
+    let generation = highest
+        .checked_add(1)
+        .ok_or_else(|| LibraryError::InvalidData("root generation overflow".to_string()))?;
+    transaction.execute(
+        "INSERT INTO meta(key, value) VALUES(?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![scan_meta_key(root_path), generation.to_string()],
+    )?;
+    transaction.commit()?;
+    Ok(generation)
+}
+
+fn verify_root_scan(
+    connection: &Connection,
+    root_path: &str,
+    generation: i64,
+) -> Result<bool, LibraryError> {
+    Ok(connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [scan_meta_key(root_path)],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some_and(|value| value == generation.to_string()))
+}
+
+fn ensure_scan_folder(
+    transaction: &Transaction<'_>,
+    root_id: i64,
+    generation: i64,
+    row: &FolderRecord,
+) -> Result<i64, LibraryError> {
+    let components = Path::new(&row.relative_path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut parent_id = None;
+    let mut relative = PathBuf::new();
+    let mut folder_id = None;
+    for (index, component) in components.iter().enumerate() {
+        relative.push(component);
+        let relative_path = relative.to_string_lossy();
+        let is_target = index + 1 == components.len();
+        let name = if is_target { &row.name } else { component };
+        let position = if is_target { row.position } else { 0 };
+        transaction.execute(
+            "INSERT INTO folders(root_id, parent_id, relative_path, name, position)
+             VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(root_id, relative_path) DO UPDATE SET
+                 parent_id = excluded.parent_id,
+                 name = CASE WHEN ?6 THEN excluded.name ELSE folders.name END,
+                 position = CASE WHEN ?6 THEN excluded.position ELSE folders.position END",
+            params![
+                root_id,
+                parent_id,
+                relative_path.as_ref(),
+                name,
+                usize_to_i64(position)?,
+                is_target,
+            ],
+        )?;
+        let current_id: i64 = transaction.query_row(
+            "SELECT id FROM folders WHERE root_id = ?1 AND relative_path = ?2",
+            params![root_id, relative_path.as_ref()],
+            |result| result.get(0),
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO folder_presence(folder_id, generation) VALUES(?1, ?2)",
+            params![current_id, generation],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO folder_closure(ancestor_id, descendant_id, depth)
+             VALUES(?1, ?1, 0)",
+            [current_id],
+        )?;
+        if let Some(parent) = parent_id {
+            transaction.execute(
+                "INSERT OR IGNORE INTO folder_closure(ancestor_id, descendant_id, depth)
+                 SELECT ancestor_id, ?1, depth + 1
+                 FROM folder_closure WHERE descendant_id = ?2",
+                params![current_id, parent],
+            )?;
+        }
+        parent_id = Some(current_id);
+        folder_id = Some(current_id);
+    }
+    folder_id.ok_or_else(|| LibraryError::InvalidData("folder path cannot be empty".to_string()))
+}
+
+fn insert_scan_sound(
+    transaction: &Transaction<'_>,
+    root_id: i64,
+    root_path: &str,
+    generation: i64,
+    row: SoundRecord,
+) -> Result<(), LibraryError> {
+    let sound = row.sound;
+    let duration_ms = sound
+        .duration_ms
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| LibraryError::InvalidData("sound duration exceeds SQLite range".into()))?;
+    transaction.execute(
+        "INSERT INTO sounds(
+             public_id, name, search_name, path, source_path, duration_ms,
+             volume, enabled, loudness_lufs, loudness_state, loudness_confidence,
+             loudness_fingerprint, loudness_true_peak_dbtp, general_position, standalone
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0)
+         ON CONFLICT(path) DO NOTHING",
+        params![
+            &sound.id,
+            &sound.name,
+            sound.name.to_lowercase(),
+            &sound.path,
+            &sound.source_path,
+            duration_ms,
+            i64::from(sound.volume),
+            i64::from(sound.enabled),
+            sound.loudness_lufs,
+            sound.loudness_analysis_state.as_str(),
+            sound.loudness_confidence,
+            sound.loudness_source_fingerprint,
+            sound.loudness_true_peak_dbtp,
+            usize_to_i64(row.general_position)?,
+        ],
+    )?;
+    let sound_id: i64 = transaction.query_row(
+        "SELECT rowid FROM sounds WHERE path = ?1",
+        [&sound.path],
+        |result| result.get(0),
+    )?;
+    transaction.execute(
+        "UPDATE sounds SET standalone = 0 WHERE rowid = ?1",
+        [sound_id],
+    )?;
+    for location in row.locations {
+        if location.root_path != root_path {
+            return Err(LibraryError::InvalidData(
+                "scan location belongs to a different root".to_string(),
+            ));
+        }
+        let folder_id = location
+            .folder_relative_path
+            .as_deref()
+            .map(|folder| {
+                transaction.query_row(
+                    "SELECT id FROM folders WHERE root_id = ?1 AND relative_path = ?2",
+                    params![root_id, folder],
+                    |result| result.get::<_, i64>(0),
+                )
+            })
+            .transpose()?;
+        transaction.execute(
+            "INSERT INTO sound_locations(sound_id, root_id, generation, folder_id, relative_path)
+             VALUES(?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(sound_id, root_id, generation) DO UPDATE SET
+                 folder_id = excluded.folder_id, relative_path = excluded.relative_path",
+            params![
+                sound_id,
+                root_id,
+                generation,
+                folder_id,
+                location.relative_path,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_root_scan_batch(
+    connection: &mut Connection,
+    root_path: &str,
+    generation: i64,
+    folders: Vec<FolderRecord>,
+    sounds: Vec<SoundRecord>,
+) -> Result<(), LibraryError> {
+    if !verify_root_scan(connection, root_path, generation)? {
+        return Err(LibraryError::InvalidData(
+            "root scan generation is no longer active".to_string(),
+        ));
+    }
+    let transaction = connection.transaction()?;
+    let root_id: i64 =
+        transaction.query_row("SELECT id FROM roots WHERE path = ?1", [root_path], |row| {
+            row.get(0)
+        })?;
+    for folder in &folders {
+        if folder.root_path != root_path {
+            return Err(LibraryError::InvalidData(
+                "scan folder belongs to a different root".to_string(),
+            ));
+        }
+        ensure_scan_folder(&transaction, root_id, generation, folder)?;
+    }
+    for sound in sounds {
+        insert_scan_sound(&transaction, root_id, root_path, generation, sound)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+fn finish_root_scan(
+    connection: &mut Connection,
+    root_path: &str,
+    generation: i64,
+) -> Result<bool, LibraryError> {
+    if !verify_root_scan(connection, root_path, generation)? {
+        return Ok(false);
+    }
+    let transaction = connection.transaction()?;
+    let changed = transaction.execute(
+        "UPDATE roots SET active_generation = ?2 WHERE path = ?1",
+        params![root_path, generation],
+    )?;
+    transaction.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        [scan_meta_key(root_path)],
+    )?;
+    transaction.commit()?;
+    Ok(changed == 1)
+}
+
+fn cancel_root_scan(
+    connection: &mut Connection,
+    root_path: &str,
+    generation: i64,
+) -> Result<bool, LibraryError> {
+    if !verify_root_scan(connection, root_path, generation)? {
+        return Ok(false);
+    }
+    let transaction = connection.transaction()?;
+    let root_id: i64 =
+        transaction.query_row("SELECT id FROM roots WHERE path = ?1", [root_path], |row| {
+            row.get(0)
+        })?;
+    transaction.execute(
+        "DELETE FROM sound_locations WHERE root_id = ?1 AND generation = ?2",
+        params![root_id, generation],
+    )?;
+    transaction.execute(
+        "DELETE FROM folder_presence
+         WHERE generation = ?2 AND folder_id IN (SELECT id FROM folders WHERE root_id = ?1)",
+        params![root_id, generation],
+    )?;
+    transaction.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        [scan_meta_key(root_path)],
+    )?;
+    transaction.commit()?;
+    Ok(true)
+}
+
+fn remove_root(connection: &mut Connection, root_path: &str) -> Result<bool, LibraryError> {
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        [scan_meta_key(root_path)],
+    )?;
+    let changed = transaction.execute("DELETE FROM roots WHERE path = ?1", [root_path])?;
+    transaction.execute(
+        "DELETE FROM sounds
+         WHERE standalone = 0
+           AND NOT EXISTS (
+               SELECT 1 FROM sound_locations WHERE sound_id = sounds.rowid
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM manual_memberships WHERE sound_id = sounds.rowid
+           )",
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(changed == 1)
 }
 
 fn apply_edit(connection: &Connection, edit: LibraryEdit) -> Result<bool, LibraryError> {
@@ -1297,6 +1986,54 @@ fn insert_folder_overrides(
     Ok(())
 }
 
+fn insert_hotkey_bindings(
+    transaction: &Transaction<'_>,
+    rows: Vec<HotkeyBindingRecord>,
+) -> Result<(), LibraryError> {
+    let mut insert = transaction.prepare(
+        "INSERT INTO hotkey_bindings(
+             binding_id, sound_id, control_action, accelerator, normalized, state, issue
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    for binding in rows {
+        let (sound_id, control_action) = match &binding.owner {
+            HotkeyBindingOwner::Sound(public_id) => (
+                Some(
+                    transaction
+                        .query_row(
+                            "SELECT rowid FROM sounds WHERE public_id = ?1",
+                            [public_id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?
+                        .ok_or_else(|| {
+                            LibraryError::InvalidData(format!(
+                                "unknown sound binding owner: {public_id}"
+                            ))
+                        })?,
+                ),
+                None,
+            ),
+            HotkeyBindingOwner::Control(action) => (None, Some(action.as_str())),
+        };
+        let state = if binding.normalized.is_some() {
+            "active"
+        } else {
+            "needs_attention"
+        };
+        insert.execute(params![
+            binding.binding_id,
+            sound_id,
+            control_action,
+            binding.accelerator,
+            binding.normalized,
+            state,
+            binding.issue,
+        ])?;
+    }
+    Ok(())
+}
+
 fn search_query(search: &str) -> String {
     format!("\"{}\"", search.replace('"', "\"\""))
 }
@@ -1491,6 +2228,35 @@ fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, Librar
     );
     connection
         .query_row(&sql, [id], sound_from_row)
+        .optional()
+        .map_err(LibraryError::from)
+}
+
+fn load_sound_by_path(connection: &Connection, path: &str) -> Result<Option<Sound>, LibraryError> {
+    let sql = format!(
+        "SELECT {SOUND_FIELDS}
+         FROM sounds AS sound
+         WHERE path = ?1 AND {LIVE_SOUND_FILTER}"
+    );
+    connection
+        .query_row(&sql, [path], sound_from_row)
+        .optional()
+        .map_err(LibraryError::from)
+}
+
+fn load_sound_for_binding(
+    connection: &Connection,
+    binding_id: &str,
+) -> Result<Option<Sound>, LibraryError> {
+    let sql = format!(
+        "SELECT {SOUND_FIELDS}
+         FROM hotkey_bindings AS binding
+         JOIN sounds AS sound ON sound.rowid = binding.sound_id
+         WHERE binding.binding_id = ?1 AND binding.state = 'active'
+           AND {LIVE_SOUND_FILTER}"
+    );
+    connection
+        .query_row(&sql, [binding_id], sound_from_row)
         .optional()
         .map_err(LibraryError::from)
 }
@@ -1749,7 +2515,7 @@ fn load_hotkey_bindings_after(
                 binding.accelerator, binding.normalized, binding.issue
          FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
-         WHERE (?1 IS NULL OR binding.binding_id > ?1)
+         WHERE binding.state = 'active' AND (?1 IS NULL OR binding.binding_id > ?1)
          ORDER BY binding.binding_id LIMIT ?2",
     )?;
     let rows = statement.query_map(params![after, usize_to_i64(PAGE_SIZE)?], |row| {
@@ -1792,6 +2558,15 @@ fn set_hotkey_binding(
         return Err(LibraryError::InvalidData(
             "normalized hotkey cannot be empty".to_string(),
         ));
+    }
+    if let Some(normalized) = binding.normalized.as_deref() {
+        let canonical = crate::hotkeys::canonicalize_hotkey_string(&binding.accelerator)
+            .map_err(|error| LibraryError::InvalidData(error.to_string()))?;
+        if normalized != canonical {
+            return Err(LibraryError::InvalidData(
+                "normalized hotkey must equal the canonical accelerator".to_string(),
+            ));
+        }
     }
     if binding.normalized.is_none() && binding.issue.as_deref().is_none_or(str::is_empty) {
         return Err(LibraryError::InvalidData(

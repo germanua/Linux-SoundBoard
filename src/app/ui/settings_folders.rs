@@ -69,10 +69,10 @@ fn build_sound_folder_row(
             let folder_rows_done = Rc::clone(&folder_rows2);
             let rebuild_pending_done = Rc::clone(&rebuild_pending2);
             let on_library_changed_done = on_library_changed2.clone();
-            if let Err(e) = commands::remove_sound_folder_async(
+            if let Err(e) = commands::remove_sound_folder_with_store_async(
                 folder_owned.clone(),
                 Arc::clone(&state2.config),
-                Arc::clone(&state2.hotkeys),
+                state2.library.clone(),
                 move |result| match result {
                     Ok(()) => {
                         log::info!("Remove folder command succeeded");

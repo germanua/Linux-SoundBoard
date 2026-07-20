@@ -156,7 +156,7 @@ pub fn build_window(
 
     {
         let sl_nav = sound_list.clone();
-        transport.set_sound_list_provider(move || sl_nav.get_navigation_sounds());
+        transport.set_sound_list_provider(move || sl_nav.navigation_context());
     }
 
     {
@@ -330,12 +330,14 @@ pub fn handle_hotkey(
         let sound_id = id.to_string();
         let sound_id_for_log = sound_id.clone();
         crate::ui_event_bridge::mark_explicit_play_pending();
-        if let Err(e) = commands::play_sound_async(sound_id, Arc::clone(state), move |result| {
-            if let Err(err) = result {
-                crate::ui_event_bridge::clear_explicit_play_pending();
-                log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
-            }
-        }) {
+        if let Err(e) =
+            commands::play_hotkey_sound_async(sound_id, Arc::clone(state), move |result| {
+                if let Err(err) = result {
+                    crate::ui_event_bridge::clear_explicit_play_pending();
+                    log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
+                }
+            })
+        {
             crate::ui_event_bridge::clear_explicit_play_pending();
             log::warn!("Failed to dispatch hotkey playback '{}': {}", id, e);
         }

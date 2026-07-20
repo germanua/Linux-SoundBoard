@@ -5,12 +5,12 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use super::backend_runtime::HotkeyBackend;
+use super::backend_runtime::{try_dispatch_hotkey, HotkeyBackend};
 use super::error::{unsupported_key_for_backend, HotkeyError};
 use super::parse_hotkey_spec;
 use super::swhkd_config::SwhkdConfig;
@@ -20,6 +20,61 @@ use super::{
     SWHKD_PIPE_OPEN_RETRY_SECS, SWHKD_PIPE_REOPEN_DELAY_MS, SWHKD_RELOAD_POST_SIGNAL_WAIT_MS,
     SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS,
 };
+
+const MAX_PIPE_LINE_BYTES: usize = 256;
+
+#[derive(Debug, PartialEq, Eq)]
+enum PipeRead {
+    Eof,
+    Binding(String),
+    Rejected,
+}
+
+fn read_pipe_binding(reader: &mut impl BufRead) -> std::io::Result<PipeRead> {
+    let mut value = Vec::with_capacity(MAX_PIPE_LINE_BYTES);
+    let mut too_long = false;
+    let mut saw_data = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if !saw_data {
+                return Ok(PipeRead::Eof);
+            }
+            break;
+        }
+        saw_data = true;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let data_len = newline.unwrap_or(available.len());
+        if !too_long {
+            let remaining = MAX_PIPE_LINE_BYTES.saturating_sub(value.len());
+            value.extend_from_slice(&available[..data_len.min(remaining)]);
+            too_long = data_len > remaining;
+        }
+        let consumed = data_len + usize::from(newline.is_some());
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
+    }
+
+    if too_long {
+        return Ok(PipeRead::Rejected);
+    }
+    if value.last() == Some(&b'\r') {
+        value.pop();
+    }
+    let Ok(binding_id) = std::str::from_utf8(&value) else {
+        return Ok(PipeRead::Rejected);
+    };
+    if binding_id.is_empty()
+        || !binding_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'))
+    {
+        return Ok(PipeRead::Rejected);
+    }
+    Ok(PipeRead::Binding(binding_id.to_string()))
+}
 
 struct DropFlag {
     flag: Arc<AtomicBool>,
@@ -107,10 +162,7 @@ impl SwhkdBackend {
         // Let root-owned `swhkd` write to the pipe.
         nix::unistd::mkfifo(
             &pipe_path,
-            nix::sys::stat::Mode::S_IRUSR
-                | nix::sys::stat::Mode::S_IWUSR
-                | nix::sys::stat::Mode::S_IWGRP
-                | nix::sys::stat::Mode::S_IWOTH,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
         )
         .map_err(|e| HotkeyError::Io(format!("Failed to create named pipe: {}", e)))?;
 
@@ -329,7 +381,7 @@ impl HotkeyBackend for SwhkdBackend {
         self.unregister_many_inner(sound_ids)
     }
 
-    fn start_listener(&self, sender: Sender<String>) {
+    fn start_listener(&self, sender: SyncSender<String>) {
         if self.started.swap(true, Ordering::SeqCst) {
             warn!("swhkd listener already started");
             return;
@@ -351,7 +403,7 @@ impl HotkeyBackend for SwhkdBackend {
             let _guard = DropFlag { flag };
 
             loop {
-                let file = match File::open(&pipe_path) {
+                let file = match File::options().read(true).write(true).open(&pipe_path) {
                     Ok(f) => f,
                     Err(e) => {
                         warn!("Failed to open hotkey pipe: {}", e);
@@ -360,21 +412,19 @@ impl HotkeyBackend for SwhkdBackend {
                     }
                 };
 
-                let reader = BufReader::new(file);
-                for line in reader.lines() {
-                    match line {
-                        Ok(sound_id) => {
-                            let sound_id = sound_id.trim().to_string();
-                            if !sound_id.is_empty() {
-                                debug!("swhkd hotkey triggered: {}", sound_id);
-                                if sender.send(sound_id).is_err() {
-                                    warn!("Failed to send hotkey event (receiver dropped)");
-                                    return;
-                                }
+                let mut reader = BufReader::new(file);
+                loop {
+                    match read_pipe_binding(&mut reader) {
+                        Ok(PipeRead::Binding(binding_id)) => {
+                            debug!("swhkd hotkey triggered: {}", binding_id);
+                            if !try_dispatch_hotkey(&sender, binding_id) {
+                                debug!("Dropped swhkd hotkey repeat because the queue is full");
                             }
                         }
-                        Err(e) => {
-                            warn!("Error reading from hotkey pipe: {}", e);
+                        Ok(PipeRead::Rejected) => debug!("Rejected malformed swhkd pipe input"),
+                        Ok(PipeRead::Eof) => break,
+                        Err(error) => {
+                            warn!("Error reading from hotkey pipe: {error}");
                             break;
                         }
                     }
@@ -402,6 +452,27 @@ impl Drop for SwhkdBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fifo_reader_caps_and_recovers_after_malformed_lines() {
+        let payload = format!("{}\nvalid-id_2\n", "x".repeat(MAX_PIPE_LINE_BYTES + 500));
+        let mut reader = BufReader::new(payload.as_bytes());
+
+        assert_eq!(read_pipe_binding(&mut reader).unwrap(), PipeRead::Rejected);
+        assert_eq!(
+            read_pipe_binding(&mut reader).unwrap(),
+            PipeRead::Binding("valid-id_2".to_string())
+        );
+        assert_eq!(read_pipe_binding(&mut reader).unwrap(), PipeRead::Eof);
+    }
+
+    #[test]
+    fn fifo_reader_rejects_shell_and_path_characters() {
+        for line in ["../sound\n", "sound;touch /tmp/x\n", "sound id\n"] {
+            let mut reader = BufReader::new(line.as_bytes());
+            assert_eq!(read_pipe_binding(&mut reader).unwrap(), PipeRead::Rejected);
+        }
+    }
 
     #[test]
     fn test_backend_name() {

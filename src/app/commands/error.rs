@@ -48,6 +48,10 @@ pub enum CommandError {
     #[error("{0}")]
     Io(String),
 
+    /// A bounded SQLite library operation failed.
+    #[error("Library operation failed: {0}")]
+    Library(String),
+
     /// An error surfaced by the audio engine / IPC layer (still string-typed;
     /// that layer is migrated separately).
     #[error("{0}")]

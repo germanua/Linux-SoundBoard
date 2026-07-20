@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::config::{Config, ControlHotkeyAction};
 use crate::hotkeys::HotkeyManager;
+use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
 
 use super::shared::{dispatch_async_result, with_config, with_config_mut};
 use super::CommandError;
@@ -84,6 +85,7 @@ pub fn set_hotkey(
     hotkey: Option<String>,
     config: Arc<Mutex<Config>>,
     hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
 ) -> Result<(), CommandError> {
     let canonical_new = match hotkey {
         Some(hk) => Some(
@@ -93,39 +95,40 @@ pub fn set_hotkey(
         None => None,
     };
 
-    let previous_hotkey = with_config(&config, |cfg| {
+    with_config(&config, |cfg| {
         ensure_hotkey_available(cfg, &id, canonical_new.as_deref())?;
-        Ok::<Option<String>, CommandError>(cfg.get_sound(&id).and_then(|s| s.hotkey.clone()))
+        Ok::<(), CommandError>(())
     })??;
 
-    with_hotkeys(&hotkeys, |manager| {
-        if let Some(hk) = canonical_new.as_ref() {
-            manager.register_hotkey_blocking(&id, hk)
-        } else {
-            manager.unregister_hotkey_blocking(&id)
-        }
-    })?
-    .map_err(|e| CommandError::Hotkey(e.to_string()))?;
-
-    crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
-
-    let save_result = with_config_mut(&config, |cfg| {
-        cfg.set_hotkey(&id, canonical_new.clone());
-        if let Err(e) = cfg.save() {
-            cfg.set_hotkey(&id, previous_hotkey.clone());
-            Err(CommandError::config_save(e))
-        } else {
-            Ok(())
-        }
-    })?;
-
-    if let Err(e) = save_result {
-        let _ = with_hotkeys(&hotkeys, |manager| match previous_hotkey {
-            Some(prev) => manager.register_hotkey_blocking(&id, &prev),
-            None => manager.unregister_hotkey_blocking(&id),
-        });
-        return Err(e);
+    if let Some(hotkey) = canonical_new.as_ref() {
+        library
+            .set_hotkey_binding(HotkeyBindingRecord {
+                binding_id: id.clone(),
+                owner: HotkeyBindingOwner::Sound(id.clone()),
+                accelerator: hotkey.clone(),
+                normalized: Some(hotkey.clone()),
+                issue: None,
+            })
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+    } else {
+        library
+            .delete_hotkey_binding(&id)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
     }
+
+    with_config_mut(&config, |cfg| {
+        cfg.set_hotkey(&id, canonical_new.clone());
+        cfg.save().map_err(CommandError::config_save)
+    })??;
+
+    with_hotkeys(&hotkeys, |manager| match canonical_new.as_ref() {
+        Some(hotkey) => manager.register_hotkey_blocking(&id, hotkey),
+        None => manager.unregister_hotkey_blocking(&id),
+    })?
+    .map_err(|error| CommandError::Hotkey(error.to_string()))?;
+    crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
     Ok(())
 }
 
@@ -134,6 +137,7 @@ pub fn set_control_hotkey(
     hotkey: Option<String>,
     config: Arc<Mutex<Config>>,
     hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
 ) -> Result<(), CommandError> {
     let action = ControlHotkeyAction::from_id(&action)
         .ok_or_else(|| CommandError::Invalid("Invalid control hotkey action".to_string()))?;
@@ -146,43 +150,42 @@ pub fn set_control_hotkey(
         None => None,
     };
 
-    let previous_hotkey = with_config(&config, |cfg| {
+    with_config(&config, |cfg| {
         ensure_hotkey_available(cfg, binding_id, canonical_new.as_deref())?;
-        Ok::<Option<String>, CommandError>(cfg.settings.control_hotkeys.get_cloned(action))
+        Ok::<(), CommandError>(())
     })??;
 
-    with_hotkeys(&hotkeys, |manager| {
-        if let Some(hk) = canonical_new.as_ref() {
-            manager.register_hotkey_blocking(binding_id, hk)
-        } else {
-            manager.unregister_hotkey_blocking(binding_id)
-        }
-    })?
-    .map_err(|e| CommandError::Hotkey(e.to_string()))?;
+    if let Some(hotkey) = canonical_new.as_ref() {
+        library
+            .set_hotkey_binding(HotkeyBindingRecord {
+                binding_id: binding_id.to_string(),
+                owner: HotkeyBindingOwner::Control(action.id().to_string()),
+                accelerator: hotkey.clone(),
+                normalized: Some(hotkey.clone()),
+                issue: None,
+            })
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+    } else {
+        library
+            .delete_hotkey_binding(binding_id)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+    }
 
-    crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
-
-    let save_result = with_config_mut(&config, |cfg| {
+    with_config_mut(&config, |cfg| {
         cfg.settings
             .control_hotkeys
             .set_action(action, canonical_new.clone());
-        if let Err(e) = cfg.save() {
-            cfg.settings
-                .control_hotkeys
-                .set_action(action, previous_hotkey.clone());
-            Err(CommandError::config_save(e))
-        } else {
-            Ok(())
-        }
-    })?;
+        cfg.save().map_err(CommandError::config_save)
+    })??;
 
-    if let Err(e) = save_result {
-        let _ = with_hotkeys(&hotkeys, |manager| match previous_hotkey {
-            Some(prev) => manager.register_hotkey_blocking(binding_id, &prev),
-            None => manager.unregister_hotkey_blocking(binding_id),
-        });
-        return Err(e);
-    }
+    with_hotkeys(&hotkeys, |manager| match canonical_new.as_ref() {
+        Some(hotkey) => manager.register_hotkey_blocking(binding_id, hotkey),
+        None => manager.unregister_hotkey_blocking(binding_id),
+    })?
+    .map_err(|error| CommandError::Hotkey(error.to_string()))?;
+    crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
     Ok(())
 }
 

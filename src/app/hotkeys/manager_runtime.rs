@@ -1,5 +1,5 @@
 use log::{info, warn};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::SyncSender;
 
 use crate::app_meta::{BACKEND_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND};
 
@@ -12,12 +12,12 @@ use super::x11_backend::X11Backend;
 pub struct HotkeyManager {
     backend: Option<Box<dyn HotkeyBackend>>,
     disabled_reason: Option<String>,
-    deferred_sender: Option<Sender<String>>,
+    deferred_sender: Option<SyncSender<String>>,
     deferred_start: bool,
 }
 
 impl HotkeyManager {
-    pub fn new_blocking(sender: Sender<String>, sounds: &[(String, String)]) -> Self {
+    pub fn new_blocking(sender: SyncSender<String>, sounds: &[(String, String)]) -> Self {
         info!("Initializing hotkey backend manager");
 
         if sounds.is_empty() {

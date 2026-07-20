@@ -3,6 +3,7 @@ use crate::audio::AudioPlayer;
 use crate::commands::LoudnessCoordinators;
 use crate::config::Config;
 use crate::hotkeys::HotkeyManager;
+use crate::library_store::LibraryStore;
 use parking_lot::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
@@ -26,6 +27,7 @@ use std::time::Instant;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<Config>>,
+    pub library: LibraryStore,
     pub player: Arc<AudioPlayer>,
     pub hotkeys: Arc<Mutex<HotkeyManager>>,
     pub pipewire_status: Arc<Mutex<PipeWireStatus>>,

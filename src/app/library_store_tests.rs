@@ -376,8 +376,119 @@ fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
     assert_eq!(replaced.bindings.len(), 1);
     assert_eq!(replaced.bindings[0].accelerator, "Alt+KeyS");
 
+    let invalid = store
+        .set_hotkey_binding(HotkeyBindingRecord {
+            binding_id: "control:stop".to_string(),
+            owner: HotkeyBindingOwner::Control("stop".to_string()),
+            accelerator: "Ctrl+KeyA".to_string(),
+            normalized: Some("Alt+KeyB".to_string()),
+            issue: None,
+        })
+        .recv()
+        .expect_err("normalized binding must match its accelerator");
+    assert!(invalid.to_string().contains("canonical"));
+    assert_eq!(
+        wait(store.hotkey_bindings_after(None)).bindings[0].accelerator,
+        "Alt+KeyS"
+    );
+
     assert!(wait(store.delete_hotkey_binding("control:stop")));
     assert!(wait(store.hotkey_bindings_after(None)).bindings.is_empty());
+}
+
+#[test]
+fn playback_lookup_resolves_only_active_sound_bindings() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("first", "First", "/music/first.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+
+    let resolved = wait(store.sound_for_binding("first")).expect("active sound binding");
+    assert_eq!(resolved.id, "first");
+    assert!(wait(store.sound_for_binding("missing")).is_none());
+
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "first".to_string(),
+        owner: HotkeyBindingOwner::Sound("first".to_string()),
+        accelerator: "not valid".to_string(),
+        normalized: None,
+        issue: Some("invalid legacy binding".to_string()),
+    })));
+    assert!(wait(store.sound_for_binding("first")).is_none());
+}
+
+#[test]
+fn first_start_seed_is_atomic_and_batched_from_legacy_config() {
+    let temp = TestDir::new();
+    let path = temp.path().join("library.sqlite3");
+    let mut config = crate::config::Config::default();
+    config.sound_folders.push("/music".to_string());
+    for index in 0..1_025 {
+        let mut next = sound(
+            &format!("sound-{index}"),
+            &format!("Sound {index}"),
+            &format!("/music/sound-{index}.flac"),
+        );
+        next.hotkey = None;
+        config.sounds.push(next);
+    }
+    config.tabs.push(crate::config::SoundTab {
+        id: "manual".to_string(),
+        name: "Manual".to_string(),
+        sound_ids: (0..1_025).map(|index| format!("sound-{index}")).collect(),
+        order: 0,
+        folder_binding: None,
+    });
+    config.settings.control_hotkeys.stop_all = Some("Ctrl+KeyS".to_string());
+
+    let store = LibraryStore::open_seeded(path.clone(), &config).expect("seed legacy config");
+    assert_eq!(wait(store.count(LibraryScope::General, "")), 1_025);
+    assert_eq!(
+        wait(store.count(LibraryScope::ManualTab("manual".to_string()), "")),
+        1_025
+    );
+    let bindings = wait(store.hotkey_bindings_after(None));
+    assert_eq!(bindings.bindings.len(), 1);
+    assert_eq!(bindings.bindings[0].binding_id, "control:stop_all");
+    drop(store);
+
+    assert!(path.exists());
+    assert!(!temp
+        .path()
+        .read_dir()
+        .expect("read test directory")
+        .any(|entry| entry
+            .expect("directory entry")
+            .file_name()
+            .to_string_lossy()
+            .contains(".importing")));
+}
+
+#[test]
+fn first_start_seed_ignores_legacy_generated_tabs() {
+    let temp = TestDir::new();
+    let path = temp.path().join("library.sqlite3");
+    let mut config = crate::config::Config::default();
+    config
+        .sounds
+        .push(sound("first", "First", "/music/first.flac"));
+    config.tabs.push(crate::config::SoundTab {
+        id: "generated".to_string(),
+        name: "Generated".to_string(),
+        sound_ids: vec!["first".to_string()],
+        order: 0,
+        folder_binding: Some(crate::config::FolderTabBinding {
+            root_folder: "/music".to_string(),
+            relative_subfolder: "album".to_string(),
+        }),
+    });
+
+    let store = LibraryStore::open_seeded(path, &config).expect("seed legacy config");
+
+    assert_eq!(wait(store.manual_tabs(0)).total, 0);
 }
 
 #[test]
@@ -699,6 +810,155 @@ fn active_root_generation_hides_partial_scan_until_atomic_switch() {
         wait(store.folder_children("/music", None, 0)).folders[0].name,
         "New"
     );
+}
+
+#[test]
+fn root_scan_api_stages_batches_and_switches_visibility_atomically() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        generation,
+        vec![FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "album/deep".to_string(),
+            parent_relative_path: Some("album".to_string()),
+            name: "deep".to_string(),
+            position: 0,
+        }],
+        vec![SoundRecord {
+            sound: sound("first", "First", "/music/album/deep/first.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("album/deep".to_string()),
+                relative_path: "album/deep/first.flac".to_string(),
+            }],
+        }],
+    ));
+
+    assert_eq!(wait(store.count(LibraryScope::General, "")), 0);
+    assert!(wait(store.folder_children("/music", None, 0))
+        .folders
+        .is_empty());
+
+    assert!(wait(store.finish_root_scan("/music", generation)));
+    assert_eq!(wait(store.count(LibraryScope::General, "")), 1);
+    let top = wait(store.folder_children("/music", None, 0));
+    assert_eq!(top.folders[0].relative_path, "album");
+    let deep = wait(store.folder_children("/music", Some("album"), 0));
+    assert_eq!(deep.folders[0].relative_path, "album/deep");
+}
+
+#[test]
+fn cancelled_root_scan_preserves_the_previous_generation() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let first_generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        first_generation,
+        Vec::new(),
+        vec![SoundRecord {
+            sound: sound("old", "Old", "/music/old.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: None,
+                relative_path: "old.flac".to_string(),
+            }],
+        }],
+    ));
+    assert!(wait(store.finish_root_scan("/music", first_generation)));
+
+    let staged_generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        staged_generation,
+        Vec::new(),
+        vec![SoundRecord {
+            sound: sound("new", "New", "/music/new.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: None,
+                relative_path: "new.flac".to_string(),
+            }],
+        }],
+    ));
+
+    assert!(wait(store.cancel_root_scan("/music", staged_generation)));
+    let visible = wait(store.page(LibraryScope::General, "", 0));
+    assert_eq!(
+        visible
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old"]
+    );
+}
+
+#[test]
+fn removing_a_root_hides_its_orphaned_sounds_but_preserves_manual_sounds() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        generation,
+        Vec::new(),
+        vec![
+            SoundRecord {
+                sound: sound("orphan", "Orphan", "/music/orphan.flac"),
+                general_position: 0,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: None,
+                    relative_path: "orphan.flac".to_string(),
+                }],
+            },
+            SoundRecord {
+                sound: sound("manual", "Manual", "/music/manual.flac"),
+                general_position: 1,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: None,
+                    relative_path: "manual.flac".to_string(),
+                }],
+            },
+        ],
+    ));
+    assert!(wait(store.finish_root_scan("/music", generation)));
+    wait(
+        store.apply_batch(LibraryBatch::ManualTabs(vec![ManualTabRecord {
+            public_id: "kept".to_string(),
+            name: "Kept".to_string(),
+            position: 0,
+        }])),
+    );
+    wait(store.apply_batch(LibraryBatch::ManualMemberships(vec![
+        ManualMembershipRecord {
+            tab_public_id: "kept".to_string(),
+            sound_public_id: "manual".to_string(),
+            position: 0,
+        },
+    ])));
+
+    assert!(wait(store.remove_root("/music")));
+
+    assert!(wait(store.roots(0)).roots.is_empty());
+    let general = wait(store.page(LibraryScope::General, "", 0));
+    assert_eq!(
+        general
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["manual"]
+    );
+    assert!(wait(store.sound_by_id("orphan")).is_none());
 }
 
 #[test]

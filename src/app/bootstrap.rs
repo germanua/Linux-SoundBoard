@@ -17,7 +17,7 @@ use crate::app_meta::{
     FORCE_X11_ENV_VAR, RENDERER_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND,
 };
 use crate::app_state::AppState;
-use crate::config::{Config, ControlHotkeyAction};
+use crate::config::Config;
 use crate::timer_registry::TimerRegistry;
 
 const ENGINE_SERVICE_UNIT: &str = "linux-soundboard-engine.service";
@@ -528,8 +528,25 @@ fn start_application(
         }
     }
 
-    let prebound_hotkeys = prebound_hotkeys(&config);
-    let (hotkey_sender, hotkey_receiver) = mpsc::channel::<String>();
+    let library_path = Config::config_path().with_file_name("library.sqlite3");
+    let library = match crate::library_store::LibraryStore::open_seeded(library_path, &config) {
+        Ok(library) => library,
+        Err(error) => {
+            log::error!("Refusing to start with unavailable library database: {error}");
+            show_config_error(app, &error);
+            return;
+        }
+    };
+
+    let prebound_hotkeys = match prebound_hotkeys(&library) {
+        Ok(bindings) => bindings,
+        Err(error) => {
+            log::error!("Could not read persisted hotkeys: {error}");
+            show_config_error(app, &error);
+            return;
+        }
+    };
+    let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
 
     let hotkey_manager =
         crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
@@ -551,6 +568,7 @@ fn start_application(
 
     let state = Arc::new(AppState {
         config: Arc::new(Mutex::new(config)),
+        library,
         player: Arc::new(player),
         hotkeys: Arc::new(Mutex::new(hotkey_manager)),
         pipewire_status: Arc::new(Mutex::new(pipewire_status)),
@@ -693,25 +711,27 @@ pub fn backfill_missing_sound_durations(config: &mut Config) -> bool {
     changed
 }
 
-fn prebound_hotkeys(config: &Config) -> Vec<(String, String)> {
-    let mut prebound: Vec<(String, String)> = config
-        .sounds
-        .iter()
-        .filter_map(|sound| {
-            sound
-                .hotkey
-                .as_ref()
-                .map(|hotkey| (sound.id.clone(), hotkey.clone()))
-        })
-        .collect();
-
-    for meta in ControlHotkeyAction::all() {
-        if let Some(hotkey) = config.settings.control_hotkeys.get_cloned(meta.action) {
-            prebound.push((meta.action.binding_id().to_string(), hotkey));
+fn prebound_hotkeys(
+    library: &crate::library_store::LibraryStore,
+) -> Result<Vec<(String, String)>, crate::library_store::LibraryError> {
+    let mut prebound = Vec::new();
+    let mut after = None;
+    loop {
+        let page = library.hotkey_bindings_after(after.as_deref()).recv()?;
+        let count = page.bindings.len();
+        after = page
+            .bindings
+            .last()
+            .map(|binding| binding.binding_id.clone());
+        prebound.extend(
+            page.bindings
+                .into_iter()
+                .map(|binding| (binding.binding_id, binding.accelerator)),
+        );
+        if count < crate::library_store::PAGE_SIZE {
+            return Ok(prebound);
         }
     }
-
-    prebound
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
