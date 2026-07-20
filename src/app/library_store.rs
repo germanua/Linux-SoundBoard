@@ -1,18 +1,20 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 
-use crate::config::{LoudnessAnalysisState, Sound, SoundTab};
+use crate::config::{LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
+pub const MAX_BATCH_ROWS: usize = 512;
 const DATABASE_SCHEMA_VERSION: i64 = 1;
-const INTERACTIVE_QUEUE_CAPACITY: usize = 64;
-const BULK_QUEUE_CAPACITY: usize = 2;
+const CONTROL_QUEUE_CAPACITY: usize = 16;
+const VISIBLE_QUEUE_CAPACITY: usize = 64;
+const MAINTENANCE_QUEUE_CAPACITY: usize = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
@@ -29,7 +31,16 @@ pub enum LibraryError {
 pub struct LibraryResponse<T>(mpsc::Receiver<Result<T, LibraryError>>);
 
 impl<T> LibraryResponse<T> {
-    pub fn recv(self) -> Result<T, LibraryError> {
+    pub fn try_recv(&self) -> Result<Option<T>, LibraryError> {
+        match self.0.try_recv() {
+            Ok(result) => result.map(Some),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(LibraryError::WorkerUnavailable),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recv(self) -> Result<T, LibraryError> {
         self.0.recv().map_err(|_| LibraryError::WorkerUnavailable)?
     }
 
@@ -43,7 +54,11 @@ impl<T> LibraryResponse<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LibraryScope {
     General,
-    Tab(String),
+    ManualTab(String),
+    Folder {
+        root_path: String,
+        relative_path: String,
+    },
 }
 
 #[derive(Debug)]
@@ -53,13 +68,91 @@ pub struct SoundPage {
 }
 
 #[derive(Debug)]
-pub struct LibrarySnapshot {
-    pub sound_folders: Vec<String>,
-    pub sounds: Vec<Sound>,
-    pub tabs: Vec<SoundTab>,
+pub struct RootRecord {
+    pub path: String,
+    pub position: usize,
 }
 
-enum InteractiveRequest {
+#[derive(Debug)]
+pub struct FolderRecord {
+    pub root_path: String,
+    pub relative_path: String,
+    pub parent_relative_path: Option<String>,
+    pub name: String,
+    pub position: usize,
+}
+
+#[derive(Debug)]
+pub struct SoundLocationRecord {
+    pub root_path: String,
+    pub folder_relative_path: Option<String>,
+    pub relative_path: String,
+}
+
+#[derive(Debug)]
+pub struct SoundRecord {
+    pub sound: Sound,
+    pub general_position: usize,
+    pub locations: Vec<SoundLocationRecord>,
+}
+
+#[derive(Debug)]
+pub struct ManualTabRecord {
+    pub public_id: String,
+    pub name: String,
+    pub position: usize,
+}
+
+#[derive(Debug)]
+pub struct ManualMembershipRecord {
+    pub tab_public_id: String,
+    pub sound_public_id: String,
+    pub position: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FolderOverrideAction {
+    Include,
+    Exclude,
+}
+
+#[derive(Debug)]
+pub struct FolderOverrideRecord {
+    pub root_path: String,
+    pub folder_relative_path: String,
+    pub sound_public_id: String,
+    pub action: FolderOverrideAction,
+}
+
+#[derive(Debug)]
+pub enum LibraryBatch {
+    Roots(Vec<RootRecord>),
+    Folders(Vec<FolderRecord>),
+    Sounds(Vec<SoundRecord>),
+    ManualTabs(Vec<ManualTabRecord>),
+    ManualMemberships(Vec<ManualMembershipRecord>),
+    FolderOverrides(Vec<FolderOverrideRecord>),
+}
+
+impl LibraryBatch {
+    fn row_count(&self) -> usize {
+        match self {
+            Self::Roots(rows) => rows.len(),
+            Self::Folders(rows) => rows.iter().fold(0, |total, row| {
+                total.saturating_add(Path::new(&row.relative_path).components().count().max(1))
+            }),
+            Self::Sounds(rows) => rows
+                .iter()
+                .map(|row| 1_usize.saturating_add(row.locations.len()))
+                .fold(0, usize::saturating_add),
+            Self::ManualTabs(rows) => rows.len(),
+            Self::ManualMemberships(rows) => rows.len(),
+            Self::FolderOverrides(rows) => rows.len(),
+        }
+    }
+}
+
+enum Request {
     Count {
         scope: LibraryScope,
         search: String,
@@ -75,25 +168,85 @@ enum InteractiveRequest {
         id: String,
         reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
     },
-}
-
-enum BulkRequest {
-    ReplaceAll {
-        snapshot: LibrarySnapshot,
+    ApplyBatch {
+        batch: LibraryBatch,
         reply: mpsc::SyncSender<Result<(), LibraryError>>,
     },
 }
 
+#[derive(Default)]
+struct QueueState {
+    control: VecDeque<Request>,
+    visible: VecDeque<Request>,
+    maintenance: VecDeque<Request>,
+    closed: bool,
+}
+
+#[derive(Default)]
+struct RequestQueue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
+}
+
+impl RequestQueue {
+    fn push(&self, request: Request) -> Result<(), LibraryError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| LibraryError::WorkerUnavailable)?;
+        if state.closed {
+            return Err(LibraryError::WorkerUnavailable);
+        }
+        let (queue, capacity) = match request {
+            Request::SoundById { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
+            Request::Count { .. } | Request::Page { .. } => {
+                (&mut state.visible, VISIBLE_QUEUE_CAPACITY)
+            }
+            Request::ApplyBatch { .. } => (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY),
+        };
+        if queue.len() >= capacity {
+            return Err(LibraryError::QueueFull);
+        }
+        queue.push_back(request);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    fn pop(&self) -> Option<Request> {
+        let mut state = self.state.lock().ok()?;
+        loop {
+            if let Some(request) = state.control.pop_front() {
+                return Some(request);
+            }
+            if let Some(request) = state.visible.pop_front() {
+                return Some(request);
+            }
+            if let Some(request) = state.maintenance.pop_front() {
+                return Some(request);
+            }
+            if state.closed {
+                return None;
+            }
+            state = self.ready.wait(state).ok()?;
+        }
+    }
+
+    fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+            self.ready.notify_all();
+        }
+    }
+}
+
 struct LibraryStoreInner {
-    interactive: mpsc::SyncSender<InteractiveRequest>,
-    bulk: mpsc::SyncSender<BulkRequest>,
-    shutdown: Arc<AtomicBool>,
+    queue: Arc<RequestQueue>,
     worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Drop for LibraryStoreInner {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Release);
+        self.queue.close();
         if let Some(worker) = self.worker.lock().expect("library worker lock").take() {
             let _ = worker.join();
         }
@@ -105,11 +258,9 @@ pub struct LibraryStore(Arc<LibraryStoreInner>);
 
 impl LibraryStore {
     pub fn open(path: PathBuf) -> Result<Self, LibraryError> {
-        let (interactive_tx, interactive_rx) = mpsc::sync_channel(INTERACTIVE_QUEUE_CAPACITY);
-        let (bulk_tx, bulk_rx) = mpsc::sync_channel(BULK_QUEUE_CAPACITY);
+        let queue = Arc::new(RequestQueue::default());
+        let worker_queue = Arc::clone(&queue);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let worker_shutdown = Arc::clone(&shutdown);
         let worker = thread::Builder::new()
             .name("library-db".to_string())
             .spawn(move || {
@@ -123,15 +274,15 @@ impl LibraryStore {
                         return;
                     }
                 };
-                run_worker(&mut connection, interactive_rx, bulk_rx, &worker_shutdown);
+                while let Some(request) = worker_queue.pop() {
+                    handle_request(&mut connection, request);
+                }
             })
             .map_err(|_| LibraryError::WorkerUnavailable)?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self(Arc::new(LibraryStoreInner {
-                interactive: interactive_tx,
-                bulk: bulk_tx,
-                shutdown,
+                queue,
                 worker: Mutex::new(Some(worker)),
             }))),
             Ok(Err(error)) => {
@@ -145,36 +296,26 @@ impl LibraryStore {
         }
     }
 
-    pub fn replace_all(&self, snapshot: LibrarySnapshot) -> LibraryResponse<()> {
-        let (reply, response) = mpsc::sync_channel(1);
-        let request = BulkRequest::ReplaceAll { snapshot, reply };
-        match self.0.bulk.try_send(request) {
-            Ok(()) => LibraryResponse(response),
-            Err(mpsc::TrySendError::Full(_)) => {
-                LibraryResponse::ready(Err(LibraryError::QueueFull))
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                LibraryResponse::ready(Err(LibraryError::WorkerUnavailable))
-            }
+    pub fn apply_batch(&self, batch: LibraryBatch) -> LibraryResponse<()> {
+        if batch.row_count() > MAX_BATCH_ROWS {
+            return LibraryResponse::ready(Err(LibraryError::InvalidData(format!(
+                "library batches are limited to {MAX_BATCH_ROWS} rows"
+            ))));
         }
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::ApplyBatch { batch, reply }, response)
     }
 
     pub fn count(&self, scope: LibraryScope, search: &str) -> LibraryResponse<usize> {
         let (reply, response) = mpsc::sync_channel(1);
-        let request = InteractiveRequest::Count {
-            scope,
-            search: search.to_lowercase(),
-            reply,
-        };
-        match self.0.interactive.try_send(request) {
-            Ok(()) => LibraryResponse(response),
-            Err(mpsc::TrySendError::Full(_)) => {
-                LibraryResponse::ready(Err(LibraryError::QueueFull))
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                LibraryResponse::ready(Err(LibraryError::WorkerUnavailable))
-            }
-        }
+        self.enqueue(
+            Request::Count {
+                scope,
+                search: search.to_lowercase(),
+                reply,
+            },
+            response,
+        )
     }
 
     pub fn page(
@@ -184,87 +325,50 @@ impl LibraryStore {
         page: usize,
     ) -> LibraryResponse<SoundPage> {
         let (reply, response) = mpsc::sync_channel(1);
-        let request = InteractiveRequest::Page {
-            scope,
-            search: search.to_lowercase(),
-            page,
-            reply,
-        };
-        match self.0.interactive.try_send(request) {
-            Ok(()) => LibraryResponse(response),
-            Err(mpsc::TrySendError::Full(_)) => {
-                LibraryResponse::ready(Err(LibraryError::QueueFull))
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                LibraryResponse::ready(Err(LibraryError::WorkerUnavailable))
-            }
-        }
+        self.enqueue(
+            Request::Page {
+                scope,
+                search: search.to_lowercase(),
+                page,
+                reply,
+            },
+            response,
+        )
     }
 
     pub fn sound_by_id(&self, id: &str) -> LibraryResponse<Option<Sound>> {
         let (reply, response) = mpsc::sync_channel(1);
-        let request = InteractiveRequest::SoundById {
-            id: id.to_string(),
-            reply,
-        };
-        match self.0.interactive.try_send(request) {
+        self.enqueue(
+            Request::SoundById {
+                id: id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
+    fn enqueue<T>(
+        &self,
+        request: Request,
+        response: mpsc::Receiver<Result<T, LibraryError>>,
+    ) -> LibraryResponse<T> {
+        match self.0.queue.push(request) {
             Ok(()) => LibraryResponse(response),
-            Err(mpsc::TrySendError::Full(_)) => {
-                LibraryResponse::ready(Err(LibraryError::QueueFull))
-            }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                LibraryResponse::ready(Err(LibraryError::WorkerUnavailable))
-            }
+            Err(error) => LibraryResponse::ready(Err(error)),
         }
     }
 }
 
-fn run_worker(
-    connection: &mut Connection,
-    interactive: mpsc::Receiver<InteractiveRequest>,
-    bulk: mpsc::Receiver<BulkRequest>,
-    shutdown: &AtomicBool,
-) {
-    while !shutdown.load(Ordering::Acquire) {
-        let mut handled_interactive = false;
-        for _ in 0..INTERACTIVE_QUEUE_CAPACITY {
-            let Ok(request) = interactive.try_recv() else {
-                break;
-            };
-            handle_interactive(connection, request);
-            handled_interactive = true;
-        }
-
-        if let Ok(request) = bulk.try_recv() {
-            handle_bulk(connection, request);
-            continue;
-        }
-        if handled_interactive {
-            continue;
-        }
-
-        match interactive.recv_timeout(Duration::from_millis(5)) {
-            Ok(request) => handle_interactive(connection, request),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if bulk.try_recv().is_err() {
-                    break;
-                }
-            }
-        }
-    }
-}
-
-fn handle_interactive(connection: &Connection, request: InteractiveRequest) {
+fn handle_request(connection: &mut Connection, request: Request) {
     match request {
-        InteractiveRequest::Count {
+        Request::Count {
             scope,
             search,
             reply,
         } => {
             let _ = reply.send(count_sounds(connection, &scope, &search));
         }
-        InteractiveRequest::Page {
+        Request::Page {
             scope,
             search,
             page,
@@ -272,16 +376,11 @@ fn handle_interactive(connection: &Connection, request: InteractiveRequest) {
         } => {
             let _ = reply.send(load_page(connection, &scope, &search, page));
         }
-        InteractiveRequest::SoundById { id, reply } => {
+        Request::SoundById { id, reply } => {
             let _ = reply.send(load_sound(connection, &id));
         }
-    }
-}
-
-fn handle_bulk(connection: &mut Connection, request: BulkRequest) {
-    match request {
-        BulkRequest::ReplaceAll { snapshot, reply } => {
-            let _ = reply.send(replace_all(connection, snapshot));
+        Request::ApplyBatch { batch, reply } => {
+            let _ = reply.send(apply_batch(connection, batch));
         }
     }
 }
@@ -299,30 +398,71 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
         )));
     }
     connection.pragma_update(None, "journal_mode", "DELETE")?;
-    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.pragma_update(None, "synchronous", "EXTRA")?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "cache_size", -2048_i64)?;
     connection.pragma_update(None, "temp_store", "FILE")?;
+    connection.pragma_update(None, "mmap_size", 0_i64)?;
+    connection.pragma_update(None, "journal_size_limit", 0_i64)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     if schema_version == 0 {
-        connection.execute_batch(
-            "BEGIN IMMEDIATE;
-         CREATE TABLE meta (
-             key TEXT PRIMARY KEY,
-             value TEXT NOT NULL
-         );
-         CREATE TABLE roots (
-             path TEXT PRIMARY KEY,
+        create_schema(&connection)?;
+    } else {
+        let meta_version: String = connection.query_row(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )?;
+        let flavor: String = connection.query_row(
+            "SELECT value FROM meta WHERE key = 'schema_flavor'",
+            [],
+            |row| row.get(0),
+        )?;
+        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-v1" {
+            return Err(LibraryError::InvalidData(
+                "library metadata does not match the bounded schema".to_string(),
+            ));
+        }
+    }
+    connection.execute_batch("PRAGMA optimize;")?;
+    Ok(connection)
+}
+
+fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+         CREATE TABLE roots(
+             id INTEGER PRIMARY KEY,
+             path TEXT NOT NULL UNIQUE,
              position INTEGER NOT NULL
          );
-         CREATE TABLE sounds (
-             id TEXT PRIMARY KEY,
+         CREATE TABLE folders(
+             id INTEGER PRIMARY KEY,
+             root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+             parent_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+             relative_path TEXT NOT NULL,
+             name TEXT NOT NULL,
+             position INTEGER NOT NULL,
+             UNIQUE(root_id, relative_path)
+         );
+         CREATE INDEX folders_parent_order ON folders(root_id, parent_id, position, id);
+         CREATE TABLE folder_closure(
+             ancestor_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+             descendant_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+             depth INTEGER NOT NULL CHECK(depth >= 0),
+             PRIMARY KEY(ancestor_id, descendant_id)
+         );
+         CREATE INDEX folder_closure_descendant ON folder_closure(descendant_id, ancestor_id);
+         CREATE TABLE sounds(
+             rowid INTEGER PRIMARY KEY,
+             public_id TEXT NOT NULL UNIQUE,
              name TEXT NOT NULL,
              search_name TEXT NOT NULL,
              path TEXT NOT NULL UNIQUE,
              source_path TEXT,
              hotkey TEXT,
-             duration_ms INTEGER,
+             duration_ms INTEGER CHECK(duration_ms IS NULL OR duration_ms >= 0),
              volume INTEGER NOT NULL CHECK(volume BETWEEN 0 AND 100),
              enabled INTEGER NOT NULL CHECK(enabled IN (0, 1)),
              loudness_lufs REAL,
@@ -330,134 +470,167 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
              loudness_confidence REAL,
              loudness_fingerprint TEXT,
              loudness_true_peak_dbtp REAL,
-             root_folder TEXT,
-             relative_path TEXT,
+             general_position INTEGER NOT NULL
+         );
+         CREATE INDEX sounds_general_order ON sounds(general_position, public_id);
+         CREATE INDEX sounds_hotkey ON sounds(hotkey) WHERE hotkey IS NOT NULL;
+         CREATE TABLE sound_locations(
+             sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
+             root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+             folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+             relative_path TEXT NOT NULL,
+             PRIMARY KEY(sound_id, root_id)
+         );
+         CREATE INDEX sound_locations_folder ON sound_locations(folder_id, sound_id);
+         CREATE TABLE manual_tabs(
+             id INTEGER PRIMARY KEY,
+             public_id TEXT NOT NULL UNIQUE,
+             name TEXT NOT NULL,
              position INTEGER NOT NULL
          );
-         CREATE INDEX sounds_search_order
-             ON sounds(search_name, id);
-         CREATE TABLE tabs (
-             id TEXT PRIMARY KEY,
-             name TEXT NOT NULL,
+         CREATE TABLE manual_memberships(
+             tab_id INTEGER NOT NULL REFERENCES manual_tabs(id) ON DELETE CASCADE,
+             sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
              position INTEGER NOT NULL,
-             kind TEXT NOT NULL CHECK(kind IN ('manual', 'generated')),
-             root_folder TEXT,
-             relative_folder TEXT
+             PRIMARY KEY(tab_id, sound_id)
          );
-         CREATE TABLE tab_memberships (
-             tab_id TEXT NOT NULL REFERENCES tabs(id) ON DELETE CASCADE,
-             sound_id TEXT NOT NULL REFERENCES sounds(id) ON DELETE CASCADE,
-             membership_kind TEXT NOT NULL CHECK(membership_kind IN ('manual', 'include', 'exclude')),
-             position INTEGER NOT NULL,
-             PRIMARY KEY(tab_id, sound_id, membership_kind)
+         CREATE INDEX manual_memberships_order ON manual_memberships(tab_id, position, sound_id);
+         CREATE TABLE folder_prefs(
+             folder_id INTEGER PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
+             display_name TEXT,
+             sibling_position INTEGER,
+             expanded INTEGER NOT NULL DEFAULT 0 CHECK(expanded IN (0, 1))
          );
-         CREATE INDEX tab_memberships_order
-             ON tab_memberships(tab_id, membership_kind, position);
+         CREATE TABLE folder_overrides(
+             folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+             sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
+             action TEXT NOT NULL CHECK(action IN ('include', 'exclude')),
+             PRIMARY KEY(folder_id, sound_id)
+         );
+         CREATE VIRTUAL TABLE sound_search USING fts5(
+             search_name,
+             content='sounds',
+             content_rowid='rowid',
+             tokenize='trigram'
+         );
+         CREATE TRIGGER sounds_search_insert AFTER INSERT ON sounds BEGIN
+             INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
+         END;
+         CREATE TRIGGER sounds_search_delete AFTER DELETE ON sounds BEGIN
+             INSERT INTO sound_search(sound_search, rowid, search_name)
+             VALUES('delete', old.rowid, old.search_name);
+         END;
+         CREATE TRIGGER sounds_search_update AFTER UPDATE OF search_name ON sounds BEGIN
+             INSERT INTO sound_search(sound_search, rowid, search_name)
+             VALUES('delete', old.rowid, old.search_name);
+             INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
+         END;
          INSERT INTO meta(key, value) VALUES('schema_version', '1');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-v1');
          PRAGMA user_version = 1;
          COMMIT;",
-        )?;
-    } else {
-        let meta_version: String = connection.query_row(
-            "SELECT value FROM meta WHERE key = 'schema_version'",
-            [],
-            |row| row.get(0),
-        )?;
-        if meta_version != DATABASE_SCHEMA_VERSION.to_string() {
-            return Err(LibraryError::InvalidData(format!(
-                "library metadata schema {meta_version} does not match file schema {schema_version}"
-            )));
-        }
-    }
-    Ok(connection)
+    )?;
+    Ok(())
 }
 
-fn replace_all(connection: &mut Connection, snapshot: LibrarySnapshot) -> Result<(), LibraryError> {
+fn apply_batch(connection: &mut Connection, batch: LibraryBatch) -> Result<(), LibraryError> {
     let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM tab_memberships", [])?;
-    transaction.execute("DELETE FROM tabs", [])?;
-    transaction.execute("DELETE FROM sounds", [])?;
-    transaction.execute("DELETE FROM roots", [])?;
-
-    for (position, root) in snapshot.sound_folders.iter().enumerate() {
-        transaction.execute(
-            "INSERT INTO roots(path, position) VALUES(?1, ?2)",
-            params![root, usize_to_i64(position)?],
-        )?;
-    }
-    for (position, sound) in snapshot.sounds.iter().enumerate() {
-        insert_sound(
-            &transaction,
-            sound,
-            &snapshot.sound_folders,
-            usize_to_i64(position)?,
-        )?;
-    }
-    for tab in &snapshot.tabs {
-        let (kind, root_folder, relative_folder, membership_kind) =
-            if let Some(binding) = &tab.folder_binding {
-                (
-                    "generated",
-                    Some(binding.root_folder.as_str()),
-                    Some(binding.relative_subfolder.as_str()),
-                    "include",
-                )
-            } else {
-                ("manual", None, None, "manual")
-            };
-        transaction.execute(
-            "INSERT INTO tabs(id, name, position, kind, root_folder, relative_folder)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                tab.id,
-                tab.name,
-                i64::from(tab.order),
-                kind,
-                root_folder,
-                relative_folder
-            ],
-        )?;
-        for (position, sound_id) in tab.sound_ids.iter().enumerate() {
-            transaction.execute(
-                "INSERT INTO tab_memberships(tab_id, sound_id, membership_kind, position)
-                 VALUES(?1, ?2, ?3, ?4)",
-                params![tab.id, sound_id, membership_kind, usize_to_i64(position)?],
-            )?;
-        }
+    match batch {
+        LibraryBatch::Roots(rows) => insert_roots(&transaction, rows)?,
+        LibraryBatch::Folders(rows) => insert_folders(&transaction, rows)?,
+        LibraryBatch::Sounds(rows) => insert_sounds(&transaction, rows)?,
+        LibraryBatch::ManualTabs(rows) => insert_manual_tabs(&transaction, rows)?,
+        LibraryBatch::ManualMemberships(rows) => insert_manual_memberships(&transaction, rows)?,
+        LibraryBatch::FolderOverrides(rows) => insert_folder_overrides(&transaction, rows)?,
     }
     transaction.commit()?;
     Ok(())
 }
 
-fn insert_sound(
+fn insert_roots(transaction: &Transaction<'_>, rows: Vec<RootRecord>) -> Result<(), LibraryError> {
+    let mut statement = transaction.prepare("INSERT INTO roots(path, position) VALUES(?1, ?2)")?;
+    for row in rows {
+        statement.execute(params![row.path, usize_to_i64(row.position)?])?;
+    }
+    Ok(())
+}
+
+fn insert_folders(
     transaction: &Transaction<'_>,
-    sound: &Sound,
-    roots: &[String],
-    position: i64,
+    rows: Vec<FolderRecord>,
 ) -> Result<(), LibraryError> {
-    let (root_folder, relative_path) = sound_location(&sound.path, roots);
-    let duration_ms = sound
-        .duration_ms
-        .map(|value| {
-            i64::try_from(value).map_err(|_| {
-                LibraryError::InvalidData(format!(
-                    "duration for sound '{}' exceeds SQLite INTEGER range",
-                    sound.id
-                ))
+    for row in rows {
+        let root_id: i64 = transaction.query_row(
+            "SELECT id FROM roots WHERE path = ?1",
+            [&row.root_path],
+            |result| result.get(0),
+        )?;
+        let parent_id = row
+            .parent_relative_path
+            .as_ref()
+            .map(|parent| {
+                transaction.query_row(
+                    "SELECT id FROM folders WHERE root_id = ?1 AND relative_path = ?2",
+                    params![root_id, parent],
+                    |result| result.get::<_, i64>(0),
+                )
             })
-        })
-        .transpose()?;
-    transaction.execute(
+            .transpose()?;
+        transaction.execute(
+            "INSERT INTO folders(root_id, parent_id, relative_path, name, position)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![
+                root_id,
+                parent_id,
+                row.relative_path,
+                row.name,
+                usize_to_i64(row.position)?
+            ],
+        )?;
+        let folder_id = transaction.last_insert_rowid();
+        transaction.execute(
+            "INSERT INTO folder_closure(ancestor_id, descendant_id, depth)
+             VALUES(?1, ?1, 0)",
+            [folder_id],
+        )?;
+        if let Some(parent_id) = parent_id {
+            transaction.execute(
+                "INSERT INTO folder_closure(ancestor_id, descendant_id, depth)
+                 SELECT ancestor_id, ?1, depth + 1
+                 FROM folder_closure WHERE descendant_id = ?2",
+                params![folder_id, parent_id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn insert_sounds(
+    transaction: &Transaction<'_>,
+    rows: Vec<SoundRecord>,
+) -> Result<(), LibraryError> {
+    let mut insert_sound = transaction.prepare(
         "INSERT INTO sounds(
-             id, name, search_name, path, source_path, hotkey, duration_ms,
-             volume, enabled, loudness_lufs, loudness_state,
-             loudness_confidence, loudness_fingerprint, loudness_true_peak_dbtp,
-             root_folder, relative_path, position
-         ) VALUES(
-             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-             ?15, ?16, ?17
-         )",
-        params![
+             public_id, name, search_name, path, source_path, hotkey, duration_ms,
+             volume, enabled, loudness_lufs, loudness_state, loudness_confidence,
+             loudness_fingerprint, loudness_true_peak_dbtp, general_position
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+    )?;
+    let mut find_root = transaction.prepare("SELECT id FROM roots WHERE path = ?1")?;
+    let mut find_folder =
+        transaction.prepare("SELECT id FROM folders WHERE root_id = ?1 AND relative_path = ?2")?;
+    let mut insert_location = transaction.prepare(
+        "INSERT INTO sound_locations(sound_id, root_id, folder_id, relative_path)
+         VALUES(?1, ?2, ?3, ?4)",
+    )?;
+    for row in rows {
+        let sound = row.sound;
+        let duration_ms = sound
+            .duration_ms
+            .map(i64::try_from)
+            .transpose()
+            .map_err(|_| LibraryError::InvalidData("sound duration exceeds SQLite range".into()))?;
+        insert_sound.execute(params![
             sound.id,
             sound.name,
             sound.name.to_lowercase(),
@@ -472,53 +645,161 @@ fn insert_sound(
             sound.loudness_confidence,
             sound.loudness_source_fingerprint,
             sound.loudness_true_peak_dbtp,
-            root_folder,
-            relative_path,
-            position,
-        ],
-    )?;
+            usize_to_i64(row.general_position)?,
+        ])?;
+        let sound_id = transaction.last_insert_rowid();
+        for location in row.locations {
+            let root_id: i64 =
+                find_root.query_row([&location.root_path], |result| result.get(0))?;
+            let folder_id = location
+                .folder_relative_path
+                .as_ref()
+                .map(|folder| {
+                    find_folder
+                        .query_row(params![root_id, folder], |result| result.get::<_, i64>(0))
+                })
+                .transpose()?;
+            insert_location.execute(params![
+                sound_id,
+                root_id,
+                folder_id,
+                location.relative_path
+            ])?;
+        }
+    }
     Ok(())
 }
 
-fn sound_location(path: &str, roots: &[String]) -> (Option<String>, Option<String>) {
-    let sound_path = Path::new(path);
-    roots
-        .iter()
-        .filter_map(|root| {
-            sound_path
-                .strip_prefix(root)
-                .ok()
-                .map(|relative| (root, relative))
-        })
-        .max_by_key(|(root, _)| Path::new(root).components().count())
-        .map(|(root, relative)| {
-            (
-                Some(root.clone()),
-                Some(relative.to_string_lossy().into_owned()),
-            )
-        })
-        .unwrap_or((None, None))
+fn insert_manual_tabs(
+    transaction: &Transaction<'_>,
+    rows: Vec<ManualTabRecord>,
+) -> Result<(), LibraryError> {
+    let mut statement = transaction
+        .prepare("INSERT INTO manual_tabs(public_id, name, position) VALUES(?1, ?2, ?3)")?;
+    for row in rows {
+        statement.execute(params![
+            row.public_id,
+            row.name,
+            usize_to_i64(row.position)?
+        ])?;
+    }
+    Ok(())
 }
+
+fn insert_manual_memberships(
+    transaction: &Transaction<'_>,
+    rows: Vec<ManualMembershipRecord>,
+) -> Result<(), LibraryError> {
+    for row in rows {
+        transaction.execute(
+            "INSERT INTO manual_memberships(tab_id, sound_id, position)
+             SELECT tab.id, sound.rowid, ?3
+             FROM manual_tabs AS tab, sounds AS sound
+             WHERE tab.public_id = ?1 AND sound.public_id = ?2",
+            params![
+                row.tab_public_id,
+                row.sound_public_id,
+                usize_to_i64(row.position)?
+            ],
+        )?;
+        if transaction.changes() != 1 {
+            return Err(LibraryError::InvalidData(
+                "manual membership references a missing tab or sound".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn insert_folder_overrides(
+    transaction: &Transaction<'_>,
+    rows: Vec<FolderOverrideRecord>,
+) -> Result<(), LibraryError> {
+    for row in rows {
+        let action = match row.action {
+            FolderOverrideAction::Include => "include",
+            FolderOverrideAction::Exclude => "exclude",
+        };
+        transaction.execute(
+            "INSERT INTO folder_overrides(folder_id, sound_id, action)
+             SELECT folder.id, sound.rowid, ?4
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             CROSS JOIN sounds AS sound
+             WHERE root.path = ?1 AND folder.relative_path = ?2 AND sound.public_id = ?3
+             ON CONFLICT(folder_id, sound_id) DO UPDATE SET action = excluded.action",
+            params![
+                row.root_path,
+                row.folder_relative_path,
+                row.sound_public_id,
+                action
+            ],
+        )?;
+        if transaction.changes() != 1 {
+            return Err(LibraryError::InvalidData(
+                "folder override references a missing folder or sound".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn search_query(search: &str) -> String {
+    format!("\"{}\"", search.replace('"', "\"\""))
+}
+
+const SEARCH_FILTER: &str =
+    "CASE WHEN ?1 = '' THEN 1 WHEN length(?1) < 3 THEN instr(sound.search_name, ?1) > 0 ELSE sound.rowid IN (SELECT rowid FROM sound_search WHERE sound_search MATCH ?2) END";
 
 fn count_sounds(
     connection: &Connection,
     scope: &LibraryScope,
     search: &str,
 ) -> Result<usize, LibraryError> {
+    let fts = search_query(search);
     let count: i64 = match scope {
         LibraryScope::General => connection.query_row(
-            "SELECT COUNT(*) FROM sounds WHERE instr(search_name, ?1) > 0",
-            [search],
+            &format!("SELECT COUNT(*) FROM sounds AS sound WHERE {SEARCH_FILTER}"),
+            params![search, fts],
             |row| row.get(0),
         )?,
-        LibraryScope::Tab(tab_id) => connection.query_row(
-            "SELECT COUNT(*)
-             FROM tab_memberships AS membership
-             JOIN sounds AS sound ON sound.id = membership.sound_id
-             WHERE membership.tab_id = ?1
-               AND membership.membership_kind != 'exclude'
-               AND instr(sound.search_name, ?2) > 0",
-            params![tab_id, search],
+        LibraryScope::ManualTab(tab_id) => connection.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM manual_memberships AS membership
+                 JOIN manual_tabs AS tab ON tab.id = membership.tab_id
+                 JOIN sounds AS sound ON sound.rowid = membership.sound_id
+                 WHERE tab.public_id = ?3 AND {SEARCH_FILTER}"
+            ),
+            params![search, fts, tab_id],
+            |row| row.get(0),
+        )?,
+        LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } => connection.query_row(
+            &format!(
+                "WITH selected(folder_id) AS (
+                     SELECT folder.id FROM folders AS folder
+                     JOIN roots AS root ON root.id = folder.root_id
+                     WHERE root.path = ?3 AND folder.relative_path = ?4
+                 ), effective(sound_id) AS (
+                     SELECT location.sound_id FROM selected
+                     JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
+                     JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                     UNION
+                     SELECT override.sound_id FROM selected
+                     JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                     WHERE override.action = 'include'
+                     EXCEPT
+                     SELECT override.sound_id FROM selected
+                     JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                     WHERE override.action = 'exclude'
+                 )
+                 SELECT COUNT(*) FROM effective
+                 JOIN sounds AS sound ON sound.rowid = effective.sound_id
+                 WHERE {SEARCH_FILTER}"
+            ),
+            params![search, fts, root_path, relative_path],
             |row| row.get(0),
         )?,
     };
@@ -533,45 +814,76 @@ fn load_page(
     page: usize,
 ) -> Result<SoundPage, LibraryError> {
     let total = count_sounds(connection, scope, search)?;
-    let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = page
         .checked_mul(PAGE_SIZE)
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = usize_to_i64(offset)?;
+    let fts = search_query(search);
+    let fields = "sound.public_id, sound.name, sound.path, sound.source_path, sound.hotkey,
+                  sound.duration_ms, sound.volume, sound.enabled, sound.loudness_lufs,
+                  sound.loudness_state, sound.loudness_confidence, sound.loudness_fingerprint,
+                  sound.loudness_true_peak_dbtp";
     let mut sounds = Vec::with_capacity(PAGE_SIZE.min(total));
     match scope {
         LibraryScope::General => {
-            let mut statement = connection.prepare(
-                "SELECT id, name, path, source_path, hotkey, duration_ms, volume,
-                        enabled, loudness_lufs, loudness_state, loudness_confidence,
-                        loudness_fingerprint, loudness_true_peak_dbtp
-                 FROM sounds
-                 WHERE instr(search_name, ?1) > 0
-                 ORDER BY search_name, id
-                 LIMIT ?2 OFFSET ?3",
-            )?;
-            let rows = statement.query_map(params![search, limit, offset], sound_from_row)?;
+            let sql = format!(
+                "SELECT {fields} FROM sounds AS sound WHERE {SEARCH_FILTER}
+                 ORDER BY sound.general_position, sound.public_id LIMIT ?3 OFFSET ?4"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(params![search, fts, limit, offset], sound_from_row)?;
             for sound in rows {
                 sounds.push(sound?);
             }
         }
-        LibraryScope::Tab(tab_id) => {
-            let mut statement = connection.prepare(
-                "SELECT sound.id, sound.name, sound.path, sound.source_path,
-                        sound.hotkey, sound.duration_ms, sound.volume, sound.enabled,
-                        sound.loudness_lufs, sound.loudness_state,
-                        sound.loudness_confidence, sound.loudness_fingerprint,
-                        sound.loudness_true_peak_dbtp
-                 FROM tab_memberships AS membership
-                 JOIN sounds AS sound ON sound.id = membership.sound_id
-                 WHERE membership.tab_id = ?1
-                   AND membership.membership_kind != 'exclude'
-                   AND instr(sound.search_name, ?2) > 0
-                 ORDER BY membership.position, sound.id
-                 LIMIT ?3 OFFSET ?4",
-            )?;
+        LibraryScope::ManualTab(tab_id) => {
+            let sql = format!(
+                "SELECT {fields} FROM manual_memberships AS membership
+                 JOIN manual_tabs AS tab ON tab.id = membership.tab_id
+                 JOIN sounds AS sound ON sound.rowid = membership.sound_id
+                 WHERE {SEARCH_FILTER} AND tab.public_id = ?3
+                 ORDER BY membership.position, sound.public_id LIMIT ?4 OFFSET ?5"
+            );
+            let mut statement = connection.prepare(&sql)?;
             let rows =
-                statement.query_map(params![tab_id, search, limit, offset], sound_from_row)?;
+                statement.query_map(params![search, fts, tab_id, limit, offset], sound_from_row)?;
+            for sound in rows {
+                sounds.push(sound?);
+            }
+        }
+        LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } => {
+            let sql = format!(
+                "WITH selected(folder_id) AS (
+                     SELECT folder.id FROM folders AS folder
+                     JOIN roots AS root ON root.id = folder.root_id
+                     WHERE root.path = ?3 AND folder.relative_path = ?4
+                 ), effective(sound_id) AS (
+                     SELECT location.sound_id FROM selected
+                     JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
+                     JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                     UNION
+                     SELECT override.sound_id FROM selected
+                     JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                     WHERE override.action = 'include'
+                     EXCEPT
+                     SELECT override.sound_id FROM selected
+                     JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                     WHERE override.action = 'exclude'
+                 )
+                 SELECT {fields} FROM effective
+                 JOIN sounds AS sound ON sound.rowid = effective.sound_id
+                 WHERE {SEARCH_FILTER}
+                 ORDER BY sound.general_position, sound.public_id LIMIT ?5 OFFSET ?6"
+            );
+            let mut statement = connection.prepare(&sql)?;
+            let rows = statement.query_map(
+                params![search, fts, root_path, relative_path, limit, offset],
+                sound_from_row,
+            )?;
             for sound in rows {
                 sounds.push(sound?);
             }
@@ -583,10 +895,10 @@ fn load_page(
 fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, LibraryError> {
     connection
         .query_row(
-            "SELECT id, name, path, source_path, hotkey, duration_ms, volume,
+            "SELECT public_id, name, path, source_path, hotkey, duration_ms, volume,
                     enabled, loudness_lufs, loudness_state, loudness_confidence,
                     loudness_fingerprint, loudness_true_peak_dbtp
-             FROM sounds WHERE id = ?1",
+             FROM sounds WHERE public_id = ?1",
             [id],
             sound_from_row,
         )
@@ -643,34 +955,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn connection_uses_bounded_memory_and_rollback_journal_settings() {
+    fn request_queue_prioritizes_control_over_visible_and_maintenance() {
+        let queue = RequestQueue::default();
+        let (maintenance_reply, _) = mpsc::sync_channel(1);
+        let (visible_reply, _) = mpsc::sync_channel(1);
+        let (control_reply, _) = mpsc::sync_channel(1);
+        queue
+            .push(Request::ApplyBatch {
+                batch: LibraryBatch::Roots(Vec::new()),
+                reply: maintenance_reply,
+            })
+            .expect("queue maintenance");
+        queue
+            .push(Request::Count {
+                scope: LibraryScope::General,
+                search: String::new(),
+                reply: visible_reply,
+            })
+            .expect("queue visible");
+        queue
+            .push(Request::SoundById {
+                id: "sound".to_string(),
+                reply: control_reply,
+            })
+            .expect("queue control");
+
+        assert!(matches!(queue.pop(), Some(Request::SoundById { .. })));
+        assert!(matches!(queue.pop(), Some(Request::Count { .. })));
+        assert!(matches!(queue.pop(), Some(Request::ApplyBatch { .. })));
+    }
+
+    #[test]
+    fn connection_uses_bounded_memory_and_durable_rollback_settings() {
         let path = std::env::temp_dir().join(format!(
             "lsb-library-pragmas-{}.sqlite3",
             uuid::Uuid::new_v4()
         ));
         let connection = open_connection(&path).expect("open configured database");
 
-        let journal_mode: String = connection
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .expect("journal mode");
-        let synchronous: i64 = connection
-            .query_row("PRAGMA synchronous", [], |row| row.get(0))
-            .expect("synchronous");
-        let foreign_keys: i64 = connection
-            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
-            .expect("foreign keys");
-        let cache_size: i64 = connection
-            .query_row("PRAGMA cache_size", [], |row| row.get(0))
-            .expect("cache size");
-        let temp_store: i64 = connection
-            .query_row("PRAGMA temp_store", [], |row| row.get(0))
-            .expect("temp store");
-
-        assert_eq!(journal_mode, "delete");
-        assert_eq!(synchronous, 2);
-        assert_eq!(foreign_keys, 1);
-        assert_eq!(cache_size, -2048);
-        assert_eq!(temp_store, 1);
+        let text = |pragma| {
+            connection
+                .query_row(&format!("PRAGMA {pragma}"), [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect(pragma)
+        };
+        let integer = |pragma| {
+            connection
+                .query_row(&format!("PRAGMA {pragma}"), [], |row| row.get::<_, i64>(0))
+                .expect(pragma)
+        };
+        assert_eq!(text("journal_mode"), "delete");
+        assert_eq!(integer("synchronous"), 3);
+        assert_eq!(integer("foreign_keys"), 1);
+        assert_eq!(integer("cache_size"), -2048);
+        assert_eq!(integer("temp_store"), 1);
+        assert_eq!(integer("mmap_size"), 0);
+        assert_eq!(integer("journal_size_limit"), 0);
 
         drop(connection);
         let _ = std::fs::remove_file(path);

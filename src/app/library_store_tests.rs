@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{FolderTabBinding, LoudnessAnalysisState, Sound, SoundTab};
-use crate::library_store::{LibraryScope, LibrarySnapshot, LibraryStore, PAGE_SIZE};
+use crate::config::{LoudnessAnalysisState, Sound};
+use crate::library_store::{
+    FolderOverrideAction, FolderOverrideRecord, FolderRecord, LibraryBatch, LibraryScope,
+    LibraryStore, ManualMembershipRecord, ManualTabRecord, RootRecord, SoundLocationRecord,
+    SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
+};
 
 struct TestDir(PathBuf);
 
@@ -39,74 +43,103 @@ fn sound(id: &str, name: &str, path: &str) -> Sound {
     sound
 }
 
+fn wait<T>(response: crate::library_store::LibraryResponse<T>) -> T {
+    response.recv().expect("library request")
+}
+
 #[test]
-fn sqlite_store_round_trips_and_pages_library_data() {
+fn bounded_store_round_trips_manual_and_recursive_folder_pages() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
 
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+            parent_relative_path: None,
+            name: "Album".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "album/disc-1".to_string(),
+            parent_relative_path: Some("album".to_string()),
+            name: "Disc 1".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "other".to_string(),
+            parent_relative_path: None,
+            name: "Other".to_string(),
+            position: 1,
+        },
+    ])));
+
     let first = sound("first", "Alpha", "/music/album/alpha.flac");
-    let second = sound("second", "beta", "/music/album/beta.flac");
-    let mut manual_tab = SoundTab::new("Favourites".to_string(), 4);
-    manual_tab.id = "favourites".to_string();
-    manual_tab.sound_ids = vec![second.id.clone(), first.id.clone()];
-    let mut generated_tab = SoundTab::new("Album".to_string(), 5);
-    generated_tab.id = "generated".to_string();
-    generated_tab.folder_binding = Some(FolderTabBinding {
-        root_folder: "/music".to_string(),
-        relative_subfolder: "album".to_string(),
-    });
+    let second = sound("second", "beta", "/music/album/disc-1/beta.flac");
+    let third = sound("third", "Гамма", "/music/other/gamma.flac");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: second.clone(),
+            general_position: 1,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("album/disc-1".to_string()),
+                relative_path: "album/disc-1/beta.flac".to_string(),
+            }],
+        },
+        SoundRecord {
+            sound: third,
+            general_position: 2,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("other".to_string()),
+                relative_path: "other/gamma.flac".to_string(),
+            }],
+        },
+        SoundRecord {
+            sound: first.clone(),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("album".to_string()),
+                relative_path: "album/alpha.flac".to_string(),
+            }],
+        },
+    ])));
+    wait(
+        store.apply_batch(LibraryBatch::ManualTabs(vec![ManualTabRecord {
+            public_id: "favourites".to_string(),
+            name: "Favourites".to_string(),
+            position: 0,
+        }])),
+    );
+    wait(store.apply_batch(LibraryBatch::ManualMemberships(vec![
+        ManualMembershipRecord {
+            tab_public_id: "favourites".to_string(),
+            sound_public_id: "second".to_string(),
+            position: 0,
+        },
+        ManualMembershipRecord {
+            tab_public_id: "favourites".to_string(),
+            sound_public_id: "first".to_string(),
+            position: 1,
+        },
+    ])));
 
-    store
-        .replace_all(LibrarySnapshot {
-            sound_folders: vec!["/music".to_string()],
-            sounds: vec![second.clone(), first.clone()],
-            tabs: vec![manual_tab, generated_tab],
-        })
-        .recv()
-        .expect("replace library");
+    let general = wait(store.page(LibraryScope::General, "ALP", 0));
+    assert_eq!(general.total, 1);
+    assert_eq!(general.sounds[0].id, first.id);
+    assert_eq!(general.sounds[0].source_path, first.source_path);
+    assert_eq!(general.sounds[0].loudness_lufs, first.loudness_lufs);
+    assert_eq!(wait(store.count(LibraryScope::General, "гам")), 1);
 
-    assert_eq!(
-        store
-            .count(LibraryScope::General, "")
-            .recv()
-            .expect("count all sounds"),
-        2
-    );
-    let page = store
-        .page(LibraryScope::General, "ALP", 0)
-        .recv()
-        .expect("query filtered page");
-    assert_eq!(page.total, 1);
-    assert_eq!(page.sounds.len(), 1);
-    assert_eq!(page.sounds[0].id, first.id);
-    assert_eq!(page.sounds[0].source_path, first.source_path);
-    assert_eq!(page.sounds[0].hotkey, first.hotkey);
-    assert_eq!(page.sounds[0].duration_ms, first.duration_ms);
-    assert_eq!(page.sounds[0].volume, first.volume);
-    assert_eq!(page.sounds[0].enabled, first.enabled);
-    assert_eq!(page.sounds[0].loudness_lufs, first.loudness_lufs);
-    assert_eq!(
-        page.sounds[0].loudness_analysis_state,
-        first.loudness_analysis_state
-    );
-    assert_eq!(
-        page.sounds[0].loudness_confidence,
-        first.loudness_confidence
-    );
-    assert_eq!(
-        page.sounds[0].loudness_source_fingerprint,
-        first.loudness_source_fingerprint
-    );
-    assert_eq!(
-        page.sounds[0].loudness_true_peak_dbtp,
-        first.loudness_true_peak_dbtp
-    );
-
-    let favourites = store
-        .page(LibraryScope::Tab("favourites".to_string()), "", 0)
-        .recv()
-        .expect("query tab page");
-    assert_eq!(favourites.total, 2);
+    let favourites = wait(store.page(LibraryScope::ManualTab("favourites".to_string()), "", 0));
     assert_eq!(
         favourites
             .sounds
@@ -115,50 +148,96 @@ fn sqlite_store_round_trips_and_pages_library_data() {
             .collect::<Vec<_>>(),
         ["second", "first"]
     );
-    assert_eq!(PAGE_SIZE, 256);
 
-    let loaded = store
-        .sound_by_id("second")
-        .recv()
-        .expect("look up sound")
-        .expect("sound exists");
-    assert_eq!(loaded.name, second.name);
-    assert_eq!(loaded.path, second.path);
+    let album = wait(store.page(
+        LibraryScope::Folder {
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+        },
+        "be",
+        0,
+    ));
+    assert_eq!(album.total, 1);
+    assert_eq!(album.sounds[0].id, "second");
+
+    wait(store.apply_batch(LibraryBatch::FolderOverrides(vec![
+        FolderOverrideRecord {
+            root_path: "/music".to_string(),
+            folder_relative_path: "album".to_string(),
+            sound_public_id: "first".to_string(),
+            action: FolderOverrideAction::Exclude,
+        },
+        FolderOverrideRecord {
+            root_path: "/music".to_string(),
+            folder_relative_path: "album".to_string(),
+            sound_public_id: "third".to_string(),
+            action: FolderOverrideAction::Include,
+        },
+    ])));
+    let customized_album = wait(store.page(
+        LibraryScope::Folder {
+            root_path: "/music".to_string(),
+            relative_path: "album".to_string(),
+        },
+        "",
+        0,
+    ));
+    assert_eq!(
+        customized_album
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["second", "third"]
+    );
+    assert_eq!(PAGE_SIZE, 256);
 }
 
 #[test]
-fn failed_snapshot_replacement_rolls_back_the_whole_library() {
+fn batch_size_is_rejected_before_reaching_sqlite() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
-    store
-        .replace_all(LibrarySnapshot {
-            sound_folders: vec!["/music".to_string()],
-            sounds: vec![sound("existing", "Existing", "/music/existing.flac")],
-            tabs: Vec::new(),
+    let roots = (0..=MAX_BATCH_ROWS)
+        .map(|position| RootRecord {
+            path: format!("/music/{position}"),
+            position,
         })
+        .collect();
+    let error = store
+        .apply_batch(LibraryBatch::Roots(roots))
         .recv()
-        .expect("seed library");
+        .expect_err("oversized batch must fail");
+    assert!(error.to_string().contains("512"));
+}
+
+#[test]
+fn duplicate_path_batch_rolls_back_without_removing_existing_rows() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("existing", "Existing", "/music/existing.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
 
     let duplicate_path = "/music/duplicate.flac";
     let error = store
-        .replace_all(LibrarySnapshot {
-            sound_folders: vec!["/other".to_string()],
-            sounds: vec![
-                sound("duplicate-a", "Duplicate A", duplicate_path),
-                sound("duplicate-b", "Duplicate B", duplicate_path),
-            ],
-            tabs: Vec::new(),
-        })
+        .apply_batch(LibraryBatch::Sounds(vec![
+            SoundRecord {
+                sound: sound("duplicate-a", "Duplicate A", duplicate_path),
+                general_position: 1,
+                locations: Vec::new(),
+            },
+            SoundRecord {
+                sound: sound("duplicate-b", "Duplicate B", duplicate_path),
+                general_position: 2,
+                locations: Vec::new(),
+            },
+        ]))
         .recv()
-        .expect_err("duplicate paths must reject the replacement");
+        .expect_err("duplicate paths must reject the batch");
     assert!(error.to_string().contains("UNIQUE constraint failed"));
-
-    let remaining = store
-        .page(LibraryScope::General, "", 0)
-        .recv()
-        .expect("load library after rollback");
-    assert_eq!(remaining.total, 1);
-    assert_eq!(remaining.sounds[0].id, "existing");
+    assert_eq!(wait(store.count(LibraryScope::General, "")), 1);
 }
 
 #[test]
@@ -186,4 +265,52 @@ fn opening_a_newer_database_schema_is_read_only_and_fails() {
         .expect("read future table");
     assert_eq!(version, 99);
     assert_eq!(marker, 0);
+}
+
+#[test]
+#[ignore = "production-scale SQLite timing and memory gate"]
+#[allow(clippy::print_stderr)]
+fn benchmark_156k_bounded_store() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let started = std::time::Instant::now();
+    for batch_start in (0..156_000).step_by(MAX_BATCH_ROWS) {
+        let batch_end = (batch_start + MAX_BATCH_ROWS).min(156_000);
+        let rows = (batch_start..batch_end)
+            .map(|index| SoundRecord {
+                sound: sound(
+                    &format!("sound-{index:06}"),
+                    &format!("Sound {index:06}"),
+                    &format!("/music/long/unicode/Шлях/Sound-{index:06}.flac"),
+                ),
+                general_position: index,
+                locations: Vec::new(),
+            })
+            .collect();
+        wait(store.apply_batch(LibraryBatch::Sounds(rows)));
+    }
+    let import_elapsed = started.elapsed();
+    assert!(import_elapsed < std::time::Duration::from_secs(30));
+    assert_eq!(wait(store.count(LibraryScope::General, "")), 156_000);
+
+    let mut slowest_query = std::time::Duration::ZERO;
+    for (search, page) in [("", 0), ("", 609), ("155999", 0), ("99", 0)] {
+        let query_started = std::time::Instant::now();
+        let result = wait(store.page(LibraryScope::General, search, page));
+        slowest_query = slowest_query.max(query_started.elapsed());
+        assert!(!result.sounds.is_empty());
+        assert!(slowest_query < std::time::Duration::from_millis(100));
+    }
+
+    let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
+    let pss_kib = smaps
+        .lines()
+        .find_map(|line| line.strip_prefix("Pss:"))
+        .and_then(|value| value.split_whitespace().next())
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("parse PSS");
+    eprintln!(
+        "156k SQLite gate: import={import_elapsed:?}, slowest_query={slowest_query:?}, pss={pss_kib} KiB"
+    );
+    assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
 }
