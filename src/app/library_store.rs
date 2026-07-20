@@ -63,7 +63,6 @@ pub enum LibraryScope {
 
 #[derive(Debug)]
 pub struct SoundPage {
-    pub total: usize,
     pub sounds: Vec<Sound>,
 }
 
@@ -700,7 +699,8 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
             [],
             |row| row.get(0),
         )?;
-        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-v1" {
+        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-generation-v1"
+        {
             return Err(LibraryError::InvalidData(
                 "library metadata does not match the bounded schema".to_string(),
             ));
@@ -717,7 +717,8 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
          CREATE TABLE roots(
              id INTEGER PRIMARY KEY,
              path TEXT NOT NULL UNIQUE,
-             position INTEGER NOT NULL
+             position INTEGER NOT NULL,
+             active_generation INTEGER NOT NULL DEFAULT 0 CHECK(active_generation >= 0)
          );
          CREATE TABLE folders(
              id INTEGER PRIMARY KEY,
@@ -729,6 +730,12 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              UNIQUE(root_id, relative_path)
          );
          CREATE INDEX folders_parent_order ON folders(root_id, parent_id, position, id);
+         CREATE TABLE folder_presence(
+             folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+             generation INTEGER NOT NULL CHECK(generation >= 0),
+             PRIMARY KEY(folder_id, generation)
+         );
+         CREATE INDEX folder_presence_generation ON folder_presence(generation, folder_id);
          CREATE TABLE folder_closure(
              ancestor_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
              descendant_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
@@ -752,18 +759,22 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              loudness_confidence REAL,
              loudness_fingerprint TEXT,
              loudness_true_peak_dbtp REAL,
-             general_position INTEGER NOT NULL
+             general_position INTEGER NOT NULL,
+             standalone INTEGER NOT NULL CHECK(standalone IN (0, 1))
          );
          CREATE INDEX sounds_general_order ON sounds(general_position, public_id);
          CREATE INDEX sounds_hotkey ON sounds(hotkey) WHERE hotkey IS NOT NULL;
+         CREATE INDEX sounds_standalone ON sounds(rowid) WHERE standalone = 1;
          CREATE TABLE sound_locations(
              sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
              root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+             generation INTEGER NOT NULL CHECK(generation >= 0),
              folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
              relative_path TEXT NOT NULL,
-             PRIMARY KEY(sound_id, root_id)
+             PRIMARY KEY(sound_id, root_id, generation)
          );
-         CREATE INDEX sound_locations_folder ON sound_locations(folder_id, sound_id);
+         CREATE INDEX sound_locations_folder
+             ON sound_locations(root_id, generation, folder_id, sound_id);
          CREATE TABLE manual_tabs(
              id INTEGER PRIMARY KEY,
              public_id TEXT NOT NULL UNIQUE,
@@ -777,6 +788,7 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              PRIMARY KEY(tab_id, sound_id)
          );
          CREATE INDEX manual_memberships_order ON manual_memberships(tab_id, position, sound_id);
+         CREATE INDEX manual_memberships_sound ON manual_memberships(sound_id);
          CREATE TABLE folder_prefs(
              folder_id INTEGER PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
              display_name TEXT,
@@ -808,7 +820,7 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
          END;
          INSERT INTO meta(key, value) VALUES('schema_version', '1');
-         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-v1');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v1');
          PRAGMA user_version = 1;
          COMMIT;",
     )?;
@@ -936,10 +948,10 @@ fn insert_folders(
     rows: Vec<FolderRecord>,
 ) -> Result<(), LibraryError> {
     for row in rows {
-        let root_id: i64 = transaction.query_row(
-            "SELECT id FROM roots WHERE path = ?1",
+        let (root_id, active_generation): (i64, i64) = transaction.query_row(
+            "SELECT id, active_generation FROM roots WHERE path = ?1",
             [&row.root_path],
-            |result| result.get(0),
+            |result| Ok((result.get(0)?, result.get(1)?)),
         )?;
         let parent_id = row
             .parent_relative_path
@@ -965,6 +977,10 @@ fn insert_folders(
         )?;
         let folder_id = transaction.last_insert_rowid();
         transaction.execute(
+            "INSERT INTO folder_presence(folder_id, generation) VALUES(?1, ?2)",
+            params![folder_id, active_generation],
+        )?;
+        transaction.execute(
             "INSERT INTO folder_closure(ancestor_id, descendant_id, depth)
              VALUES(?1, ?1, 0)",
             [folder_id],
@@ -989,17 +1005,19 @@ fn insert_sounds(
         "INSERT INTO sounds(
              public_id, name, search_name, path, source_path, hotkey, duration_ms,
              volume, enabled, loudness_lufs, loudness_state, loudness_confidence,
-             loudness_fingerprint, loudness_true_peak_dbtp, general_position
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             loudness_fingerprint, loudness_true_peak_dbtp, general_position, standalone
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
     )?;
-    let mut find_root = transaction.prepare("SELECT id FROM roots WHERE path = ?1")?;
+    let mut find_root =
+        transaction.prepare("SELECT id, active_generation FROM roots WHERE path = ?1")?;
     let mut find_folder =
         transaction.prepare("SELECT id FROM folders WHERE root_id = ?1 AND relative_path = ?2")?;
     let mut insert_location = transaction.prepare(
-        "INSERT INTO sound_locations(sound_id, root_id, folder_id, relative_path)
-         VALUES(?1, ?2, ?3, ?4)",
+        "INSERT INTO sound_locations(sound_id, root_id, generation, folder_id, relative_path)
+         VALUES(?1, ?2, ?3, ?4, ?5)",
     )?;
     for row in rows {
+        let standalone = row.locations.is_empty();
         let sound = row.sound;
         let duration_ms = sound
             .duration_ms
@@ -1022,11 +1040,14 @@ fn insert_sounds(
             sound.loudness_source_fingerprint,
             sound.loudness_true_peak_dbtp,
             usize_to_i64(row.general_position)?,
+            i64::from(standalone),
         ])?;
         let sound_id = transaction.last_insert_rowid();
         for location in row.locations {
-            let root_id: i64 =
-                find_root.query_row([&location.root_path], |result| result.get(0))?;
+            let (root_id, generation): (i64, i64) = find_root
+                .query_row([&location.root_path], |result| {
+                    Ok((result.get(0)?, result.get(1)?))
+                })?;
             let folder_id = location
                 .folder_relative_path
                 .as_ref()
@@ -1038,6 +1059,7 @@ fn insert_sounds(
             insert_location.execute(params![
                 sound_id,
                 root_id,
+                generation,
                 folder_id,
                 location.relative_path
             ])?;
@@ -1127,6 +1149,24 @@ fn search_query(search: &str) -> String {
 const SEARCH_FILTER: &str =
     "CASE WHEN ?1 = '' THEN 1 WHEN length(?1) < 3 THEN instr(sound.search_name, ?1) > 0 ELSE sound.rowid IN (SELECT rowid FROM sound_search WHERE sound_search MATCH ?2) END";
 
+const LIVE_SOUND_FILTER: &str = "(sound.standalone = 1
+      OR EXISTS(SELECT 1 FROM manual_memberships AS live_manual
+                WHERE live_manual.sound_id = sound.rowid)
+      OR EXISTS(SELECT 1 FROM sound_locations AS live_location
+                JOIN roots AS live_root ON live_root.id = live_location.root_id
+                WHERE live_location.sound_id = sound.rowid
+                  AND live_location.generation = live_root.active_generation))";
+
+const LIVE_SOUNDS_CTE: &str = "live(sound_id) AS (
+         SELECT rowid FROM sounds WHERE standalone = 1
+         UNION
+         SELECT sound_id FROM manual_memberships
+         UNION
+         SELECT location.sound_id FROM roots AS root
+         JOIN sound_locations AS location ON location.root_id = root.id
+             AND location.generation = root.active_generation
+     )";
+
 fn count_sounds(
     connection: &Connection,
     scope: &LibraryScope,
@@ -1135,7 +1175,12 @@ fn count_sounds(
     let fts = search_query(search);
     let count: i64 = match scope {
         LibraryScope::General => connection.query_row(
-            &format!("SELECT COUNT(*) FROM sounds AS sound WHERE {SEARCH_FILTER}"),
+            &format!(
+                "WITH {LIVE_SOUNDS_CTE}
+                 SELECT COUNT(*) FROM live
+                 JOIN sounds AS sound ON sound.rowid = live.sound_id
+                 WHERE {SEARCH_FILTER}"
+            ),
             params![search, fts],
             |row| row.get(0),
         )?,
@@ -1154,14 +1199,19 @@ fn count_sounds(
             relative_path,
         } => connection.query_row(
             &format!(
-                "WITH selected(folder_id) AS (
-                     SELECT folder.id FROM folders AS folder
+                "WITH selected(folder_id, root_id, generation) AS (
+                     SELECT folder.id, root.id, root.active_generation
+                     FROM folders AS folder
                      JOIN roots AS root ON root.id = folder.root_id
+                     JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                         AND presence.generation = root.active_generation
                      WHERE root.path = ?3 AND folder.relative_path = ?4
                  ), effective(sound_id) AS (
                      SELECT location.sound_id FROM selected
                      JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
                      JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                         AND location.root_id = selected.root_id
+                         AND location.generation = selected.generation
                      UNION
                      SELECT override.sound_id FROM selected
                      JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
@@ -1189,7 +1239,6 @@ fn load_page(
     search: &str,
     page: usize,
 ) -> Result<SoundPage, LibraryError> {
-    let total = count_sounds(connection, scope, search)?;
     let offset = page
         .checked_mul(PAGE_SIZE)
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
@@ -1200,11 +1249,14 @@ fn load_page(
                   sound.duration_ms, sound.volume, sound.enabled, sound.loudness_lufs,
                   sound.loudness_state, sound.loudness_confidence, sound.loudness_fingerprint,
                   sound.loudness_true_peak_dbtp";
-    let mut sounds = Vec::with_capacity(PAGE_SIZE.min(total));
+    let mut sounds = Vec::with_capacity(PAGE_SIZE);
     match scope {
         LibraryScope::General => {
             let sql = format!(
-                "SELECT {fields} FROM sounds AS sound WHERE {SEARCH_FILTER}
+                "WITH {LIVE_SOUNDS_CTE}
+                 SELECT {fields} FROM live
+                 JOIN sounds AS sound ON sound.rowid = live.sound_id
+                 WHERE {SEARCH_FILTER}
                  ORDER BY sound.general_position, sound.public_id LIMIT ?3 OFFSET ?4"
             );
             let mut statement = connection.prepare(&sql)?;
@@ -1233,14 +1285,19 @@ fn load_page(
             relative_path,
         } => {
             let sql = format!(
-                "WITH selected(folder_id) AS (
-                     SELECT folder.id FROM folders AS folder
+                "WITH selected(folder_id, root_id, generation) AS (
+                     SELECT folder.id, root.id, root.active_generation
+                     FROM folders AS folder
                      JOIN roots AS root ON root.id = folder.root_id
+                     JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                         AND presence.generation = root.active_generation
                      WHERE root.path = ?3 AND folder.relative_path = ?4
                  ), effective(sound_id) AS (
                      SELECT location.sound_id FROM selected
                      JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
                      JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                         AND location.root_id = selected.root_id
+                         AND location.generation = selected.generation
                      UNION
                      SELECT override.sound_id FROM selected
                      JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
@@ -1265,19 +1322,19 @@ fn load_page(
             }
         }
     }
-    Ok(SoundPage { total, sounds })
+    Ok(SoundPage { sounds })
 }
 
 fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, LibraryError> {
+    let sql = format!(
+        "SELECT public_id, name, path, source_path, hotkey, duration_ms, volume,
+                enabled, loudness_lufs, loudness_state, loudness_confidence,
+                loudness_fingerprint, loudness_true_peak_dbtp
+         FROM sounds AS sound
+         WHERE public_id = ?1 AND {LIVE_SOUND_FILTER}"
+    );
     connection
-        .query_row(
-            "SELECT public_id, name, path, source_path, hotkey, duration_ms, volume,
-                    enabled, loudness_lufs, loudness_state, loudness_confidence,
-                    loudness_fingerprint, loudness_true_peak_dbtp
-             FROM sounds WHERE public_id = ?1",
-            [id],
-            sound_from_row,
-        )
+        .query_row(&sql, [id], sound_from_row)
         .optional()
         .map_err(LibraryError::from)
 }
@@ -1388,13 +1445,21 @@ fn load_folder_children(
     let offset = usize_to_i64(offset)?;
     let fields = "folder.id, folder.relative_path,
                   COALESCE(pref.display_name, folder.name), COALESCE(pref.expanded, 0),
-                  EXISTS(SELECT 1 FROM folders AS child WHERE child.parent_id = folder.id)";
+                  EXISTS(SELECT 1 FROM folders AS child
+                         JOIN folder_presence AS child_presence
+                           ON child_presence.folder_id = child.id
+                          AND child_presence.generation = root.active_generation
+                         WHERE child.parent_id = folder.id)";
     let (total, folders) = if let Some(parent_relative_path) = parent_relative_path {
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM folders AS folder
              JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
              WHERE root.path = ?1 AND folder.parent_id = (
                  SELECT parent.id FROM folders AS parent
+                 JOIN folder_presence AS parent_presence ON parent_presence.folder_id = parent.id
+                     AND parent_presence.generation = root.active_generation
                  WHERE parent.root_id = root.id AND parent.relative_path = ?2
              )",
             params![root_path, parent_relative_path],
@@ -1403,9 +1468,13 @@ fn load_folder_children(
         let sql = format!(
             "SELECT {fields} FROM folders AS folder
              JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
              LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
              WHERE root.path = ?1 AND folder.parent_id = (
                  SELECT parent.id FROM folders AS parent
+                 JOIN folder_presence AS parent_presence ON parent_presence.folder_id = parent.id
+                     AND parent_presence.generation = root.active_generation
                  WHERE parent.root_id = root.id AND parent.relative_path = ?2
              )
              ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
@@ -1421,6 +1490,8 @@ fn load_folder_children(
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM folders AS folder
              JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
              WHERE root.path = ?1 AND folder.parent_id IS NULL",
             [root_path],
             |row| row.get(0),
@@ -1428,6 +1499,8 @@ fn load_folder_children(
         let sql = format!(
             "SELECT {fields} FROM folders AS folder
              JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
              LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
              WHERE root.path = ?1 AND folder.parent_id IS NULL
              ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
@@ -1465,32 +1538,26 @@ fn collect_folders(
 }
 
 fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, LibraryError> {
-    let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM sounds WHERE hotkey IS NOT NULL",
-        [],
-        |row| row.get(0),
-    )?;
-    let total = usize::try_from(count)
-        .map_err(|_| LibraryError::InvalidData("negative hotkey count".to_string()))?;
     let offset = page
         .checked_mul(PAGE_SIZE)
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
-    let mut statement = connection.prepare(
+    let sql = format!(
         "SELECT public_id, name, path, source_path, hotkey, duration_ms, volume,
                 enabled, loudness_lufs, loudness_state, loudness_confidence,
                 loudness_fingerprint, loudness_true_peak_dbtp
-         FROM sounds WHERE hotkey IS NOT NULL
-         ORDER BY general_position, public_id LIMIT ?1 OFFSET ?2",
-    )?;
+         FROM sounds AS sound WHERE hotkey IS NOT NULL AND {LIVE_SOUND_FILTER}
+         ORDER BY general_position, public_id LIMIT ?1 OFFSET ?2"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(
         params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
         sound_from_row,
     )?;
-    let mut sounds = Vec::with_capacity(PAGE_SIZE.min(total.saturating_sub(offset)));
+    let mut sounds = Vec::with_capacity(PAGE_SIZE);
     for sound in rows {
         sounds.push(sound?);
     }
-    Ok(SoundPage { total, sounds })
+    Ok(SoundPage { sounds })
 }
 
 fn load_adjacent_sound(
@@ -1528,7 +1595,10 @@ fn load_sound_at(
         LibraryScope::General => connection
             .query_row(
                 &format!(
-                    "SELECT {fields} FROM sounds AS sound WHERE {SEARCH_FILTER}
+                    "WITH {LIVE_SOUNDS_CTE}
+                     SELECT {fields} FROM live
+                     JOIN sounds AS sound ON sound.rowid = live.sound_id
+                     WHERE {SEARCH_FILTER}
                      ORDER BY sound.general_position, sound.public_id LIMIT 1 OFFSET ?3"
                 ),
                 params![search, fts, offset],
@@ -1556,14 +1626,19 @@ fn load_sound_at(
         } => connection
             .query_row(
                 &format!(
-                    "WITH selected(folder_id) AS (
-                         SELECT folder.id FROM folders AS folder
+                    "WITH selected(folder_id, root_id, generation) AS (
+                         SELECT folder.id, root.id, root.active_generation
+                         FROM folders AS folder
                          JOIN roots AS root ON root.id = folder.root_id
+                         JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                             AND presence.generation = root.active_generation
                          WHERE root.path = ?3 AND folder.relative_path = ?4
                      ), effective(sound_id) AS (
                          SELECT location.sound_id FROM selected
                          JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
                          JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                             AND location.root_id = selected.root_id
+                             AND location.generation = selected.generation
                          UNION
                          SELECT override.sound_id FROM selected
                          JOIN folder_overrides AS override ON override.folder_id = selected.folder_id

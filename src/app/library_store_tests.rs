@@ -133,7 +133,7 @@ fn bounded_store_round_trips_manual_and_recursive_folder_pages() {
     ])));
 
     let general = wait(store.page(LibraryScope::General, "ALP", 0));
-    assert_eq!(general.total, 1);
+    assert_eq!(wait(store.count(LibraryScope::General, "ALP")), 1);
     assert_eq!(general.sounds[0].id, first.id);
     assert_eq!(general.sounds[0].source_path, first.source_path);
     assert_eq!(general.sounds[0].loudness_lufs, first.loudness_lufs);
@@ -157,7 +157,7 @@ fn bounded_store_round_trips_manual_and_recursive_folder_pages() {
         "be",
         0,
     ));
-    assert_eq!(album.total, 1);
+    assert_eq!(album.sounds.len(), 1);
     assert_eq!(album.sounds[0].id, "second");
 
     wait(store.apply_batch(LibraryBatch::FolderOverrides(vec![
@@ -264,20 +264,20 @@ fn direct_sound_edits_keep_search_hotkeys_and_delete_cascades_consistent() {
     assert!(wait(store.update_sound(updated)));
     assert_eq!(wait(store.count(LibraryScope::General, "alpha")), 0);
     let renamed = wait(store.page(LibraryScope::General, "gamma", 0));
-    assert_eq!(renamed.total, 1);
+    assert_eq!(renamed.sounds.len(), 1);
     assert_eq!(renamed.sounds[0].path, "/music/gamma.flac");
     assert_eq!(renamed.sounds[0].volume, 42);
     assert!(renamed.sounds[0].enabled);
 
     let hotkeys = wait(store.hotkey_page(0));
-    assert_eq!(hotkeys.total, 1);
+    assert_eq!(hotkeys.sounds.len(), 1);
     assert_eq!(hotkeys.sounds[0].id, "second");
 
     assert!(wait(store.delete_sound("second")));
     assert!(!wait(store.delete_sound("second")));
     assert!(wait(store.sound_by_id("second")).is_none());
     assert_eq!(wait(store.count(LibraryScope::General, "beta")), 0);
-    assert_eq!(wait(store.hotkey_page(0)).total, 0);
+    assert!(wait(store.hotkey_page(0)).sounds.is_empty());
 }
 
 #[test]
@@ -500,6 +500,108 @@ fn manual_and_folder_edits_are_atomic_bounded_and_immediately_visible() {
 }
 
 #[test]
+fn active_root_generation_hides_partial_scan_until_atomic_switch() {
+    let temp = TestDir::new();
+    let path = temp.path().join("library.sqlite3");
+    let store = LibraryStore::open(path.clone()).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![FolderRecord {
+        root_path: "/music".to_string(),
+        relative_path: "old".to_string(),
+        parent_relative_path: None,
+        name: "Old".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("old", "Old", "/music/old/old.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("old".to_string()),
+                relative_path: "old/old.flac".to_string(),
+            }],
+        },
+        SoundRecord {
+            sound: sound("standalone", "Standalone", "/imports/standalone.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).expect("open raw database");
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO folders(root_id, parent_id, relative_path, name, position)
+             SELECT id, NULL, 'new', 'New', 0 FROM roots WHERE path = '/music';
+             INSERT INTO folder_presence(folder_id, generation)
+             SELECT id, 1 FROM folders WHERE relative_path = 'new';
+             INSERT INTO folder_closure(ancestor_id, descendant_id, depth)
+             SELECT id, id, 0 FROM folders WHERE relative_path = 'new';
+             INSERT INTO sounds(
+                 public_id, name, search_name, path, source_path, hotkey, duration_ms,
+                 volume, enabled, loudness_lufs, loudness_state, loudness_confidence,
+                 loudness_fingerprint, loudness_true_peak_dbtp, general_position, standalone
+             ) VALUES(
+                 'new', 'New', 'new', '/music/new/new.flac', NULL, NULL, NULL,
+                 100, 1, NULL, 'pending', NULL, NULL, NULL, 2, 0
+             );
+             INSERT INTO sound_locations(sound_id, root_id, generation, folder_id, relative_path)
+             SELECT sound.rowid, root.id, 1, folder.id, 'new/new.flac'
+             FROM sounds AS sound, roots AS root, folders AS folder
+             WHERE sound.public_id = 'new' AND root.path = '/music'
+               AND folder.root_id = root.id AND folder.relative_path = 'new';",
+        )
+        .expect("stage inactive generation");
+    drop(connection);
+
+    let store = LibraryStore::open(path.clone()).expect("reopen store");
+    let before = wait(store.page(LibraryScope::General, "", 0));
+    assert_eq!(
+        before
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old", "standalone"]
+    );
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0)).folders[0].name,
+        "Old"
+    );
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&path).expect("open raw database");
+    connection
+        .execute(
+            "UPDATE roots SET active_generation = 1 WHERE path = '/music'",
+            [],
+        )
+        .expect("switch active generation");
+    drop(connection);
+
+    let store = LibraryStore::open(path).expect("reopen switched store");
+    let after = wait(store.page(LibraryScope::General, "", 0));
+    assert_eq!(
+        after
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["standalone", "new"]
+    );
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0)).folders[0].name,
+        "New"
+    );
+}
+
+#[test]
 fn opening_a_newer_database_schema_is_read_only_and_fails() {
     let temp = TestDir::new();
     let path = temp.path().join("library.sqlite3");
@@ -532,18 +634,37 @@ fn opening_a_newer_database_schema_is_read_only_and_fails() {
 fn benchmark_156k_bounded_store() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![FolderRecord {
+        root_path: "/music".to_string(),
+        relative_path: "long/unicode/Шлях".to_string(),
+        parent_relative_path: None,
+        name: "Шлях".to_string(),
+        position: 0,
+    }])));
     let started = std::time::Instant::now();
-    for batch_start in (0..156_000).step_by(MAX_BATCH_ROWS) {
-        let batch_end = (batch_start + MAX_BATCH_ROWS).min(156_000);
+    let sounds_per_batch = MAX_BATCH_ROWS / 2;
+    for batch_start in (0..156_000).step_by(sounds_per_batch) {
+        let batch_end = (batch_start + sounds_per_batch).min(156_000);
         let rows = (batch_start..batch_end)
-            .map(|index| SoundRecord {
-                sound: sound(
-                    &format!("sound-{index:06}"),
-                    &format!("Sound {index:06}"),
-                    &format!("/music/long/unicode/Шлях/Sound-{index:06}.flac"),
-                ),
-                general_position: index,
-                locations: Vec::new(),
+            .map(|index| {
+                let relative_path = format!("long/unicode/Шлях/Sound-{index:06}.flac");
+                SoundRecord {
+                    sound: sound(
+                        &format!("sound-{index:06}"),
+                        &format!("Sound {index:06}"),
+                        &format!("/music/{relative_path}"),
+                    ),
+                    general_position: index,
+                    locations: vec![SoundLocationRecord {
+                        root_path: "/music".to_string(),
+                        folder_relative_path: Some("long/unicode/Шлях".to_string()),
+                        relative_path,
+                    }],
+                }
             })
             .collect();
         wait(store.apply_batch(LibraryBatch::Sounds(rows)));
@@ -556,9 +677,13 @@ fn benchmark_156k_bounded_store() {
     for (search, page) in [("", 0), ("", 609), ("155999", 0), ("99", 0)] {
         let query_started = std::time::Instant::now();
         let result = wait(store.page(LibraryScope::General, search, page));
-        slowest_query = slowest_query.max(query_started.elapsed());
+        let elapsed = query_started.elapsed();
+        slowest_query = slowest_query.max(elapsed);
         assert!(!result.sounds.is_empty());
-        assert!(slowest_query < std::time::Duration::from_millis(100));
+        assert!(
+            elapsed < std::time::Duration::from_millis(100),
+            "General search={search:?} page={page} took {elapsed:?}"
+        );
     }
 
     let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
