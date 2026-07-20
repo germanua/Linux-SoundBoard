@@ -135,8 +135,8 @@ pub fn build_window(
 
     {
         let sl = sound_list.clone();
-        tabs.connect_tab_selected(move |tab_id| {
-            sl.set_active_tab(tab_id);
+        tabs.connect_tab_selected(move |selection| {
+            sl.set_active_scope(selection.identity, selection.scope);
         });
     }
 

@@ -183,17 +183,48 @@ impl SwhkdBackend {
         Ok(())
     }
 
+    fn reload_or_restore_last_good(&self) -> Result<(), HotkeyError> {
+        let projection_result = self
+            .reload_swhkd()
+            .and_then(|_| self.verify_swhkd_running());
+        let Err(projection_error) = projection_result else {
+            return Ok(());
+        };
+
+        let restore_result = self
+            .config
+            .lock()
+            .restore_last_good()
+            .and_then(|_| self.reload_swhkd());
+        match restore_result {
+            Ok(()) => Err(HotkeyError::Process(format!(
+                "swhkd rejected the new projection; restored the last-known-good config: {projection_error}"
+            ))),
+            Err(restore_error) => Err(HotkeyError::Process(format!(
+                "swhkd projection failed ({projection_error}); restoring the last-known-good config also failed ({restore_error})"
+            ))),
+        }
+    }
+
     fn reload_swhkd_async(&self) {
         let processes = Arc::clone(&self.processes);
+        let config = Arc::clone(&self.config);
         thread::spawn(move || {
             let swhkd_pid = processes.lock().swhkd_pid;
 
             thread::sleep(Duration::from_millis(SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS));
             if let Err(e) = SwhkdConfig::reload_swhkd(swhkd_pid) {
                 warn!(
-                    "Failed to reload swhkd config: {}. Hotkeys will be unregistered on next app restart.",
+                    "Failed to reload swhkd config: {}. Restoring last-known-good projection.",
                     e
                 );
+                if let Err(restore_error) = config
+                    .lock()
+                    .restore_last_good()
+                    .and_then(|_| SwhkdConfig::reload_swhkd(swhkd_pid))
+                {
+                    warn!("Failed to restore last-known-good swhkd config: {restore_error}");
+                }
                 return;
             }
 
@@ -330,18 +361,7 @@ impl HotkeyBackend for SwhkdBackend {
 
         drop(config);
 
-        if let Err(e) = self.reload_swhkd() {
-            warn!(
-                "Failed to reload swhkd config: {}. Hotkey will be registered on next app restart.",
-                e
-            );
-        }
-
-        if let Err(e) = self.verify_swhkd_running() {
-            warn!("swhkd verification warning: {}", e);
-        }
-
-        Ok(())
+        self.reload_or_restore_last_good()
     }
 
     fn register_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
@@ -355,17 +375,7 @@ impl HotkeyBackend for SwhkdBackend {
         config.write_to_file()?;
         drop(config);
 
-        if let Err(e) = self.reload_swhkd() {
-            warn!(
-                "Failed to reload swhkd config: {}. Hotkeys will be registered on next app restart.",
-                e
-            );
-        }
-
-        if let Err(e) = self.verify_swhkd_running() {
-            warn!("swhkd verification warning: {}", e);
-        }
-
+        self.reload_or_restore_last_good()?;
         add_result
     }
 

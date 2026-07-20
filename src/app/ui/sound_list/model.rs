@@ -5,7 +5,6 @@ use glib::BoxedAnyObject;
 #[cfg(test)]
 use std::collections::HashMap;
 
-use crate::app_meta::GENERAL_TAB_ID;
 use crate::config::Sound;
 
 use super::{SoundListInner, SoundRowData};
@@ -28,12 +27,7 @@ fn replace_store_rows(store: &gio::ListStore, rows: Vec<SoundRowData>) -> HashMa
 
 impl SoundListInner {
     pub(super) fn reload_store(&self) {
-        let tab_id = self.current_tab_id();
-        let scope = if tab_id == GENERAL_TAB_ID {
-            crate::library_store::LibraryScope::General
-        } else {
-            crate::library_store::LibraryScope::ManualTab(tab_id)
-        };
+        let scope = self.current_scope();
         self.store.reload(scope, self.current_search_query());
     }
 
@@ -55,8 +49,8 @@ impl SoundListInner {
         self.state.config.lock().get_sound(sound_id).cloned()
     }
 
-    pub(super) fn current_tab_id(&self) -> String {
-        self.active_tab_id.lock().clone()
+    pub(super) fn current_scope(&self) -> crate::library_store::LibraryScope {
+        self.active_scope.lock().clone()
     }
 
     pub(super) fn current_search_query(&self) -> String {

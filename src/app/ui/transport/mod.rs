@@ -16,8 +16,8 @@ mod playback;
 mod scrub;
 mod signals;
 
-type SoundListProvider = Box<dyn Fn() -> NavigationContext + Send + Sync>;
-type HasSoundsChecker = Box<dyn Fn() -> bool + Send + Sync>;
+type SoundListProvider = Box<dyn Fn() -> NavigationContext + 'static>;
+type HasSoundsChecker = Box<dyn Fn() -> bool + 'static>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;
 type SettingsRequestedCallback = Rc<dyn Fn() + 'static>;
@@ -97,8 +97,8 @@ struct TransportInner {
     last_track_sound_id: RefCell<Option<String>>,
     state: Arc<AppState>,
     has_sound_list_provider: Cell<bool>,
-    sound_list_provider: Mutex<Option<SoundListProvider>>,
-    has_sounds_checker: Mutex<Option<HasSoundsChecker>>,
+    sound_list_provider: RefCell<Option<SoundListProvider>>,
+    has_sounds_checker: RefCell<Option<HasSoundsChecker>>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     on_library_changed: RefCell<Option<LibraryChangedCallback>>,
     on_list_style_changed: RefCell<Option<ListStyleChangedCallback>>,

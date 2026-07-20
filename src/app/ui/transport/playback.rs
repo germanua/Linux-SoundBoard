@@ -189,7 +189,7 @@ impl TransportBar {
 
 impl TransportInner {
     pub(super) fn has_navigation_sounds(&self) -> bool {
-        let guard = self.has_sounds_checker.lock();
+        let guard = self.has_sounds_checker.borrow();
         match guard.as_ref() {
             Some(checker) => checker(),
             None => false,
@@ -198,7 +198,8 @@ impl TransportInner {
 
     pub(super) fn play_adjacent_sound(&self, offset: i32) {
         self.clear_continue_suppression();
-        let context = match self.sound_list_provider.lock().as_ref() {
+        let provider = self.sound_list_provider.borrow();
+        let context = match provider.as_ref() {
             Some(provider) => provider(),
             None => return,
         };

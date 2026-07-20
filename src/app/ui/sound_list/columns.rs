@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use glib::BoxedAnyObject;
@@ -12,18 +13,18 @@ fn format_duration(ms: u64) -> String {
 }
 
 impl SoundListInner {
-    pub(super) fn configure_columns(self: &Arc<Self>) {
+    pub(super) fn configure_columns(self: &Rc<Self>) {
         self.col_view.append_column(&self.build_index_column());
         self.col_view.append_column(&self.build_name_column());
         self.col_view.append_column(&self.build_duration_column());
         self.col_view.append_column(&self.build_hotkey_column());
     }
 
-    fn build_index_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_index_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -82,11 +83,11 @@ impl SoundListInner {
         column
     }
 
-    fn build_name_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_name_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -175,11 +176,11 @@ impl SoundListInner {
         column
     }
 
-    fn build_duration_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_duration_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -242,11 +243,11 @@ impl SoundListInner {
         column
     }
 
-    fn build_hotkey_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_hotkey_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;

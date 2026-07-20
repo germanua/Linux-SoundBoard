@@ -38,17 +38,17 @@ impl TransportBar {
     }
 
     pub fn set_sound_list_provider<
-        F: Fn() -> crate::ui::sound_list::NavigationContext + Send + Sync + 'static,
+        F: Fn() -> crate::ui::sound_list::NavigationContext + 'static,
     >(
         &self,
         f: F,
     ) {
-        *self.inner.sound_list_provider.lock() = Some(Box::new(f));
+        *self.inner.sound_list_provider.borrow_mut() = Some(Box::new(f));
         self.inner.has_sound_list_provider.set(true);
     }
 
-    pub fn set_has_sounds_checker<F: Fn() -> bool + Send + Sync + 'static>(&self, f: F) {
-        *self.inner.has_sounds_checker.lock() = Some(Box::new(f));
+    pub fn set_has_sounds_checker<F: Fn() -> bool + 'static>(&self, f: F) {
+        *self.inner.has_sounds_checker.borrow_mut() = Some(Box::new(f));
     }
 
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
@@ -101,8 +101,8 @@ impl TransportBar {
             }
         }
         self.inner.has_sound_list_provider.set(false);
-        *self.inner.sound_list_provider.lock() = None;
-        *self.inner.has_sounds_checker.lock() = None;
+        *self.inner.sound_list_provider.borrow_mut() = None;
+        *self.inner.has_sounds_checker.borrow_mut() = None;
         *self.inner.toast_sender.lock() = None;
         *self.inner.on_library_changed.borrow_mut() = None;
         *self.inner.on_list_style_changed.borrow_mut() = None;

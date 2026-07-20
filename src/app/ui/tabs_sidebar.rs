@@ -2,11 +2,14 @@ use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
+use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
-    SelectionMode, Widget,
+    Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, ListView, Orientation, ScrolledWindow,
+    SelectionMode, SignalListItemFactory, SingleSelection, TreeExpander, TreeListModel,
+    TreeListRow, Widget,
 };
 
 use crate::app_meta::GENERAL_TAB_ID;
@@ -19,8 +22,52 @@ use super::is_unmodified_delete_shortcut;
 use super::menu;
 use super::tab_dnd;
 
-pub type TabSelectedCallback = Box<dyn Fn(String) + 'static>;
+#[derive(Clone)]
+pub struct SidebarSelection {
+    pub identity: String,
+    pub scope: crate::library_store::LibraryScope,
+}
+
+pub type TabSelectedCallback = Box<dyn Fn(SidebarSelection) + 'static>;
 pub type TabMembershipChangedCallback = Box<dyn Fn() + 'static>;
+
+struct FolderNode {
+    root_path: String,
+    relative_path: Option<String>,
+    name: String,
+    has_children: bool,
+    children: gio::ListStore,
+    children_requested: Cell<bool>,
+}
+
+impl FolderNode {
+    fn root(path: String) -> Self {
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| path.clone());
+        Self {
+            root_path: path,
+            relative_path: None,
+            name,
+            has_children: true,
+            children: gio::ListStore::new::<BoxedAnyObject>(),
+            children_requested: Cell::new(false),
+        }
+    }
+
+    fn folder(root_path: String, item: crate::library_store::FolderItem) -> Self {
+        Self {
+            root_path,
+            relative_path: Some(item.relative_path),
+            name: item.name,
+            has_children: item.has_children,
+            children: gio::ListStore::new::<BoxedAnyObject>(),
+            children_requested: Cell::new(false),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidebarDropIntent {
@@ -62,6 +109,8 @@ pub struct TabsSidebar {
 struct TabsInner {
     scroll: ScrolledWindow,
     list_box: ListBox,
+    folder_roots: gio::ListStore,
+    folder_generation: Rc<Cell<u64>>,
     state: Arc<AppState>,
     on_tab_selected: RefCell<Option<TabSelectedCallback>>,
     on_tab_membership_changed: RefCell<Option<TabMembershipChangedCallback>>,
@@ -104,6 +153,77 @@ impl TabsSidebar {
             .build();
         vbox.append(&list_box);
 
+        let folders_title = Label::builder()
+            .label("FOLDERS")
+            .css_classes(vec!["dim-label", "caption"])
+            .xalign(0.0)
+            .margin_start(8)
+            .margin_end(8)
+            .margin_top(12)
+            .margin_bottom(4)
+            .build();
+        vbox.append(&folders_title);
+
+        let folder_roots = gio::ListStore::new::<BoxedAnyObject>();
+        let folder_generation = Rc::new(Cell::new(0));
+        let library_for_children = state.library.clone();
+        let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
+            let boxed = item.downcast_ref::<BoxedAnyObject>()?;
+            let node = boxed.borrow::<FolderNode>();
+            if !node.has_children {
+                return None;
+            }
+            if !node.children_requested.replace(true) {
+                TabsInner::load_folder_children_async(
+                    library_for_children.clone(),
+                    node.children.clone(),
+                    node.root_path.clone(),
+                    node.relative_path.clone(),
+                    0,
+                );
+            }
+            Some(node.children.clone().upcast())
+        });
+        let folder_selection = SingleSelection::new(Some(folder_tree.clone()));
+        folder_selection.set_autoselect(false);
+        folder_selection.set_can_unselect(true);
+        let folder_factory = SignalListItemFactory::new();
+        folder_factory.connect_setup(|_, item| {
+            let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
+                return;
+            };
+            let label = Label::builder()
+                .xalign(0.0)
+                .hexpand(true)
+                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                .build();
+            let expander = TreeExpander::new();
+            expander.set_child(Some(&label));
+            item.set_child(Some(&expander));
+        });
+        folder_factory.connect_bind(|_, item| {
+            let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
+                return;
+            };
+            let Some(row) = item.item().and_downcast::<TreeListRow>() else {
+                return;
+            };
+            let Some(expander) = item.child().and_downcast::<TreeExpander>() else {
+                return;
+            };
+            let Some(label) = expander.child().and_downcast::<Label>() else {
+                return;
+            };
+            let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
+                return;
+            };
+            label.set_label(&boxed.borrow::<FolderNode>().name);
+            expander.set_list_row(Some(&row));
+        });
+        let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
+        folder_view.add_css_class("navigation-sidebar");
+        vbox.append(&folder_view);
+
         let scroll = ScrolledWindow::builder()
             .child(&vbox)
             .vexpand(true)
@@ -113,6 +233,8 @@ impl TabsSidebar {
         let inner = Arc::new(TabsInner {
             scroll,
             list_box: list_box.clone(),
+            folder_roots,
+            folder_generation,
             state,
             on_tab_selected: RefCell::new(None),
             on_tab_membership_changed: RefCell::new(None),
@@ -124,6 +246,39 @@ impl TabsSidebar {
 
         {
             let inner_weak = Arc::downgrade(&inner);
+            folder_selection.connect_selected_item_notify(move |selection| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                let Some(row) = selection.selected_item().and_downcast::<TreeListRow>() else {
+                    return;
+                };
+                let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
+                    return;
+                };
+                let node = boxed.borrow::<FolderNode>();
+                let Some(relative_path) = node.relative_path.clone() else {
+                    return;
+                };
+                let root_path = node.root_path.clone();
+                drop(node);
+                inner.list_box.select_row(None::<&ListBoxRow>);
+                let identity = format!("folder:{root_path}/{relative_path}");
+                *inner.active_tab_id.lock() = identity.clone();
+                if let Some(ref callback) = *inner.on_tab_selected.borrow() {
+                    callback(SidebarSelection {
+                        identity,
+                        scope: crate::library_store::LibraryScope::Folder {
+                            root_path,
+                            relative_path,
+                        },
+                    });
+                };
+            });
+        }
+
+        {
+            let inner_weak = Arc::downgrade(&inner);
             list_box.connect_row_selected(move |_, row| {
                 let Some(inner_sel) = inner_weak.upgrade() else {
                     return;
@@ -132,7 +287,15 @@ impl TabsSidebar {
                     let id = row.widget_name().to_string();
                     *inner_sel.active_tab_id.lock() = id.clone();
                     if let Some(ref cb) = *inner_sel.on_tab_selected.borrow() {
-                        cb(id);
+                        let scope = if id == GENERAL_TAB_ID {
+                            crate::library_store::LibraryScope::General
+                        } else {
+                            crate::library_store::LibraryScope::ManualTab(id.clone())
+                        };
+                        cb(SidebarSelection {
+                            identity: id,
+                            scope,
+                        });
                     }
                 }
             });
@@ -159,7 +322,7 @@ impl TabsSidebar {
         self.inner.scroll.upcast_ref()
     }
 
-    pub fn connect_tab_selected<F: Fn(String) + 'static>(&self, f: F) {
+    pub fn connect_tab_selected<F: Fn(SidebarSelection) + 'static>(&self, f: F) {
         *self.inner.on_tab_selected.borrow_mut() = Some(Box::new(f));
     }
 
@@ -183,6 +346,95 @@ impl TabsSidebar {
 }
 
 impl TabsInner {
+    fn load_roots_async(
+        library: crate::library_store::LibraryStore,
+        model: gio::ListStore,
+        page: usize,
+        generation: Rc<Cell<u64>>,
+        expected_generation: u64,
+    ) {
+        let response = library.roots(page);
+        glib::timeout_add_local(Duration::from_millis(2), move || {
+            if generation.get() != expected_generation {
+                return glib::ControlFlow::Break;
+            }
+            match response.try_recv() {
+                Ok(Some(result)) => {
+                    let count = result.roots.len();
+                    for root in result.roots {
+                        model.append(&BoxedAnyObject::new(FolderNode::root(root.path)));
+                    }
+                    if count == crate::library_store::PAGE_SIZE {
+                        Self::load_roots_async(
+                            library.clone(),
+                            model.clone(),
+                            page.saturating_add(1),
+                            Rc::clone(&generation),
+                            expected_generation,
+                        );
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(None) => glib::ControlFlow::Continue,
+                Err(error) => {
+                    log::warn!("Failed to load sound folder roots: {error}");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    fn load_folder_children_async(
+        library: crate::library_store::LibraryStore,
+        model: gio::ListStore,
+        root_path: String,
+        parent_relative_path: Option<String>,
+        page: usize,
+    ) {
+        let response = library.folder_children(&root_path, parent_relative_path.as_deref(), page);
+        glib::timeout_add_local(Duration::from_millis(2), move || {
+            match response.try_recv() {
+                Ok(Some(result)) => {
+                    let count = result.folders.len();
+                    for folder in result.folders {
+                        model.append(&BoxedAnyObject::new(FolderNode::folder(
+                            root_path.clone(),
+                            folder,
+                        )));
+                    }
+                    if count == crate::library_store::PAGE_SIZE {
+                        Self::load_folder_children_async(
+                            library.clone(),
+                            model.clone(),
+                            root_path.clone(),
+                            parent_relative_path.clone(),
+                            page.saturating_add(1),
+                        );
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(None) => glib::ControlFlow::Continue,
+                Err(error) => {
+                    log::warn!("Failed to load sound folder children: {error}");
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    fn reload_folder_roots(&self) {
+        let next_generation = self.folder_generation.get().wrapping_add(1);
+        self.folder_generation.set(next_generation);
+        self.folder_roots.remove_all();
+        Self::load_roots_async(
+            self.state.library.clone(),
+            self.folder_roots.clone(),
+            0,
+            Rc::clone(&self.folder_generation),
+            next_generation,
+        );
+    }
+
     fn connect_delete_shortcut(self: &Arc<Self>) {
         let key = gtk4::EventControllerKey::new();
         let inner_weak = Arc::downgrade(self);
@@ -259,6 +511,7 @@ impl TabsInner {
     }
 
     fn reload_tabs_now(self: &Arc<Self>, select_id: Option<&str>) {
+        self.reload_folder_roots();
         self.list_box.select_row(None::<&ListBoxRow>);
         while let Some(row) = self.list_box.row_at_index(0) {
             self.list_box.remove(&row);

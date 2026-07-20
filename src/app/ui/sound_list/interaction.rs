@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gio::prelude::*;
@@ -15,8 +16,8 @@ use crate::ui::{menu, tab_dnd};
 use super::{SoundListInner, SoundRowData, SOUND_CONTEXT_NAMESPACE};
 
 impl SoundListInner {
-    pub(super) fn connect_activate(self: &Arc<Self>) {
-        let inner_weak = Arc::downgrade(self);
+    pub(super) fn connect_activate(self: &Rc<Self>) {
+        let inner_weak = Rc::downgrade(self);
         let store = self.store.clone();
         let invalid_ids = Arc::clone(&self.invalid_ids);
 
@@ -41,7 +42,7 @@ impl SoundListInner {
                 let sound_name = sound.name.clone();
                 let sound_id = sound.id.clone();
                 let invalid_ids_for_play = Arc::clone(&invalid_ids);
-                let inner_weak_for_play = Arc::downgrade(&inner);
+                let inner_weak_for_play = Rc::downgrade(&inner);
                 crate::ui_event_bridge::mark_explicit_play_pending();
                 if let Err(e) = commands::play_sound_async(
                     sound.id.clone(),
@@ -85,8 +86,8 @@ impl SoundListInner {
                 .unwrap_or_else(|| full_sound.path.clone());
             let state_locate = Arc::clone(&inner.state);
             let invalid_locate = Arc::clone(&inner.invalid_ids);
-            let inner_weak_locate = Arc::downgrade(&inner);
-            let inner_weak_remove = Arc::downgrade(&inner);
+            let inner_weak_locate = Rc::downgrade(&inner);
+            let inner_weak_remove = Rc::downgrade(&inner);
             let sound_id_locate = sound.id.clone();
             let sound_id_remove = sound.id.clone();
             let win_locate = win.clone();
@@ -139,9 +140,9 @@ impl SoundListInner {
         });
     }
 
-    pub(super) fn connect_remove_shortcut(self: &Arc<Self>) {
+    pub(super) fn connect_remove_shortcut(self: &Rc<Self>) {
         let key = EventControllerKey::new();
-        let inner_weak = Arc::downgrade(self);
+        let inner_weak = Rc::downgrade(self);
         key.connect_key_pressed(move |_, keyval, _, modifiers| {
             let Some(inner) = inner_weak.upgrade() else {
                 return glib::Propagation::Proceed;
@@ -159,7 +160,7 @@ impl SoundListInner {
         self.col_view.add_controller(key);
     }
 
-    pub(super) fn setup_drag_drop(self: &Arc<Self>) {
+    pub(super) fn setup_drag_drop(self: &Rc<Self>) {
         let drop_target_files = gtk4::DropTarget::new(
             gtk4::gdk::FileList::static_type(),
             gtk4::gdk::DragAction::COPY,
@@ -169,7 +170,7 @@ impl SoundListInner {
             gtk4::DropTarget::new(glib::Type::STRING, gtk4::gdk::DragAction::COPY);
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             drop_target_files.connect_drop(move |_, value, _, _| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return false;
@@ -192,7 +193,7 @@ impl SoundListInner {
         }
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             drop_target_text.connect_drop(move |_, value, _, _| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return false;
@@ -215,7 +216,7 @@ impl SoundListInner {
         log::info!("Drag & drop handlers installed on sound list");
     }
 
-    fn handle_dropped_files(self: &Arc<Self>, paths: Vec<String>) -> bool {
+    fn handle_dropped_files(self: &Rc<Self>, paths: Vec<String>) -> bool {
         if paths.is_empty() {
             log::warn!("No paths to import");
             return false;
@@ -230,7 +231,7 @@ impl SoundListInner {
             Some(tab_id.clone())
         };
 
-        let inner_weak = Arc::downgrade(self);
+        let inner_weak = Rc::downgrade(self);
         match commands::import_files_to_tab_with_store_async(
             paths,
             tab_id_opt,
@@ -256,7 +257,7 @@ impl SoundListInner {
         }
     }
 
-    pub(super) fn install_context_menu(self: &Arc<Self>, widget: &impl IsA<gtk4::Widget>) {
+    pub(super) fn install_context_menu(self: &Rc<Self>, widget: &impl IsA<gtk4::Widget>) {
         let gesture = GestureClick::new();
         gesture.set_button(3);
         gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
@@ -265,7 +266,7 @@ impl SoundListInner {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
         });
 
-        let inner_weak = Arc::downgrade(self);
+        let inner_weak = Rc::downgrade(self);
         gesture.connect_released(move |gesture, _, x, y| {
             let Some(inner) = inner_weak.upgrade() else {
                 return;
@@ -283,7 +284,7 @@ impl SoundListInner {
         widget.as_ref().add_controller(gesture);
     }
 
-    pub(super) fn install_drag_source(self: &Arc<Self>, widget: &impl IsA<gtk4::Widget>) {
+    pub(super) fn install_drag_source(self: &Rc<Self>, widget: &impl IsA<gtk4::Widget>) {
         let drag_source = DragSource::new();
         drag_source.set_actions(gtk4::gdk::DragAction::COPY);
         drag_source.set_button(gtk4::gdk::BUTTON_PRIMARY);
@@ -292,7 +293,7 @@ impl SoundListInner {
         // Leave the sequence shared so normal row selection still works.
         drag_source.set_exclusive(false);
 
-        let inner_weak = Arc::downgrade(self);
+        let inner_weak = Rc::downgrade(self);
         drag_source.connect_prepare(move |source, _, _| {
             let inner = inner_weak.upgrade()?;
             let _ = source.set_state(gtk4::EventSequenceState::Claimed);
@@ -385,7 +386,7 @@ impl SoundListInner {
     }
 
     fn show_context_menu_for_sound_id(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         widget: &Widget,
         x: f64,
         y: f64,
@@ -399,7 +400,7 @@ impl SoundListInner {
     }
 
     fn show_context_menu(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         widget: &Widget,
         x: f64,
         y: f64,
@@ -477,13 +478,13 @@ impl SoundListInner {
         let action_group = gio::SimpleActionGroup::new();
 
         {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
             let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("rename", None);
             action.connect_activate(move |_, _| {
-                let inner_confirm = Arc::clone(&inner);
+                let inner_confirm = Rc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 dialog_host.show_input(
@@ -506,13 +507,13 @@ impl SoundListInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
             let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("set-hotkey", None);
             action.connect_activate(move |_, _| {
-                let inner_confirm = Arc::clone(&inner);
+                let inner_confirm = Rc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 let dialog_host_weak = dialog_host.downgrade();
@@ -579,14 +580,14 @@ impl SoundListInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let target_ids = target_ids.clone();
             let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("refine-loudness", None);
             action.connect_activate(move |_, _| {
                 for sound_id in &target_ids {
-                    let inner_done = Arc::clone(&inner);
+                    let inner_done = Rc::clone(&inner);
                     let dialog_host = dialog_host.downgrade();
                     let sound_id_for_err = sound_id.clone();
                     if let Err(e) = commands::analyze_sound_loudness_async(
@@ -619,7 +620,7 @@ impl SoundListInner {
         }
 
         for tab in &tabs {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let sound_ids = target_ids.clone();
             let tab_id = tab.id.clone();
@@ -643,7 +644,7 @@ impl SoundListInner {
         }
 
         if active_tab != GENERAL_TAB_ID {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let tab_id = active_tab.clone();
             let sound_ids = target_ids.clone();
@@ -670,7 +671,7 @@ impl SoundListInner {
         }
 
         {
-            let inner = Arc::clone(self);
+            let inner = Rc::clone(self);
             let target_ids = target_ids.clone();
             let action = gio::SimpleAction::new("remove", None);
             action.connect_activate(move |_, _| {
@@ -711,7 +712,7 @@ impl SoundListInner {
         ids
     }
 
-    fn request_sound_removal(self: &Arc<Self>, ids: Vec<String>) -> bool {
+    fn request_sound_removal(self: &Rc<Self>, ids: Vec<String>) -> bool {
         if self.removal_pending.get() {
             return false;
         }
@@ -722,7 +723,7 @@ impl SoundListInner {
         }
 
         let count = ids.len();
-        let inner = Arc::clone(self);
+        let inner = Rc::clone(self);
         let remove = move || inner.remove_sounds_now(ids.clone());
         if self.state.config.lock().settings.skip_delete_confirm {
             remove();
@@ -734,13 +735,13 @@ impl SoundListInner {
         true
     }
 
-    fn remove_sounds_now(self: &Arc<Self>, ids: Vec<String>) {
+    fn remove_sounds_now(self: &Rc<Self>, ids: Vec<String>) {
         if self.removal_pending.replace(true) {
             return;
         }
 
         let count = ids.len();
-        let inner_weak = Arc::downgrade(self);
+        let inner_weak = Rc::downgrade(self);
         if let Err(err) = commands::remove_sounds_with_store_async(
             ids.clone(),
             Arc::clone(&self.state.config),

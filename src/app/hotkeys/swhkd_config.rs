@@ -30,6 +30,73 @@ fn shell_quote(value: &str) -> String {
 }
 
 impl SwhkdConfig {
+    fn last_good_path(&self) -> PathBuf {
+        self.config_path.with_file_name("swhkdrc.last-good")
+    }
+
+    fn sync_parent(&self) -> Result<(), HotkeyError> {
+        if let Some(parent) = self.config_path.parent() {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn preserve_last_good(&self) -> Result<(), HotkeyError> {
+        if !self.config_path.exists() {
+            return Ok(());
+        }
+        let backup = self.last_good_path();
+        let candidate = backup.with_file_name(format!(
+            ".swhkdrc.last-good.tmp.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<(), HotkeyError> {
+            if fs::hard_link(&self.config_path, &candidate).is_err() {
+                fs::copy(&self.config_path, &candidate)
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            }
+            fs::File::open(&candidate)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::rename(&candidate, backup).map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.sync_parent()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(candidate);
+        }
+        result
+    }
+
+    pub(crate) fn restore_last_good(&self) -> Result<(), HotkeyError> {
+        let backup = self.last_good_path();
+        if !backup.exists() {
+            return Err(HotkeyError::Io(
+                "No last-known-good swhkd config is available".to_string(),
+            ));
+        }
+        let candidate = self.config_path.with_file_name(format!(
+            ".swhkdrc.restore.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<(), HotkeyError> {
+            fs::copy(&backup, &candidate).map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::File::open(&candidate)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::rename(&candidate, &self.config_path)
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.sync_parent()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(candidate);
+        }
+        result
+    }
+
     pub fn new(pipe_path: PathBuf) -> Result<Self, HotkeyError> {
         let config_path = Self::get_config_path()?;
 
@@ -154,14 +221,10 @@ impl SwhkdConfig {
             }
             file.sync_all()
                 .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.preserve_last_good()?;
             fs::rename(&candidate, &self.config_path)
                 .map_err(|error| HotkeyError::Io(error.to_string()))?;
-            if let Some(parent) = self.config_path.parent() {
-                fs::File::open(parent)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
-            }
-            Ok(())
+            self.sync_parent()
         })();
         if write_result.is_err() {
             let _ = fs::remove_file(&candidate);
@@ -297,5 +360,34 @@ mod tests {
             .add_hotkey("../sound;touch /tmp/x", "Ctrl+KeyA")
             .is_err());
         assert!(config.hotkeys.is_empty());
+    }
+
+    #[test]
+    fn failed_projection_can_restore_the_last_good_config() {
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        let mut config = SwhkdConfig {
+            hotkeys: BTreeMap::new(),
+            config_path: dir.join("swhkdrc"),
+            pipe_path: dir.join("hotkey.pipe"),
+        };
+        config
+            .add_hotkey("first", "Ctrl+KeyA")
+            .expect("add first binding");
+        config.write_to_file().expect("write first config");
+        config
+            .add_hotkey("second", "Alt+KeyB")
+            .expect("add second binding");
+        config.write_to_file().expect("write candidate config");
+        assert!(fs::read_to_string(&config.config_path)
+            .expect("read candidate")
+            .contains("second"));
+
+        config.restore_last_good().expect("restore previous config");
+        let restored = fs::read_to_string(&config.config_path).expect("read restored config");
+        assert!(restored.contains("first"));
+        assert!(!restored.contains("second"));
+
+        fs::remove_dir_all(dir).expect("remove test directory");
     }
 }

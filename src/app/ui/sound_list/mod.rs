@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -46,7 +47,7 @@ pub(super) struct ScrollOffsets {
 
 #[derive(Clone)]
 pub struct SoundList {
-    pub(super) inner: Arc<SoundListInner>,
+    pub(super) inner: Rc<SoundListInner>,
 }
 
 pub(super) struct SoundListInner {
@@ -55,6 +56,7 @@ pub(super) struct SoundListInner {
     pub(super) selection: MultiSelection,
     pub(super) store: PagedSoundModel,
     pub(super) active_tab_id: Mutex<String>,
+    pub(super) active_scope: Mutex<crate::library_store::LibraryScope>,
     pub(super) search_query: Mutex<String>,
     pub(super) playing_ids: Arc<Mutex<HashSet<String>>>,
     pub(super) invalid_ids: Arc<Mutex<HashSet<String>>>,
@@ -64,17 +66,6 @@ pub(super) struct SoundListInner {
     pub(super) removal_pending: Cell<bool>,
     pub(super) on_library_changed: RefCell<Option<Box<dyn Fn() + 'static>>>,
 }
-
-// SAFETY: SoundListInner is only ever constructed, accessed, and dropped on
-// the GTK main thread. The `RefCell` field (`on_library_changed`) and all GTK widget fields are not thread-safe, but
-// no code path ever sends this value to another thread. The `Arc<SoundListInner>`
-// is held exclusively by GTK signal closures and the `SoundList` owner, all of
-// which fire on the main thread. This invariant must never be violated — any
-// future change that accesses `SoundListInner` from a background thread would
-// produce UB.
-unsafe impl Send for SoundListInner {}
-// SAFETY: same as the Send impl above — all accesses are on the GTK main thread.
-unsafe impl Sync for SoundListInner {}
 
 impl SoundList {
     pub fn new(state: Arc<AppState>, dialog_host: DialogHost) -> Self {
@@ -104,12 +95,13 @@ impl SoundList {
             .hexpand(true)
             .build();
 
-        let inner = Arc::new(SoundListInner {
+        let inner = Rc::new(SoundListInner {
             scroll,
             col_view: col_view.clone(),
             selection,
             store: store.clone(),
             active_tab_id: Mutex::new(GENERAL_TAB_ID.to_string()),
+            active_scope: Mutex::new(crate::library_store::LibraryScope::General),
             search_query: Mutex::new(String::new()),
             playing_ids: Arc::new(Mutex::new(HashSet::new())),
             invalid_ids: Arc::new(Mutex::new(HashSet::new())),
@@ -159,8 +151,9 @@ impl SoundList {
         }
     }
 
-    pub fn set_active_tab(&self, tab_id: String) {
-        *self.inner.active_tab_id.lock() = tab_id;
+    pub fn set_active_scope(&self, identity: String, scope: crate::library_store::LibraryScope) {
+        *self.inner.active_tab_id.lock() = identity;
+        *self.inner.active_scope.lock() = scope;
         self.refresh_from_state();
     }
 
@@ -214,12 +207,7 @@ impl SoundList {
     }
 
     pub fn navigation_context(&self) -> NavigationContext {
-        let tab_id = self.inner.current_tab_id();
-        let scope = if tab_id == GENERAL_TAB_ID {
-            crate::library_store::LibraryScope::General
-        } else {
-            crate::library_store::LibraryScope::ManualTab(tab_id)
-        };
+        let scope = self.inner.current_scope();
         let position = self
             .inner
             .active_sound_id
