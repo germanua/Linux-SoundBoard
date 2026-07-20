@@ -160,16 +160,15 @@ fn build_generated_tab_plans(scan: &scanner::AudioScan) -> Vec<GeneratedTabPlan>
             .or_default();
     }
     for file in &scan.files {
-        let Some(relative_subfolder) = &file.top_level_subfolder else {
-            continue;
-        };
-        paths_by_binding
-            .entry(FolderTabBinding {
-                root_folder: file.root_folder.clone(),
-                relative_subfolder: relative_subfolder.clone(),
-            })
-            .or_default()
-            .push(file.path.clone());
+        for relative_subfolder in &file.relative_subfolders {
+            paths_by_binding
+                .entry(FolderTabBinding {
+                    root_folder: file.root_folder.clone(),
+                    relative_subfolder: relative_subfolder.clone(),
+                })
+                .or_default()
+                .push(file.path.clone());
+        }
     }
 
     let mut name_counts = HashMap::<String, usize>::new();
@@ -212,11 +211,9 @@ fn path_belongs_to_binding(path: &str, binding: &FolderTabBinding) -> bool {
     let Ok(relative) = Path::new(path).strip_prefix(&binding.root_folder) else {
         return false;
     };
-    let mut components = relative.components();
-    let Some(first) = components.next() else {
-        return false;
-    };
-    components.next().is_some() && first.as_os_str().to_string_lossy() == binding.relative_subfolder
+    relative
+        .strip_prefix(Path::new(&binding.relative_subfolder))
+        .is_ok_and(|suffix| suffix.components().next().is_some())
 }
 
 fn reconcile_generated_tabs(

@@ -13,7 +13,7 @@ pub struct AudioFile {
     pub name: String,
     pub root_folder: String,
     pub relative_path: String,
-    pub top_level_subfolder: Option<String>,
+    pub relative_subfolders: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -114,14 +114,14 @@ pub fn scan_folder(folder: &str) -> AudioScan {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "Unknown".to_string());
                     let relative = file_path.strip_prefix(path).unwrap_or(file_path);
-                    let mut components = relative.components();
-                    let first = components.next();
-                    let top_level_subfolder = if components.next().is_some() {
-                        first.map(|part| part.as_os_str().to_string_lossy().to_string())
-                    } else {
-                        None
-                    };
-                    if let Some(relative_subfolder) = &top_level_subfolder {
+                    let relative_subfolders = relative
+                        .parent()
+                        .into_iter()
+                        .flat_map(Path::ancestors)
+                        .filter(|ancestor| ancestor.components().next().is_some())
+                        .map(|ancestor| ancestor.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>();
+                    for relative_subfolder in &relative_subfolders {
                         scan.subfolders.push(ScannedSubfolder {
                             root_folder: folder.to_string(),
                             relative_subfolder: relative_subfolder.clone(),
@@ -133,7 +133,7 @@ pub fn scan_folder(folder: &str) -> AudioScan {
                         name,
                         root_folder: folder.to_string(),
                         relative_path: relative.to_string_lossy().to_string(),
-                        top_level_subfolder,
+                        relative_subfolders,
                     });
                 }
             }
@@ -262,10 +262,16 @@ mod tests {
 
         assert_eq!(
             scan.subfolders,
-            [ScannedSubfolder {
-                root_folder: root.to_string_lossy().to_string(),
-                relative_subfolder: "With Audio".to_string(),
-            }]
+            [
+                ScannedSubfolder {
+                    root_folder: root.to_string_lossy().to_string(),
+                    relative_subfolder: "With Audio".to_string(),
+                },
+                ScannedSubfolder {
+                    root_folder: root.to_string_lossy().to_string(),
+                    relative_subfolder: "With Audio/Nested".to_string(),
+                },
+            ]
         );
         fs::remove_dir_all(root).expect("cleanup test tree");
     }
@@ -293,14 +299,14 @@ mod tests {
             .unwrap();
         assert_eq!(root_audio.root_folder, root.to_string_lossy());
         assert_eq!(root_audio.relative_path, "root.mp3");
-        assert_eq!(root_audio.top_level_subfolder, None);
+        assert!(root_audio.relative_subfolders.is_empty());
         let nested_audio = scan
             .files
             .iter()
             .find(|file| file.path == nested_file.to_string_lossy())
             .unwrap();
         assert_eq!(nested_audio.relative_path, "Меми/Nested/clip.ogg");
-        assert_eq!(nested_audio.top_level_subfolder.as_deref(), Some("Меми"));
+        assert_eq!(nested_audio.relative_subfolders, ["Меми/Nested", "Меми"]);
         assert!(scan.subfolders.iter().any(|folder| {
             folder.root_folder == root.to_string_lossy() && folder.relative_subfolder == "Меми"
         }));

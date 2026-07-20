@@ -433,12 +433,12 @@ fn test_refresh_sounds_reconciles_generated_tabs_and_root_removal() {
     let first = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
         .expect("first refresh succeeds");
     assert_eq!(first.added, 2);
-    assert_eq!(first.tabs_created, 2);
-    assert_eq!(first.tab_memberships_added, 2);
+    assert_eq!(first.tabs_created, 3);
+    assert_eq!(first.tab_memberships_added, 3);
     {
         let cfg = config.lock();
         assert_eq!(cfg.sounds.len(), 3);
-        assert_eq!(cfg.tabs.len(), 3);
+        assert_eq!(cfg.tabs.len(), 4);
         let alerts_tab = cfg.tabs.iter().find(|tab| tab.name == "Alerts").unwrap();
         assert_eq!(alerts_tab.sound_ids, ["existing-alert"]);
         assert_eq!(
@@ -448,6 +448,14 @@ fn test_refresh_sounds_reconciles_generated_tabs_and_root_removal() {
                 relative_subfolder: "Alerts".to_string(),
             })
         );
+        let memes_tab = cfg.tabs.iter().find(|tab| tab.name == "Memes").unwrap();
+        let nested_tab = cfg
+            .tabs
+            .iter()
+            .find(|tab| tab.name == "Memes/Nested")
+            .unwrap();
+        assert_eq!(memes_tab.sound_ids, nested_tab.sound_ids);
+        assert_eq!(memes_tab.sound_ids.len(), 1);
         let root_sound = cfg
             .sounds
             .iter()
@@ -481,7 +489,7 @@ fn test_refresh_sounds_reconciles_generated_tabs_and_root_removal() {
     let fourth = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
         .expect("deleted-subfolder refresh succeeds");
     assert_eq!(fourth.removed, 1);
-    assert_eq!(fourth.tabs_removed, 1);
+    assert_eq!(fourth.tabs_removed, 2);
 
     let unrelated = root
         .parent()
@@ -578,11 +586,13 @@ fn test_refresh_sounds_uses_one_tab_owner_for_overlapping_roots() {
     let first = commands::refresh_sounds(config.clone(), hotkeys.clone(), &coords)
         .expect("refresh parent-owned roots");
     assert_eq!(first.added, 1);
-    assert_eq!(first.tabs_created, 1);
+    assert_eq!(first.tabs_created, 2);
     {
         let cfg = config.lock();
-        assert_eq!(cfg.tabs.len(), 1);
+        assert_eq!(cfg.tabs.len(), 2);
         assert_eq!(cfg.tabs[0].name, "Alerts");
+        assert_eq!(cfg.tabs[1].name, "Alerts/Nested");
+        assert_eq!(cfg.tabs[0].sound_ids, cfg.tabs[1].sound_ids);
         assert_eq!(cfg.tabs[0].sound_ids.len(), 1);
     }
 
