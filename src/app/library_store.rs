@@ -95,6 +95,18 @@ pub struct FolderPage {
 }
 
 #[derive(Debug)]
+pub struct ManualTabItem {
+    pub public_id: String,
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct ManualTabPage {
+    pub total: usize,
+    pub tabs: Vec<ManualTabItem>,
+}
+
+#[derive(Debug)]
 pub struct RootRecord {
     pub path: String,
     pub position: usize,
@@ -161,6 +173,29 @@ pub enum LibraryBatch {
     FolderOverrides(Vec<FolderOverrideRecord>),
 }
 
+enum LibraryEdit {
+    UpsertManualTab(ManualTabRecord),
+    DeleteManualTab(String),
+    SetManualMembership(ManualMembershipRecord),
+    RemoveManualMembership {
+        tab_public_id: String,
+        sound_public_id: String,
+    },
+    SetFolderOverride(FolderOverrideRecord),
+    ClearFolderOverride {
+        root_path: String,
+        folder_relative_path: String,
+        sound_public_id: String,
+    },
+    SetFolderPreferences {
+        root_path: String,
+        folder_relative_path: String,
+        display_name: Option<String>,
+        sibling_position: Option<usize>,
+        expanded: bool,
+    },
+}
+
 impl LibraryBatch {
     fn row_count(&self) -> usize {
         match self {
@@ -216,6 +251,14 @@ enum Request {
         page: usize,
         reply: mpsc::SyncSender<Result<FolderPage, LibraryError>>,
     },
+    ManualTabs {
+        page: usize,
+        reply: mpsc::SyncSender<Result<ManualTabPage, LibraryError>>,
+    },
+    Edit {
+        edit: LibraryEdit,
+        reply: mpsc::SyncSender<Result<bool, LibraryError>>,
+    },
     UpdateSound {
         sound: Sound,
         reply: mpsc::SyncSender<Result<bool, LibraryError>>,
@@ -261,6 +304,8 @@ impl RequestQueue {
             | Request::Page { .. }
             | Request::Roots { .. }
             | Request::FolderChildren { .. }
+            | Request::ManualTabs { .. }
+            | Request::Edit { .. }
             | Request::UpdateSound { .. }
             | Request::DeleteSound { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
             Request::ApplyBatch { .. } => (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY),
@@ -456,6 +501,71 @@ impl LibraryStore {
         )
     }
 
+    pub fn manual_tabs(&self, page: usize) -> LibraryResponse<ManualTabPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::ManualTabs { page, reply }, response)
+    }
+
+    pub fn upsert_manual_tab(&self, tab: ManualTabRecord) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::UpsertManualTab(tab))
+    }
+
+    pub fn delete_manual_tab(&self, public_id: &str) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::DeleteManualTab(public_id.to_string()))
+    }
+
+    pub fn set_manual_membership(
+        &self,
+        membership: ManualMembershipRecord,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetManualMembership(membership))
+    }
+
+    pub fn remove_manual_membership(
+        &self,
+        tab_public_id: &str,
+        sound_public_id: &str,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::RemoveManualMembership {
+            tab_public_id: tab_public_id.to_string(),
+            sound_public_id: sound_public_id.to_string(),
+        })
+    }
+
+    pub fn set_folder_override(&self, record: FolderOverrideRecord) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetFolderOverride(record))
+    }
+
+    pub fn clear_folder_override(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        sound_public_id: &str,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::ClearFolderOverride {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            sound_public_id: sound_public_id.to_string(),
+        })
+    }
+
+    pub fn set_folder_preferences(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        display_name: Option<&str>,
+        sibling_position: Option<usize>,
+        expanded: bool,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetFolderPreferences {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            display_name: display_name.map(str::to_string),
+            sibling_position,
+            expanded,
+        })
+    }
+
     pub fn update_sound(&self, sound: Sound) -> LibraryResponse<bool> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(Request::UpdateSound { sound, reply }, response)
@@ -470,6 +580,11 @@ impl LibraryStore {
             },
             response,
         )
+    }
+
+    fn edit(&self, edit: LibraryEdit) -> LibraryResponse<bool> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::Edit { edit, reply }, response)
     }
 
     fn enqueue<T>(
@@ -533,6 +648,12 @@ fn handle_request(connection: &mut Connection, request: Request) {
                 parent_relative_path.as_deref(),
                 page,
             ));
+        }
+        Request::ManualTabs { page, reply } => {
+            let _ = reply.send(load_manual_tabs(connection, page));
+        }
+        Request::Edit { edit, reply } => {
+            let _ = reply.send(apply_edit(connection, edit));
         }
         Request::UpdateSound { sound, reply } => {
             let _ = reply.send(update_sound(connection, sound));
@@ -706,6 +827,100 @@ fn apply_batch(connection: &mut Connection, batch: LibraryBatch) -> Result<(), L
     }
     transaction.commit()?;
     Ok(())
+}
+
+fn apply_edit(connection: &Connection, edit: LibraryEdit) -> Result<bool, LibraryError> {
+    let changed = match edit {
+        LibraryEdit::UpsertManualTab(row) => connection.execute(
+            "INSERT INTO manual_tabs(public_id, name, position) VALUES(?1, ?2, ?3)
+             ON CONFLICT(public_id) DO UPDATE SET
+                 name = excluded.name, position = excluded.position",
+            params![row.public_id, row.name, usize_to_i64(row.position)?],
+        )?,
+        LibraryEdit::DeleteManualTab(public_id) => {
+            connection.execute("DELETE FROM manual_tabs WHERE public_id = ?1", [public_id])?
+        }
+        LibraryEdit::SetManualMembership(row) => connection.execute(
+            "INSERT INTO manual_memberships(tab_id, sound_id, position)
+             SELECT tab.id, sound.rowid, ?3
+             FROM manual_tabs AS tab, sounds AS sound
+             WHERE tab.public_id = ?1 AND sound.public_id = ?2
+             ON CONFLICT(tab_id, sound_id) DO UPDATE SET position = excluded.position",
+            params![
+                row.tab_public_id,
+                row.sound_public_id,
+                usize_to_i64(row.position)?
+            ],
+        )?,
+        LibraryEdit::RemoveManualMembership {
+            tab_public_id,
+            sound_public_id,
+        } => connection.execute(
+            "DELETE FROM manual_memberships
+             WHERE tab_id = (SELECT id FROM manual_tabs WHERE public_id = ?1)
+               AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?2)",
+            params![tab_public_id, sound_public_id],
+        )?,
+        LibraryEdit::SetFolderOverride(row) => {
+            let action = match row.action {
+                FolderOverrideAction::Include => "include",
+                FolderOverrideAction::Exclude => "exclude",
+            };
+            connection.execute(
+                "INSERT INTO folder_overrides(folder_id, sound_id, action)
+                 SELECT folder.id, sound.rowid, ?4
+                 FROM folders AS folder
+                 JOIN roots AS root ON root.id = folder.root_id
+                 CROSS JOIN sounds AS sound
+                 WHERE root.path = ?1 AND folder.relative_path = ?2 AND sound.public_id = ?3
+                 ON CONFLICT(folder_id, sound_id) DO UPDATE SET action = excluded.action",
+                params![
+                    row.root_path,
+                    row.folder_relative_path,
+                    row.sound_public_id,
+                    action
+                ],
+            )?
+        }
+        LibraryEdit::ClearFolderOverride {
+            root_path,
+            folder_relative_path,
+            sound_public_id,
+        } => connection.execute(
+            "DELETE FROM folder_overrides
+             WHERE folder_id = (
+                 SELECT folder.id FROM folders AS folder
+                 JOIN roots AS root ON root.id = folder.root_id
+                 WHERE root.path = ?1 AND folder.relative_path = ?2
+             ) AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?3)",
+            params![root_path, folder_relative_path, sound_public_id],
+        )?,
+        LibraryEdit::SetFolderPreferences {
+            root_path,
+            folder_relative_path,
+            display_name,
+            sibling_position,
+            expanded,
+        } => connection.execute(
+            "INSERT INTO folder_prefs(folder_id, display_name, sibling_position, expanded)
+             SELECT folder.id, ?3, ?4, ?5
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.relative_path = ?2
+             ON CONFLICT(folder_id) DO UPDATE SET
+                 display_name = excluded.display_name,
+                 sibling_position = excluded.sibling_position,
+                 expanded = excluded.expanded",
+            params![
+                root_path,
+                folder_relative_path,
+                display_name,
+                sibling_position.map(usize_to_i64).transpose()?,
+                i64::from(expanded),
+            ],
+        )?,
+    };
+    Ok(changed == 1)
 }
 
 fn insert_roots(transaction: &Transaction<'_>, rows: Vec<RootRecord>) -> Result<(), LibraryError> {
@@ -1130,6 +1345,34 @@ fn load_roots(connection: &Connection, page: usize) -> Result<RootPage, LibraryE
         roots.push(root?);
     }
     Ok(RootPage { total, roots })
+}
+
+fn load_manual_tabs(connection: &Connection, page: usize) -> Result<ManualTabPage, LibraryError> {
+    let count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM manual_tabs", [], |row| row.get(0))?;
+    let total = usize::try_from(count)
+        .map_err(|_| LibraryError::InvalidData("negative manual tab count".to_string()))?;
+    let offset = page
+        .checked_mul(PAGE_SIZE)
+        .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let mut statement = connection.prepare(
+        "SELECT public_id, name FROM manual_tabs
+         ORDER BY position, id LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = statement.query_map(
+        params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
+        |row| {
+            Ok(ManualTabItem {
+                public_id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        },
+    )?;
+    let mut tabs = Vec::with_capacity(PAGE_SIZE.min(total.saturating_sub(offset)));
+    for tab in rows {
+        tabs.push(tab?);
+    }
+    Ok(ManualTabPage { total, tabs })
 }
 
 fn load_folder_children(

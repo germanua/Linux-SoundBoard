@@ -390,6 +390,116 @@ fn folder_navigation_pages_only_direct_children_at_arbitrary_depth() {
 }
 
 #[test]
+fn manual_and_folder_edits_are_atomic_bounded_and_immediately_visible() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![FolderRecord {
+        root_path: "/music".to_string(),
+        relative_path: "album".to_string(),
+        parent_relative_path: None,
+        name: "Album".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("first", "First", "/music/album/first.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: Some("album".to_string()),
+                relative_path: "album/first.flac".to_string(),
+            }],
+        },
+        SoundRecord {
+            sound: sound("second", "Second", "/elsewhere/second.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+
+    assert!(wait(store.upsert_manual_tab(ManualTabRecord {
+        public_id: "favourites".to_string(),
+        name: "Favourites".to_string(),
+        position: 0,
+    })));
+    assert!(wait(store.set_manual_membership(ManualMembershipRecord {
+        tab_public_id: "favourites".to_string(),
+        sound_public_id: "second".to_string(),
+        position: 0,
+    })));
+    assert!(wait(store.set_manual_membership(ManualMembershipRecord {
+        tab_public_id: "favourites".to_string(),
+        sound_public_id: "first".to_string(),
+        position: 1,
+    })));
+    let tabs = wait(store.manual_tabs(0));
+    assert_eq!(tabs.total, 1);
+    assert_eq!(tabs.tabs[0].name, "Favourites");
+    let favourites = wait(store.page(LibraryScope::ManualTab("favourites".to_string()), "", 0));
+    assert_eq!(
+        favourites
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["second", "first"]
+    );
+
+    assert!(wait(store.set_folder_override(FolderOverrideRecord {
+        root_path: "/music".to_string(),
+        folder_relative_path: "album".to_string(),
+        sound_public_id: "second".to_string(),
+        action: FolderOverrideAction::Include,
+    })));
+    assert_eq!(
+        wait(store.count(
+            LibraryScope::Folder {
+                root_path: "/music".to_string(),
+                relative_path: "album".to_string(),
+            },
+            ""
+        )),
+        2
+    );
+    assert!(wait(
+        store.clear_folder_override("/music", "album", "second")
+    ));
+    assert_eq!(
+        wait(store.count(
+            LibraryScope::Folder {
+                root_path: "/music".to_string(),
+                relative_path: "album".to_string(),
+            },
+            ""
+        )),
+        1
+    );
+
+    assert!(wait(store.set_folder_preferences(
+        "/music",
+        "album",
+        Some("Renamed Album"),
+        Some(3),
+        true,
+    )));
+    let folders = wait(store.folder_children("/music", None, 0));
+    assert_eq!(folders.folders[0].name, "Renamed Album");
+    assert!(folders.folders[0].expanded);
+
+    assert!(wait(store.remove_manual_membership("favourites", "second")));
+    assert_eq!(
+        wait(store.count(LibraryScope::ManualTab("favourites".to_string()), "")),
+        1
+    );
+    assert!(wait(store.delete_manual_tab("favourites")));
+    assert_eq!(wait(store.manual_tabs(0)).total, 0);
+}
+
+#[test]
 fn opening_a_newer_database_schema_is_read_only_and_fails() {
     let temp = TestDir::new();
     let path = temp.path().join("library.sqlite3");
