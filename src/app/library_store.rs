@@ -218,6 +218,10 @@ enum LibraryEdit {
         tab_public_id: String,
         sound_public_id: String,
     },
+    ApplyManualMemberships {
+        additions: Vec<ManualMembershipRecord>,
+        removals: Vec<(String, String)>,
+    },
     SetFolderOverride(FolderOverrideRecord),
     ClearFolderOverride {
         root_path: String,
@@ -970,6 +974,36 @@ impl LibraryStore {
         self.edit(LibraryEdit::RemoveManualMembership {
             tab_public_id: tab_public_id.to_string(),
             sound_public_id: sound_public_id.to_string(),
+        })
+    }
+
+    pub fn remove_manual_memberships(
+        &self,
+        tab_public_id: &str,
+        sound_public_ids: Vec<String>,
+    ) -> LibraryResponse<bool> {
+        self.apply_manual_memberships(
+            Vec::new(),
+            sound_public_ids
+                .into_iter()
+                .map(|sound_public_id| (tab_public_id.to_string(), sound_public_id))
+                .collect(),
+        )
+    }
+
+    pub fn apply_manual_memberships(
+        &self,
+        additions: Vec<ManualMembershipRecord>,
+        removals: Vec<(String, String)>,
+    ) -> LibraryResponse<bool> {
+        if additions.len().saturating_add(removals.len()) > MAX_BATCH_ROWS {
+            return LibraryResponse::ready(Err(LibraryError::InvalidData(format!(
+                "manual membership batches are limited to {MAX_BATCH_ROWS} rows"
+            ))));
+        }
+        self.edit(LibraryEdit::ApplyManualMemberships {
+            additions,
+            removals,
         })
     }
 
@@ -1916,7 +1950,7 @@ fn remove_root(connection: &mut Connection, root_path: &str) -> Result<bool, Lib
     Ok(changed == 1)
 }
 
-fn apply_edit(connection: &Connection, edit: LibraryEdit) -> Result<bool, LibraryError> {
+fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, LibraryError> {
     let changed = match edit {
         LibraryEdit::UpsertManualTab(row) => connection.execute(
             "INSERT INTO manual_tabs(public_id, name, position) VALUES(?1, ?2, ?3)
@@ -1948,6 +1982,40 @@ fn apply_edit(connection: &Connection, edit: LibraryEdit) -> Result<bool, Librar
                AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?2)",
             params![tab_public_id, sound_public_id],
         )?,
+        LibraryEdit::ApplyManualMemberships {
+            additions,
+            removals,
+        } => {
+            let transaction = connection.transaction()?;
+            let mut insert = transaction.prepare(
+                "INSERT INTO manual_memberships(tab_id, sound_id, position)
+                 SELECT tab.id, sound.rowid, ?3
+                 FROM manual_tabs AS tab, sounds AS sound
+                 WHERE tab.public_id = ?1 AND sound.public_id = ?2
+                 ON CONFLICT(tab_id, sound_id) DO UPDATE SET position = excluded.position",
+            )?;
+            let mut delete = transaction.prepare(
+                "DELETE FROM manual_memberships
+                 WHERE tab_id = (SELECT id FROM manual_tabs WHERE public_id = ?1)
+                   AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?2)",
+            )?;
+            let mut changed = 0_usize;
+            for row in additions {
+                changed = changed.saturating_add(insert.execute(params![
+                    row.tab_public_id,
+                    row.sound_public_id,
+                    usize_to_i64(row.position)?
+                ])?);
+            }
+            for (tab_public_id, sound_public_id) in removals {
+                changed = changed
+                    .saturating_add(delete.execute(params![tab_public_id, sound_public_id])?);
+            }
+            drop(insert);
+            drop(delete);
+            transaction.commit()?;
+            changed
+        }
         LibraryEdit::SetFolderOverride(row) => {
             let action = match row.action {
                 FolderOverrideAction::Include => "include",

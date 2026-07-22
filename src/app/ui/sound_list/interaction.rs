@@ -652,17 +652,26 @@ impl SoundListInner {
             let action_name = format!("add-to-tab-{}", tab.id);
             let action = gio::SimpleAction::new(&action_name, None);
             action.connect_activate(move |_, _| {
-                match commands::add_sounds_to_tab_with_store(
+                let inner_done = Rc::clone(&inner);
+                let dispatch = commands::add_sounds_to_tab_with_store_async(
                     tab_id.clone(),
                     sound_ids.clone(),
                     Arc::clone(&state.config),
                     state.library.clone(),
-                ) {
-                    Ok(_) => {
-                        inner.refresh_from_state_inner();
-                        inner.emit_library_changed();
-                    }
-                    Err(e) => log::warn!("Add to tab failed: {e}"),
+                    move |result| match result {
+                        Ok(_) => {
+                            inner_done.refresh_from_state_inner();
+                            inner_done.emit_library_changed();
+                        }
+                        Err(e) => {
+                            inner_done.refresh_from_state_inner();
+                            inner_done.emit_library_changed();
+                            log::warn!("Add to tab failed: {e}");
+                        }
+                    },
+                );
+                if let Err(error) = dispatch {
+                    log::warn!("Failed to dispatch add to tab: {error}");
                 }
             });
             action_group.add_action(&action);
@@ -675,21 +684,26 @@ impl SoundListInner {
             let sound_ids = target_ids.clone();
             let action = gio::SimpleAction::new("remove-from-tab", None);
             action.connect_activate(move |_, _| {
-                let mut any_success = false;
-                for sound_id in &sound_ids {
-                    match commands::remove_sound_from_tab_with_store(
-                        tab_id.clone(),
-                        sound_id.clone(),
-                        Arc::clone(&state.config),
-                        state.library.clone(),
-                    ) {
-                        Ok(_) => any_success = true,
-                        Err(e) => log::warn!("Remove from tab failed for {}: {e}", sound_id),
-                    }
-                }
-                if any_success {
-                    inner.refresh_from_state_inner();
-                    inner.emit_library_changed();
+                let inner_done = Rc::clone(&inner);
+                let dispatch = commands::remove_sounds_from_tab_with_store_async(
+                    tab_id.clone(),
+                    sound_ids.clone(),
+                    Arc::clone(&state.config),
+                    state.library.clone(),
+                    move |result| match result {
+                        Ok(_) => {
+                            inner_done.refresh_from_state_inner();
+                            inner_done.emit_library_changed();
+                        }
+                        Err(e) => {
+                            inner_done.refresh_from_state_inner();
+                            inner_done.emit_library_changed();
+                            log::warn!("Remove from tab failed: {e}");
+                        }
+                    },
+                );
+                if let Err(error) = dispatch {
+                    log::warn!("Failed to dispatch remove from tab: {error}");
                 }
             });
             action_group.add_action(&action);

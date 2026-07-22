@@ -484,16 +484,28 @@ impl TabsInner {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
                 };
-                match commands::create_tab_with_store(
+                let inner_done = Arc::downgrade(&inner);
+                let dispatch = commands::create_tab_with_store_async(
                     name,
                     Arc::clone(&inner.state.config),
                     inner.state.library.clone(),
-                ) {
-                    Ok(tab) => {
-                        *inner.active_tab_id.lock() = tab.id.clone();
-                        inner.queue_reload_tabs_and_emit(Some(tab.id));
-                    }
-                    Err(e) => log::warn!("Failed to create tab: {e}"),
+                    move |result| match result {
+                        Ok(tab) => {
+                            if let Some(inner) = inner_done.upgrade() {
+                                *inner.active_tab_id.lock() = tab.id.clone();
+                                inner.queue_reload_tabs_and_emit(Some(tab.id));
+                            }
+                        }
+                        Err(e) => {
+                            if let Some(inner) = inner_done.upgrade() {
+                                inner.queue_reload_tabs_and_emit(None);
+                            }
+                            log::warn!("Failed to create tab: {e}");
+                        }
+                    },
+                );
+                if let Err(error) = dispatch {
+                    log::warn!("Failed to dispatch tab creation: {error}");
                 }
             },
         );
@@ -881,50 +893,53 @@ impl TabsInner {
                                     return;
                                 }
 
-                                match commands::apply_sound_tab_drop_with_store(
+                                let inner_done = Arc::downgrade(&inner);
+                                let drop_done = drop_for_finish.clone();
+                                let source_tab_id = payload.source_tab_id.clone();
+                                let target_tab_id = target_tab_id_for_read.clone();
+                                let moved_count = payload.sound_ids.len();
+                                let dispatch = commands::apply_sound_tab_drop_with_store_async(
                                     payload.source_tab_id.clone(),
                                     target_tab_id_for_read.clone(),
                                     payload.sound_ids.clone(),
                                     Arc::clone(&inner.state.config),
                                     inner.state.library.clone(),
-                                ) {
-                                    Ok(changed) => {
-                                        if !changed {
+                                    move |result| match result {
+                                        Ok(true) => {
+                                            drop_done.finish(drag_action_for_intent(intent));
+                                            if let Some(inner) = inner_done.upgrade() {
+                                                inner.reload_tabs_and_emit(None);
+                                                inner.emit_tab_membership_changed();
+                                                inner.send_drop_toast(
+                                                    intent,
+                                                    &source_tab_id,
+                                                    &target_tab_id,
+                                                    moved_count,
+                                                );
+                                            }
+                                        }
+                                        Ok(false) => {
                                             log::info!(
                                                 "Tab drop produced no membership changes (source={}, target={}, sounds={})",
-                                                payload.source_tab_id,
-                                                target_tab_id_for_read,
-                                                payload.sound_ids.len()
+                                                source_tab_id,
+                                                target_tab_id,
+                                                moved_count
                                             );
-                                            drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                            return;
+                                            drop_done.finish(gtk4::gdk::DragAction::empty());
                                         }
-
-                                        let finish_action = drag_action_for_intent(intent);
-                                        drop_for_finish.finish(finish_action);
-
-                                        let inner_weak_refresh = Arc::downgrade(&inner);
-                                        let source_tab_id = payload.source_tab_id.clone();
-                                        let target_tab_id = target_tab_id_for_read.clone();
-                                        let moved_count = payload.sound_ids.len();
-                                        glib::idle_add_local_once(move || {
-                                            let Some(inner) = inner_weak_refresh.upgrade() else {
-                                                return;
-                                            };
-                                            inner.reload_tabs_and_emit(None);
-                                            inner.emit_tab_membership_changed();
-                                            inner.send_drop_toast(
-                                                intent,
-                                                &source_tab_id,
-                                                &target_tab_id,
-                                                moved_count,
-                                            );
-                                        });
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Tab drop failed: {e}");
-                                        drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                                    }
+                                        Err(e) => {
+                                            log::warn!("Tab drop failed: {e}");
+                                            drop_done.finish(gtk4::gdk::DragAction::empty());
+                                            if let Some(inner) = inner_done.upgrade() {
+                                                inner.reload_tabs_and_emit(None);
+                                                inner.emit_tab_membership_changed();
+                                            }
+                                        }
+                                    },
+                                );
+                                if let Err(error) = dispatch {
+                                    log::warn!("Failed to dispatch tab drop: {error}");
+                                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
                                 }
                             }
                             Err(e) => {
@@ -1032,14 +1047,29 @@ impl TabsInner {
                         let Some(inner_confirm) = inner_confirm_weak.upgrade() else {
                             return;
                         };
-                        match commands::rename_tab_with_store(
+                        let inner_done = Arc::downgrade(&inner_confirm);
+                        let tab_id_done = tab_id.clone();
+                        let dispatch = commands::rename_tab_with_store_async(
                             tab_id.clone(),
                             new_name,
                             Arc::clone(&inner_confirm.state.config),
                             inner_confirm.state.library.clone(),
-                        ) {
-                            Ok(_) => inner_confirm.queue_reload_tabs_and_emit(Some(tab_id.clone())),
-                            Err(e) => log::warn!("Rename tab failed: {e}"),
+                            move |result| match result {
+                                Ok(_) => {
+                                    if let Some(inner) = inner_done.upgrade() {
+                                        inner.queue_reload_tabs_and_emit(Some(tab_id_done));
+                                    }
+                                }
+                                Err(e) => {
+                                    if let Some(inner) = inner_done.upgrade() {
+                                        inner.queue_reload_tabs_and_emit(None);
+                                    }
+                                    log::warn!("Rename tab failed: {e}");
+                                }
+                            },
+                        );
+                        if let Err(error) = dispatch {
+                            log::warn!("Failed to dispatch tab rename: {error}");
                         }
                     },
                 );

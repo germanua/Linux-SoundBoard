@@ -842,6 +842,26 @@ fn manual_and_folder_edits_are_atomic_bounded_and_immediately_visible() {
         wait(store.count(LibraryScope::ManualTab("favourites".to_string()), "")),
         1
     );
+    let oversized = store
+        .remove_manual_memberships(
+            "favourites",
+            vec!["first".to_string(); crate::library_store::MAX_BATCH_ROWS + 1],
+        )
+        .recv()
+        .expect_err("oversized removal must fail before mutation");
+    assert!(oversized.to_string().contains("limited"));
+    assert_eq!(
+        wait(store.count(LibraryScope::ManualTab("favourites".to_string()), "")),
+        1
+    );
+    assert!(wait(store.remove_manual_memberships(
+        "favourites",
+        vec!["first".to_string()]
+    )));
+    assert_eq!(
+        wait(store.count(LibraryScope::ManualTab("favourites".to_string()), "")),
+        0
+    );
     assert!(wait(store.delete_manual_tab("favourites")));
     assert_eq!(wait(store.manual_tabs(0)).total, 0);
 }

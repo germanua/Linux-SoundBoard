@@ -669,10 +669,39 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
     );
     assert_eq!(
         library
-            .count(crate::library_store::LibraryScope::ManualTab(tab.id), "")
+            .count(
+                crate::library_store::LibraryScope::ManualTab(tab.id.clone()),
+                "",
+            )
             .recv()
             .expect("count tab sounds"),
         2
+    );
+    let sound_ids = library
+        .page(
+            crate::library_store::LibraryScope::ManualTab(tab.id.clone()),
+            "",
+            0,
+        )
+        .recv()
+        .expect("load imported tab")
+        .sounds
+        .into_iter()
+        .map(|sound| sound.id)
+        .collect();
+    commands::remove_sounds_from_tab_with_store(
+        tab.id.clone(),
+        sound_ids,
+        Arc::clone(&config),
+        library.clone(),
+    )
+    .expect("remove imported sounds from store-backed tab");
+    assert_eq!(
+        library
+            .count(crate::library_store::LibraryScope::ManualTab(tab.id), "")
+            .recv()
+            .expect("count emptied tab"),
+        0
     );
 
     cleanup_test_audio_path(&first);
