@@ -17,44 +17,63 @@ pub struct HotkeyManager {
 }
 
 impl HotkeyManager {
-    pub fn new_blocking(sender: SyncSender<String>, sounds: &[(String, String)]) -> Self {
+    pub fn new_deferred(sender: SyncSender<String>) -> Self {
         info!("Initializing hotkey backend manager");
-
-        if sounds.is_empty() {
-            info!("Deferring hotkey backend startup until the first binding is added");
-            return Self {
-                backend: None,
-                disabled_reason: None,
-                deferred_sender: Some(sender),
-                deferred_start: true,
-            };
+        info!("Deferring hotkey backend startup until persisted bindings are projected");
+        Self {
+            backend: None,
+            disabled_reason: None,
+            deferred_sender: Some(sender),
+            deferred_start: true,
         }
+    }
 
-        match Self::select_backend() {
-            Ok(backend) => {
-                info!("Selected hotkey backend: {}", backend.name());
-                info!("Prebound hotkeys to register: {}", sounds.len());
-                if let Err(e) = backend.register_many(sounds) {
-                    warn!("Failed to register prebound hotkeys: {}", e);
+    pub fn project_hotkey_pages_blocking<F>(
+        &mut self,
+        mut next_page: F,
+    ) -> Result<usize, HotkeyError>
+    where
+        F: FnMut() -> Result<Option<Vec<(String, String)>>, HotkeyError>,
+    {
+        let mut projected = 0_usize;
+        let mut staged = false;
+        let mut first_error = None;
+        loop {
+            let page = match next_page() {
+                Ok(Some(page)) => page,
+                Ok(None) => break,
+                Err(error) => {
+                    if let Some(backend) = &self.backend {
+                        backend.abort_staged();
+                    }
+                    return Err(error);
                 }
-                backend.start_listener(sender);
-                Self {
-                    backend: Some(backend),
-                    disabled_reason: None,
-                    deferred_sender: None,
-                    deferred_start: false,
-                }
+            };
+            if page.is_empty() {
+                continue;
             }
-            Err(reason) => {
-                warn!("Global hotkeys unavailable: {}", reason);
-                Self {
-                    backend: None,
-                    disabled_reason: Some(reason.to_string()),
-                    // Preserve sender so backend can be retried after remediation.
-                    deferred_sender: Some(sender),
-                    deferred_start: true,
-                }
+            self.ensure_backend_started()?;
+            let backend = self.backend.as_ref().ok_or_else(|| {
+                HotkeyError::BackendUnavailable("Global hotkeys unavailable".to_string())
+            })?;
+            staged = true;
+            projected = projected.saturating_add(page.len());
+            if let Err(error) = backend.stage_many(&page) {
+                first_error.get_or_insert(error);
             }
+        }
+        if staged {
+            self.backend
+                .as_ref()
+                .ok_or_else(|| {
+                    HotkeyError::BackendUnavailable("Global hotkeys unavailable".to_string())
+                })?
+                .commit_staged()?;
+        }
+        if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Ok(projected)
         }
     }
 
@@ -313,5 +332,79 @@ fn select_x11_backend() -> Result<Box<dyn HotkeyBackend>, HotkeyError> {
                 errors.join("; ")
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::any::Any;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct ProjectionState {
+        page_sizes: Vec<usize>,
+        commits: usize,
+    }
+
+    struct ProjectionBackend(Arc<parking_lot::Mutex<ProjectionState>>);
+
+    impl HotkeyBackend for ProjectionBackend {
+        fn name(&self) -> &'static str {
+            "projection-test"
+        }
+
+        fn register(&self, _binding_id: &str, _hotkey: &str) -> Result<(), HotkeyError> {
+            Ok(())
+        }
+
+        fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
+            self.0.lock().page_sizes.push(bindings.len());
+            Ok(())
+        }
+
+        fn commit_staged(&self) -> Result<(), HotkeyError> {
+            self.0.lock().commits += 1;
+            Ok(())
+        }
+
+        fn unregister(&self, _binding_id: &str) -> Result<(), HotkeyError> {
+            Ok(())
+        }
+
+        fn start_listener(&self, _sender: SyncSender<String>) {}
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn paged_projection_commits_once_after_all_pages() {
+        let projection = Arc::new(parking_lot::Mutex::new(ProjectionState::default()));
+        let mut manager = HotkeyManager {
+            backend: Some(Box::new(ProjectionBackend(Arc::clone(&projection)))),
+            disabled_reason: None,
+            deferred_sender: None,
+            deferred_start: false,
+        };
+        let mut pages = VecDeque::from([
+            Ok(Some(vec![("one".to_string(), "Ctrl+KeyA".to_string())])),
+            Ok(Some(vec![
+                ("two".to_string(), "Ctrl+KeyB".to_string()),
+                ("three".to_string(), "Ctrl+KeyC".to_string()),
+            ])),
+            Ok(None),
+        ]);
+
+        let projected = manager
+            .project_hotkey_pages_blocking(|| pages.pop_front().expect("projection page"))
+            .expect("project pages");
+
+        assert_eq!(projected, 3);
+        let projection = projection.lock();
+        assert_eq!(projection.page_sizes, [1, 2]);
+        assert_eq!(projection.commits, 1);
     }
 }

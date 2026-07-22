@@ -22,6 +22,7 @@ use super::{normalize_capture_key, parse_hotkey_spec, HotkeyCode, HotkeyModifier
 
 pub struct X11Backend {
     bindings: Arc<Mutex<BindingIndex>>,
+    staged_bindings: Mutex<Option<BindingIndex>>,
     started: AtomicBool,
     stop_flag: Arc<AtomicBool>,
     display_ptr: Arc<Mutex<Option<NonNullXDisplay>>>,
@@ -148,6 +149,7 @@ impl X11Backend {
 
         Ok(Self {
             bindings: Arc::new(Mutex::new(BindingIndex::default())),
+            staged_bindings: Mutex::new(None),
             started: AtomicBool::new(false),
             stop_flag: Arc::new(AtomicBool::new(false)),
             display_ptr: Arc::new(Mutex::new(None)),
@@ -264,6 +266,26 @@ impl HotkeyBackend for X11Backend {
         self.bindings
             .lock()
             .insert(sound_id, Chord::from_spec(spec))
+    }
+
+    fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
+        let mut staged = self.staged_bindings.lock();
+        let staged = staged.get_or_insert_with(BindingIndex::default);
+        for (binding_id, hotkey) in bindings {
+            staged.insert(binding_id, Chord::from_spec(parse_hotkey_spec(hotkey)?))?;
+        }
+        Ok(())
+    }
+
+    fn commit_staged(&self) -> Result<(), HotkeyError> {
+        if let Some(staged) = self.staged_bindings.lock().take() {
+            *self.bindings.lock() = staged;
+        }
+        Ok(())
+    }
+
+    fn abort_staged(&self) {
+        self.staged_bindings.lock().take();
     }
 
     fn unregister(&self, sound_id: &str) -> Result<(), HotkeyError> {

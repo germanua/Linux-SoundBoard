@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use gio::prelude::*;
 use glib::subclass::prelude::*;
@@ -12,6 +13,7 @@ use super::SoundRowData;
 
 const MAX_CACHED_PAGES: usize = 4;
 const MAX_CACHED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+static NEXT_SEARCH_OWNER: AtomicU64 = AtomicU64::new(1);
 
 fn row_payload_bytes(row: &SoundRowData) -> usize {
     let sound_bytes = row.sound.as_ref().map_or(0, |sound| {
@@ -40,6 +42,7 @@ mod imp {
     pub struct PagedSoundModel {
         pub total: Cell<u32>,
         pub generation: Cell<u64>,
+        pub search_owner: Cell<u64>,
         pub library: RefCell<Option<LibraryStore>>,
         pub scope: RefCell<Option<LibraryScope>>,
         pub search: RefCell<String>,
@@ -94,6 +97,10 @@ glib::wrapper! {
 impl PagedSoundModel {
     pub(super) fn new(library: LibraryStore) -> Self {
         let model: Self = glib::Object::builder().build();
+        model
+            .imp()
+            .search_owner
+            .set(NEXT_SEARCH_OWNER.fetch_add(1, Ordering::Relaxed));
         *model.imp().library.borrow_mut() = Some(library);
         model
     }
@@ -118,7 +125,7 @@ impl PagedSoundModel {
         let Some(library) = imp.library.borrow().clone() else {
             return;
         };
-        let response = library.count(scope, &search);
+        let response = library.count_coalesced(imp.search_owner.get(), generation, scope, &search);
         let weak = self.downgrade();
         if let Err(error) = crate::commands::dispatch_async_result(
             "count_lazy_sound_rows",
@@ -127,14 +134,15 @@ impl PagedSoundModel {
                 let Some(model) = weak.upgrade() else {
                     return;
                 };
+                if model.imp().generation.get() != generation {
+                    return;
+                }
                 match result {
                     Ok(total) => {
-                        if model.imp().generation.get() == generation {
-                            let total = u32::try_from(total).unwrap_or(u32::MAX);
-                            model.imp().total.set(total);
-                            if total > 0 {
-                                model.items_changed(0, 0, total);
-                            }
+                        let total = u32::try_from(total).unwrap_or(u32::MAX);
+                        model.imp().total.set(total);
+                        if total > 0 {
+                            model.items_changed(0, 0, total);
                         }
                     }
                     Err(error) => {
@@ -181,7 +189,13 @@ impl PagedSoundModel {
             return;
         };
         let search = imp.search.borrow().clone();
-        let response = library.page(scope, &search, page as usize);
+        let response = library.page_coalesced(
+            imp.search_owner.get(),
+            generation,
+            scope,
+            &search,
+            page as usize,
+        );
         let weak = self.downgrade();
         if let Err(error) = crate::commands::dispatch_async_result(
             "load_lazy_sound_page",
@@ -190,6 +204,9 @@ impl PagedSoundModel {
                 let Some(model) = weak.upgrade() else {
                     return;
                 };
+                if model.imp().generation.get() != generation {
+                    return;
+                }
                 match result {
                     Ok(result) => {
                         model.install_page(page, generation, result.sounds);

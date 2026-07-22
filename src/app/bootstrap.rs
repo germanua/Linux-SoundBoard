@@ -538,21 +538,9 @@ fn start_application(
         }
     };
 
-    let prebound_hotkeys = match prebound_hotkeys(&library) {
-        Ok(bindings) => bindings,
-        Err(error) => {
-            log::error!("Could not read persisted hotkeys: {error}");
-            show_config_error(app, &error);
-            return;
-        }
-    };
     let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
-
-    let hotkey_manager =
-        crate::hotkeys::HotkeyManager::new_blocking(hotkey_sender, &prebound_hotkeys);
+    let hotkey_manager = crate::hotkeys::HotkeyManager::new_deferred(hotkey_sender);
     crate::diagnostics::set_hotkey_status(&hotkey_manager.status_message());
-    crate::diagnostics::memory::log_memory_snapshot("startup:hotkeys_ready");
-    crate::diagnostics::record_phase_with_config("startup:hotkeys_ready", &config);
 
     let previous_engine_version = match startup_mode {
         StartupMode::Persistent => previous_engine_version.or_else(incompatible_engine_version),
@@ -624,6 +612,7 @@ fn start_application(
     }
     record_state_phase("startup:window_presented", &state);
 
+    schedule_startup_hotkey_projection(Arc::clone(&state));
     schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
 
     {
@@ -711,26 +700,70 @@ pub fn backfill_missing_sound_durations(config: &mut Config) -> bool {
     changed
 }
 
-fn prebound_hotkeys(
+fn project_startup_hotkeys(
     library: &crate::library_store::LibraryStore,
-) -> Result<Vec<(String, String)>, crate::library_store::LibraryError> {
-    let mut prebound = Vec::new();
+) -> impl FnMut() -> Result<Option<Vec<(String, String)>>, crate::hotkeys::HotkeyError> + '_ {
     let mut after = None;
-    loop {
-        let page = library.hotkey_bindings_after(after.as_deref()).recv()?;
+    let mut finished = false;
+    move || {
+        if finished {
+            return Ok(None);
+        }
+        let page = library
+            .hotkey_bindings_after(after.as_deref())
+            .recv()
+            .map_err(|error| {
+                crate::hotkeys::HotkeyError::Io(format!(
+                    "Could not read persisted hotkeys: {error}"
+                ))
+            })?;
         let count = page.bindings.len();
         after = page
             .bindings
             .last()
             .map(|binding| binding.binding_id.clone());
-        prebound.extend(
+        if count < crate::library_store::PAGE_SIZE {
+            finished = true;
+        }
+        if page.bindings.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
             page.bindings
                 .into_iter()
-                .map(|binding| (binding.binding_id, binding.accelerator)),
-        );
-        if count < crate::library_store::PAGE_SIZE {
-            return Ok(prebound);
-        }
+                .map(|binding| (binding.binding_id, binding.accelerator))
+                .collect(),
+        ))
+    }
+}
+
+fn schedule_startup_hotkey_projection(state: Arc<AppState>) {
+    let worker_state = Arc::clone(&state);
+    let completion_state = Arc::clone(&state);
+    if let Err(error) = crate::commands::dispatch_async_result(
+        "project_startup_hotkeys",
+        move || {
+            let mut hotkeys = worker_state.hotkeys.lock();
+            hotkeys.project_hotkey_pages_blocking(project_startup_hotkeys(&worker_state.library))
+        },
+        move |result| {
+            let status = match result {
+                Ok(count) => {
+                    info!("Projected {count} persisted hotkey binding(s)");
+                    completion_state.hotkeys.lock().status_message()
+                }
+                Err(error) => {
+                    log::error!("Could not project persisted hotkeys: {error}");
+                    "Hotkeys: Error (see logs)".to_string()
+                }
+            };
+            crate::diagnostics::set_hotkey_status(&status);
+            crate::diagnostics::memory::log_memory_snapshot("startup:hotkeys_ready");
+            record_state_phase("startup:hotkeys_ready", &completion_state);
+        },
+    ) {
+        log::error!("Could not schedule persisted hotkey projection: {error}");
+        crate::diagnostics::set_hotkey_status("Hotkeys: Error (see logs)");
     }
 }
 

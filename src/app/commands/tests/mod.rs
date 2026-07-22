@@ -38,7 +38,7 @@ fn create_test_config_state() -> Arc<Mutex<Config>> {
 fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     use std::sync::mpsc;
     let (sender, _) = mpsc::sync_channel(1);
-    let manager = HotkeyManager::new_blocking(sender, &[]);
+    let manager = HotkeyManager::new_deferred(sender);
     Arc::new(Mutex::new(manager))
 }
 

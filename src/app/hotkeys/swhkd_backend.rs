@@ -368,15 +368,22 @@ impl HotkeyBackend for SwhkdBackend {
         if bindings.is_empty() {
             return Ok(());
         }
-
-        let mut config = self.config.lock();
-        let add_result = Self::add_validated_hotkey_batch(&mut config, bindings);
-
-        config.write_to_file()?;
-        drop(config);
-
-        self.reload_or_restore_last_good()?;
+        let add_result = self.stage_many(bindings);
+        self.commit_staged()?;
         add_result
+    }
+
+    fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
+        Self::add_validated_hotkey_batch(&mut self.config.lock(), bindings)
+    }
+
+    fn commit_staged(&self) -> Result<(), HotkeyError> {
+        self.config.lock().write_to_file()?;
+        self.reload_or_restore_last_good()
+    }
+
+    fn abort_staged(&self) {
+        self.config.lock().hotkeys.clear();
     }
 
     fn unregister(&self, sound_id: &str) -> Result<(), HotkeyError> {

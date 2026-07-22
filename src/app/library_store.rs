@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
@@ -251,16 +251,24 @@ impl LibraryBatch {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchGeneration {
+    owner: u64,
+    generation: u64,
+}
+
 enum Request {
     Count {
         scope: LibraryScope,
         search: String,
+        query_generation: Option<SearchGeneration>,
         reply: mpsc::SyncSender<Result<usize, LibraryError>>,
     },
     Page {
         scope: LibraryScope,
         search: String,
         page: usize,
+        query_generation: Option<SearchGeneration>,
         reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
     },
     SoundById {
@@ -361,11 +369,26 @@ enum Request {
     },
 }
 
+impl Request {
+    fn search_generation(&self) -> Option<SearchGeneration> {
+        match self {
+            Self::Count {
+                query_generation, ..
+            }
+            | Self::Page {
+                query_generation, ..
+            } => *query_generation,
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct QueueState {
     control: VecDeque<Request>,
     visible: VecDeque<Request>,
     maintenance: VecDeque<Request>,
+    search_generations: HashMap<u64, u64>,
     closed: bool,
 }
 
@@ -383,6 +406,25 @@ impl RequestQueue {
             .map_err(|_| LibraryError::WorkerUnavailable)?;
         if state.closed {
             return Err(LibraryError::WorkerUnavailable);
+        }
+        if let Some(query) = request.search_generation() {
+            if state
+                .search_generations
+                .get(&query.owner)
+                .is_some_and(|generation| query.generation < *generation)
+            {
+                return Ok(());
+            }
+            if state.search_generations.get(&query.owner) != Some(&query.generation) {
+                state
+                    .search_generations
+                    .insert(query.owner, query.generation);
+                state.visible.retain(|queued| {
+                    !queued.search_generation().is_some_and(|generation| {
+                        generation.owner == query.owner && generation.generation < query.generation
+                    })
+                });
+            }
         }
         let (queue, capacity) = match request {
             Request::SoundById { .. }
@@ -704,11 +746,31 @@ impl LibraryStore {
     }
 
     pub fn count(&self, scope: LibraryScope, search: &str) -> LibraryResponse<usize> {
+        self.count_request(scope, search, None)
+    }
+
+    pub(crate) fn count_coalesced(
+        &self,
+        owner: u64,
+        generation: u64,
+        scope: LibraryScope,
+        search: &str,
+    ) -> LibraryResponse<usize> {
+        self.count_request(scope, search, Some(SearchGeneration { owner, generation }))
+    }
+
+    fn count_request(
+        &self,
+        scope: LibraryScope,
+        search: &str,
+        query_generation: Option<SearchGeneration>,
+    ) -> LibraryResponse<usize> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
             Request::Count {
                 scope,
                 search: search.to_lowercase(),
+                query_generation,
                 reply,
             },
             response,
@@ -721,12 +783,39 @@ impl LibraryStore {
         search: &str,
         page: usize,
     ) -> LibraryResponse<SoundPage> {
+        self.page_request(scope, search, page, None)
+    }
+
+    pub(crate) fn page_coalesced(
+        &self,
+        owner: u64,
+        generation: u64,
+        scope: LibraryScope,
+        search: &str,
+        page: usize,
+    ) -> LibraryResponse<SoundPage> {
+        self.page_request(
+            scope,
+            search,
+            page,
+            Some(SearchGeneration { owner, generation }),
+        )
+    }
+
+    fn page_request(
+        &self,
+        scope: LibraryScope,
+        search: &str,
+        page: usize,
+        query_generation: Option<SearchGeneration>,
+    ) -> LibraryResponse<SoundPage> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
             Request::Page {
                 scope,
                 search: search.to_lowercase(),
                 page,
+                query_generation,
                 reply,
             },
             response,
@@ -1072,6 +1161,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
         Request::Count {
             scope,
             search,
+            query_generation: _,
             reply,
         } => {
             let _ = reply.send(count_sounds(connection, &scope, &search));
@@ -1080,6 +1170,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
             scope,
             search,
             page,
+            query_generation: _,
             reply,
         } => {
             let _ = reply.send(load_page(connection, &scope, &search, page));
@@ -3211,6 +3302,7 @@ mod tests {
             .push(Request::Count {
                 scope: LibraryScope::General,
                 search: String::new(),
+                query_generation: None,
                 reply: visible_reply,
             })
             .expect("queue visible");
@@ -3224,6 +3316,83 @@ mod tests {
         assert!(matches!(queue.pop(), Some(Request::SoundById { .. })));
         assert!(matches!(queue.pop(), Some(Request::Count { .. })));
         assert!(matches!(queue.pop(), Some(Request::ApplyBatch { .. })));
+    }
+
+    #[test]
+    fn request_queue_coalesces_older_search_generations() {
+        let queue = RequestQueue::default();
+        let (old_count_reply, old_count_response) = mpsc::sync_channel(1);
+        let (old_page_reply, old_page_response) = mpsc::sync_channel(1);
+        let (latest_reply, _) = mpsc::sync_channel(1);
+        let old = SearchGeneration {
+            owner: 7,
+            generation: 1,
+        };
+        let latest = SearchGeneration {
+            owner: 7,
+            generation: 2,
+        };
+
+        queue
+            .push(Request::Count {
+                scope: LibraryScope::General,
+                search: "old".to_string(),
+                query_generation: Some(old),
+                reply: old_count_reply,
+            })
+            .expect("queue old count");
+        queue
+            .push(Request::Page {
+                scope: LibraryScope::General,
+                search: "old".to_string(),
+                page: 0,
+                query_generation: Some(old),
+                reply: old_page_reply,
+            })
+            .expect("queue old page");
+        queue
+            .push(Request::Count {
+                scope: LibraryScope::General,
+                search: "latest".to_string(),
+                query_generation: Some(latest),
+                reply: latest_reply,
+            })
+            .expect("queue latest count");
+
+        let state = queue.state.lock().expect("queue state");
+        assert_eq!(state.visible.len(), 1);
+        assert!(matches!(
+            state.visible.front(),
+            Some(Request::Count {
+                query_generation: Some(value),
+                ..
+            }) if *value == latest
+        ));
+        drop(state);
+        assert!(matches!(
+            old_count_response.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        assert!(matches!(
+            old_page_response.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+
+        assert!(matches!(queue.pop(), Some(Request::Count { .. })));
+        let (late_old_reply, late_old_response) = mpsc::sync_channel(1);
+        queue
+            .push(Request::Count {
+                scope: LibraryScope::General,
+                search: "late-old".to_string(),
+                query_generation: Some(old),
+                reply: late_old_reply,
+            })
+            .expect("drop late old count");
+        assert!(queue.state.lock().expect("queue state").visible.is_empty());
+        assert!(matches!(
+            late_old_response.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

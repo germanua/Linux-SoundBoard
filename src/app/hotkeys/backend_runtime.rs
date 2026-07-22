@@ -15,6 +15,13 @@ pub trait HotkeyBackend: Send + Sync {
         }
         Ok(())
     }
+    fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
+        self.register_many(bindings)
+    }
+    fn commit_staged(&self) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+    fn abort_staged(&self) {}
     fn unregister(&self, sound_id: &str) -> Result<(), HotkeyError>;
     fn unregister_many(&self, sound_ids: &[String]) -> Result<(), HotkeyError> {
         for sound_id in sound_ids {
