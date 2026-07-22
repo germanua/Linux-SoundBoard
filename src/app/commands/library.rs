@@ -16,8 +16,8 @@ use crate::audio::scanner;
 use crate::config::{Config, FolderTabBinding, LoudnessAnalysisState, Sound};
 use crate::hotkeys::HotkeyManager;
 use crate::library_store::{
-    FolderRecord, LibraryBatch, LibraryScope, LibraryStore, SoundLocationRecord, SoundRecord,
-    MAX_BATCH_ROWS,
+    FolderRecord, LibraryBatch, LibraryScope, LibraryStore, RootRecord, SoundLocationRecord,
+    SoundRecord, MAX_BATCH_ROWS,
 };
 
 use super::shared::{
@@ -45,6 +45,26 @@ fn maybe_schedule_missing_loudness_backfill(
         Err(err) => {
             log::warn!("Failed to schedule background loudness backfill: {}", err);
         }
+    }
+}
+
+fn maybe_schedule_missing_loudness_backfill_with_store(
+    config: &Arc<Mutex<Config>>,
+    library: &LibraryStore,
+    coords: &LoudnessCoordinators,
+) {
+    match crate::commands::trigger_missing_loudness_analysis_with_store(
+        Arc::clone(config),
+        library.clone(),
+        false,
+        None,
+        coords,
+    ) {
+        Ok(crate::commands::MissingLoudnessAnalysisTrigger::Started) => {
+            log::info!("Scheduled missing loudness analysis after library update");
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("Failed to schedule loudness analysis: {error}"),
     }
 }
 
@@ -504,16 +524,7 @@ pub fn add_sound_with_store(
         }]))
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    if let Err(error) = with_config_mut(&config, |candidate| {
-        if candidate.sounds.iter().all(|item| item.id != sound.id) {
-            candidate.sounds.push(sound.clone());
-            candidate.save().map_err(CommandError::config_save)?;
-        }
-        Ok::<(), CommandError>(())
-    }) {
-        log::warn!("Legacy library mirror failed after adding sound: {error}");
-    }
-    maybe_schedule_missing_loudness_backfill(&config, coords);
+    maybe_schedule_missing_loudness_backfill_with_store(&config, &library, coords);
     Ok(sound)
 }
 
@@ -542,7 +553,6 @@ pub fn rename_sound(
 pub fn rename_sound_with_store(
     id: String,
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<Sound, CommandError> {
     let new_name = name.trim().to_string();
@@ -559,24 +569,12 @@ pub fn rename_sound_with_store(
         .update_sound(sound.clone())
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    if let Err(error) = with_config_mut(&config, |candidate| {
-        if let Some(existing) = candidate.get_sound_mut(&id) {
-            existing.name = sound.name.clone();
-            candidate.save().map_err(CommandError::config_save)?;
-        }
-        Ok::<(), CommandError>(())
-    })
-    .and_then(|result| result)
-    {
-        log::warn!("Legacy library mirror failed after renaming sound: {error}");
-    }
     Ok(sound)
 }
 
 pub fn rename_sound_with_store_async<F>(
     id: String,
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -585,7 +583,7 @@ where
 {
     dispatch_async_result(
         "rename_sound",
-        move || rename_sound_with_store(id, name, config, library),
+        move || rename_sound_with_store(id, name, library),
         on_complete,
     )
 }
@@ -672,7 +670,6 @@ where
 
 pub fn remove_sounds_with_store(
     ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
@@ -687,16 +684,6 @@ pub fn remove_sounds_with_store(
         }
     }
     if !removed.is_empty() {
-        if let Err(error) = with_config_mut(&config, |candidate| {
-            let before = candidate.sounds.len();
-            candidate.remove_sounds(&removed);
-            if candidate.sounds.len() != before {
-                candidate.save().map_err(CommandError::config_save)?;
-            }
-            Ok::<(), CommandError>(())
-        }) {
-            log::warn!("Legacy library mirror failed after removing sounds: {error}");
-        }
         projection
             .reconcile_blocking()
             .map_err(CommandError::HotkeyProjection)?;
@@ -706,7 +693,6 @@ pub fn remove_sounds_with_store(
 
 pub fn remove_sounds_with_store_async<F>(
     ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
@@ -716,7 +702,7 @@ where
 {
     dispatch_async_result(
         "remove_sounds",
-        move || remove_sounds_with_store(ids, config, library, projection),
+        move || remove_sounds_with_store(ids, library, projection),
         on_complete,
     )
 }
@@ -741,6 +727,42 @@ where
     dispatch_async_result(
         "add_sound_folder",
         move || add_sound_folder(folder, config),
+        on_complete,
+    )
+}
+
+pub fn add_sound_folder_with_store(
+    folder: String,
+    library: LibraryStore,
+) -> Result<(), CommandError> {
+    if !Path::new(&folder).is_dir() {
+        return Err(CommandError::Invalid("Folder does not exist".to_string()));
+    }
+    let position = library
+        .roots(0)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .total;
+    library
+        .apply_batch(LibraryBatch::Roots(vec![RootRecord {
+            path: folder,
+            position,
+        }]))
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))
+}
+
+pub fn add_sound_folder_with_store_async<F>(
+    folder: String,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "add_sound_folder",
+        move || add_sound_folder_with_store(folder, library),
         on_complete,
     )
 }
@@ -802,7 +824,6 @@ where
 
 pub fn remove_sound_folder_with_store(
     folder: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
@@ -810,9 +831,6 @@ pub fn remove_sound_folder_with_store(
         .remove_root(&folder)
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    with_saved_config(&config, |candidate| {
-        candidate.remove_sound_folder(&folder);
-    })?;
     projection
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)
@@ -820,7 +838,6 @@ pub fn remove_sound_folder_with_store(
 
 pub fn remove_sound_folder_with_store_async<F>(
     folder: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
@@ -830,7 +847,7 @@ where
 {
     dispatch_async_result(
         "remove_sound_folder",
-        move || remove_sound_folder_with_store(folder, config, library, projection),
+        move || remove_sound_folder_with_store(folder, library, projection),
         on_complete,
     )
 }
@@ -1059,11 +1076,22 @@ where
 }
 
 pub fn refresh_sounds_with_store(
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<RefreshSummary, CommandError> {
-    let folders = config.lock().sound_folders.clone();
+    let mut folders = Vec::new();
+    let mut root_page = 0_usize;
+    loop {
+        let page = library
+            .roots(root_page)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+        folders.extend(page.roots.into_iter().map(|root| root.path));
+        if folders.len() >= page.total {
+            break;
+        }
+        root_page = root_page.saturating_add(1);
+    }
     let before = library
         .count(LibraryScope::General, "")
         .recv()
@@ -1159,7 +1187,6 @@ pub fn refresh_sounds_with_store(
 }
 
 pub fn refresh_sounds_with_store_async<F>(
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
@@ -1169,7 +1196,7 @@ where
 {
     dispatch_async_result(
         "refresh_sounds",
-        move || refresh_sounds_with_store(config, library, projection),
+        move || refresh_sounds_with_store(library, projection),
         on_complete,
     )
 }
@@ -1604,16 +1631,7 @@ pub fn update_sound_source_with_store(
         .update_sound(sound.clone())
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    if let Err(error) = with_config_mut(&config, |candidate| {
-        if let Some(existing) = candidate.get_sound_mut(&id) {
-            *existing = sound.clone();
-            candidate.save().map_err(CommandError::config_save)?;
-        }
-        Ok::<(), CommandError>(())
-    }) {
-        log::warn!("Legacy library mirror failed after relinking sound: {error}");
-    }
-    maybe_schedule_missing_loudness_backfill(&config, coords);
+    maybe_schedule_missing_loudness_backfill_with_store(&config, &library, coords);
     Ok(sound)
 }
 

@@ -548,9 +548,8 @@ fn store_refresh_streams_nested_folders_without_generated_tabs() {
         library.clone(),
         create_mock_hotkey_manager(),
     );
-    let summary =
-        commands::refresh_sounds_with_store(Arc::clone(&config), library.clone(), projection)
-            .expect("store refresh succeeds");
+    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
+        .expect("store refresh succeeds");
 
     assert_eq!(summary.added, 1);
     assert!(config.lock().tabs.is_empty());
@@ -609,7 +608,6 @@ fn store_backed_rename_and_remove_work_for_scanned_sounds_absent_from_legacy_jso
     let renamed = commands::rename_sound_with_store(
         "scanned".to_string(),
         "Renamed".to_string(),
-        Arc::clone(&config),
         library.clone(),
     )
     .expect("rename database-only sound");
@@ -628,13 +626,8 @@ fn store_backed_rename_and_remove_work_for_scanned_sounds_absent_from_legacy_jso
         library.clone(),
         create_mock_hotkey_manager(),
     );
-    commands::remove_sounds_with_store(
-        vec!["scanned".to_string()],
-        config,
-        library.clone(),
-        projection,
-    )
-    .expect("remove database-only sound");
+    commands::remove_sounds_with_store(vec!["scanned".to_string()], library.clone(), projection)
+        .expect("remove database-only sound");
     assert!(library
         .sound_by_id("scanned")
         .recv()
@@ -650,12 +643,8 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
     let second = create_test_audio_file("ogg");
     let config = create_test_config_state();
     let library = create_test_library(&config);
-    let tab = commands::create_tab_with_store(
-        "Imported".to_string(),
-        Arc::clone(&config),
-        library.clone(),
-    )
-    .expect("create store-backed tab");
+    let tab = commands::create_tab_with_store("Imported".to_string(), library.clone())
+        .expect("create store-backed tab");
 
     let imported = commands::import_files_to_tab_with_store(
         vec![
@@ -698,13 +687,8 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
         .into_iter()
         .map(|sound| sound.id)
         .collect();
-    commands::remove_sounds_from_tab_with_store(
-        tab.id.clone(),
-        sound_ids,
-        Arc::clone(&config),
-        library.clone(),
-    )
-    .expect("remove imported sounds from store-backed tab");
+    commands::remove_sounds_from_tab_with_store(tab.id.clone(), sound_ids, library.clone())
+        .expect("remove imported sounds from store-backed tab");
     assert_eq!(
         library
             .count(crate::library_store::LibraryScope::ManualTab(tab.id), "")

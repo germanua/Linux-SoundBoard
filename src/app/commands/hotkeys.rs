@@ -5,7 +5,7 @@ use crate::config::{Config, ControlHotkeyAction};
 use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
 use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
 
-use super::shared::{dispatch_async_result, with_config_mut};
+use super::shared::dispatch_async_result;
 use super::CommandError;
 
 fn canonical_hotkey_matches(stored_hotkey: &str, canonical_hotkey: &str) -> bool {
@@ -97,7 +97,6 @@ pub fn validate_hotkey_available(
 pub fn set_hotkey(
     id: String,
     hotkey: Option<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
@@ -129,13 +128,6 @@ pub fn set_hotkey(
             .map_err(|error| CommandError::Library(error.to_string()))?;
     }
 
-    if let Err(error) = with_config_mut(&config, |cfg| {
-        cfg.set_hotkey(&id, canonical_new.clone());
-        cfg.save().map_err(CommandError::config_save)
-    })? {
-        log::warn!("Failed to mirror SQLite sound hotkey to legacy config: {error}");
-    }
-
     projection
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)
@@ -144,7 +136,6 @@ pub fn set_hotkey(
 pub fn set_hotkey_async<F>(
     id: String,
     hotkey: Option<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
     on_complete: F,
@@ -154,7 +145,7 @@ where
 {
     dispatch_async_result(
         "set_hotkey",
-        move || set_hotkey(id, hotkey, config, library, projection),
+        move || set_hotkey(id, hotkey, library, projection),
         on_complete,
     )
 }
@@ -162,7 +153,6 @@ where
 pub fn set_control_hotkey(
     action: String,
     hotkey: Option<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
@@ -197,15 +187,6 @@ pub fn set_control_hotkey(
             .map_err(|error| CommandError::Library(error.to_string()))?;
     }
 
-    if let Err(error) = with_config_mut(&config, |cfg| {
-        cfg.settings
-            .control_hotkeys
-            .set_action(action, canonical_new.clone());
-        cfg.save().map_err(CommandError::config_save)
-    })? {
-        log::warn!("Failed to mirror SQLite control hotkey to legacy config: {error}");
-    }
-
     projection
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)
@@ -214,7 +195,6 @@ pub fn set_control_hotkey(
 pub fn set_control_hotkey_async<F>(
     action: String,
     hotkey: Option<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
     on_complete: F,
@@ -224,7 +204,7 @@ where
 {
     dispatch_async_result(
         "set_control_hotkey",
-        move || set_control_hotkey(action, hotkey, config, library, projection),
+        move || set_control_hotkey(action, hotkey, library, projection),
         on_complete,
     )
 }

@@ -288,14 +288,16 @@ fn test_set_hotkey_valid() {
     let result = commands::set_hotkey(
         sound_id,
         Some("Ctrl+1".to_string()),
-        config.clone(),
-        library,
+        library.clone(),
         projection,
     );
     match result {
         Ok(_) => {
-            let cfg = config.lock();
-            assert!(cfg.sounds[0].hotkey.is_some());
+            assert!(library
+                .hotkey_binding(&config.lock().sounds[0].id)
+                .recv()
+                .unwrap()
+                .is_some());
         }
         Err(e) => {
             println!(
@@ -322,11 +324,10 @@ fn test_set_hotkey_clear() {
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
-    let result = commands::set_hotkey(sound_id, None, config.clone(), library, projection);
+    let result = commands::set_hotkey(sound_id.clone(), None, library.clone(), projection);
     match result {
         Ok(_) => {
-            let cfg = config.lock();
-            assert!(cfg.sounds[0].hotkey.is_none());
+            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
         }
         Err(e) => {
             println!("Hotkey clear failed: {}", e);
@@ -350,7 +351,6 @@ fn test_set_control_hotkey_rejects_duplicate_control_binding() {
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
-        config.clone(),
         library,
         projection,
     );
@@ -377,7 +377,6 @@ fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
-        config.clone(),
         library,
         projection,
     );

@@ -194,9 +194,32 @@ pub fn create_tab(name: String, config: Arc<Mutex<Config>>) -> Result<SoundTab, 
     with_saved_config_result(&config, |cfg| Ok(cfg.create_tab(trimmed_name)))
 }
 
+fn find_manual_tab(
+    library: &LibraryStore,
+    id: &str,
+) -> Result<Option<crate::library_store::ManualTabItem>, CommandError> {
+    let mut page_index = 0_usize;
+    loop {
+        let page = library
+            .manual_tabs(page_index)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+        if let Some(tab) = page.tabs.into_iter().find(|tab| tab.public_id == id) {
+            return Ok(Some(tab));
+        }
+        if page_index
+            .saturating_add(1)
+            .saturating_mul(crate::library_store::PAGE_SIZE)
+            >= page.total
+        {
+            return Ok(None);
+        }
+        page_index = page_index.saturating_add(1);
+    }
+}
+
 pub fn create_tab_with_store(
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<SoundTab, CommandError> {
     let trimmed_name = name.trim().to_string();
@@ -205,14 +228,14 @@ pub fn create_tab_with_store(
             "Tab name cannot be empty".to_string(),
         ));
     }
-    let order = config
-        .lock()
-        .tabs
-        .iter()
-        .map(|tab| tab.order)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
+    let order = u32::try_from(
+        library
+            .manual_tabs(0)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+            .total,
+    )
+    .map_err(|_| CommandError::Invalid("Too many tabs".to_string()))?;
     let tab = SoundTab::new(trimmed_name, order);
     library
         .upsert_manual_tab(ManualTabRecord {
@@ -222,15 +245,11 @@ pub fn create_tab_with_store(
         })
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    with_saved_config_result(&config, |cfg| {
-        cfg.tabs.push(tab.clone());
-        Ok(tab)
-    })
+    Ok(tab)
 }
 
 pub fn create_tab_with_store_async<F>(
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -239,7 +258,7 @@ where
 {
     dispatch_tab_mutation(
         "create_tab",
-        move || create_tab_with_store(name, config, library),
+        move || create_tab_with_store(name, library),
         on_complete,
     )
 }
@@ -266,7 +285,6 @@ pub fn rename_tab(
 pub fn rename_tab_with_store(
     id: String,
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<(), CommandError> {
     let trimmed_name = name.trim().to_string();
@@ -275,10 +293,8 @@ pub fn rename_tab_with_store(
             "Tab name cannot be empty".to_string(),
         ));
     }
-    let position = config
-        .lock()
-        .get_tab(&id)
-        .map(|tab| tab.order as usize)
+    let position = find_manual_tab(&library, &id)?
+        .map(|tab| tab.position)
         .ok_or(CommandError::NotFound("Tab"))?;
     library
         .upsert_manual_tab(ManualTabRecord {
@@ -288,13 +304,12 @@ pub fn rename_tab_with_store(
         })
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    rename_tab(id, trimmed_name, config)
+    Ok(())
 }
 
 pub fn rename_tab_with_store_async<F>(
     id: String,
     name: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -303,7 +318,7 @@ where
 {
     dispatch_tab_mutation(
         "rename_tab",
-        move || rename_tab_with_store(id, name, config, library),
+        move || rename_tab_with_store(id, name, library),
         on_complete,
     )
 }
@@ -335,7 +350,6 @@ where
 
 pub fn delete_tab_with_store_async<F>(
     id: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -345,11 +359,15 @@ where
     dispatch_tab_mutation(
         "delete_tab",
         move || {
-            library
+            let deleted = library
                 .delete_manual_tab(&id)
                 .recv()
                 .map_err(|error| CommandError::Library(error.to_string()))?;
-            delete_tab(id, config)
+            if deleted {
+                Ok(())
+            } else {
+                Err(CommandError::NotFound("Tab"))
+            }
         },
         on_complete,
     )
@@ -371,13 +389,10 @@ pub fn add_sounds_to_tab(
 pub fn add_sounds_to_tab_with_store(
     tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<(), CommandError> {
-    let base = config
-        .lock()
-        .get_tab(&tab_id)
-        .map(|tab| tab.sound_ids.len())
+    let base = find_manual_tab(&library, &tab_id)?
+        .map(|tab| tab.sound_count)
         .ok_or(CommandError::NotFound("Tab"))?;
     let additions = sound_ids
         .iter()
@@ -392,13 +407,12 @@ pub fn add_sounds_to_tab_with_store(
         .apply_manual_memberships(additions, Vec::new())
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    add_sounds_to_tab(tab_id, sound_ids, config)
+    Ok(())
 }
 
 pub fn add_sounds_to_tab_with_store_async<F>(
     tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -407,7 +421,7 @@ where
 {
     dispatch_tab_mutation(
         "add_sounds_to_tab",
-        move || add_sounds_to_tab_with_store(tab_id, sound_ids, config, library),
+        move || add_sounds_to_tab_with_store(tab_id, sound_ids, library),
         on_complete,
     )
 }
@@ -428,14 +442,13 @@ pub fn remove_sound_from_tab(
 pub fn remove_sound_from_tab_with_store(
     tab_id: String,
     sound_id: String,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<(), CommandError> {
     library
         .remove_manual_membership(&tab_id, &sound_id)
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    remove_sound_from_tab(tab_id, sound_id, config)
+    Ok(())
 }
 
 pub fn remove_sounds_from_tab(
@@ -455,7 +468,6 @@ pub fn remove_sounds_from_tab(
 pub fn remove_sounds_from_tab_with_store(
     tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<(), CommandError> {
     let sound_ids = normalize_sound_ids(sound_ids);
@@ -463,13 +475,12 @@ pub fn remove_sounds_from_tab_with_store(
         .remove_manual_memberships(&tab_id, sound_ids.clone())
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    remove_sounds_from_tab(tab_id, sound_ids, config)
+    Ok(())
 }
 
 pub fn remove_sounds_from_tab_with_store_async<F>(
     tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -478,7 +489,7 @@ where
 {
     dispatch_tab_mutation(
         "remove_sounds_from_tab",
-        move || remove_sounds_from_tab_with_store(tab_id, sound_ids, config, library),
+        move || remove_sounds_from_tab_with_store(tab_id, sound_ids, library),
         on_complete,
     )
 }
@@ -511,7 +522,6 @@ pub fn apply_sound_tab_drop_with_store(
     source_tab_id: String,
     target_tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
 ) -> Result<bool, CommandError> {
     let sound_ids = normalize_sound_ids(sound_ids);
@@ -519,10 +529,8 @@ pub fn apply_sound_tab_drop_with_store(
         return Ok(false);
     }
     let operation = resolve_tab_drop_operation(&source_tab_id, &target_tab_id);
-    let target_base = config
-        .lock()
-        .get_tab(&target_tab_id)
-        .map(|tab| tab.sound_ids.len())
+    let target_base = find_manual_tab(&library, &target_tab_id)?
+        .map(|tab| tab.sound_count)
         .unwrap_or(0);
     let additions = match operation {
         TabDropOperation::Noop => return Ok(false),
@@ -548,18 +556,17 @@ pub fn apply_sound_tab_drop_with_store(
     } else {
         Vec::new()
     };
-    library
+    let changed = library
         .apply_manual_memberships(additions, removals)
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
-    apply_sound_tab_drop(source_tab_id, target_tab_id, sound_ids, config)
+    Ok(changed)
 }
 
 pub fn apply_sound_tab_drop_with_store_async<F>(
     source_tab_id: String,
     target_tab_id: String,
     sound_ids: Vec<String>,
-    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
@@ -568,15 +575,7 @@ where
 {
     dispatch_tab_mutation(
         "apply_sound_tab_drop",
-        move || {
-            apply_sound_tab_drop_with_store(
-                source_tab_id,
-                target_tab_id,
-                sound_ids,
-                config,
-                library,
-            )
-        },
+        move || apply_sound_tab_drop_with_store(source_tab_id, target_tab_id, sound_ids, library),
         on_complete,
     )
 }

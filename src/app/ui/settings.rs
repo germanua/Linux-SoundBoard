@@ -319,15 +319,14 @@ fn build_general_page(
                             };
                             add_folder_row3.set_sensitive(false);
                             let add_folder_row_done = add_folder_row3.clone();
-                            if let Err(e) = commands::add_sound_folder_async(
+                            if let Err(e) = commands::add_sound_folder_with_store_async(
                                 path_str,
-                                Arc::clone(&state3.config),
+                                state3.library.clone(),
                                 move |result| match result {
                                     Ok(()) => {
                                         log::info!("Add folder command succeeded");
                                         let add_folder_row_refresh = add_folder_row_done.clone();
                                         if let Err(e) = commands::refresh_sounds_with_store_async(
-                                            Arc::clone(&state3.config),
                                             state3.library.clone(),
                                             state3.hotkey_projection.clone(),
                                             move |result| {

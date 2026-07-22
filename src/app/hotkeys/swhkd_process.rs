@@ -2,6 +2,7 @@ use log::{debug, error, info, warn};
 use nix::sys::signal::Signal;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +42,12 @@ impl SwhkdProcesses {
         let swhks_path = which::which("swhks")
             .map_err(|_| HotkeyError::Process(missing_swhkd_message("swhks")))?;
 
-        Command::new(swhks_path)
+        let mut command = Command::new(swhks_path);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
             .spawn()
             .map_err(|e| HotkeyError::Process(format!("Failed to spawn swhks: {}", e)))
     }
@@ -83,14 +89,22 @@ impl SwhkdProcesses {
         let uid = nix::unistd::getuid();
         let sock_path = PathBuf::from(format!("/run/user/{}/swhkd.sock", uid));
 
+        Self::wait_for_swhks_socket_at(&sock_path, 50, SWHKD_SOCKET_POLL_INTERVAL_MS)
+    }
+
+    fn wait_for_swhks_socket_at(
+        sock_path: &Path,
+        attempts: usize,
+        poll_interval_ms: u64,
+    ) -> Result<(), HotkeyError> {
         debug!("Waiting for swhks socket at: {}", sock_path.display());
 
-        for attempt in 1..=50 {
-            if sock_path.exists() {
+        for attempt in 1..=attempts.max(1) {
+            if UnixStream::connect(sock_path).is_ok() {
                 info!("swhks socket ready after {} attempts", attempt);
                 return Ok(());
             }
-            thread::sleep(Duration::from_millis(SWHKD_SOCKET_POLL_INTERVAL_MS));
+            thread::sleep(Duration::from_millis(poll_interval_ms));
         }
 
         Err(HotkeyError::Process(
@@ -99,17 +113,27 @@ impl SwhkdProcesses {
     }
 
     pub fn spawn_managed(config_path: &Path) -> Result<Self, HotkeyError> {
-        let swhks_child = Self::spawn_swhks()?;
+        let mut swhks_child = Self::spawn_swhks()?;
 
-        Self::wait_for_swhks_socket()?;
+        if let Err(error) = Self::wait_for_swhks_socket() {
+            Self::terminate_tracked_child("swhks", &mut swhks_child);
+            return Err(error);
+        }
 
-        let mut swhkd = Self::spawn_swhkd(config_path)?;
+        let mut swhkd = match Self::spawn_swhkd(config_path) {
+            Ok(process) => process,
+            Err(error) => {
+                Self::terminate_tracked_child("swhks", &mut swhks_child);
+                return Err(error);
+            }
+        };
         let swhkd_pid = swhkd.child.id() as i32;
 
         thread::sleep(Duration::from_millis(SWHKD_STARTUP_VERIFY_WAIT_MS));
 
         match swhkd.child.try_wait() {
             Ok(Some(status)) => {
+                Self::terminate_tracked_child("swhks", &mut swhks_child);
                 return Err(HotkeyError::Process(Self::format_startup_exit_message(
                     swhkd_pid,
                     status,
@@ -118,6 +142,8 @@ impl SwhkdProcesses {
             }
             Ok(None) => {}
             Err(err) => {
+                Self::terminate_tracked_child("swhkd", &mut swhkd.child);
+                Self::terminate_tracked_child("swhks", &mut swhks_child);
                 return Err(HotkeyError::Process(format!(
                     "Could not verify swhkd startup state for PID {}: {}",
                     swhkd_pid, err
@@ -126,6 +152,8 @@ impl SwhkdProcesses {
         }
 
         if !Self::pid_is_live(swhkd_pid) {
+            Self::terminate_tracked_child("swhkd", &mut swhkd.child);
+            Self::terminate_tracked_child("swhks", &mut swhks_child);
             return Err(HotkeyError::Process(format!(
                 "swhkd process (PID {}) is not running after startup.\n\
                  This usually indicates:\n\
@@ -489,6 +517,7 @@ impl Drop for SwhkdProcesses {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixListener;
 
     #[test]
     fn parses_real_uid_from_proc_status() {
@@ -532,5 +561,22 @@ mod tests {
 
         assert!(tail.contains("Last swhkd output:"));
         assert!(tail.contains("three"));
+    }
+
+    #[test]
+    fn socket_readiness_requires_a_connectable_swhks_listener() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-swhks-readiness-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("swhkd.sock");
+        fs::write(&socket, b"stale").unwrap();
+        assert!(SwhkdProcesses::wait_for_swhks_socket_at(&socket, 1, 0).is_err());
+
+        fs::remove_file(&socket).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        assert!(SwhkdProcesses::wait_for_swhks_socket_at(&socket, 1, 0).is_ok());
+
+        drop(listener);
+        fs::remove_dir_all(directory).unwrap();
     }
 }

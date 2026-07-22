@@ -26,7 +26,7 @@ pub fn run() -> i32 {
                 warn!("Failed to set audio engine socket nonblocking mode: {err}");
             }
 
-            let config = match Config::load() {
+            let config = match Config::load_runtime_settings() {
                 Ok(config) => config,
                 Err(err) => {
                     error!(

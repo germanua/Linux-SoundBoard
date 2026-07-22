@@ -93,6 +93,10 @@ struct RuntimeInventory {
     live_timer_count: usize,
     hotkey_status: String,
     playback_registry_count: usize,
+    library_sound_count: usize,
+    library_tab_count: usize,
+    library_folder_count: usize,
+    library_hotkey_count: usize,
 }
 
 fn parse_kb_value(line: &str) -> Option<u64> {
@@ -317,9 +321,10 @@ pub fn log_memory_snapshot(tag: &str) {
 }
 
 pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory {
-    let sound_count = config.sounds.len();
-    let tab_count = config.tabs.len();
-    let folder_count = config.sound_folders.len();
+    let runtime = RUNTIME_INVENTORY.lock().clone();
+    let sound_count = config.sounds.len().max(runtime.library_sound_count);
+    let tab_count = config.tabs.len().max(runtime.library_tab_count);
+    let folder_count = config.sound_folders.len().max(runtime.library_folder_count);
 
     let mut sound_string_bytes = 0;
     for sound in &config.sounds {
@@ -398,7 +403,7 @@ pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory
 
     let ui_row_count_estimate = sound_count + tab_count;
 
-    let mut hotkey_binding_count = 0;
+    let mut hotkey_binding_count = runtime.library_hotkey_count;
     for sound in &config.sounds {
         if sound.hotkey.is_some() {
             hotkey_binding_count += 1;
@@ -427,8 +432,6 @@ pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory
     }
 
     let thread_count = read_memory_snapshot().and_then(|s| s.threads).unwrap_or(0);
-    let runtime = RUNTIME_INVENTORY.lock().clone();
-
     AppMemoryInventory {
         sound_count,
         tab_count,
@@ -484,6 +487,14 @@ pub fn set_hotkey_status(status: &str) {
 
 pub fn set_playback_registry_count(count: usize) {
     RUNTIME_INVENTORY.lock().playback_registry_count = count;
+}
+
+pub fn set_library_counts(sounds: usize, tabs: usize, folders: usize, hotkeys: usize) {
+    let mut runtime = RUNTIME_INVENTORY.lock();
+    runtime.library_sound_count = sounds;
+    runtime.library_tab_count = tabs;
+    runtime.library_folder_count = folders;
+    runtime.library_hotkey_count = hotkeys;
 }
 
 pub fn record_phase_with_config(name: &str, config: &crate::config::Config) {

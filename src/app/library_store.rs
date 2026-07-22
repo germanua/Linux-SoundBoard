@@ -84,11 +84,12 @@ pub struct FolderPage {
     pub folders: Vec<FolderItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ManualTabItem {
     pub public_id: String,
     pub name: String,
     pub sound_count: usize,
+    pub position: usize,
 }
 
 #[derive(Debug)]
@@ -115,6 +116,33 @@ pub struct HotkeyBindingRecord {
 #[derive(Debug)]
 pub struct HotkeyBindingPage {
     pub bindings: Vec<HotkeyBindingRecord>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoudnessStats {
+    pub total: usize,
+    pub pending: usize,
+    pub estimated: usize,
+    pub refined: usize,
+    pub unavailable: usize,
+    pub missing: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LibraryStats {
+    pub sounds: usize,
+    pub roots: usize,
+    pub manual_tabs: usize,
+    pub active_hotkeys: usize,
+}
+
+#[derive(Debug)]
+pub struct LoudnessUpdate {
+    pub sound_id: String,
+    pub lufs: Option<f64>,
+    pub state: LoudnessAnalysisState,
+    pub confidence: Option<f32>,
+    pub true_peak_dbtp: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -298,6 +326,10 @@ enum Request {
         after: Option<String>,
         reply: mpsc::SyncSender<Result<HotkeyBindingPage, LibraryError>>,
     },
+    HotkeyBinding {
+        binding_id: String,
+        reply: mpsc::SyncSender<Result<Option<HotkeyBindingRecord>, LibraryError>>,
+    },
     SetHotkeyBinding {
         binding: HotkeyBindingRecord,
         reply: mpsc::SyncSender<Result<bool, LibraryError>>,
@@ -310,6 +342,26 @@ enum Request {
         binding_id: String,
         normalized: String,
         reply: mpsc::SyncSender<Result<Option<String>, LibraryError>>,
+    },
+    LoudnessStats {
+        reply: mpsc::SyncSender<Result<LoudnessStats, LibraryError>>,
+    },
+    LibraryStats {
+        reply: mpsc::SyncSender<Result<LibraryStats, LibraryError>>,
+    },
+    LoudnessBackfillAfter {
+        after: Option<String>,
+        reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
+    },
+    LoudnessRefinementCandidates {
+        force: bool,
+        after: Option<String>,
+        limit: usize,
+        reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
+    },
+    ApplyLoudnessUpdates {
+        updates: Vec<LoudnessUpdate>,
+        reply: mpsc::SyncSender<Result<usize, LibraryError>>,
     },
     BeginRootScan {
         root_path: String,
@@ -433,9 +485,16 @@ impl RequestQueue {
             | Request::Adjacent { .. }
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
+            | Request::HotkeyBinding { .. }
             | Request::SetHotkeyBinding { .. }
             | Request::DeleteHotkeyBinding { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
-            Request::HotkeyConflict { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
+            Request::HotkeyConflict { .. }
+            | Request::LoudnessStats { .. }
+            | Request::LibraryStats { .. }
+            | Request::LoudnessBackfillAfter { .. }
+            | Request::LoudnessRefinementCandidates { .. } => {
+                (&mut state.control, CONTROL_QUEUE_CAPACITY)
+            }
             Request::Count { .. }
             | Request::Page { .. }
             | Request::Roots { .. }
@@ -444,6 +503,7 @@ impl RequestQueue {
             | Request::Edit { .. }
             | Request::UpdateSound { .. }
             | Request::DeleteSound { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
+            Request::ApplyLoudnessUpdates { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
             Request::BeginRootScan { .. }
             | Request::FinishRootScan { .. }
             | Request::CancelRootScan { .. }
@@ -697,6 +757,17 @@ impl LibraryStore {
     }
 
     pub fn open(path: PathBuf) -> Result<Self, LibraryError> {
+        Self::open_inner(path, None)
+    }
+
+    pub fn open_authoritative(path: PathBuf, library_id: &str) -> Result<Self, LibraryError> {
+        Self::open_inner(path, Some(library_id.to_string()))
+    }
+
+    fn open_inner(
+        path: PathBuf,
+        expected_library_id: Option<String>,
+    ) -> Result<Self, LibraryError> {
         let queue = Arc::new(RequestQueue::default());
         let worker_queue = Arc::clone(&queue);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -705,6 +776,31 @@ impl LibraryStore {
             .spawn(move || {
                 let mut connection = match open_connection(&path) {
                     Ok(connection) => {
+                        if let Some(expected) = expected_library_id.as_deref() {
+                            let identity = connection
+                                .query_row(
+                                    "SELECT value FROM meta WHERE key = 'library_id'",
+                                    [],
+                                    |row| row.get::<_, String>(0),
+                                )
+                                .optional();
+                            let ready = connection
+                                .query_row(
+                                    "SELECT value FROM meta WHERE key = 'database_ready'",
+                                    [],
+                                    |row| row.get::<_, String>(0),
+                                )
+                                .optional();
+                            if !matches!(identity, Ok(Some(ref value)) if value == expected)
+                                || !matches!(ready, Ok(Some(ref value)) if value == "1")
+                            {
+                                let _ =
+                                    ready_tx
+                                        .send(Err("library database identity changed before open"
+                                            .to_string()));
+                                return;
+                            }
+                        }
                         let _ = ready_tx.send(Ok(()));
                         connection
                     }
@@ -891,6 +987,17 @@ impl LibraryStore {
         )
     }
 
+    pub fn hotkey_binding(&self, binding_id: &str) -> LibraryResponse<Option<HotkeyBindingRecord>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::HotkeyBinding {
+                binding_id: binding_id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
     pub fn set_hotkey_binding(&self, binding: HotkeyBindingRecord) -> LibraryResponse<bool> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(Request::SetHotkeyBinding { binding, reply }, response)
@@ -921,6 +1028,55 @@ impl LibraryStore {
             },
             response,
         )
+    }
+
+    pub fn loudness_stats(&self) -> LibraryResponse<LoudnessStats> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::LoudnessStats { reply }, response)
+    }
+
+    pub fn stats(&self) -> LibraryResponse<LibraryStats> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::LibraryStats { reply }, response)
+    }
+
+    pub fn loudness_backfill_after(&self, after: Option<&str>) -> LibraryResponse<SoundPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::LoudnessBackfillAfter {
+                after: after.map(str::to_string),
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn loudness_refinement_candidates(
+        &self,
+        force: bool,
+        after: Option<&str>,
+        limit: usize,
+    ) -> LibraryResponse<SoundPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::LoudnessRefinementCandidates {
+                force,
+                after: after.map(str::to_string),
+                limit: limit.min(MAX_BATCH_ROWS),
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn apply_loudness_updates(&self, updates: Vec<LoudnessUpdate>) -> LibraryResponse<usize> {
+        if updates.len() > MAX_BATCH_ROWS {
+            return LibraryResponse::ready(Err(LibraryError::InvalidData(format!(
+                "loudness update exceeds {MAX_BATCH_ROWS} rows"
+            ))));
+        }
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::ApplyLoudnessUpdates { updates, reply }, response)
     }
 
     pub fn begin_root_scan(&self, root_path: &str, position: usize) -> LibraryResponse<i64> {
@@ -1201,6 +1357,9 @@ fn handle_request(connection: &mut Connection, request: Request) {
         Request::HotkeyBindingsAfter { after, reply } => {
             let _ = reply.send(load_hotkey_bindings_after(connection, after.as_deref()));
         }
+        Request::HotkeyBinding { binding_id, reply } => {
+            let _ = reply.send(load_hotkey_binding(connection, &binding_id));
+        }
         Request::SetHotkeyBinding { binding, reply } => {
             let _ = reply.send(set_hotkey_binding(connection, binding));
         }
@@ -1213,6 +1372,31 @@ fn handle_request(connection: &mut Connection, request: Request) {
             reply,
         } => {
             let _ = reply.send(load_hotkey_conflict(connection, &binding_id, &normalized));
+        }
+        Request::LoudnessStats { reply } => {
+            let _ = reply.send(load_loudness_stats(connection));
+        }
+        Request::LibraryStats { reply } => {
+            let _ = reply.send(load_library_stats(connection));
+        }
+        Request::LoudnessBackfillAfter { after, reply } => {
+            let _ = reply.send(load_loudness_backfill_after(connection, after.as_deref()));
+        }
+        Request::LoudnessRefinementCandidates {
+            force,
+            after,
+            limit,
+            reply,
+        } => {
+            let _ = reply.send(load_loudness_refinement_candidates(
+                connection,
+                force,
+                after.as_deref(),
+                limit,
+            ));
+        }
+        Request::ApplyLoudnessUpdates { updates, reply } => {
+            let _ = reply.send(apply_loudness_updates(connection, updates));
         }
         Request::BeginRootScan {
             root_path,
@@ -2163,7 +2347,10 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
 }
 
 fn insert_roots(transaction: &Transaction<'_>, rows: Vec<RootRecord>) -> Result<(), LibraryError> {
-    let mut statement = transaction.prepare("INSERT INTO roots(path, position) VALUES(?1, ?2)")?;
+    let mut statement = transaction.prepare(
+        "INSERT INTO roots(path, position) VALUES(?1, ?2)
+         ON CONFLICT(path) DO NOTHING",
+    )?;
     for row in rows {
         statement.execute(params![row.path, usize_to_i64(row.position)?])?;
     }
@@ -2498,21 +2685,165 @@ const LIVE_SOUND_FILTER: &str = "(sound.standalone = 1
                 WHERE live_location.sound_id = sound.rowid
                   AND live_location.generation = live_root.active_generation))";
 
-const LIVE_SOUNDS_CTE: &str = "live(sound_id) AS (
-         SELECT rowid FROM sounds WHERE standalone = 1
-         UNION
-         SELECT sound_id FROM manual_memberships
-         UNION
-         SELECT location.sound_id FROM roots AS root
-         JOIN sound_locations AS location ON location.root_id = root.id
-             AND location.generation = root.active_generation
-)";
 const SOUND_FIELDS: &str = "sound.public_id, sound.name, sound.path, sound.source_path,
     (SELECT binding.accelerator FROM hotkey_bindings AS binding
      WHERE binding.sound_id = sound.rowid AND binding.state = 'active'),
     sound.duration_ms, sound.volume, sound.enabled, sound.loudness_lufs,
     sound.loudness_state, sound.loudness_confidence, sound.loudness_fingerprint,
     sound.loudness_true_peak_dbtp";
+
+fn load_loudness_stats(connection: &Connection) -> Result<LoudnessStats, LibraryError> {
+    let sql = format!(
+        "SELECT COUNT(*),
+                COALESCE(SUM(sound.loudness_state = 'pending'), 0),
+                COALESCE(SUM(sound.loudness_state = 'estimated'), 0),
+                COALESCE(SUM(sound.loudness_state = 'refined'), 0),
+                COALESCE(SUM(sound.loudness_state = 'unavailable'), 0),
+                COALESCE(SUM(sound.loudness_lufs IS NULL
+                    AND sound.loudness_state <> 'unavailable'), 0)
+         FROM sounds AS sound WHERE {LIVE_SOUND_FILTER}"
+    );
+    let values = connection.query_row(&sql, [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+        ))
+    })?;
+    let convert = |value: i64| {
+        usize::try_from(value)
+            .map_err(|_| LibraryError::InvalidData("negative loudness count".to_string()))
+    };
+    Ok(LoudnessStats {
+        total: convert(values.0)?,
+        pending: convert(values.1)?,
+        estimated: convert(values.2)?,
+        refined: convert(values.3)?,
+        unavailable: convert(values.4)?,
+        missing: convert(values.5)?,
+    })
+}
+
+fn load_library_stats(connection: &Connection) -> Result<LibraryStats, LibraryError> {
+    let sound_sql = format!("SELECT COUNT(*) FROM sounds AS sound WHERE {LIVE_SOUND_FILTER}");
+    let sounds: i64 = connection.query_row(&sound_sql, [], |row| row.get(0))?;
+    let roots: i64 = connection.query_row("SELECT COUNT(*) FROM roots", [], |row| row.get(0))?;
+    let manual_tabs: i64 =
+        connection.query_row("SELECT COUNT(*) FROM manual_tabs", [], |row| row.get(0))?;
+    let hotkey_sql = format!(
+        "SELECT COUNT(*) FROM hotkey_bindings AS binding
+         LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
+         WHERE binding.state = 'active'
+           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})"
+    );
+    let active_hotkeys: i64 = connection.query_row(&hotkey_sql, [], |row| row.get(0))?;
+    let convert = |value: i64| {
+        usize::try_from(value)
+            .map_err(|_| LibraryError::InvalidData("negative library count".to_string()))
+    };
+    Ok(LibraryStats {
+        sounds: convert(sounds)?,
+        roots: convert(roots)?,
+        manual_tabs: convert(manual_tabs)?,
+        active_hotkeys: convert(active_hotkeys)?,
+    })
+}
+
+fn load_loudness_backfill_after(
+    connection: &Connection,
+    after: Option<&str>,
+) -> Result<SoundPage, LibraryError> {
+    let sql = format!(
+        "SELECT {SOUND_FIELDS} FROM sounds AS sound
+         WHERE sound.loudness_lufs IS NULL
+           AND sound.loudness_state <> 'unavailable'
+           AND {LIVE_SOUND_FILTER}
+           AND (?1 IS NULL OR sound.public_id > ?1)
+         ORDER BY sound.public_id LIMIT ?2"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(params![after, usize_to_i64(PAGE_SIZE)?], sound_from_row)?;
+    let mut sounds = Vec::with_capacity(PAGE_SIZE);
+    for sound in rows {
+        sounds.push(sound?);
+    }
+    Ok(SoundPage { sounds })
+}
+
+fn load_loudness_refinement_candidates(
+    connection: &Connection,
+    force: bool,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<SoundPage, LibraryError> {
+    let (sql, threshold) = if force {
+        (
+            format!(
+                "SELECT {SOUND_FIELDS} FROM sounds AS sound
+                 WHERE sound.loudness_state = 'estimated'
+                   AND sound.loudness_lufs IS NOT NULL
+                   AND {LIVE_SOUND_FILTER}
+                   AND (?1 IS NULL OR sound.public_id > ?1)
+                 ORDER BY sound.public_id LIMIT ?3"
+            ),
+            0.0,
+        )
+    } else {
+        (
+            format!(
+                "SELECT {SOUND_FIELDS} FROM sounds AS sound
+                 WHERE sound.loudness_state = 'estimated'
+                   AND sound.loudness_lufs IS NOT NULL
+                   AND {LIVE_SOUND_FILTER}
+                   AND COALESCE(sound.loudness_confidence, 0.0) <= ?2
+                 ORDER BY COALESCE(sound.loudness_confidence, 0.0),
+                          COALESCE(sound.duration_ms, 0) DESC, sound.public_id
+                 LIMIT ?3"
+            ),
+            FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD_FOR_STORE,
+        )
+    };
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        params![after, threshold, usize_to_i64(limit)?],
+        sound_from_row,
+    )?;
+    let mut sounds = Vec::with_capacity(limit);
+    for sound in rows {
+        sounds.push(sound?);
+    }
+    Ok(SoundPage { sounds })
+}
+
+const FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD_FOR_STORE: f32 = 0.80;
+
+fn apply_loudness_updates(
+    connection: &mut Connection,
+    updates: Vec<LoudnessUpdate>,
+) -> Result<usize, LibraryError> {
+    let transaction = connection.transaction()?;
+    let mut statement = transaction.prepare(
+        "UPDATE sounds SET loudness_lufs = ?2, loudness_state = ?3,
+             loudness_confidence = ?4, loudness_true_peak_dbtp = ?5
+         WHERE public_id = ?1",
+    )?;
+    let mut changed = 0_usize;
+    for update in updates {
+        changed = changed.saturating_add(statement.execute(params![
+            update.sound_id,
+            update.lufs,
+            update.state.as_str(),
+            update.confidence,
+            update.true_peak_dbtp,
+        ])?);
+    }
+    drop(statement);
+    transaction.commit()?;
+    Ok(changed)
+}
 
 fn count_sounds(
     connection: &Connection,
@@ -2523,10 +2854,8 @@ fn count_sounds(
     let count: i64 = match scope {
         LibraryScope::General => connection.query_row(
             &format!(
-                "WITH {LIVE_SOUNDS_CTE}
-                 SELECT COUNT(*) FROM live
-                 JOIN sounds AS sound ON sound.rowid = live.sound_id
-                 WHERE {SEARCH_FILTER}"
+                "SELECT COUNT(*) FROM sounds AS sound
+                 WHERE {LIVE_SOUND_FILTER} AND {SEARCH_FILTER}"
             ),
             params![search, fts],
             |row| row.get(0),
@@ -2597,10 +2926,8 @@ fn load_page(
     match scope {
         LibraryScope::General => {
             let sql = format!(
-                "WITH {LIVE_SOUNDS_CTE}
-                 SELECT {fields} FROM live
-                 JOIN sounds AS sound ON sound.rowid = live.sound_id
-                 WHERE {SEARCH_FILTER}
+                "SELECT {fields} FROM sounds AS sound
+                 WHERE {LIVE_SOUND_FILTER} AND {SEARCH_FILTER}
                  ORDER BY sound.general_position, sound.public_id LIMIT ?3 OFFSET ?4"
             );
             let mut statement = connection.prepare(&sql)?;
@@ -2717,13 +3044,6 @@ fn update_sound(connection: &mut Connection, sound: Sound) -> Result<bool, Libra
         .map(i64::try_from)
         .transpose()
         .map_err(|_| LibraryError::InvalidData("sound duration exceeds SQLite range".into()))?;
-    let hotkey = sound
-        .hotkey
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let normalized = hotkey.as_ref().map(|value| value.to_ascii_lowercase());
     let transaction = connection.transaction()?;
     let changed = transaction.execute(
         "UPDATE sounds SET
@@ -2748,22 +3068,6 @@ fn update_sound(connection: &mut Connection, sound: Sound) -> Result<bool, Libra
             sound.loudness_true_peak_dbtp,
         ],
     )?;
-    if changed == 1 {
-        transaction.execute(
-            "DELETE FROM hotkey_bindings
-             WHERE sound_id = (SELECT rowid FROM sounds WHERE public_id = ?1)",
-            [&sound.id],
-        )?;
-        if let (Some(accelerator), Some(normalized)) = (hotkey, normalized) {
-            transaction.execute(
-                "INSERT INTO hotkey_bindings(
-                     binding_id, sound_id, accelerator, normalized, state
-                 ) SELECT ?1, rowid, ?2, ?3, 'active'
-                   FROM sounds WHERE public_id = ?1",
-                params![&sound.id, accelerator, normalized],
-            )?;
-        }
-    }
     transaction.commit()?;
     Ok(changed == 1)
 }
@@ -2810,7 +3114,7 @@ fn load_manual_tabs(connection: &Connection, page: usize) -> Result<ManualTabPag
     let mut statement = connection.prepare(
         "SELECT public_id, name,
                 (SELECT COUNT(*) FROM manual_memberships AS membership
-                 WHERE membership.tab_id = manual_tabs.id)
+                 WHERE membership.tab_id = manual_tabs.id), position
          FROM manual_tabs
          ORDER BY position, id LIMIT ?1 OFFSET ?2",
     )?;
@@ -2828,6 +3132,13 @@ fn load_manual_tabs(connection: &Connection, page: usize) -> Result<ManualTabPag
                 public_id: row.get(0)?,
                 name: row.get(1)?,
                 sound_count,
+                position: usize::try_from(row.get::<_, i64>(3)?).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })?,
             })
         },
     )?;
@@ -3003,6 +3314,39 @@ fn load_hotkey_bindings_after(
     Ok(HotkeyBindingPage { bindings })
 }
 
+fn load_hotkey_binding(
+    connection: &Connection,
+    binding_id: &str,
+) -> Result<Option<HotkeyBindingRecord>, LibraryError> {
+    let sql = format!(
+        "SELECT binding.binding_id, sound.public_id, binding.control_action,
+                binding.accelerator, binding.normalized, binding.issue
+         FROM hotkey_bindings AS binding
+         LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
+         WHERE binding.binding_id = ?1
+           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})"
+    );
+    connection
+        .query_row(&sql, [binding_id], |row| {
+            let sound_id: Option<String> = row.get(1)?;
+            let control_action: Option<String> = row.get(2)?;
+            let owner = match (sound_id, control_action) {
+                (Some(id), None) => HotkeyBindingOwner::Sound(id),
+                (None, Some(action)) => HotkeyBindingOwner::Control(action),
+                _ => return Err(rusqlite::Error::InvalidQuery),
+            };
+            Ok(HotkeyBindingRecord {
+                binding_id: row.get(0)?,
+                owner,
+                accelerator: row.get(3)?,
+                normalized: row.get(4)?,
+                issue: row.get(5)?,
+            })
+        })
+        .optional()
+        .map_err(Into::into)
+}
+
 fn load_hotkey_conflict(
     connection: &Connection,
     binding_id: &str,
@@ -3172,10 +3516,8 @@ fn load_sound_at(
         LibraryScope::General => connection
             .query_row(
                 &format!(
-                    "WITH {LIVE_SOUNDS_CTE}
-                     SELECT {fields} FROM live
-                     JOIN sounds AS sound ON sound.rowid = live.sound_id
-                     WHERE {SEARCH_FILTER}
+                    "SELECT {fields} FROM sounds AS sound
+                     WHERE {LIVE_SOUND_FILTER} AND {SEARCH_FILTER}
                      ORDER BY sound.general_position, sound.public_id LIMIT 1 OFFSET ?3"
                 ),
                 params![search, fts, offset],

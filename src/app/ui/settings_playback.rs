@@ -334,8 +334,8 @@ pub(super) fn build_playback_groups(
             let state2 = Arc::clone(&state);
             let spinner2 = spinner.downgrade();
             analyze_btn.connect_clicked(move |btn| {
-                let in_flight = commands::get_loudness_status_summary(
-                    Arc::clone(&state2.config),
+                let in_flight = commands::get_loudness_status_summary_with_store(
+                    state2.library.clone(),
                     &state2.loudness_coordinators,
                 )
                 .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
@@ -345,8 +345,9 @@ pub(super) fn build_playback_groups(
                     crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
-                match commands::trigger_missing_loudness_analysis(
+                match commands::trigger_missing_loudness_analysis_with_store(
                     Arc::clone(&state2.config),
+                    state2.library.clone(),
                     true,
                     Some(Box::new(|_| {
                         crate::ui_event_bridge::post_loudness_status_refresh();
@@ -385,8 +386,8 @@ pub(super) fn build_playback_groups(
             let state2 = Arc::clone(&state);
             let refine_spinner2 = refine_spinner.downgrade();
             refine_btn.connect_clicked(move |btn| {
-                let in_flight = commands::get_loudness_status_summary(
-                    Arc::clone(&state2.config),
+                let in_flight = commands::get_loudness_status_summary_with_store(
+                    state2.library.clone(),
                     &state2.loudness_coordinators,
                 )
                 .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
@@ -396,8 +397,9 @@ pub(super) fn build_playback_groups(
                     crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
-                match commands::trigger_estimated_loudness_refinement(
+                match commands::trigger_estimated_loudness_refinement_with_store(
                     Arc::clone(&state2.config),
+                    state2.library.clone(),
                     true,
                     &state2.loudness_coordinators,
                 ) {
@@ -463,8 +465,8 @@ pub(super) fn build_playback_groups(
                     return;
                 };
 
-                let summary = match commands::get_loudness_status_summary(
-                    Arc::clone(&state2.config),
+                let summary = match commands::get_loudness_status_summary_with_store(
+                    state2.library.clone(),
                     &state2.loudness_coordinators,
                 ) {
                     Ok(summary) => summary,

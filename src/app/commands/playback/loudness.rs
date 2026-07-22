@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::audio::loudness;
 use crate::commands::shared::{adaptive_audio_analysis_plan, with_config, with_config_mut};
 use crate::config::{Config, LoudnessAnalysisState, Sound};
+use crate::library_store::{LibraryStore, LoudnessUpdate};
 
 use super::{
     CommandError, EstimatedLoudnessRefinementTrigger, LoudnessCoordinators,
@@ -536,6 +537,271 @@ pub fn analyze_all_loudness(
         );
     }
     Ok(analyzed_count)
+}
+
+fn backfill_update(outcome: BackfillOutcome) -> LoudnessUpdate {
+    match outcome {
+        BackfillOutcome::Analyzed {
+            id,
+            lufs,
+            state,
+            confidence,
+            true_peak_dbtp,
+        } => LoudnessUpdate {
+            sound_id: id,
+            lufs: Some(lufs),
+            state,
+            confidence,
+            true_peak_dbtp,
+        },
+        BackfillOutcome::Unavailable { id } => LoudnessUpdate {
+            sound_id: id,
+            lufs: None,
+            state: LoudnessAnalysisState::Unavailable,
+            confidence: None,
+            true_peak_dbtp: None,
+        },
+    }
+}
+
+fn refinement_update(outcome: RefinementOutcome, sound: &Sound) -> LoudnessUpdate {
+    match outcome {
+        RefinementOutcome::Refined {
+            id,
+            lufs,
+            true_peak_dbtp,
+        } => LoudnessUpdate {
+            sound_id: id,
+            lufs: Some(lufs),
+            state: LoudnessAnalysisState::Refined,
+            confidence: Some(FAST_LUFS_REFINED_CONFIDENCE),
+            true_peak_dbtp,
+        },
+        RefinementOutcome::Deferred {
+            id,
+            backoff_confidence,
+        } => LoudnessUpdate {
+            sound_id: id,
+            lufs: sound.loudness_lufs,
+            state: LoudnessAnalysisState::Estimated,
+            confidence: Some(
+                sound
+                    .loudness_confidence
+                    .unwrap_or(0.0)
+                    .max(backoff_confidence)
+                    .clamp(0.0, 1.0),
+            ),
+            true_peak_dbtp: sound.loudness_true_peak_dbtp,
+        },
+        RefinementOutcome::Unavailable { id } => LoudnessUpdate {
+            sound_id: id,
+            lufs: None,
+            state: LoudnessAnalysisState::Unavailable,
+            confidence: None,
+            true_peak_dbtp: None,
+        },
+    }
+}
+
+pub(super) fn maybe_trigger_estimated_loudness_refinement_with_store(
+    auto_gain_enabled: bool,
+    library: LibraryStore,
+    force: bool,
+    coords: &LoudnessCoordinators,
+) -> Result<EstimatedLoudnessRefinementTrigger, CommandError> {
+    let has_candidates = !library
+        .loudness_refinement_candidates(force, None, 1)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .sounds
+        .is_empty();
+    let trigger = estimated_loudness_refinement_trigger(
+        auto_gain_enabled,
+        has_candidates,
+        force,
+        coords.refinement.is_in_flight(),
+    );
+    if trigger != EstimatedLoudnessRefinementTrigger::Started {
+        return Ok(trigger);
+    }
+    let started = coords
+        .refinement
+        .try_start(
+            "loudness-refinement",
+            move || refine_estimated_loudness_with_store(library, force),
+            Some(Box::new(|_| {
+                crate::ui_event_bridge::post_loudness_status_refresh();
+            })),
+        )
+        .map_err(|error| CommandError::Analysis(error.to_string()))?;
+    Ok(if started {
+        trigger
+    } else {
+        EstimatedLoudnessRefinementTrigger::SkippedAlreadyRunning
+    })
+}
+
+fn refine_estimated_loudness_with_store(
+    library: LibraryStore,
+    force: bool,
+) -> Result<u32, crate::audio::LoudnessError> {
+    loudness::reset_loudness_analysis_cancelled();
+    let limit = if force {
+        crate::library_store::MAX_BATCH_ROWS
+    } else {
+        FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN
+    };
+    let mut refined = 0_u32;
+    let mut after = None::<String>;
+    loop {
+        let sounds = library
+            .loudness_refinement_candidates(force, after.as_deref(), limit)
+            .recv()
+            .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?
+            .sounds;
+        if sounds.is_empty() {
+            break;
+        }
+        after = sounds.last().map(|sound| sound.id.clone());
+        let mut updates = Vec::with_capacity(sounds.len());
+        for sound in sounds {
+            if loudness::is_loudness_analysis_cancelled() {
+                break;
+            }
+            let id = sound.id.clone();
+            let path = sound.path.clone();
+            let outcome = if !Path::new(&path).exists() {
+                RefinementOutcome::Unavailable { id }
+            } else {
+                match loudness::analyze_loudness_path_full(Path::new(&path)) {
+                    Ok((lufs, true_peak_dbtp)) if lufs.is_finite() => {
+                        refined = refined.saturating_add(1);
+                        RefinementOutcome::Refined {
+                            id,
+                            lufs,
+                            true_peak_dbtp,
+                        }
+                    }
+                    Ok(_) => RefinementOutcome::Unavailable { id },
+                    Err(error) if should_mark_unavailable_loudness_error(&error) => {
+                        RefinementOutcome::Unavailable { id }
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to refine loudness for '{path}': {error}");
+                        RefinementOutcome::Deferred {
+                            id,
+                            backoff_confidence: FAST_LUFS_REFINEMENT_CONFIDENCE_THRESHOLD + 0.05,
+                        }
+                    }
+                }
+            };
+            updates.push(refinement_update(outcome, &sound));
+            crate::ui_event_bridge::post_loudness_status_refresh();
+        }
+        if !updates.is_empty() {
+            library
+                .apply_loudness_updates(updates)
+                .recv()
+                .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+        }
+        if !force || loudness::is_loudness_analysis_cancelled() {
+            break;
+        }
+    }
+    Ok(refined)
+}
+
+pub fn analyze_all_loudness_with_store(
+    library: LibraryStore,
+    auto_gain_enabled: bool,
+    coords: LoudnessCoordinators,
+) -> Result<u32, crate::audio::LoudnessError> {
+    crate::diagnostics::memory::log_memory_snapshot("analyze_all_loudness:start");
+    loudness::reset_loudness_analysis_cancelled();
+    let mut after = None::<String>;
+    let mut analyzed = 0_u32;
+    loop {
+        let sounds = library
+            .loudness_backfill_after(after.as_deref())
+            .recv()
+            .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?
+            .sounds;
+        if sounds.is_empty() {
+            break;
+        }
+        after = sounds.last().map(|sound| sound.id.clone());
+        let analysis_plan = adaptive_audio_analysis_plan(sounds.len());
+        let analyze = |sound: &Sound| -> Option<BackfillOutcome> {
+            if loudness::is_loudness_analysis_cancelled() {
+                return None;
+            }
+            if !Path::new(&sound.path).exists() {
+                return Some(BackfillOutcome::Unavailable {
+                    id: sound.id.clone(),
+                });
+            }
+            match analyze_loudness_for_backfill(Path::new(&sound.path), sound.duration_ms) {
+                Ok((lufs, state, confidence, true_peak_dbtp)) if lufs.is_finite() => {
+                    Some(BackfillOutcome::Analyzed {
+                        id: sound.id.clone(),
+                        lufs,
+                        state,
+                        confidence,
+                        true_peak_dbtp,
+                    })
+                }
+                Ok(_) => Some(BackfillOutcome::Unavailable {
+                    id: sound.id.clone(),
+                }),
+                Err(error) if should_mark_unavailable_loudness_error(&error) => {
+                    Some(BackfillOutcome::Unavailable {
+                        id: sound.id.clone(),
+                    })
+                }
+                Err(error) => {
+                    log::warn!("Failed to analyze loudness for '{}': {error}", sound.path);
+                    None
+                }
+            }
+        };
+        let outcomes = match rayon::ThreadPoolBuilder::new()
+            .num_threads(analysis_plan.threads)
+            .build()
+        {
+            Ok(pool) => pool.install(|| sounds.par_iter().filter_map(analyze).collect::<Vec<_>>()),
+            Err(_) => sounds.iter().filter_map(analyze).collect(),
+        };
+        analyzed = analyzed.saturating_add(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, BackfillOutcome::Analyzed { .. }))
+                .count() as u32,
+        );
+        let updates = outcomes
+            .into_iter()
+            .map(backfill_update)
+            .collect::<Vec<_>>();
+        if !updates.is_empty() {
+            library
+                .apply_loudness_updates(updates)
+                .recv()
+                .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+            crate::ui_event_bridge::post_loudness_status_refresh();
+        }
+        if loudness::is_loudness_analysis_cancelled() {
+            break;
+        }
+    }
+    crate::diagnostics::clear_work_runtime();
+    if let Err(error) = maybe_trigger_estimated_loudness_refinement_with_store(
+        auto_gain_enabled,
+        library,
+        false,
+        &coords,
+    ) {
+        log::warn!("Failed to schedule loudness refinement: {error}");
+    }
+    Ok(analyzed)
 }
 
 #[cfg(test)]

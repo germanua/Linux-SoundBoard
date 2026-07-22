@@ -422,7 +422,7 @@ impl SoundListInner {
         sound: crate::config::Sound,
     ) {
         let active_tab = self.active_tab_id.lock().clone();
-        let tabs = self.state.config.lock().tabs.clone();
+        let tabs = self.state.manual_tabs.lock().clone();
 
         let menu_model = gio::Menu::new();
         let selected_ids = self.selected_sound_ids();
@@ -466,7 +466,10 @@ impl SoundListInner {
             for tab in &tabs {
                 add_to_tab.append(
                     Some(&tab.name),
-                    Some(&format!("{SOUND_CONTEXT_NAMESPACE}.add-to-tab-{}", tab.id)),
+                    Some(&format!(
+                        "{SOUND_CONTEXT_NAMESPACE}.add-to-tab-{}",
+                        tab.public_id
+                    )),
                 );
             }
 
@@ -512,7 +515,6 @@ impl SoundListInner {
                         let dispatch = commands::rename_sound_with_store_async(
                             sound.id.clone(),
                             new_name,
-                            Arc::clone(&state_confirm.config),
                             state_confirm.library.clone(),
                             move |result| match result {
                                 Ok(_) => inner_done.refresh_from_state_inner(),
@@ -553,7 +555,6 @@ impl SoundListInner {
                         let dispatch = commands::set_hotkey_async(
                             sound.id.clone(),
                             hotkey,
-                            Arc::clone(&state_confirm.config),
                             state_confirm.library.clone(),
                             state_confirm.hotkey_projection.clone(),
                             move |result| match result {
@@ -615,9 +616,9 @@ impl SoundListInner {
                     let inner_done = Rc::clone(&inner);
                     let dialog_host = dialog_host.downgrade();
                     let sound_id_for_err = sound_id.clone();
-                    if let Err(e) = commands::analyze_sound_loudness_async(
+                    if let Err(e) = commands::analyze_sound_loudness_with_store_async(
                         sound_id.clone(),
-                        Arc::clone(&state.config),
+                        state.library.clone(),
                         move |result| match result {
                             Ok(_) => inner_done.refresh_from_state_inner(),
                             Err(err) => {
@@ -648,15 +649,14 @@ impl SoundListInner {
             let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let sound_ids = target_ids.clone();
-            let tab_id = tab.id.clone();
-            let action_name = format!("add-to-tab-{}", tab.id);
+            let tab_id = tab.public_id.clone();
+            let action_name = format!("add-to-tab-{}", tab.public_id);
             let action = gio::SimpleAction::new(&action_name, None);
             action.connect_activate(move |_, _| {
                 let inner_done = Rc::clone(&inner);
                 let dispatch = commands::add_sounds_to_tab_with_store_async(
                     tab_id.clone(),
                     sound_ids.clone(),
-                    Arc::clone(&state.config),
                     state.library.clone(),
                     move |result| match result {
                         Ok(_) => {
@@ -688,7 +688,6 @@ impl SoundListInner {
                 let dispatch = commands::remove_sounds_from_tab_with_store_async(
                     tab_id.clone(),
                     sound_ids.clone(),
-                    Arc::clone(&state.config),
                     state.library.clone(),
                     move |result| match result {
                         Ok(_) => {
@@ -783,7 +782,6 @@ impl SoundListInner {
         let inner_weak = Rc::downgrade(self);
         if let Err(err) = commands::remove_sounds_with_store_async(
             ids.clone(),
-            Arc::clone(&self.state.config),
             self.state.library.clone(),
             self.state.hotkey_projection.clone(),
             move |result| {

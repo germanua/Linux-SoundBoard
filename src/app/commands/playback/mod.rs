@@ -16,7 +16,7 @@ use super::shared::{
 use super::CommandError;
 
 mod loudness;
-pub use loudness::analyze_all_loudness;
+pub use loudness::{analyze_all_loudness, analyze_all_loudness_with_store};
 
 // Bring internal helpers into this module's namespace so the sibling test
 // module can import them via `super::` without widening their visibility
@@ -128,6 +128,18 @@ pub fn trigger_estimated_loudness_refinement(
     loudness::maybe_trigger_estimated_loudness_refinement(config, force, coords)
 }
 
+pub fn trigger_estimated_loudness_refinement_with_store(
+    config: Arc<Mutex<Config>>,
+    library: crate::library_store::LibraryStore,
+    force: bool,
+    coords: &LoudnessCoordinators,
+) -> Result<EstimatedLoudnessRefinementTrigger, CommandError> {
+    let auto_gain = config.lock().settings.auto_gain;
+    loudness::maybe_trigger_estimated_loudness_refinement_with_store(
+        auto_gain, library, force, coords,
+    )
+}
+
 pub fn get_loudness_status_summary(
     config: Arc<Mutex<Config>>,
     coords: &LoudnessCoordinators,
@@ -157,6 +169,26 @@ pub fn get_loudness_status_summary(
         }
 
         summary
+    })
+}
+
+pub fn get_loudness_status_summary_with_store(
+    library: crate::library_store::LibraryStore,
+    coords: &LoudnessCoordinators,
+) -> Result<LoudnessStatusSummary, CommandError> {
+    let stats = library
+        .loudness_stats()
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    Ok(LoudnessStatusSummary {
+        total_sounds: stats.total,
+        pending_count: stats.pending,
+        estimated_count: stats.estimated,
+        refined_count: stats.refined,
+        unavailable_count: stats.unavailable,
+        missing_loudness_count: stats.missing,
+        in_flight_backfill: coords.backfill.is_in_flight(),
+        in_flight_refinement: coords.refinement.is_in_flight(),
     })
 }
 
@@ -212,6 +244,54 @@ pub fn trigger_missing_loudness_analysis(
     }
 
     Ok(MissingLoudnessAnalysisTrigger::Started)
+}
+
+pub fn trigger_missing_loudness_analysis_with_store(
+    config: Arc<Mutex<Config>>,
+    library: crate::library_store::LibraryStore,
+    force: bool,
+    on_complete: Option<LoudnessAnalysisCompletion>,
+    coords: &LoudnessCoordinators,
+) -> Result<MissingLoudnessAnalysisTrigger, CommandError> {
+    let auto_gain = config.lock().settings.auto_gain;
+    let stats = library
+        .loudness_stats()
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    let trigger = missing_loudness_analysis_trigger(
+        auto_gain,
+        stats.missing > 0,
+        force,
+        coords.backfill.is_in_flight(),
+    );
+    if trigger != MissingLoudnessAnalysisTrigger::Started {
+        if trigger == MissingLoudnessAnalysisTrigger::SkippedNoMissingSounds {
+            let _ = loudness::maybe_trigger_estimated_loudness_refinement_with_store(
+                auto_gain, library, force, coords,
+            );
+        }
+        return Ok(trigger);
+    }
+    let completion: Option<LoudnessAnalysisCompletion> = Some(Box::new(move |result| {
+        if let Some(on_complete) = on_complete {
+            on_complete(result);
+        }
+        crate::ui_event_bridge::post_loudness_status_refresh();
+    }));
+    let coords_clone = coords.clone();
+    let started = coords
+        .backfill
+        .try_start(
+            "loudness-backfill",
+            move || loudness::analyze_all_loudness_with_store(library, auto_gain, coords_clone),
+            completion,
+        )
+        .map_err(|error| CommandError::Analysis(error.to_string()))?;
+    Ok(if started {
+        trigger
+    } else {
+        MissingLoudnessAnalysisTrigger::SkippedAlreadyRunning
+    })
 }
 
 pub fn list_sounds(config: Arc<Mutex<Config>>) -> Vec<Sound> {
@@ -628,6 +708,51 @@ where
     dispatch_async_result(
         "analyze_sound_loudness",
         move || analyze_sound_loudness(id, config),
+        on_complete,
+    )
+}
+
+pub fn analyze_sound_loudness_with_store_async<F>(
+    id: String,
+    library: crate::library_store::LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Option<f64>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "analyze_sound_loudness",
+        move || {
+            let sound = library
+                .sound_by_id(&id)
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?
+                .ok_or(CommandError::SoundNotFound)?;
+            let (raw_lufs, true_peak_dbtp) =
+                audio_loudness::analyze_loudness_path_full(Path::new(&sound.path))
+                    .map_err(|error| CommandError::Analysis(error.to_string()))?;
+            let (lufs, state, confidence, true_peak_dbtp) = if raw_lufs.is_finite() {
+                (
+                    Some(raw_lufs),
+                    LoudnessAnalysisState::Refined,
+                    Some(FAST_LUFS_REFINED_CONFIDENCE),
+                    true_peak_dbtp,
+                )
+            } else {
+                (None, LoudnessAnalysisState::Unavailable, None, None)
+            };
+            library
+                .apply_loudness_updates(vec![crate::library_store::LoudnessUpdate {
+                    sound_id: id,
+                    lufs,
+                    state,
+                    confidence,
+                    true_peak_dbtp,
+                }])
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))?;
+            Ok(lufs)
+        },
         on_complete,
     )
 }

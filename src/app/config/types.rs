@@ -749,6 +749,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: default_schema_version(),
+            library_id: Some(Uuid::new_v4().to_string()),
             sound_folders: vec![],
             sounds: vec![],
             tabs: vec![],
@@ -761,7 +762,11 @@ impl Default for Config {
 pub struct Config {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_id: Option<String>,
+    #[serde(default)]
     pub sound_folders: Vec<String>,
+    #[serde(default)]
     pub sounds: Vec<Sound>,
     #[serde(default)]
     pub tabs: Vec<SoundTab>,

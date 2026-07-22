@@ -4,8 +4,8 @@ use crate::config::{LoudnessAnalysisState, Sound};
 use crate::library_store::{
     FolderOverrideAction, FolderOverrideRecord, FolderRecord, HotkeyBindingOwner,
     HotkeyBindingRecord, LegacyGeneratedMembershipRecord, LegacyGeneratedTabRecord, LibraryBatch,
-    LibraryScope, LibraryStore, ManualMembershipRecord, ManualTabRecord, RootRecord,
-    SoundLocationRecord, SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
+    LibraryScope, LibraryStore, LoudnessUpdate, ManualMembershipRecord, ManualTabRecord,
+    RootRecord, SoundLocationRecord, SoundRecord, MAX_BATCH_ROWS, PAGE_SIZE,
 };
 
 struct TestDir(PathBuf);
@@ -46,6 +46,117 @@ fn sound(id: &str, name: &str, path: &str) -> Sound {
 
 fn wait<T>(response: crate::library_store::LibraryResponse<T>) -> T {
     response.recv().expect("library request")
+}
+
+#[test]
+fn adding_an_existing_root_is_idempotent() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let root = || RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    };
+
+    wait(store.apply_batch(LibraryBatch::Roots(vec![root()])));
+    wait(store.apply_batch(LibraryBatch::Roots(vec![root()])));
+
+    let roots = wait(store.roots(0));
+    assert_eq!(roots.total, 1);
+    assert_eq!(roots.roots[0].path, "/music");
+}
+
+#[test]
+fn loudness_backfill_is_keyset_paged_and_updated_in_bounded_batches() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let rows = (0..300)
+        .map(|index| {
+            let mut item = sound(
+                &format!("sound-{index:03}"),
+                &format!("Sound {index:03}"),
+                &format!("/music/sound-{index:03}.wav"),
+            );
+            item.loudness_lufs = None;
+            item.loudness_analysis_state = LoudnessAnalysisState::Pending;
+            item.loudness_confidence = None;
+            SoundRecord {
+                sound: item,
+                general_position: index,
+                locations: Vec::new(),
+            }
+        })
+        .collect();
+    wait(store.apply_batch(LibraryBatch::Sounds(rows)));
+
+    let first = wait(store.loudness_backfill_after(None));
+    assert_eq!(first.sounds.len(), PAGE_SIZE);
+    assert_eq!(first.sounds.first().unwrap().id, "sound-000");
+    assert_eq!(first.sounds.last().unwrap().id, "sound-255");
+    let second = wait(store.loudness_backfill_after(Some("sound-255")));
+    assert_eq!(second.sounds.len(), 44);
+    assert_eq!(second.sounds.first().unwrap().id, "sound-256");
+
+    assert_eq!(
+        wait(store.apply_loudness_updates(vec![
+            LoudnessUpdate {
+                sound_id: "sound-000".to_string(),
+                lufs: Some(-14.0),
+                state: LoudnessAnalysisState::Refined,
+                confidence: Some(1.0),
+                true_peak_dbtp: Some(-1.0),
+            },
+            LoudnessUpdate {
+                sound_id: "sound-001".to_string(),
+                lufs: Some(-15.0),
+                state: LoudnessAnalysisState::Estimated,
+                confidence: Some(0.7),
+                true_peak_dbtp: Some(-2.0),
+            },
+        ])),
+        2
+    );
+    let stats = wait(store.loudness_stats());
+    assert_eq!(stats.total, 300);
+    assert_eq!(stats.missing, 298);
+    assert_eq!(stats.pending, 298);
+    assert_eq!(stats.estimated, 1);
+    assert_eq!(stats.refined, 1);
+}
+
+#[test]
+fn forced_loudness_refinement_uses_stable_keyset_pages() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    let rows = (0..3)
+        .map(|index| {
+            let mut item = sound(
+                &format!("sound-{index}"),
+                &format!("Sound {index}"),
+                &format!("/music/sound-{index}.wav"),
+            );
+            item.loudness_confidence = Some(if index == 1 { 0.95 } else { 0.5 });
+            SoundRecord {
+                sound: item,
+                general_position: index,
+                locations: Vec::new(),
+            }
+        })
+        .collect();
+    wait(store.apply_batch(LibraryBatch::Sounds(rows)));
+
+    let normal = wait(store.loudness_refinement_candidates(false, None, 10));
+    assert_eq!(normal.sounds.len(), 2);
+    let first = wait(store.loudness_refinement_candidates(true, None, 2));
+    assert_eq!(
+        first
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["sound-0", "sound-1"]
+    );
+    let second = wait(store.loudness_refinement_candidates(true, Some("sound-1"), 2));
+    assert_eq!(second.sounds[0].id, "sound-2");
 }
 
 #[test]
@@ -271,14 +382,17 @@ fn direct_sound_edits_keep_search_hotkeys_and_delete_cascades_consistent() {
     assert!(renamed.sounds[0].enabled);
 
     let hotkeys = wait(store.hotkey_page(0));
-    assert_eq!(hotkeys.sounds.len(), 1);
-    assert_eq!(hotkeys.sounds[0].id, "second");
+    assert_eq!(hotkeys.sounds.len(), 2);
+    assert_eq!(hotkeys.sounds[0].id, "first");
+    assert_eq!(hotkeys.sounds[1].id, "second");
 
     assert!(wait(store.delete_sound("second")));
     assert!(!wait(store.delete_sound("second")));
     assert!(wait(store.sound_by_id("second")).is_none());
     assert_eq!(wait(store.count(LibraryScope::General, "beta")), 0);
-    assert!(wait(store.hotkey_page(0)).sounds.is_empty());
+    let hotkeys = wait(store.hotkey_page(0));
+    assert_eq!(hotkeys.sounds.len(), 1);
+    assert_eq!(hotkeys.sounds[0].id, "first");
 }
 
 #[test]

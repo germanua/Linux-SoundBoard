@@ -1,4 +1,5 @@
-pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+pub const CURRENT_SCHEMA_VERSION: u32 = 8;
+pub const LAST_LEGACY_SCHEMA_VERSION: u32 = 7;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -15,6 +16,7 @@ pub struct V3ToV4Migration;
 pub struct V4ToV5Migration;
 pub struct V5ToV6Migration;
 pub struct V6ToV7Migration;
+pub struct V7ToV8Migration;
 
 impl V0ToV1Migration {
     pub fn migrate(config: serde_json::Value) -> Result<serde_json::Value, MigrationError> {
@@ -158,6 +160,18 @@ impl V6ToV7Migration {
     }
 }
 
+impl V7ToV8Migration {
+    pub fn migrate(config: serde_json::Value) -> Result<serde_json::Value, MigrationError> {
+        let mut migrated = config;
+        if let Some(obj) = migrated.as_object_mut() {
+            obj.insert("schema_version".to_string(), serde_json::json!(8));
+            obj.entry("library_id".to_string())
+                .or_insert(serde_json::Value::Null);
+        }
+        Ok(migrated)
+    }
+}
+
 pub fn run_migrations(
     config: serde_json::Value,
     from_version: u32,
@@ -172,7 +186,7 @@ pub fn run_migrations(
         let migrated = V3ToV4Migration::migrate(migrated)?;
         let migrated = V4ToV5Migration::migrate(migrated)?;
         let migrated = V5ToV6Migration::migrate(migrated)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 1 {
         let migrated = V1ToV2Migration::migrate(config)?;
@@ -180,32 +194,35 @@ pub fn run_migrations(
         let migrated = V3ToV4Migration::migrate(migrated)?;
         let migrated = V4ToV5Migration::migrate(migrated)?;
         let migrated = V5ToV6Migration::migrate(migrated)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 2 {
         let migrated = V2ToV3Migration::migrate(config)?;
         let migrated = V3ToV4Migration::migrate(migrated)?;
         let migrated = V4ToV5Migration::migrate(migrated)?;
         let migrated = V5ToV6Migration::migrate(migrated)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 3 {
         let migrated = V3ToV4Migration::migrate(config)?;
         let migrated = V4ToV5Migration::migrate(migrated)?;
         let migrated = V5ToV6Migration::migrate(migrated)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 4 {
         let migrated = V4ToV5Migration::migrate(config)?;
         let migrated = V5ToV6Migration::migrate(migrated)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 5 {
         let migrated = V5ToV6Migration::migrate(config)?;
-        return V6ToV7Migration::migrate(migrated);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(migrated)?);
     }
     if from_version == 6 {
-        return V6ToV7Migration::migrate(config);
+        return V7ToV8Migration::migrate(V6ToV7Migration::migrate(config)?);
+    }
+    if from_version == 7 {
+        return V7ToV8Migration::migrate(config);
     }
     Err(MigrationError::NoMigrationPath {
         from: from_version,

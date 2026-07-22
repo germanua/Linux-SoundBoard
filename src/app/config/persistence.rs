@@ -91,7 +91,30 @@ impl Config {
         Self::load_from_path(&Self::config_path())
     }
 
-    fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load_runtime_settings() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = Self::config_path();
+        Self::load_runtime_settings_from_path(&path)
+    }
+
+    pub(crate) fn load_runtime_settings_from_path(
+        path: &Path,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let version = crate::legacy_migration::config_schema_version(path)?;
+        if version <= crate::config::LAST_LEGACY_SCHEMA_VERSION {
+            let config = Self {
+                library_id: None,
+                settings: crate::legacy_migration::read_legacy_runtime_settings(path)?,
+                ..Self::default()
+            };
+            return Ok(config);
+        }
+        Self::load_from_path(path)
+    }
+
+    pub(crate) fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if path.exists() {
             let content = fs::read(path)?;
             let raw: serde_json::Value = serde_json::from_slice(&content)?;
@@ -99,7 +122,9 @@ impl Config {
             let version = raw
                 .get("schema_version")
                 .and_then(|v| v.as_u64())
-                .map(|v| v as u32)
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| "configuration schema version exceeds the supported integer range")?
                 .unwrap_or(0);
 
             let config_value = if version == crate::config::migration::CURRENT_SCHEMA_VERSION {
@@ -123,7 +148,7 @@ impl Config {
         self.save_to_path(&Self::config_path())
     }
 
-    fn save_to_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn save_to_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -134,7 +159,27 @@ impl Config {
             let tmp_file = fs::File::create(&tmp_path)?;
             {
                 let mut writer = std::io::BufWriter::new(&tmp_file);
-                serde_json::to_writer_pretty(&mut writer, self)?;
+                if self.schema_version >= crate::config::CURRENT_SCHEMA_VERSION {
+                    let mut persisted = serde_json::to_value(&*self)?;
+                    let object = persisted.as_object_mut().ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "configuration did not serialize as an object",
+                        )
+                    })?;
+                    object.remove("sound_folders");
+                    object.remove("sounds");
+                    object.remove("tabs");
+                    if let Some(settings) = object
+                        .get_mut("settings")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        settings.remove("control_hotkeys");
+                    }
+                    serde_json::to_writer_pretty(&mut writer, &persisted)?;
+                } else {
+                    serde_json::to_writer_pretty(&mut writer, &*self)?;
+                }
                 writer.flush()?;
             }
             tmp_file.sync_all()?;
@@ -354,6 +399,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Sound;
     const SCHEMA_6_FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/config-v2.0-schema6.json");
 
     fn test_dir() -> PathBuf {
@@ -477,6 +523,37 @@ mod tests {
     }
 
     #[test]
+    fn runtime_settings_loader_ignores_legacy_library_arrays() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        let path = dir.join("config.json");
+        let mut legacy = Config {
+            schema_version: crate::config::LAST_LEGACY_SCHEMA_VERSION,
+            library_id: None,
+            ..Config::default()
+        };
+        legacy.settings.local_volume = 37;
+        legacy.sounds = (0..2_048)
+            .map(|index| {
+                Sound::new(
+                    format!("Sound {index}"),
+                    format!("/music/sound-{index}.wav"),
+                )
+            })
+            .collect();
+        serde_json::to_writer(fs::File::create(&path).unwrap(), &legacy).unwrap();
+
+        let runtime =
+            Config::load_runtime_settings_from_path(&path).expect("load bounded runtime settings");
+
+        assert_eq!(runtime.settings.local_volume, 37);
+        assert!(runtime.sounds.is_empty());
+        assert!(runtime.tabs.is_empty());
+        assert!(runtime.sound_folders.is_empty());
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+
+    #[test]
     fn identical_schema_6_backup_is_idempotent() {
         let dir = test_dir();
         fs::create_dir_all(&dir).expect("create config directory");
@@ -564,17 +641,31 @@ mod tests {
     }
 
     #[test]
-    fn save_to_path_round_trips_without_leaving_a_temp_file() {
+    fn schema_8_save_contains_only_settings_and_library_identity() {
         let dir = test_dir();
         fs::create_dir_all(&dir).expect("create config directory");
         let path = dir.join("config.json");
         let mut config = Config::default();
         config.sound_folders.push("/tmp/sounds".to_string());
+        config.settings.control_hotkeys.set_action(
+            crate::config::ControlHotkeyAction::StopAll,
+            Some("F8".to_string()),
+        );
 
         config.save_to_path(&path).expect("save config");
 
         let loaded = Config::load_from_path(&path).expect("load saved config");
-        assert_eq!(loaded.sound_folders, ["/tmp/sounds"]);
+        assert!(loaded.sound_folders.is_empty());
+        assert!(loaded.sounds.is_empty());
+        assert!(loaded.tabs.is_empty());
+        assert!(loaded.settings.control_hotkeys.stop_all.is_none());
+        assert_eq!(loaded.library_id, config.library_id);
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("read config")).expect("parse config");
+        assert!(persisted.get("sound_folders").is_none());
+        assert!(persisted.get("sounds").is_none());
+        assert!(persisted.get("tabs").is_none());
+        assert!(persisted["settings"].get("control_hotkeys").is_none());
         assert!(fs::read_dir(&dir)
             .expect("read config directory")
             .all(|entry| !entry

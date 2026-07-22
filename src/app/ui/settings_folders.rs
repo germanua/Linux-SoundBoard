@@ -71,7 +71,6 @@ fn build_sound_folder_row(
             let on_library_changed_done = on_library_changed2.clone();
             if let Err(e) = commands::remove_sound_folder_with_store_async(
                 folder_owned.clone(),
-                Arc::clone(&state2.config),
                 state2.library.clone(),
                 state2.hotkey_projection.clone(),
                 move |result| match result {
@@ -142,8 +141,6 @@ pub(super) fn schedule_rebuild_sound_folder_rows(
             Rc::clone(&rebuild_pending),
             on_library_changed,
         );
-
-        clear_rebuild_pending(rebuild_pending.as_ref());
     });
 }
 
@@ -156,63 +153,64 @@ pub(super) fn rebuild_sound_folder_rows(
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
 ) {
     log::info!("rebuild_sound_folder_rows: Starting rebuild");
-
-    let existing_rows = {
-        let mut tracked = folder_rows.borrow_mut();
-        std::mem::take(&mut *tracked)
-    };
-    log::info!(
-        "rebuild_sound_folder_rows: Removing {} existing rows",
-        existing_rows.len()
-    );
-    for row_weak in existing_rows {
-        let Some(row) = row_weak.upgrade() else {
-            continue;
-        };
-
-        if row.parent().is_none() {
-            continue;
-        }
-
-        folders_group.remove(&row);
+    let library = state.library.clone();
+    let folders_group = folders_group.clone();
+    let add_folder_row = add_folder_row.clone();
+    let rebuild_pending_done = Rc::clone(&rebuild_pending);
+    if let Err(error) = commands::dispatch_async_result(
+        "load_settings_sound_folders",
+        move || {
+            let mut folders = Vec::new();
+            let mut page_index = 0_usize;
+            loop {
+                let page = library.roots(page_index).recv()?;
+                folders.extend(page.roots.into_iter().map(|root| root.path));
+                if folders.len() >= page.total {
+                    return Ok::<_, crate::library_store::LibraryError>(folders);
+                }
+                page_index = page_index.saturating_add(1);
+            }
+        },
+        move |result| {
+            let folders = match result {
+                Ok(folders) => folders,
+                Err(error) => {
+                    log::warn!("Failed to load sound folders: {error}");
+                    clear_rebuild_pending(rebuild_pending_done.as_ref());
+                    return;
+                }
+            };
+            let existing_rows = {
+                let mut tracked = folder_rows.borrow_mut();
+                std::mem::take(&mut *tracked)
+            };
+            for row_weak in existing_rows {
+                if let Some(row) = row_weak.upgrade().filter(|row| row.parent().is_some()) {
+                    folders_group.remove(&row);
+                }
+            }
+            for folder in folders {
+                let row = build_sound_folder_row(
+                    folder,
+                    Arc::clone(&state),
+                    &folders_group,
+                    &add_folder_row,
+                    Rc::clone(&folder_rows),
+                    Rc::clone(&rebuild_pending_done),
+                    on_library_changed.clone(),
+                );
+                folders_group.add(&row);
+                folder_rows.borrow_mut().push(row.downgrade());
+            }
+            if should_attach_add_folder_row(add_folder_row.parent().is_some()) {
+                folders_group.add(&add_folder_row);
+            }
+            clear_rebuild_pending(rebuild_pending_done.as_ref());
+        },
+    ) {
+        log::warn!("Failed to dispatch sound-folder load: {error}");
+        clear_rebuild_pending(rebuild_pending.as_ref());
     }
-
-    let folders = {
-        let cfg = state.config.lock();
-        log::info!(
-            "rebuild_sound_folder_rows: Config has {} folders: {:?}",
-            cfg.sound_folders.len(),
-            cfg.sound_folders
-        );
-        cfg.sound_folders.clone()
-    };
-
-    let mut added_rows = 0usize;
-    for folder in folders {
-        let row = build_sound_folder_row(
-            folder,
-            Arc::clone(&state),
-            folders_group,
-            add_folder_row,
-            Rc::clone(&folder_rows),
-            Rc::clone(&rebuild_pending),
-            on_library_changed.clone(),
-        );
-        folders_group.add(&row);
-        folder_rows.borrow_mut().push(row.downgrade());
-        added_rows = added_rows.saturating_add(1);
-    }
-
-    if should_attach_add_folder_row(add_folder_row.parent().is_some()) {
-        folders_group.add(add_folder_row);
-    } else {
-        log::debug!("rebuild_sound_folder_rows: Add Folder row already attached");
-    }
-
-    log::info!(
-        "rebuild_sound_folder_rows: Rebuild complete, {} rows added",
-        added_rows
-    );
 }
 
 #[cfg(test)]

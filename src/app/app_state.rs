@@ -31,6 +31,7 @@ pub struct AppState {
     pub player: Arc<AudioPlayer>,
     pub hotkeys: Arc<Mutex<HotkeyManager>>,
     pub hotkey_projection: HotkeyProjectionCoordinator,
+    pub manual_tabs: Arc<Mutex<Vec<crate::library_store::ManualTabItem>>>,
     pub pipewire_status: Arc<Mutex<PipeWireStatus>>,
     /// Debounce state for `commands::play_sound_async`. Prevents hotkey
     /// auto-repeat from dispatching the same sound twice within 30 ms.

@@ -1,6 +1,6 @@
 mod defaults;
 pub mod migration;
-pub use migration::{MigrationError, CURRENT_SCHEMA_VERSION};
+pub use migration::{MigrationError, CURRENT_SCHEMA_VERSION, LAST_LEGACY_SCHEMA_VERSION};
 mod persistence;
 mod types;
 

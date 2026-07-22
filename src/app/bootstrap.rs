@@ -149,15 +149,23 @@ fn configure_preferred_renderer() {
         return;
     }
 
-    if !running_in_vmware_guest() {
+    let backend = std::env::var(BACKEND_ENV_VAR).ok();
+    let vmware = running_in_vmware_guest();
+    if !should_use_fallback_renderer(backend.as_deref(), vmware) {
         return;
     }
 
-    info!(
-        "VMware guest detected; forcing safer GTK renderer via {}={}",
-        RENDERER_ENV_VAR, FALLBACK_RENDERER
-    );
+    let reason = if backend.as_deref() == Some(X11_BACKEND) {
+        "X11/XWayland session"
+    } else {
+        "VMware guest"
+    };
+    info!("{reason} detected; using lower-memory GTK renderer via {RENDERER_ENV_VAR}={FALLBACK_RENDERER}");
     std::env::set_var(RENDERER_ENV_VAR, FALLBACK_RENDERER);
+}
+
+fn should_use_fallback_renderer(backend: Option<&str>, vmware: bool) -> bool {
+    backend == Some(X11_BACKEND) || vmware
 }
 
 fn running_in_vmware_guest() -> bool {
@@ -183,7 +191,7 @@ fn build_activate_handler() -> impl Fn(&Application) + 'static {
         }
 
         let kind = installation_kind();
-        let compatible_engine = compatible_stable_engine_running();
+        let compatible_engine = compatible_engine_running();
         let home = dirs::home_dir().unwrap_or_default();
         let stable_binary = stable_user_binary_path(&home);
         let installed_version = installed_user_version(&home);
@@ -474,6 +482,71 @@ fn show_startup_error(
     dialog.choose(parent, None::<&gio::Cancellable>, move |_| app.quit());
 }
 
+fn show_storage_recovery_error(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    message: &str,
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) {
+    let config_path = Config::config_path();
+    let backup_path = config_path.with_file_name("config.json.pre-v8-backup");
+    if !backup_path.is_file() {
+        show_startup_error(app, parent, "Sound library could not be opened", message);
+        return;
+    }
+
+    let dialog = adw::AlertDialog::new(
+        Some("Sound library could not be opened"),
+        Some(&format!(
+            "{message}\n\nYou can exit without changes or restore the preserved pre-v8 settings. Current settings and database files will be archived, not deleted."
+        )),
+    );
+    dialog.add_responses(&[("exit", "Exit"), ("restore", "Restore pre-v8 backup")]);
+    dialog.set_close_response("exit");
+    dialog.set_default_response(Some("restore"));
+    dialog.set_response_appearance("restore", adw::ResponseAppearance::Suggested);
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    dialog.choose(parent, None::<&gio::Cancellable>, move |response| {
+        if response != "restore" {
+            callback_app.quit();
+            return;
+        }
+        let library_path = config_path.with_file_name("library.sqlite3");
+        let app_done = callback_app.clone();
+        let parent_done = callback_parent.clone();
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "restore_legacy_library",
+            move || crate::legacy_migration::restore_legacy_backup(&config_path, &library_path),
+            move |result| match result {
+                Ok(report) => {
+                    log::info!(
+                        "Restored pre-v8 settings; archived config={:?}, database={:?}",
+                        report.archived_config,
+                        report.archived_database
+                    );
+                    parent_done.close();
+                    start_application(&app_done, startup_mode, previous_engine_version);
+                }
+                Err(error) => show_startup_error(
+                    &app_done,
+                    &parent_done,
+                    "Sound library restore failed",
+                    &format!("{error}\n\nNo current file was deleted."),
+                ),
+            },
+        ) {
+            show_startup_error(
+                &callback_app,
+                &callback_parent,
+                "Sound library restore could not start",
+                &error.to_string(),
+            );
+        }
+    });
+}
+
 fn show_config_error(app: &Application, error: &dyn std::error::Error) {
     let parent = gtk4::ApplicationWindow::builder()
         .application(app)
@@ -496,7 +569,214 @@ fn show_config_error(app: &Application, error: &dyn std::error::Error) {
     );
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoragePreparation {
+    Ready,
+    NeedsLegacyMigration,
+}
+
+fn prepare_startup_storage() -> Result<StoragePreparation, String> {
+    let config_path = Config::config_path();
+    let library_path = config_path.with_file_name("library.sqlite3");
+    prepare_startup_storage_at(&config_path, &library_path)
+}
+
+fn prepare_startup_storage_at(
+    config_path: &Path,
+    library_path: &Path,
+) -> Result<StoragePreparation, String> {
+    if !config_path.exists() {
+        if library_path.exists() {
+            let identity = crate::legacy_migration::database_identity(library_path)
+                .map_err(|error| error.to_string())?;
+            if identity.source_sha256.is_some() {
+                return Err(format!(
+                    "A migrated library exists but config.json is missing. Restore '{}' and restart; no files were changed.",
+                    config_path.with_file_name("config.json.pre-v8-backup").display()
+                ));
+            }
+            let mut config = Config {
+                library_id: Some(identity.library_id),
+                ..Config::default()
+            };
+            config
+                .save_to_path(config_path)
+                .map_err(|error| error.to_string())?;
+            return Ok(StoragePreparation::Ready);
+        }
+        let mut config = Config::default();
+        let library_id = config
+            .library_id
+            .clone()
+            .ok_or_else(|| "new settings have no library identity".to_string())?;
+        crate::legacy_migration::initialize_empty_library(library_path, &library_id)
+            .map_err(|error| error.to_string())?;
+        config
+            .save_to_path(config_path)
+            .map_err(|error| error.to_string())?;
+        return Ok(StoragePreparation::Ready);
+    }
+
+    let version = crate::legacy_migration::config_schema_version(config_path)
+        .map_err(|error| error.to_string())?;
+    if version <= crate::config::LAST_LEGACY_SCHEMA_VERSION {
+        if library_path.exists() {
+            crate::legacy_migration::complete_legacy_settings_cutover(config_path, library_path)
+            .map_err(|error| {
+                format!(
+                    "Legacy settings and the existing library database cannot be matched safely: {error}. No files were replaced."
+                )
+            })?;
+            return Ok(StoragePreparation::Ready);
+        }
+        return Ok(StoragePreparation::NeedsLegacyMigration);
+    }
+    if version != crate::config::CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "Configuration schema {version} is newer than supported schema {}.",
+            crate::config::CURRENT_SCHEMA_VERSION
+        ));
+    }
+
+    let config = Config::load_from_path(config_path).map_err(|error| error.to_string())?;
+    let expected_id = config
+        .library_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Schema-8 settings have no library identity".to_string())?;
+    let identity = crate::legacy_migration::database_identity(library_path)
+        .map_err(|error| error.to_string())?;
+    if identity.library_id != expected_id {
+        return Err(
+            "Schema-8 settings and library.sqlite3 have different identities; refusing to open an empty or unrelated library."
+                .to_string(),
+        );
+    }
+    Ok(StoragePreparation::Ready)
+}
+
 fn start_application(
+    app: &Application,
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) {
+    let parent = gtk4::ApplicationWindow::builder()
+        .application(app)
+        .title(APP_TITLE)
+        .default_width(440)
+        .default_height(160)
+        .build();
+    let content = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Vertical)
+        .spacing(12)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .build();
+    content.append(&gtk4::Spinner::builder().spinning(true).build());
+    content.append(&gtk4::Label::new(Some("Preparing sound library…")));
+    parent.set_child(Some(&content));
+    parent.present();
+
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    if let Err(error) = crate::commands::dispatch_async_result(
+        "prepare_startup_storage",
+        prepare_startup_storage,
+        move |result| match result {
+            Ok(StoragePreparation::Ready) => {
+                callback_parent.close();
+                start_application_ready(
+                    &callback_app,
+                    startup_mode,
+                    previous_engine_version.clone(),
+                );
+            }
+            Ok(StoragePreparation::NeedsLegacyMigration) => prompt_legacy_migration(
+                &callback_app,
+                &callback_parent,
+                startup_mode,
+                previous_engine_version,
+            ),
+            Err(error) => show_storage_recovery_error(
+                &callback_app,
+                &callback_parent,
+                &error,
+                startup_mode,
+                previous_engine_version,
+            ),
+        },
+    ) {
+        show_startup_error(
+            app,
+            &parent,
+            "Sound library could not be prepared",
+            &error.to_string(),
+        );
+    }
+}
+
+fn prompt_legacy_migration(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) {
+    let dialog = adw::AlertDialog::new(
+        Some("Upgrade your sound library"),
+        Some(
+            "Linux Soundboard will move sounds, folders, tabs, and hotkeys into its low-memory database. Your original config is kept as config.json.pre-v8-backup. Cancel makes no changes.",
+        ),
+    );
+    dialog.add_responses(&[("cancel", "Cancel"), ("migrate", "Upgrade")]);
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("migrate"));
+    dialog.set_response_appearance("migrate", adw::ResponseAppearance::Suggested);
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    dialog.choose(parent, None::<&gio::Cancellable>, move |response| {
+        if response != "migrate" {
+            callback_parent.close();
+            callback_app.quit();
+            return;
+        }
+        let config_path = Config::config_path();
+        let library_path = config_path.with_file_name("library.sqlite3");
+        let app_done = callback_app.clone();
+        let parent_done = callback_parent.clone();
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "migrate_legacy_library",
+            move || crate::legacy_migration::migrate_legacy_config(&config_path, &library_path),
+            move |result| match result {
+                Ok(report) => {
+                    log::info!(
+                        "Migrated {} sounds, {} roots, {} tabs, and {} hotkeys",
+                        report.sounds,
+                        report.roots,
+                        report.manual_tabs,
+                        report.hotkeys
+                    );
+                    parent_done.close();
+                    start_application_ready(&app_done, startup_mode, previous_engine_version);
+                }
+                Err(error) => show_startup_error(
+                    &app_done,
+                    &parent_done,
+                    "Sound library upgrade failed",
+                    &format!("{error}\n\nThe original config and backup were preserved."),
+                ),
+            },
+        ) {
+            show_startup_error(
+                &callback_app,
+                &callback_parent,
+                "Sound library upgrade could not start",
+                &error.to_string(),
+            );
+        }
+    });
+}
+
+fn start_application_ready(
     app: &Application,
     startup_mode: StartupMode,
     previous_engine_version: Option<String>,
@@ -507,7 +787,7 @@ fn start_application(
         warn!("GTK display backend is unavailable during activation");
     }
 
-    let mut config = match load_config() {
+    let config = match load_config() {
         Ok(config) => config,
         Err(err) => {
             log::error!(
@@ -521,22 +801,26 @@ fn start_application(
     crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
     crate::diagnostics::record_phase_with_config("startup:config_loaded", &config);
 
-    let cleaned_count = cleanup_stale_tmp_sounds(&mut config);
-    if cleaned_count > 0 {
-        if let Err(e) = config.save() {
-            log::warn!("Failed to save config after cleanup: {}", e);
-        }
-    }
-
     let library_path = Config::config_path().with_file_name("library.sqlite3");
-    let library = match crate::library_store::LibraryStore::open_seeded(library_path, &config) {
-        Ok(library) => library,
-        Err(error) => {
-            log::error!("Refusing to start with unavailable library database: {error}");
-            show_config_error(app, &error);
-            return;
-        }
+    let Some(library_id) = config.library_id.as_deref() else {
+        show_config_error(
+            app,
+            &std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "schema-8 settings have no library identity",
+            ),
+        );
+        return;
     };
+    let library =
+        match crate::library_store::LibraryStore::open_authoritative(library_path, library_id) {
+            Ok(library) => library,
+            Err(error) => {
+                log::error!("Refusing to start with unavailable library database: {error}");
+                show_config_error(app, &error);
+                return;
+            }
+        };
 
     let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
     let hotkey_manager = crate::hotkeys::HotkeyManager::new_deferred(hotkey_sender);
@@ -546,7 +830,20 @@ fn start_application(
         StartupMode::Persistent => previous_engine_version.or_else(incompatible_engine_version),
         StartupMode::Transient => None,
     };
-    let (player, connected_remotely) = initialize_player(&config, startup_mode);
+    let (player, connected_remotely) = match initialize_player(&config, startup_mode) {
+        Ok(player) => player,
+        Err(error) => {
+            let parent = gtk4::ApplicationWindow::builder()
+                .application(app)
+                .title(APP_TITLE)
+                .default_width(480)
+                .default_height(160)
+                .build();
+            parent.present();
+            show_startup_error(app, &parent, "Persistent audio engine unavailable", &error);
+            return;
+        }
+    };
     let engine_update_notice = engine_update_notice(previous_engine_version, connected_remotely);
     crate::diagnostics::set_playback_registry_count(0);
     crate::diagnostics::memory::log_memory_snapshot("startup:player_initialized");
@@ -563,6 +860,7 @@ fn start_application(
         player: Arc::new(player),
         hotkeys,
         hotkey_projection,
+        manual_tabs: Arc::new(Mutex::new(Vec::new())),
         pipewire_status: Arc::new(Mutex::new(pipewire_status)),
         play_dispatch_debounce: Arc::new(Mutex::new(None)),
         loudness_coordinators: crate::commands::LoudnessCoordinators::new(),
@@ -618,12 +916,35 @@ fn start_application(
 
     schedule_startup_hotkey_projection(Arc::clone(&state));
     schedule_startup_loudness_backfill(Arc::clone(&state), &timer_registry);
+    schedule_library_diagnostics(Arc::clone(&state));
 
     {
         let state_idle = Arc::clone(&state);
         glib::timeout_add_local_once(Duration::from_secs(5), move || {
             record_state_phase("idle:5s", &state_idle);
         });
+    }
+}
+
+fn schedule_library_diagnostics(state: Arc<AppState>) {
+    let response = state.library.stats();
+    if let Err(error) = crate::commands::dispatch_async_result(
+        "load_library_diagnostics",
+        move || response.recv(),
+        move |result| match result {
+            Ok(stats) => {
+                crate::diagnostics::set_library_counts(
+                    stats.sounds,
+                    stats.manual_tabs,
+                    stats.roots,
+                    stats.active_hotkeys,
+                );
+                record_state_phase("startup:library_ready", &state);
+            }
+            Err(error) => log::warn!("Failed to load library diagnostics: {error}"),
+        },
+    ) {
+        log::warn!("Failed to dispatch library diagnostics: {error}");
     }
 }
 
@@ -642,66 +963,25 @@ fn record_state_phase(name: &str, state: &Arc<AppState>) {
 fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &TimerRegistry) {
     glib::idle_add_local_once(move || {
         crate::diagnostics::memory::log_memory_snapshot("startup:loudness_bg:check");
-        let (auto_gain_enabled, missing_count) = {
-            let cfg = state.config.lock();
-            let missing_count = cfg
-                .sounds
-                .iter()
-                .filter(|sound| sound.loudness_lufs.is_none())
-                .count();
-            crate::diagnostics::record_phase_with_config("startup:loudness_check", &cfg);
-            (cfg.settings.auto_gain, missing_count)
-        };
-
-        if !auto_gain_enabled || missing_count == 0 {
-            return;
+        let config = Arc::clone(&state.config);
+        let library = state.library.clone();
+        let coords = state.loudness_coordinators.clone();
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "startup_loudness_backfill",
+            move || {
+                crate::commands::trigger_missing_loudness_analysis_with_store(
+                    config, library, false, None, &coords,
+                )
+            },
+            |result| {
+                if let Err(error) = result {
+                    log::warn!("Failed to schedule startup loudness analysis: {error}");
+                }
+            },
+        ) {
+            log::warn!("Failed to dispatch startup loudness check: {error}");
         }
-
-        log::info!(
-            "Deferring startup loudness analysis: {} sounds missing LUFS",
-            missing_count
-        );
-        crate::diagnostics::record_phase("startup:loudness_bg:deferred", None);
     });
-}
-
-fn cleanup_stale_tmp_sounds(config: &mut Config) -> usize {
-    use std::path::Path;
-
-    let sounds_to_remove: Vec<String> = config
-        .sounds
-        .iter()
-        .filter(|sound| {
-            let effective_path = sound.source_path.as_ref().unwrap_or(&sound.path);
-            let path = Path::new(effective_path);
-            path.starts_with("/tmp") && !path.exists()
-        })
-        .map(|s| s.id.clone())
-        .collect();
-
-    let count = sounds_to_remove.len();
-    if count > 0 {
-        info!("Cleaning up {} stale sound(s) from /tmp", count);
-        config.remove_sounds(&sounds_to_remove);
-    }
-
-    count
-}
-
-pub fn backfill_missing_sound_durations(config: &mut Config) -> bool {
-    let mut changed = false;
-
-    for sound in &mut config.sounds {
-        if sound.duration_ms.is_some() {
-            continue;
-        }
-        if let Some(duration_ms) = crate::commands::probe_duration_ms(&sound.path) {
-            sound.duration_ms = Some(duration_ms);
-            changed = true;
-        }
-    }
-
-    changed
 }
 
 fn schedule_startup_hotkey_projection(state: Arc<AppState>) {
@@ -868,23 +1148,17 @@ fn handoff_to_newer_user_install_if_needed() {
     std::process::exit(1);
 }
 
-fn compatible_stable_engine_running() -> bool {
+fn compatible_engine_running() -> bool {
     let Ok(info) = crate::audio::engine_ipc::engine_info() else {
         return false;
     };
-    let home = dirs::home_dir().unwrap_or_default();
     crate::audio::engine_ipc::engine_info_compatible(&info)
-        && installation_kind_for(
-            std::path::Path::new(&info.binary_path),
-            &home,
-            info.binary_path.ends_with(".AppImage"),
-        ) == InstallationKind::Stable
 }
 
 fn initialize_player(
     config: &Config,
     startup_mode: StartupMode,
-) -> (crate::audio::AudioPlayer, bool) {
+) -> Result<(crate::audio::AudioPlayer, bool), String> {
     use crate::audio::AudioBackendKind;
 
     // Debug aid: when route audit is requested, bypass the systemd-spawned
@@ -912,7 +1186,7 @@ fn initialize_player(
                 crate::audio::engine_ipc::engine_running,
                 crate::audio::engine_ipc::shutdown_incompatible_engine_if_running,
                 manage_audio_engine_service,
-                stop_audio_engine_service_and_process,
+                || {},
                 60,
                 || std::thread::sleep(Duration::from_millis(50)),
             ),
@@ -923,7 +1197,13 @@ fn initialize_player(
         };
         if let Some(player) = remote {
             log::info!("Connected UI to Linux Soundboard audio engine");
-            return (player, true);
+            return Ok((player, true));
+        }
+        if startup_mode == StartupMode::Persistent {
+            return Err(
+                "Linux Soundboard could not connect to its persistent audio engine. No temporary engine was started and no replacement virtual microphone was created. Exit, repair or install the user service, then retry."
+                    .to_string(),
+            );
         }
     }
 
@@ -938,10 +1218,10 @@ fn initialize_player(
     } else {
         AudioBackendKind::PulseAudio
     };
-    (
+    Ok((
         crate::audio::AudioPlayer::new_with_config_and_audio_backend(config, backend),
         false,
-    )
+    ))
 }
 
 fn connect_or_start_audio_engine<T>(
@@ -1186,92 +1466,138 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    fn build_test_wave_payload() -> Vec<u8> {
-        let sample_rate = 44_100_u32;
-        let channels = 2_u16;
-        let bits_per_sample = 16_u16;
-        let sample_count = sample_rate / 5;
-        let bytes_per_sample = (bits_per_sample / 8) as usize;
-        let block_align = channels as usize * bytes_per_sample;
-        let byte_rate = sample_rate as usize * block_align;
-        let mut pcm = Vec::with_capacity(sample_count as usize * block_align);
+    struct TestDir(PathBuf);
 
-        for frame in 0..sample_count {
-            let phase = 2.0_f32 * std::f32::consts::PI * 440.0 * frame as f32 / sample_rate as f32;
-            let sample = (phase.sin() * 12_000.0) as i16;
-            for _ in 0..channels {
-                pcm.extend_from_slice(&sample.to_le_bytes());
-            }
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("lsb-bootstrap-{label}-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&path).expect("create test directory");
+            Self(path)
         }
 
-        let data_len = pcm.len() as u32;
-        let riff_len = 36 + data_len;
+        fn config_path(&self) -> PathBuf {
+            self.0.join("config.json")
+        }
 
-        let mut bytes = Vec::with_capacity(44 + pcm.len());
-        bytes.extend_from_slice(b"RIFF");
-        bytes.extend_from_slice(&riff_len.to_le_bytes());
-        bytes.extend_from_slice(b"WAVE");
-        bytes.extend_from_slice(b"fmt ");
-        bytes.extend_from_slice(&16_u32.to_le_bytes());
-        bytes.extend_from_slice(&1_u16.to_le_bytes());
-        bytes.extend_from_slice(&channels.to_le_bytes());
-        bytes.extend_from_slice(&sample_rate.to_le_bytes());
-        bytes.extend_from_slice(&(byte_rate as u32).to_le_bytes());
-        bytes.extend_from_slice(&(block_align as u16).to_le_bytes());
-        bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
-        bytes.extend_from_slice(b"data");
-        bytes.extend_from_slice(&data_len.to_le_bytes());
-        bytes.extend_from_slice(&pcm);
+        fn library_path(&self) -> PathBuf {
+            self.0.join("library.sqlite3")
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_legacy_config(path: &Path) -> Vec<u8> {
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
+        config.sound_folders.push("/music".to_string());
+        config.sounds.push(Sound::new(
+            "Tone".to_string(),
+            "/music/tone.wav".to_string(),
+        ));
+        let bytes = serde_json::to_vec(&config).expect("serialize legacy config");
+        fs::write(path, &bytes).expect("write legacy config");
         bytes
     }
 
-    fn create_test_audio_file(ext: &str) -> PathBuf {
-        let base =
-            std::env::temp_dir().join(format!("lsb-bootstrap-test-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&base).expect("create temp audio dir");
-        let path = base.join(format!("tone.{}", ext));
-        fs::write(&path, build_test_wave_payload()).expect("write test audio payload");
-        path
-    }
+    #[test]
+    fn startup_preflight_creates_one_matching_empty_library() {
+        let temp = TestDir::new("new-storage");
 
-    fn cleanup_test_audio_path(path: &Path) {
-        let _ = fs::remove_file(path);
-        if let Some(parent) = path.parent() {
-            let _ = fs::remove_dir_all(parent);
-        }
+        assert_eq!(
+            prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+                .expect("prepare new storage"),
+            StoragePreparation::Ready
+        );
+
+        let config = Config::load_from_path(&temp.config_path()).expect("load settings");
+        let identity = crate::legacy_migration::database_identity(&temp.library_path())
+            .expect("load database identity");
+        assert_eq!(
+            config.library_id.as_deref(),
+            Some(identity.library_id.as_str())
+        );
     }
 
     #[test]
-    fn startup_duration_backfill_fills_missing_and_preserves_existing() {
-        let audio_path = create_test_audio_file("wav");
-        let mut cfg = Config::default();
+    fn startup_preflight_leaves_unconfirmed_legacy_config_untouched() {
+        let temp = TestDir::new("legacy-prompt");
+        let original = write_legacy_config(&temp.config_path());
 
-        let mut missing = Sound::new(
-            "Missing".to_string(),
-            audio_path.to_string_lossy().to_string(),
+        assert_eq!(
+            prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+                .expect("inspect legacy storage"),
+            StoragePreparation::NeedsLegacyMigration
         );
-        missing.duration_ms = None;
+        assert_eq!(fs::read(temp.config_path()).unwrap(), original);
+        assert!(!temp.library_path().exists());
+    }
 
-        let mut existing = Sound::new("Existing".to_string(), "/tmp/existing.wav".to_string());
-        existing.duration_ms = Some(1234);
+    #[test]
+    fn startup_preflight_resumes_after_database_publication() {
+        let temp = TestDir::new("resume-cutover");
+        write_legacy_config(&temp.config_path());
+        let report = crate::legacy_migration::migrate_legacy_database(
+            &temp.config_path(),
+            &temp.library_path(),
+        )
+        .expect("publish database");
 
-        let missing_file = Sound::new(
-            "Missing File".to_string(),
-            "/tmp/does-not-exist.wav".to_string(),
+        assert_eq!(
+            prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+                .expect("resume cutover"),
+            StoragePreparation::Ready
         );
+        let config = Config::load_from_path(&temp.config_path()).expect("load schema-8 settings");
+        assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            config.library_id.as_deref(),
+            Some(report.library_id.as_str())
+        );
+    }
 
-        cfg.sounds.push(missing);
-        cfg.sounds.push(existing);
-        cfg.sounds.push(missing_file);
+    #[test]
+    fn startup_preflight_refuses_schema_8_without_its_database() {
+        let temp = TestDir::new("missing-database");
+        let mut config = Config::default();
+        config
+            .save_to_path(&temp.config_path())
+            .expect("write schema-8 settings");
 
-        let changed = backfill_missing_sound_durations(&mut cfg);
+        let error = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+            .expect_err("missing database must fail");
+        assert!(error.contains("missing"));
+        assert!(!temp.library_path().exists());
+    }
 
-        assert!(changed);
-        assert!(cfg.sounds[0].duration_ms.is_some());
-        assert_eq!(cfg.sounds[1].duration_ms, Some(1234));
-        assert_eq!(cfg.sounds[2].duration_ms, None);
+    #[test]
+    fn startup_preflight_refuses_mismatched_schema_8_database() {
+        let temp = TestDir::new("mismatched-database");
+        let mut config = Config::default();
+        config
+            .save_to_path(&temp.config_path())
+            .expect("write schema-8 settings");
+        crate::legacy_migration::initialize_empty_library(
+            &temp.library_path(),
+            "different-library",
+        )
+        .expect("create mismatched database");
 
-        cleanup_test_audio_path(&audio_path);
+        let error = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+            .expect_err("mismatched database must fail");
+        assert!(error.contains("different identities"));
+    }
+
+    #[test]
+    fn x11_and_vmware_choose_the_bounded_fallback_renderer() {
+        assert!(should_use_fallback_renderer(Some(X11_BACKEND), false));
+        assert!(should_use_fallback_renderer(Some(WAYLAND_BACKEND), true));
+        assert!(!should_use_fallback_renderer(Some(WAYLAND_BACKEND), false));
     }
 
     #[test]

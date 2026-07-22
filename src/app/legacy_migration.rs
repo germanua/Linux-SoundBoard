@@ -1,9 +1,9 @@
 use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -31,7 +31,7 @@ pub enum LegacyMigrationError {
     Invalid(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct LegacyMigrationReport {
     pub sounds: usize,
     pub roots: usize,
@@ -41,6 +41,19 @@ pub struct LegacyMigrationReport {
     pub hotkeys: usize,
     pub source_sha256: String,
     pub library_id: String,
+    pub settings: Settings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatabaseIdentity {
+    pub library_id: String,
+    pub source_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyRestoreReport {
+    pub archived_config: Option<PathBuf>,
+    pub archived_database: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -76,6 +89,7 @@ struct ImportState {
     membership_count: usize,
     generated_tab_count: usize,
     hotkey_count: usize,
+    migrated_settings: Option<Settings>,
 }
 
 impl ImportState {
@@ -97,6 +111,7 @@ impl ImportState {
             membership_count: 0,
             generated_tab_count: 0,
             hotkey_count: 0,
+            migrated_settings: None,
         }
     }
 
@@ -267,10 +282,10 @@ impl ImportState {
         let version = self
             .schema_version
             .ok_or_else(|| LegacyMigrationError::Invalid("missing schema_version".to_string()))?;
-        if version > crate::config::CURRENT_SCHEMA_VERSION {
+        if version > crate::config::LAST_LEGACY_SCHEMA_VERSION {
             return Err(LegacyMigrationError::Invalid(format!(
                 "legacy schema {version} is newer than supported schema {}",
-                crate::config::CURRENT_SCHEMA_VERSION
+                crate::config::LAST_LEGACY_SCHEMA_VERSION
             )));
         }
         let settings = self
@@ -299,6 +314,9 @@ impl ImportState {
                 self.hotkey_count = self.hotkey_count.saturating_add(1);
             }
         }
+        let mut runtime_settings = settings;
+        runtime_settings.control_hotkeys = Default::default();
+        self.migrated_settings = Some(runtime_settings);
         self.flush_hotkeys()
     }
 }
@@ -664,6 +682,87 @@ fn parse_pass(
     Ok(())
 }
 
+#[derive(Default)]
+struct LegacySettingsState {
+    schema_version: Option<u32>,
+    settings: Option<serde_json::Value>,
+}
+
+struct LegacySettingsSeed<'a>(&'a mut LegacySettingsState);
+
+impl<'de> DeserializeSeed<'de> for LegacySettingsSeed<'_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct SettingsVisitor<'a>(&'a mut LegacySettingsState);
+        impl<'de> Visitor<'de> for SettingsVisitor<'_> {
+            type Value = ();
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a legacy Linux SoundBoard configuration object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                while let Some(field) = map.next_key::<String>()? {
+                    match field.as_str() {
+                        "schema_version" => self.0.schema_version = Some(map.next_value()?),
+                        "settings" => self.0.settings = Some(map.next_value()?),
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+        deserializer.deserialize_map(SettingsVisitor(self.0))
+    }
+}
+
+pub fn config_schema_version(path: &Path) -> Result<u32, LegacyMigrationError> {
+    Ok(read_legacy_settings_state(path)?
+        .schema_version
+        .unwrap_or(0))
+}
+
+fn read_legacy_settings_state(path: &Path) -> Result<LegacySettingsState, LegacyMigrationError> {
+    let reader = BufReader::new(fs::File::open(path)?);
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let mut state = LegacySettingsState::default();
+    LegacySettingsSeed(&mut state).deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(state)
+}
+
+pub(crate) fn read_legacy_runtime_settings(path: &Path) -> Result<Settings, LegacyMigrationError> {
+    let mut state = read_legacy_settings_state(path)?;
+    let version = state.schema_version.unwrap_or(0);
+    if version > crate::config::LAST_LEGACY_SCHEMA_VERSION {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "schema {version} is not a legacy configuration"
+        )));
+    }
+    let migrated = crate::config::migration::run_migrations(
+        serde_json::json!({
+            "schema_version": version,
+            "sound_folders": [],
+            "sounds": [],
+            "tabs": [],
+            "settings": state.settings.take().unwrap_or_else(|| serde_json::json!({})),
+        }),
+        version,
+    )?;
+    let mut settings: Settings = serde_json::from_value(migrated["settings"].clone())?;
+    settings.control_hotkeys = Default::default();
+    Ok(settings)
+}
+
 fn finalize_database(
     path: &Path,
     source_sha256: &str,
@@ -673,7 +772,14 @@ fn finalize_database(
 ) -> Result<(), LegacyMigrationError> {
     let connection = Connection::open(path)?;
     connection.execute_batch(
-        "UPDATE hotkey_bindings AS binding
+        "INSERT OR IGNORE INTO manual_tabs(public_id, name, position)
+         SELECT public_id, name, position FROM legacy_generated_tabs;
+         INSERT OR IGNORE INTO manual_memberships(tab_id, sound_id, position)
+         SELECT manual.id, legacy.sound_id, legacy.position
+         FROM legacy_generated_memberships AS legacy
+         JOIN legacy_generated_tabs AS generated ON generated.id = legacy.tab_id
+         JOIN manual_tabs AS manual ON manual.public_id = generated.public_id;
+         UPDATE hotkey_bindings AS binding
          SET issue = 'duplicate legacy binding'
          WHERE issue = 'valid legacy candidate'
            AND (SELECT COUNT(*) FROM hotkey_bindings AS other
@@ -764,6 +870,9 @@ pub fn migrate_legacy_database(
             hotkeys: state.hotkey_count,
             source_sha256: source_sha256.clone(),
             library_id: uuid::Uuid::new_v4().to_string(),
+            settings: state.migrated_settings.take().ok_or_else(|| {
+                LegacyMigrationError::Invalid("legacy settings were not imported".to_string())
+            })?,
         };
         drop(state);
         finalize_database(
@@ -790,6 +899,214 @@ pub fn migrate_legacy_database(
     result
 }
 
+pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigrationError> {
+    if !path.is_file() {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "library database '{}' is missing",
+            path.display()
+        )));
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if schema_version != 3 {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "library database schema is {schema_version}, expected 3"
+        )));
+    }
+    let ready: Option<String> = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'database_ready'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if ready.as_deref() != Some("1") {
+        return Err(LegacyMigrationError::Invalid(
+            "library database is not marked ready".to_string(),
+        ));
+    }
+    let library_id: Option<String> = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'library_id'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let library_id = library_id
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            LegacyMigrationError::Invalid("library database has no identity".to_string())
+        })?;
+    let source_sha256 = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'source_sha256'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(DatabaseIdentity {
+        library_id,
+        source_sha256,
+    })
+}
+
+fn write_schema_8_config(
+    path: &Path,
+    library_id: String,
+    settings: Settings,
+) -> Result<(), LegacyMigrationError> {
+    let mut config = crate::config::Config {
+        library_id: Some(library_id),
+        settings,
+        ..crate::config::Config::default()
+    };
+    config
+        .save_to_path(path)
+        .map_err(|error| LegacyMigrationError::Invalid(error.to_string()))
+}
+
+pub fn complete_legacy_settings_cutover(
+    source: &Path,
+    destination: &Path,
+) -> Result<DatabaseIdentity, LegacyMigrationError> {
+    let identity = database_identity(destination)?;
+    let expected_source = identity.source_sha256.as_deref().ok_or_else(|| {
+        LegacyMigrationError::Invalid("migrated database has no source checksum".to_string())
+    })?;
+    if sha256(source)? != expected_source {
+        return Err(LegacyMigrationError::Invalid(
+            "legacy config does not match the ready database".to_string(),
+        ));
+    }
+    let settings = read_legacy_runtime_settings(source)?;
+    write_schema_8_config(source, identity.library_id.clone(), settings)?;
+    let config = crate::config::Config::load_from_path(source)
+        .map_err(|error| LegacyMigrationError::Invalid(error.to_string()))?;
+    if config.library_id.as_deref() != Some(identity.library_id.as_str()) {
+        return Err(LegacyMigrationError::Invalid(
+            "settings/database identity verification failed".to_string(),
+        ));
+    }
+    Ok(identity)
+}
+
+pub fn migrate_legacy_config(
+    source: &Path,
+    destination: &Path,
+) -> Result<LegacyMigrationReport, LegacyMigrationError> {
+    let report = migrate_legacy_database(source, destination)?;
+    write_schema_8_config(source, report.library_id.clone(), report.settings.clone())?;
+    let identity = database_identity(destination)?;
+    if identity.library_id != report.library_id {
+        return Err(LegacyMigrationError::Invalid(
+            "published settings/database identity mismatch".to_string(),
+        ));
+    }
+    Ok(report)
+}
+
+pub fn restore_legacy_backup(
+    config_path: &Path,
+    library_path: &Path,
+) -> Result<LegacyRestoreReport, LegacyMigrationError> {
+    let backup = config_path.with_file_name("config.json.pre-v8-backup");
+    if !backup.is_file() {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "legacy backup '{}' is missing",
+            backup.display()
+        )));
+    }
+    let version = config_schema_version(&backup)?;
+    if version > crate::config::LAST_LEGACY_SCHEMA_VERSION {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "legacy backup schema {version} is not restorable"
+        )));
+    }
+
+    let suffix = uuid::Uuid::new_v4();
+    let archived_config = config_path
+        .exists()
+        .then(|| config_path.with_file_name(format!("config.json.pre-restore-{suffix}")));
+    let archived_database = library_path
+        .exists()
+        .then(|| library_path.with_file_name(format!("library.sqlite3.pre-restore-{suffix}")));
+    let candidate = config_path.with_file_name(format!(".config.json.restoring-{suffix}"));
+
+    let result = (|| -> Result<(), LegacyMigrationError> {
+        let mut reader = BufReader::new(fs::File::open(&backup)?);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&candidate)?;
+        let mut writer = BufWriter::new(&file);
+        std::io::copy(&mut reader, &mut writer)?;
+        writer.flush()?;
+        drop(writer);
+        file.sync_all()?;
+
+        if let Some(path) = &archived_database {
+            fs::rename(library_path, path)?;
+        }
+        if let Some(path) = &archived_config {
+            if let Err(error) = fs::rename(config_path, path) {
+                if let Some(database) = &archived_database {
+                    let _ = fs::rename(database, library_path);
+                }
+                return Err(error.into());
+            }
+        }
+        if let Err(error) = fs::rename(&candidate, config_path) {
+            if let Some(path) = &archived_config {
+                let _ = fs::rename(path, config_path);
+            }
+            if let Some(path) = &archived_database {
+                let _ = fs::rename(path, library_path);
+            }
+            return Err(error.into());
+        }
+        fs::set_permissions(config_path, fs::Permissions::from_mode(0o600))?;
+        if let Some(parent) = config_path.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(candidate);
+    }
+    result?;
+    Ok(LegacyRestoreReport {
+        archived_config,
+        archived_database,
+    })
+}
+
+pub fn initialize_empty_library(path: &Path, library_id: &str) -> Result<(), LegacyMigrationError> {
+    if path.exists() {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "refusing to replace existing database '{}'",
+            path.display()
+        )));
+    }
+    let store = LibraryStore::open(path.to_path_buf())?;
+    drop(store);
+    let connection = Connection::open(path)?;
+    connection.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('library_id', ?1)",
+        [library_id],
+    )?;
+    connection.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES('database_ready', '1')",
+        [],
+    )?;
+    drop(connection);
+    fs::File::open(path)?.sync_all()?;
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,6 +1121,8 @@ mod tests {
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
         config.sound_folders.push("/music".to_string());
         for index in 0..1_025 {
             let mut sound = Sound::new(
@@ -849,6 +1168,14 @@ mod tests {
         );
         assert_eq!(
             store
+                .manual_tabs(0)
+                .recv()
+                .expect("load migrated tabs")
+                .total,
+            2
+        );
+        assert_eq!(
+            store
                 .count(LibraryScope::ManualTab("manual".to_string()), "")
                 .recv()
                 .expect("count manual membership"),
@@ -889,6 +1216,8 @@ mod tests {
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
         for (id, hotkey) in [
             ("first", "Ctrl+KeyA"),
             ("second", "Ctrl+KeyA"),
@@ -924,7 +1253,7 @@ mod tests {
 
     #[test]
     fn importer_accepts_every_legacy_schema_number_zero_through_seven() {
-        for version in 0..=crate::config::CURRENT_SCHEMA_VERSION {
+        for version in 0..=crate::config::LAST_LEGACY_SCHEMA_VERSION {
             let directory = std::env::temp_dir().join(format!(
                 "lsb-legacy-schema-{version}-{}",
                 uuid::Uuid::new_v4()
@@ -943,5 +1272,108 @@ mod tests {
             assert!(destination.exists());
             fs::remove_dir_all(directory).expect("remove test directory");
         }
+    }
+
+    #[test]
+    fn full_cutover_publishes_small_schema_8_settings_with_matching_identity() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema8-cutover-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
+        config.sound_folders.push("/music".to_string());
+        config.sounds.push(Sound::new(
+            "Tone".to_string(),
+            "/music/tone.wav".to_string(),
+        ));
+        config.settings.control_hotkeys.stop_all = Some("Ctrl+KeyS".to_string());
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+
+        let report = migrate_legacy_config(&source, &destination).expect("complete migration");
+        let persisted: serde_json::Value =
+            serde_json::from_reader(fs::File::open(&source).unwrap()).unwrap();
+        assert_eq!(persisted["schema_version"], serde_json::json!(8));
+        assert_eq!(persisted["library_id"], report.library_id);
+        assert!(persisted.get("sounds").is_none());
+        assert!(persisted.get("sound_folders").is_none());
+        assert!(persisted["settings"].get("control_hotkeys").is_none());
+        assert_eq!(
+            database_identity(&destination).unwrap().library_id,
+            report.library_id
+        );
+        assert_eq!(report.hotkeys, 1);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn restart_finishes_settings_switch_after_database_publication() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema8-resume-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+
+        let report = migrate_legacy_database(&source, &destination).expect("publish database");
+        assert_eq!(config_schema_version(&source).unwrap(), 7);
+        let identity = complete_legacy_settings_cutover(&source, &destination)
+            .expect("resume settings switch");
+        assert_eq!(identity.library_id, report.library_id);
+        assert_eq!(config_schema_version(&source).unwrap(), 8);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn restart_refuses_a_ready_database_for_a_changed_legacy_source() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema8-mismatch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        migrate_legacy_database(&source, &destination).expect("publish database");
+        fs::write(&source, b"{\"schema_version\":7,\"settings\":{}}")
+            .expect("replace legacy source");
+
+        assert!(complete_legacy_settings_cutover(&source, &destination).is_err());
+        assert_eq!(config_schema_version(&source).unwrap(), 7);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn restore_keeps_current_files_and_reinstates_the_legacy_backup() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema8-restore-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.library_id = None;
+        config.sounds.push(Sound::new(
+            "Tone".to_string(),
+            "/music/tone.wav".to_string(),
+        ));
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        let legacy_bytes = fs::read(&source).unwrap();
+        migrate_legacy_config(&source, &destination).expect("complete migration");
+
+        let restored = restore_legacy_backup(&source, &destination).expect("restore backup");
+
+        assert_eq!(fs::read(&source).unwrap(), legacy_bytes);
+        assert!(!destination.exists());
+        assert!(restored.archived_config.unwrap().is_file());
+        assert!(restored.archived_database.unwrap().is_file());
+        assert_eq!(config_schema_version(&source).unwrap(), 7);
+        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

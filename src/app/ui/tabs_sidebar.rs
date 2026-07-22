@@ -492,7 +492,6 @@ impl TabsInner {
                 let inner_done = Arc::downgrade(&inner);
                 let dispatch = commands::create_tab_with_store_async(
                     name,
-                    Arc::clone(&inner.state.config),
                     inner.state.library.clone(),
                     move |result| match result {
                         Ok(tab) => {
@@ -529,6 +528,7 @@ impl TabsInner {
 
     fn reload_tabs_async(self: &Arc<Self>, select_id: Option<&str>) {
         self.reload_folder_roots();
+        self.state.manual_tabs.lock().clear();
         let generation = self.tab_generation.get().wrapping_add(1);
         self.tab_generation.set(generation);
         self.list_box.select_row(None::<&ListBoxRow>);
@@ -605,6 +605,7 @@ impl TabsInner {
                             .saturating_mul(crate::library_store::PAGE_SIZE)
                             < result.total;
                         for tab in result.tabs {
+                            inner.state.manual_tabs.lock().push(tab.clone());
                             inner.list_box.append(&inner.make_tab_row(
                                 &tab.public_id,
                                 &tab.name,
@@ -777,10 +778,11 @@ impl TabsInner {
             return "General".to_string();
         }
 
-        let cfg = self.state.config.lock();
-        cfg.tabs
+        self.state
+            .manual_tabs
+            .lock()
             .iter()
-            .find(|tab| tab.id == tab_id)
+            .find(|tab| tab.public_id == tab_id)
             .map(|tab| tab.name.clone())
             .unwrap_or_else(|| tab_id.to_string())
     }
@@ -981,7 +983,6 @@ impl TabsInner {
                                     payload.source_tab_id.clone(),
                                     target_tab_id_for_read.clone(),
                                     payload.sound_ids.clone(),
-                                    Arc::clone(&inner.state.config),
                                     inner.state.library.clone(),
                                     move |result| match result {
                                         Ok(true) => {
@@ -1061,7 +1062,6 @@ impl TabsInner {
                 let inner_weak_complete = Arc::downgrade(&inner);
                 if let Err(err) = commands::delete_tab_with_store_async(
                     tab_id.clone(),
-                    Arc::clone(&inner.state.config),
                     inner.state.library.clone(),
                     move |result| {
                         let Some(inner) = inner_weak_complete.upgrade() else {
@@ -1131,7 +1131,6 @@ impl TabsInner {
                         let dispatch = commands::rename_tab_with_store_async(
                             tab_id.clone(),
                             new_name,
-                            Arc::clone(&inner_confirm.state.config),
                             inner_confirm.state.library.clone(),
                             move |result| match result {
                                 Ok(_) => {
