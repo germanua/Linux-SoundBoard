@@ -259,6 +259,8 @@ impl TabsSidebar {
                 };
                 let node = boxed.borrow::<FolderNode>();
                 let Some(relative_path) = node.relative_path.clone() else {
+                    drop(node);
+                    row.set_expanded(!row.is_expanded());
                     return;
                 };
                 let root_path = node.root_path.clone();
