@@ -1,6 +1,5 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Duration;
 
 use gio::prelude::*;
 use glib::subclass::prelude::*;
@@ -121,28 +120,31 @@ impl PagedSoundModel {
         };
         let response = library.count(scope, &search);
         let weak = self.downgrade();
-        glib::timeout_add_local(Duration::from_millis(2), move || {
-            let Some(model) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            match response.try_recv() {
-                Ok(Some(total)) => {
-                    if model.imp().generation.get() == generation {
-                        let total = u32::try_from(total).unwrap_or(u32::MAX);
-                        model.imp().total.set(total);
-                        if total > 0 {
-                            model.items_changed(0, 0, total);
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "count_lazy_sound_rows",
+            move || response.recv(),
+            move |result| {
+                let Some(model) = weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(total) => {
+                        if model.imp().generation.get() == generation {
+                            let total = u32::try_from(total).unwrap_or(u32::MAX);
+                            model.imp().total.set(total);
+                            if total > 0 {
+                                model.items_changed(0, 0, total);
+                            }
                         }
                     }
-                    glib::ControlFlow::Break
+                    Err(error) => {
+                        log::warn!("Failed to count lazy sound rows: {error}");
+                    }
                 }
-                Ok(None) => glib::ControlFlow::Continue,
-                Err(error) => {
-                    log::warn!("Failed to count lazy sound rows: {error}");
-                    glib::ControlFlow::Break
-                }
-            }
-        });
+            },
+        ) {
+            log::warn!("Failed to dispatch lazy sound row count: {error}");
+        }
     }
 
     fn ensure_page(&self, page: u32) {
@@ -181,23 +183,27 @@ impl PagedSoundModel {
         let search = imp.search.borrow().clone();
         let response = library.page(scope, &search, page as usize);
         let weak = self.downgrade();
-        glib::timeout_add_local(Duration::from_millis(2), move || {
-            let Some(model) = weak.upgrade() else {
-                return glib::ControlFlow::Break;
-            };
-            match response.try_recv() {
-                Ok(Some(result)) => {
-                    model.install_page(page, generation, result.sounds);
-                    glib::ControlFlow::Break
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "load_lazy_sound_page",
+            move || response.recv(),
+            move |result| {
+                let Some(model) = weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(result) => {
+                        model.install_page(page, generation, result.sounds);
+                    }
+                    Err(error) => {
+                        model.imp().pending.borrow_mut().remove(&page);
+                        log::warn!("Failed to load lazy sound page {page}: {error}");
+                    }
                 }
-                Ok(None) => glib::ControlFlow::Continue,
-                Err(error) => {
-                    model.imp().pending.borrow_mut().remove(&page);
-                    log::warn!("Failed to load lazy sound page {page}: {error}");
-                    glib::ControlFlow::Break
-                }
-            }
-        });
+            },
+        ) {
+            self.imp().pending.borrow_mut().remove(&page);
+            log::warn!("Failed to dispatch lazy sound page {page}: {error}");
+        }
     }
 
     fn placeholder(&self, generation: u64, position: u32) -> BoxedAnyObject {

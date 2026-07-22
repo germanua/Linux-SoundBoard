@@ -31,14 +31,6 @@ pub enum LibraryError {
 pub struct LibraryResponse<T>(mpsc::Receiver<Result<T, LibraryError>>);
 
 impl<T> LibraryResponse<T> {
-    pub fn try_recv(&self) -> Result<Option<T>, LibraryError> {
-        match self.0.try_recv() {
-            Ok(result) => result.map(Some),
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err(LibraryError::WorkerUnavailable),
-        }
-    }
-
     pub(crate) fn recv(self) -> Result<T, LibraryError> {
         self.0.recv().map_err(|_| LibraryError::WorkerUnavailable)?
     }
@@ -96,6 +88,7 @@ pub struct FolderPage {
 pub struct ManualTabItem {
     pub public_id: String,
     pub name: String,
+    pub sound_count: usize,
 }
 
 #[derive(Debug)]
@@ -2075,7 +2068,7 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
             ],
         )?,
     };
-    Ok(changed == 1)
+    Ok(changed != 0)
 }
 
 fn insert_roots(transaction: &Transaction<'_>, rows: Vec<RootRecord>) -> Result<(), LibraryError> {
@@ -2724,15 +2717,26 @@ fn load_manual_tabs(connection: &Connection, page: usize) -> Result<ManualTabPag
         .checked_mul(PAGE_SIZE)
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
     let mut statement = connection.prepare(
-        "SELECT public_id, name FROM manual_tabs
+        "SELECT public_id, name,
+                (SELECT COUNT(*) FROM manual_memberships AS membership
+                 WHERE membership.tab_id = manual_tabs.id)
+         FROM manual_tabs
          ORDER BY position, id LIMIT ?1 OFFSET ?2",
     )?;
     let rows = statement.query_map(
         params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
         |row| {
+            let sound_count = usize::try_from(row.get::<_, i64>(2)?).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Integer,
+                    Box::new(error),
+                )
+            })?;
             Ok(ManualTabItem {
                 public_id: row.get(0)?,
                 name: row.get(1)?,
+                sound_count,
             })
         },
     )?;

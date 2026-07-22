@@ -786,6 +786,7 @@ fn manual_and_folder_edits_are_atomic_bounded_and_immediately_visible() {
     let tabs = wait(store.manual_tabs(0));
     assert_eq!(tabs.total, 1);
     assert_eq!(tabs.tabs[0].name, "Favourites");
+    assert_eq!(tabs.tabs[0].sound_count, 2);
     let favourites = wait(store.page(LibraryScope::ManualTab("favourites".to_string()), "", 0));
     assert_eq!(
         favourites
@@ -1304,6 +1305,17 @@ fn benchmark_156k_bounded_store() {
         name: "Шлях".to_string(),
         position: 0,
     }])));
+    wait(
+        store.apply_batch(LibraryBatch::ManualTabs(
+            (0..8)
+                .map(|index| ManualTabRecord {
+                    public_id: format!("tab-{index}"),
+                    name: format!("Tab {index}"),
+                    position: index,
+                })
+                .collect(),
+        )),
+    );
     let started = std::time::Instant::now();
     let sounds_per_batch = MAX_BATCH_ROWS / 2;
     for batch_start in (0..156_000).step_by(sounds_per_batch) {
@@ -1327,6 +1339,18 @@ fn benchmark_156k_bounded_store() {
             })
             .collect();
         wait(store.apply_batch(LibraryBatch::Sounds(rows)));
+        assert!(wait(
+            store.apply_manual_memberships(
+                (batch_start..batch_end)
+                    .map(|index| ManualMembershipRecord {
+                        tab_public_id: format!("tab-{}", index % 8),
+                        sound_public_id: format!("sound-{index:06}"),
+                        position: index / 8,
+                    })
+                    .collect(),
+                Vec::new(),
+            )
+        ));
     }
     let import_elapsed = started.elapsed();
     assert!(import_elapsed < std::time::Duration::from_secs(30));
@@ -1344,6 +1368,16 @@ fn benchmark_156k_bounded_store() {
             "General search={search:?} page={page} took {elapsed:?}"
         );
     }
+    let query_started = std::time::Instant::now();
+    let tabs = wait(store.manual_tabs(0));
+    let elapsed = query_started.elapsed();
+    slowest_query = slowest_query.max(elapsed);
+    assert_eq!(tabs.total, 8);
+    assert!(tabs.tabs.iter().all(|tab| tab.sound_count == 19_500));
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "manual tab counts took {elapsed:?}"
+    );
 
     let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
     let pss_kib = smaps

@@ -2,7 +2,6 @@ use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use glib::BoxedAnyObject;
 use gtk4::prelude::*;
@@ -111,6 +110,7 @@ struct TabsInner {
     list_box: ListBox,
     folder_roots: gio::ListStore,
     folder_generation: Rc<Cell<u64>>,
+    tab_generation: Cell<u64>,
     state: Arc<AppState>,
     on_tab_selected: RefCell<Option<TabSelectedCallback>>,
     on_tab_membership_changed: RefCell<Option<TabMembershipChangedCallback>>,
@@ -235,6 +235,7 @@ impl TabsSidebar {
             list_box: list_box.clone(),
             folder_roots,
             folder_generation,
+            tab_generation: Cell::new(0),
             state,
             on_tab_selected: RefCell::new(None),
             on_tab_membership_changed: RefCell::new(None),
@@ -311,7 +312,7 @@ impl TabsSidebar {
             });
         }
 
-        inner.reload_tabs_now(None);
+        inner.reload_tabs_async(None);
         inner.connect_delete_shortcut();
         inner.attach_sidebar_drop_target(&list_box);
 
@@ -354,34 +355,37 @@ impl TabsInner {
         expected_generation: u64,
     ) {
         let response = library.roots(page);
-        glib::timeout_add_local(Duration::from_millis(2), move || {
-            if generation.get() != expected_generation {
-                return glib::ControlFlow::Break;
-            }
-            match response.try_recv() {
-                Ok(Some(result)) => {
-                    let count = result.roots.len();
-                    for root in result.roots {
-                        model.append(&BoxedAnyObject::new(FolderNode::root(root.path)));
-                    }
-                    if count == crate::library_store::PAGE_SIZE {
-                        Self::load_roots_async(
-                            library.clone(),
-                            model.clone(),
-                            page.saturating_add(1),
-                            Rc::clone(&generation),
-                            expected_generation,
-                        );
-                    }
-                    glib::ControlFlow::Break
+        if let Err(error) = commands::dispatch_async_result(
+            "load_sidebar_roots",
+            move || response.recv(),
+            move |result| {
+                if generation.get() != expected_generation {
+                    return;
                 }
-                Ok(None) => glib::ControlFlow::Continue,
-                Err(error) => {
-                    log::warn!("Failed to load sound folder roots: {error}");
-                    glib::ControlFlow::Break
+                match result {
+                    Ok(result) => {
+                        let count = result.roots.len();
+                        for root in result.roots {
+                            model.append(&BoxedAnyObject::new(FolderNode::root(root.path)));
+                        }
+                        if count == crate::library_store::PAGE_SIZE {
+                            Self::load_roots_async(
+                                library.clone(),
+                                model.clone(),
+                                page.saturating_add(1),
+                                Rc::clone(&generation),
+                                expected_generation,
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to load sound folder roots: {error}");
+                    }
                 }
-            }
-        });
+            },
+        ) {
+            log::warn!("Failed to dispatch sound folder root load: {error}");
+        }
     }
 
     fn load_folder_children_async(
@@ -392,9 +396,11 @@ impl TabsInner {
         page: usize,
     ) {
         let response = library.folder_children(&root_path, parent_relative_path.as_deref(), page);
-        glib::timeout_add_local(Duration::from_millis(2), move || {
-            match response.try_recv() {
-                Ok(Some(result)) => {
+        if let Err(error) = commands::dispatch_async_result(
+            "load_sidebar_folder_children",
+            move || response.recv(),
+            move |result| match result {
+                Ok(result) => {
                     let count = result.folders.len();
                     for folder in result.folders {
                         model.append(&BoxedAnyObject::new(FolderNode::folder(
@@ -411,15 +417,14 @@ impl TabsInner {
                             page.saturating_add(1),
                         );
                     }
-                    glib::ControlFlow::Break
                 }
-                Ok(None) => glib::ControlFlow::Continue,
                 Err(error) => {
                     log::warn!("Failed to load sound folder children: {error}");
-                    glib::ControlFlow::Break
                 }
-            }
-        });
+            },
+        ) {
+            log::warn!("Failed to dispatch sound folder child load: {error}");
+        }
     }
 
     fn reload_folder_roots(&self) {
@@ -469,7 +474,7 @@ impl TabsInner {
             let Some(inner) = inner_weak.upgrade() else {
                 return;
             };
-            inner.reload_tabs_now(select_id.as_deref());
+            inner.reload_tabs_async(select_id.as_deref());
         });
     }
 
@@ -518,48 +523,122 @@ impl TabsInner {
             let Some(inner) = inner_weak.upgrade() else {
                 return;
             };
-            inner.reload_tabs_now(select_id.as_deref());
+            inner.reload_tabs_async(select_id.as_deref());
         });
     }
 
-    fn reload_tabs_now(self: &Arc<Self>, select_id: Option<&str>) {
+    fn reload_tabs_async(self: &Arc<Self>, select_id: Option<&str>) {
         self.reload_folder_roots();
+        let generation = self.tab_generation.get().wrapping_add(1);
+        self.tab_generation.set(generation);
         self.list_box.select_row(None::<&ListBoxRow>);
         while let Some(row) = self.list_box.row_at_index(0) {
             self.list_box.remove(&row);
         }
 
-        let (tabs, active_id, total_sounds) = {
-            let cfg = self.state.config.lock();
-            (
-                cfg.tabs.clone(),
-                self.active_tab_id.lock().clone(),
-                cfg.sounds.len(),
-            )
-        };
-
-        self.list_box.append(&self.make_tab_row(
-            GENERAL_TAB_ID,
-            "General",
-            icons::FOLDER_OPEN,
-            total_sounds,
-            false,
-        ));
-
-        let mut sorted_tabs = tabs;
-        sorted_tabs.sort_by_key(|tab| tab.order);
-        for tab in &sorted_tabs {
+        let target_id = select_id
+            .map(str::to_string)
+            .unwrap_or_else(|| self.active_tab_id.lock().clone());
+        let response = self
+            .state
+            .library
+            .count(crate::library_store::LibraryScope::General, "");
+        let inner_weak = Arc::downgrade(self);
+        let target_for_completion = target_id.clone();
+        if let Err(error) = commands::dispatch_async_result(
+            "load_sidebar_general_count",
+            move || response.recv(),
+            move |result| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                if inner.tab_generation.get() != generation {
+                    return;
+                }
+                let total_sounds = match result {
+                    Ok(total) => total,
+                    Err(error) => {
+                        log::warn!("Failed to count General sidebar sounds: {error}");
+                        0
+                    }
+                };
+                inner.list_box.append(&inner.make_tab_row(
+                    GENERAL_TAB_ID,
+                    "General",
+                    icons::FOLDER_OPEN,
+                    total_sounds,
+                    false,
+                ));
+                inner.load_manual_tabs_async(0, generation, target_for_completion);
+            },
+        ) {
+            log::warn!("Failed to dispatch General sidebar count: {error}");
             self.list_box.append(&self.make_tab_row(
-                &tab.id,
-                &tab.name,
-                icons::FOLDER,
-                tab.sound_ids.len(),
-                true,
+                GENERAL_TAB_ID,
+                "General",
+                icons::FOLDER_OPEN,
+                0,
+                false,
             ));
+            self.load_manual_tabs_async(0, generation, target_id);
         }
+    }
 
-        let target_id = select_id.unwrap_or(&active_id).to_string();
-        if !self.select_row_by_id(&target_id) {
+    fn load_manual_tabs_async(self: &Arc<Self>, page: usize, generation: u64, target_id: String) {
+        let response = self.state.library.manual_tabs(page);
+        let inner_weak = Arc::downgrade(self);
+        let target_for_completion = target_id.clone();
+        if let Err(error) = commands::dispatch_async_result(
+            "load_sidebar_manual_tabs",
+            move || response.recv(),
+            move |result| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                if inner.tab_generation.get() != generation {
+                    return;
+                }
+                match result {
+                    Ok(result) => {
+                        let has_more = page
+                            .saturating_add(1)
+                            .saturating_mul(crate::library_store::PAGE_SIZE)
+                            < result.total;
+                        for tab in result.tabs {
+                            inner.list_box.append(&inner.make_tab_row(
+                                &tab.public_id,
+                                &tab.name,
+                                icons::FOLDER,
+                                tab.sound_count,
+                                true,
+                            ));
+                        }
+                        if has_more {
+                            inner.load_manual_tabs_async(
+                                page.saturating_add(1),
+                                generation,
+                                target_for_completion,
+                            );
+                        } else {
+                            inner.finish_tab_reload(&target_for_completion);
+                        }
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to load manual sidebar tabs: {error}");
+                        inner.finish_tab_reload(&target_for_completion);
+                    }
+                }
+            },
+        ) {
+            log::warn!("Failed to dispatch manual sidebar tab load: {error}");
+            if self.tab_generation.get() == generation {
+                self.finish_tab_reload(&target_id);
+            }
+        }
+    }
+
+    fn finish_tab_reload(&self, target_id: &str) {
+        if !self.select_row_by_id(target_id) {
             self.select_row_by_id(GENERAL_TAB_ID);
         }
     }
