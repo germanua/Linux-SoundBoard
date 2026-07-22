@@ -304,14 +304,23 @@ impl PagedSoundModel {
             return false;
         };
         let changed = objects.len().min(sounds.len());
-        for (object, sound) in objects.iter().zip(sounds) {
-            *object.borrow_mut::<SoundRowData>() = SoundRowData {
+        for (offset, sound) in sounds.into_iter().take(changed).enumerate() {
+            let object = BoxedAnyObject::new(SoundRowData {
                 id: sound.id.clone(),
                 name: sound.name.clone(),
                 duration_ms: sound.duration_ms,
                 hotkey: sound.hotkey.clone(),
                 sound: Some(sound),
-            };
+            });
+            imp.identities.borrow_mut().insert(
+                (
+                    generation,
+                    page.saturating_mul(PAGE_SIZE as u32)
+                        .saturating_add(offset as u32),
+                ),
+                object.downgrade(),
+            );
+            objects[offset] = object;
         }
         let payload_bytes = objects
             .iter()
@@ -334,14 +343,19 @@ impl PagedSoundModel {
         let page = position / PAGE_SIZE as u32;
         let offset = position as usize % PAGE_SIZE;
         let payload_bytes = {
-            let pages = self.imp().pages.borrow();
-            let Some(rows) = pages.get(&page) else {
+            let mut pages = self.imp().pages.borrow_mut();
+            let Some(rows) = pages.get_mut(&page) else {
                 return;
             };
-            let Some(object) = rows.get(offset) else {
+            let Some(slot) = rows.get_mut(offset) else {
                 return;
             };
-            *object.borrow_mut::<SoundRowData>() = row;
+            let object = BoxedAnyObject::new(row);
+            self.imp()
+                .identities
+                .borrow_mut()
+                .insert((self.imp().generation.get(), position), object.downgrade());
+            *slot = object;
             rows.iter()
                 .map(|object| row_payload_bytes(&object.borrow::<SoundRowData>()))
                 .fold(0_usize, usize::saturating_add)
@@ -482,6 +496,31 @@ mod tests {
         model.reset_for_test(512);
         assert!(!model.install_test_page_for_generation(0, first_generation));
         assert_eq!(model.cached_page_count(), 0);
+    }
+
+    #[test]
+    fn loaded_page_replaces_placeholder_identity_for_gtk_rebind() {
+        use gio::prelude::*;
+        use glib::BoxedAnyObject;
+
+        let model = PagedSoundModel::new_for_test(1);
+        let placeholder = model.item(0).expect("placeholder row");
+        let mut sound =
+            crate::config::Sound::new("Loaded".to_string(), "/music/loaded.flac".to_string());
+        sound.id = "loaded".to_string();
+
+        assert!(model.install_page(0, model.generation(), vec![sound]));
+        let loaded = model.item(0).expect("loaded row");
+
+        assert_ne!(placeholder, loaded);
+        assert_eq!(
+            loaded
+                .downcast::<BoxedAnyObject>()
+                .expect("boxed row")
+                .borrow::<SoundRowData>()
+                .name,
+            "Loaded"
+        );
     }
 
     #[test]
