@@ -569,10 +569,11 @@ fn show_config_error(app: &Application, error: &dyn std::error::Error) {
     );
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum StoragePreparation {
     Ready,
     NeedsLegacyMigration,
+    NeedsEmptyLibraryRecovery { library_id: String },
 }
 
 fn prepare_startup_storage() -> Result<StoragePreparation, String> {
@@ -644,6 +645,11 @@ fn prepare_startup_storage_at(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "Schema-8 settings have no library identity".to_string())?;
+    if !library_path.exists() {
+        return Ok(StoragePreparation::NeedsEmptyLibraryRecovery {
+            library_id: expected_id.to_string(),
+        });
+    }
     let identity = crate::legacy_migration::database_identity(library_path)
         .map_err(|error| error.to_string())?;
     if identity.library_id != expected_id {
@@ -697,6 +703,34 @@ fn start_application(
                 startup_mode,
                 previous_engine_version,
             ),
+            Ok(StoragePreparation::NeedsEmptyLibraryRecovery { library_id }) => {
+                let message = format!(
+                    "The sound library database '{}' is missing.",
+                    Config::config_path()
+                        .with_file_name("library.sqlite3")
+                        .display()
+                );
+                if Config::config_path()
+                    .with_file_name("config.json.pre-v8-backup")
+                    .is_file()
+                {
+                    show_storage_recovery_error(
+                        &callback_app,
+                        &callback_parent,
+                        &message,
+                        startup_mode,
+                        previous_engine_version,
+                    );
+                } else {
+                    prompt_empty_library_creation(
+                        &callback_app,
+                        &callback_parent,
+                        library_id,
+                        startup_mode,
+                        previous_engine_version,
+                    );
+                }
+            }
             Err(error) => show_storage_recovery_error(
                 &callback_app,
                 &callback_parent,
@@ -713,6 +747,58 @@ fn start_application(
             &error.to_string(),
         );
     }
+}
+
+fn prompt_empty_library_creation(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    library_id: String,
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) {
+    let dialog = adw::AlertDialog::new(
+        Some("Sound library is missing"),
+        Some(
+            "No recoverable library backup was found. You can exit without changes or create an empty library while keeping your current settings.",
+        ),
+    );
+    dialog.add_responses(&[("exit", "Exit"), ("create", "Create Empty Library")]);
+    dialog.set_close_response("exit");
+    dialog.set_default_response(Some("exit"));
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    dialog.choose(parent, None::<&gio::Cancellable>, move |response| {
+        if response != "create" {
+            callback_app.quit();
+            return;
+        }
+        let library_path = Config::config_path().with_file_name("library.sqlite3");
+        let app_done = callback_app.clone();
+        let parent_done = callback_parent.clone();
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "create_empty_library",
+            move || crate::legacy_migration::initialize_empty_library(&library_path, &library_id),
+            move |result| match result {
+                Ok(()) => {
+                    parent_done.close();
+                    start_application(&app_done, startup_mode, previous_engine_version);
+                }
+                Err(error) => show_startup_error(
+                    &app_done,
+                    &parent_done,
+                    "Empty library could not be created",
+                    &error.to_string(),
+                ),
+            },
+        ) {
+            show_startup_error(
+                &callback_app,
+                &callback_parent,
+                "Empty library creation could not start",
+                &error.to_string(),
+            );
+        }
+    });
 }
 
 fn prompt_legacy_migration(
@@ -1562,16 +1648,22 @@ mod tests {
     }
 
     #[test]
-    fn startup_preflight_refuses_schema_8_without_its_database() {
+    fn startup_preflight_offers_explicit_recovery_for_schema_8_without_its_database() {
         let temp = TestDir::new("missing-database");
         let mut config = Config::default();
         config
             .save_to_path(&temp.config_path())
             .expect("write schema-8 settings");
 
-        let error = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
-            .expect_err("missing database must fail");
-        assert!(error.contains("missing"));
+        let preparation = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+            .expect("missing database should offer an explicit recovery choice");
+
+        assert_eq!(
+            preparation,
+            StoragePreparation::NeedsEmptyLibraryRecovery {
+                library_id: config.library_id.expect("schema-8 identity"),
+            }
+        );
         assert!(!temp.library_path().exists());
     }
 
