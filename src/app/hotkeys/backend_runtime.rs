@@ -18,6 +18,9 @@ pub trait HotkeyBackend: Send + Sync {
     fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
         self.register_many(bindings)
     }
+    fn begin_staged(&self) -> Result<(), HotkeyError> {
+        self.stage_many(&[])
+    }
     fn commit_staged(&self) -> Result<(), HotkeyError> {
         Ok(())
     }

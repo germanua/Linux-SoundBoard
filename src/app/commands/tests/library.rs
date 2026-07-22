@@ -544,8 +544,13 @@ fn store_refresh_streams_nested_folders_without_generated_tabs() {
     let config = Arc::new(Mutex::new(config));
     let library = create_test_library(&config);
 
-    let summary = commands::refresh_sounds_with_store(Arc::clone(&config), library.clone())
-        .expect("store refresh succeeds");
+    let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(
+        library.clone(),
+        create_mock_hotkey_manager(),
+    );
+    let summary =
+        commands::refresh_sounds_with_store(Arc::clone(&config), library.clone(), projection)
+            .expect("store refresh succeeds");
 
     assert_eq!(summary.added, 1);
     assert!(config.lock().tabs.is_empty());
@@ -619,11 +624,15 @@ fn store_backed_rename_and_remove_work_for_scanned_sounds_absent_from_legacy_jso
         "Renamed"
     );
 
+    let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(
+        library.clone(),
+        create_mock_hotkey_manager(),
+    );
     commands::remove_sounds_with_store(
         vec!["scanned".to_string()],
         config,
-        create_mock_hotkey_manager(),
         library.clone(),
+        projection,
     )
     .expect("remove database-only sound");
     assert!(library

@@ -2,7 +2,7 @@ use crate::audio::pipewire_detection::PipeWireStatus;
 use crate::audio::AudioPlayer;
 use crate::commands::LoudnessCoordinators;
 use crate::config::Config;
-use crate::hotkeys::HotkeyManager;
+use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
 use crate::library_store::LibraryStore;
 use parking_lot::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
@@ -30,6 +30,7 @@ pub struct AppState {
     pub library: LibraryStore,
     pub player: Arc<AudioPlayer>,
     pub hotkeys: Arc<Mutex<HotkeyManager>>,
+    pub hotkey_projection: HotkeyProjectionCoordinator,
     pub pipewire_status: Arc<Mutex<PipeWireStatus>>,
     /// Debounce state for `commands::play_sound_async`. Prevents hotkey
     /// auto-repeat from dispatching the same sound twice within 30 ms.

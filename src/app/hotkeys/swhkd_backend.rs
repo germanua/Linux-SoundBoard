@@ -113,7 +113,7 @@ impl SwhkdBackend {
 
         let pipe_path = Self::create_hotkey_pipe()?;
 
-        let config = SwhkdConfig::new(pipe_path.clone())?;
+        let mut config = SwhkdConfig::new(pipe_path.clone())?;
 
         // Always run a fresh, app-managed swhkd. Any daemon already running is
         // either an orphan from a previous session or a foreign instance whose
@@ -125,7 +125,8 @@ impl SwhkdBackend {
         }
 
         info!("Spawning swhkd/swhks processes");
-        config.write_to_file()?;
+        config.begin_projection()?;
+        config.commit_projection()?;
         let processes = SwhkdProcesses::spawn_managed(&config.config_path)?;
 
         let processes_arc = Arc::new(Mutex::new(processes));
@@ -206,53 +207,6 @@ impl SwhkdBackend {
         }
     }
 
-    fn reload_swhkd_async(&self) {
-        let processes = Arc::clone(&self.processes);
-        let config = Arc::clone(&self.config);
-        thread::spawn(move || {
-            let swhkd_pid = processes.lock().swhkd_pid;
-
-            thread::sleep(Duration::from_millis(SWHKD_RELOAD_PRE_SIGNAL_WAIT_MS));
-            if let Err(e) = SwhkdConfig::reload_swhkd(swhkd_pid) {
-                warn!(
-                    "Failed to reload swhkd config: {}. Restoring last-known-good projection.",
-                    e
-                );
-                if let Err(restore_error) = config
-                    .lock()
-                    .restore_last_good()
-                    .and_then(|_| SwhkdConfig::reload_swhkd(swhkd_pid))
-                {
-                    warn!("Failed to restore last-known-good swhkd config: {restore_error}");
-                }
-                return;
-            }
-
-            thread::sleep(Duration::from_millis(SWHKD_RELOAD_POST_SIGNAL_WAIT_MS));
-            info!("swhkd config reload complete");
-        });
-    }
-
-    fn unregister_many_inner(&self, sound_ids: &[String]) -> Result<(), HotkeyError> {
-        if sound_ids.is_empty() {
-            return Ok(());
-        }
-
-        let mut config = self.config.lock();
-        let removed = config.remove_hotkeys(sound_ids);
-        if removed == 0 {
-            return Ok(());
-        }
-
-        config.write_to_file()?;
-        drop(config);
-
-        // Keep delete-path unregisters off the GTK thread.
-        self.reload_swhkd_async();
-
-        Ok(())
-    }
-
     fn validate_hotkey_binding(hotkey: &str) -> Result<(), HotkeyError> {
         let trimmed = hotkey.trim();
         if trimmed.is_empty() {
@@ -278,7 +232,7 @@ impl SwhkdBackend {
         let mut failed = Vec::new();
         for (sound_id, hotkey) in bindings {
             match Self::validate_hotkey_binding(hotkey)
-                .and_then(|_| config.add_hotkey(sound_id, hotkey))
+                .and_then(|_| config.stage_hotkey(sound_id, hotkey))
             {
                 Ok(()) => {}
                 Err(err) => failed.push(format!("{sound_id}={hotkey} ({err})")),
@@ -350,52 +304,52 @@ impl HotkeyBackend for SwhkdBackend {
     }
 
     fn register(&self, sound_id: &str, hotkey: &str) -> Result<(), HotkeyError> {
-        debug!("Registering hotkey: {} -> {}", sound_id, hotkey);
-
-        Self::validate_hotkey_binding(hotkey)?;
-
-        let mut config = self.config.lock();
-        config.add_hotkey(sound_id, hotkey)?;
-
-        config.write_to_file()?;
-
-        drop(config);
-
-        self.reload_or_restore_last_good()
+        let _ = (sound_id, hotkey);
+        Err(HotkeyError::Process(
+            "swhkd hotkeys must be updated through a complete projection".to_string(),
+        ))
     }
 
     fn register_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
-        if bindings.is_empty() {
-            return Ok(());
-        }
+        self.begin_staged()?;
         let add_result = self.stage_many(bindings);
         self.commit_staged()?;
         add_result
     }
 
+    fn begin_staged(&self) -> Result<(), HotkeyError> {
+        self.config.lock().begin_projection()
+    }
+
     fn stage_many(&self, bindings: &[(String, String)]) -> Result<(), HotkeyError> {
-        Self::add_validated_hotkey_batch(&mut self.config.lock(), bindings)
+        let mut config = self.config.lock();
+        if !config.projection_started() {
+            config.begin_projection()?;
+        }
+        Self::add_validated_hotkey_batch(&mut config, bindings)
     }
 
     fn commit_staged(&self) -> Result<(), HotkeyError> {
-        self.config.lock().write_to_file()?;
+        self.config.lock().commit_projection()?;
         self.reload_or_restore_last_good()
     }
 
     fn abort_staged(&self) {
-        self.config.lock().hotkeys.clear();
+        self.config.lock().abort_projection();
     }
 
     fn unregister(&self, sound_id: &str) -> Result<(), HotkeyError> {
-        debug!("Unregistering hotkey: {}", sound_id);
-        self.unregister_many_inner(&[sound_id.to_string()])
+        let _ = sound_id;
+        Err(HotkeyError::Process(
+            "swhkd hotkeys must be updated through a complete projection".to_string(),
+        ))
     }
 
     fn unregister_many(&self, sound_ids: &[String]) -> Result<(), HotkeyError> {
-        if !sound_ids.is_empty() {
-            debug!("Unregistering {} hotkeys", sound_ids.len());
-        }
-        self.unregister_many_inner(sound_ids)
+        let _ = sound_ids;
+        Err(HotkeyError::Process(
+            "swhkd hotkeys must be updated through a complete projection".to_string(),
+        ))
     }
 
     fn start_listener(&self, sender: SyncSender<String>) {
@@ -543,38 +497,29 @@ mod tests {
 
     #[test]
     fn register_many_batch_adds_all_bindings() {
-        let pipe_path = PathBuf::from("/tmp/test.pipe");
-        let mut config = SwhkdConfig {
-            hotkeys: Default::default(),
-            config_path: PathBuf::from("/tmp/test_swhkdrc"),
-            pipe_path,
-        };
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-batch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut config = SwhkdConfig::for_paths(dir.join("swhkdrc"), dir.join("test.pipe"));
+        config.begin_projection().unwrap();
         let bindings = vec![
             ("sound-1".to_string(), "Ctrl+KeyA".to_string()),
             ("sound-2".to_string(), "Alt+KeyB".to_string()),
         ];
 
         SwhkdBackend::add_validated_hotkey_batch(&mut config, &bindings).unwrap();
-
-        assert_eq!(config.hotkeys.len(), 2);
-        assert_eq!(
-            config.hotkeys.get("sound-1").map(String::as_str),
-            Some("ctrl + ~a")
-        );
-        assert_eq!(
-            config.hotkeys.get("sound-2").map(String::as_str),
-            Some("alt + ~b")
-        );
+        assert_eq!(config.commit_projection().unwrap(), 2);
+        let rendered = fs::read_to_string(&config.config_path).unwrap();
+        assert!(rendered.contains("ctrl + ~a"));
+        assert!(rendered.contains("alt + ~b"));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn register_many_batch_skips_invalid_without_dropping_valid_bindings() {
-        let pipe_path = PathBuf::from("/tmp/test.pipe");
-        let mut config = SwhkdConfig {
-            hotkeys: Default::default(),
-            config_path: PathBuf::from("/tmp/test_swhkdrc"),
-            pipe_path,
-        };
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-partial-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut config = SwhkdConfig::for_paths(dir.join("swhkdrc"), dir.join("test.pipe"));
+        config.begin_projection().unwrap();
         let bindings = vec![
             ("sound-1".to_string(), "Ctrl+KeyA".to_string()),
             ("sound-2".to_string(), "Ctrl+NumpadDivide".to_string()),
@@ -584,10 +529,10 @@ mod tests {
 
         assert!(err.to_string().contains("Some hotkeys were skipped"));
         assert!(err.to_string().contains("sound-2=Ctrl+NumpadDivide"));
-        assert_eq!(config.hotkeys.len(), 1);
-        assert_eq!(
-            config.hotkeys.get("sound-1").map(String::as_str),
-            Some("ctrl + ~a")
-        );
+        assert_eq!(config.commit_projection().unwrap(), 1);
+        let rendered = fs::read_to_string(&config.config_path).unwrap();
+        assert!(rendered.contains("ctrl + ~a"));
+        assert!(!rendered.contains("sound-2"));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

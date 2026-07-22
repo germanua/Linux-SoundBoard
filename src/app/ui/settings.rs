@@ -329,6 +329,7 @@ fn build_general_page(
                                         if let Err(e) = commands::refresh_sounds_with_store_async(
                                             Arc::clone(&state3.config),
                                             state3.library.clone(),
+                                            state3.hotkey_projection.clone(),
                                             move |result| {
                                                 add_folder_row_refresh.set_sensitive(true);
                                                 if let Err(e) = result {

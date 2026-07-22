@@ -554,11 +554,15 @@ fn start_application(
 
     let pipewire_status = crate::audio::pipewire_detection::check_pipewire();
 
+    let hotkeys = Arc::new(Mutex::new(hotkey_manager));
+    let hotkey_projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
     let state = Arc::new(AppState {
         config: Arc::new(Mutex::new(config)),
         library,
         player: Arc::new(player),
-        hotkeys: Arc::new(Mutex::new(hotkey_manager)),
+        hotkeys,
+        hotkey_projection,
         pipewire_status: Arc::new(Mutex::new(pipewire_status)),
         play_dispatch_debounce: Arc::new(Mutex::new(None)),
         loudness_coordinators: crate::commands::LoudnessCoordinators::new(),
@@ -700,58 +704,15 @@ pub fn backfill_missing_sound_durations(config: &mut Config) -> bool {
     changed
 }
 
-fn project_startup_hotkeys(
-    library: &crate::library_store::LibraryStore,
-) -> impl FnMut() -> Result<Option<Vec<(String, String)>>, crate::hotkeys::HotkeyError> + '_ {
-    let mut after = None;
-    let mut finished = false;
-    move || {
-        if finished {
-            return Ok(None);
-        }
-        let page = library
-            .hotkey_bindings_after(after.as_deref())
-            .recv()
-            .map_err(|error| {
-                crate::hotkeys::HotkeyError::Io(format!(
-                    "Could not read persisted hotkeys: {error}"
-                ))
-            })?;
-        let count = page.bindings.len();
-        after = page
-            .bindings
-            .last()
-            .map(|binding| binding.binding_id.clone());
-        if count < crate::library_store::PAGE_SIZE {
-            finished = true;
-        }
-        if page.bindings.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(
-            page.bindings
-                .into_iter()
-                .map(|binding| (binding.binding_id, binding.accelerator))
-                .collect(),
-        ))
-    }
-}
-
 fn schedule_startup_hotkey_projection(state: Arc<AppState>) {
-    let worker_state = Arc::clone(&state);
+    let projection = state.hotkey_projection.clone();
     let completion_state = Arc::clone(&state);
     if let Err(error) = crate::commands::dispatch_async_result(
         "project_startup_hotkeys",
-        move || {
-            let mut hotkeys = worker_state.hotkeys.lock();
-            hotkeys.project_hotkey_pages_blocking(project_startup_hotkeys(&worker_state.library))
-        },
+        move || projection.reconcile_blocking(),
         move |result| {
             let status = match result {
-                Ok(count) => {
-                    info!("Projected {count} persisted hotkey binding(s)");
-                    completion_state.hotkeys.lock().status_message()
-                }
+                Ok(()) => completion_state.hotkeys.lock().status_message(),
                 Err(error) => {
                     log::error!("Could not project persisted hotkeys: {error}");
                     "Hotkeys: Error (see logs)".to_string()

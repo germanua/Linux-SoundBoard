@@ -2,6 +2,7 @@ mod backend_runtime;
 mod error;
 mod manager_runtime;
 mod parsing;
+mod projection;
 mod swhkd_backend;
 mod swhkd_config;
 mod swhkd_install;
@@ -24,6 +25,7 @@ pub use parsing::{
     canonicalize_hotkey_string, normalize_capture_key, parse_hotkey_spec, HotkeyCode,
     HotkeyModifier, HotkeySpec,
 };
+pub use projection::HotkeyProjectionCoordinator;
 pub use swhkd_install::{
     install_swhkd_native_detailed, manual_swhkd_install_commands, should_offer_swhkd_install,
     SwhkdInstallError, SwhkdInstallErrorKind, SwhkdInstallReport, SwhkdInstallState,

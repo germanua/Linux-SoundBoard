@@ -673,8 +673,8 @@ where
 pub fn remove_sounds_with_store(
     ids: Vec<String>,
     config: Arc<Mutex<Config>>,
-    hotkeys: Arc<Mutex<HotkeyManager>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
     let mut removed = Vec::new();
     for id in &ids {
@@ -697,7 +697,9 @@ pub fn remove_sounds_with_store(
         }) {
             log::warn!("Legacy library mirror failed after removing sounds: {error}");
         }
-        unregister_hotkeys_best_effort(&hotkeys, &removed, "remove_sounds_with_store");
+        projection
+            .reconcile_blocking()
+            .map_err(CommandError::HotkeyProjection)?;
     }
     Ok(())
 }
@@ -705,8 +707,8 @@ pub fn remove_sounds_with_store(
 pub fn remove_sounds_with_store_async<F>(
     ids: Vec<String>,
     config: Arc<Mutex<Config>>,
-    hotkeys: Arc<Mutex<HotkeyManager>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -714,7 +716,7 @@ where
 {
     dispatch_async_result(
         "remove_sounds",
-        move || remove_sounds_with_store(ids, config, hotkeys, library),
+        move || remove_sounds_with_store(ids, config, library, projection),
         on_complete,
     )
 }
@@ -802,6 +804,7 @@ pub fn remove_sound_folder_with_store(
     folder: String,
     config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
     library
         .remove_root(&folder)
@@ -809,13 +812,17 @@ pub fn remove_sound_folder_with_store(
         .map_err(|error| CommandError::Library(error.to_string()))?;
     with_saved_config(&config, |candidate| {
         candidate.remove_sound_folder(&folder);
-    })
+    })?;
+    projection
+        .reconcile_blocking()
+        .map_err(CommandError::HotkeyProjection)
 }
 
 pub fn remove_sound_folder_with_store_async<F>(
     folder: String,
     config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -823,7 +830,7 @@ where
 {
     dispatch_async_result(
         "remove_sound_folder",
-        move || remove_sound_folder_with_store(folder, config, library),
+        move || remove_sound_folder_with_store(folder, config, library, projection),
         on_complete,
     )
 }
@@ -1054,6 +1061,7 @@ where
 pub fn refresh_sounds_with_store(
     config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<RefreshSummary, CommandError> {
     let folders = config.lock().sound_folders.clone();
     let before = library
@@ -1139,6 +1147,9 @@ pub fn refresh_sounds_with_store(
         .count(LibraryScope::General, "")
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?;
+    projection
+        .reconcile_blocking()
+        .map_err(CommandError::HotkeyProjection)?;
     Ok(RefreshSummary {
         added: after.saturating_sub(before),
         removed: before.saturating_sub(after),
@@ -1150,6 +1161,7 @@ pub fn refresh_sounds_with_store(
 pub fn refresh_sounds_with_store_async<F>(
     config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -1157,7 +1169,7 @@ where
 {
     dispatch_async_result(
         "refresh_sounds",
-        move || refresh_sounds_with_store(config, library),
+        move || refresh_sounds_with_store(config, library, projection),
         on_complete,
     )
 }

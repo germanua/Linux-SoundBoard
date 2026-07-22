@@ -73,6 +73,7 @@ fn build_sound_folder_row(
                 folder_owned.clone(),
                 Arc::clone(&state2.config),
                 state2.library.clone(),
+                state2.hotkey_projection.clone(),
                 move |result| match result {
                     Ok(()) => {
                         log::info!("Remove folder command succeeded");

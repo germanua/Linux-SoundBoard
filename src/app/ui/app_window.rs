@@ -70,13 +70,13 @@ pub fn build_window(
             banner.set_revealed(true);
             if can_install {
                 let dialog_host = dialog_host.clone();
-                let config = Arc::clone(&state.config);
                 let hotkeys = Arc::clone(&state.hotkeys);
+                let projection = state.hotkey_projection.clone();
                 let reason_text = reason.clone();
                 banner.connect_button_clicked(move |b| {
                     dialog_host.prompt_swhkd_install(
-                        Arc::clone(&config),
                         Arc::clone(&hotkeys),
+                        projection.clone(),
                         &reason_text,
                     );
                     b.set_revealed(false);

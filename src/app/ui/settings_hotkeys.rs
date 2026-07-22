@@ -56,13 +56,13 @@ pub(super) fn build_hotkeys_page(
                 .build();
 
             let hotkeys = Arc::clone(&state.hotkeys);
-            let config = Arc::clone(&state.config);
+            let projection = state.hotkey_projection.clone();
             let reason_text = reason.clone();
             let dialog_host_install = dialog_host.clone();
             install_btn.connect_clicked(move |_| {
                 dialog_host_install.prompt_swhkd_install(
-                    Arc::clone(&config),
                     Arc::clone(&hotkeys),
+                    projection.clone(),
                     &reason_text,
                 );
             });
@@ -149,8 +149,8 @@ fn build_hotkey_row(
                         action.id().to_string(),
                         hotkey,
                         Arc::clone(&state3.config),
-                        Arc::clone(&state3.hotkeys),
                         state3.library.clone(),
+                        state3.hotkey_projection.clone(),
                         move |result| match result {
                             Ok(_) => {
                                 if let Some(label) = lbl_done.upgrade() {
@@ -179,8 +179,8 @@ fn build_hotkey_row(
                                         dialog_host.show_hotkey_error_with_install_option(
                                             "Failed to Set Control Hotkey",
                                             &message,
-                                            Arc::clone(&state_done.config),
                                             Arc::clone(&state_done.hotkeys),
+                                            state_done.hotkey_projection.clone(),
                                         );
                                     } else {
                                         dialog_host
@@ -214,8 +214,8 @@ fn build_hotkey_row(
                 action.id().to_string(),
                 None,
                 Arc::clone(&state2.config),
-                Arc::clone(&state2.hotkeys),
                 state2.library.clone(),
+                state2.hotkey_projection.clone(),
                 move |result| match result {
                     Ok(_) => {
                         if let Some(label) = lbl_done.upgrade() {

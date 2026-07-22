@@ -554,8 +554,8 @@ impl SoundListInner {
                             sound.id.clone(),
                             hotkey,
                             Arc::clone(&state_confirm.config),
-                            Arc::clone(&state_confirm.hotkeys),
                             state_confirm.library.clone(),
+                            state_confirm.hotkey_projection.clone(),
                             move |result| match result {
                                 Ok(_) => inner_done.refresh_from_state_inner(),
                                 Err(e) => {
@@ -570,8 +570,8 @@ impl SoundListInner {
                                             dialog_host.show_hotkey_error_with_install_option(
                                                 "Failed to Set Hotkey",
                                                 &message,
-                                                Arc::clone(&state_done.config),
                                                 Arc::clone(&state_done.hotkeys),
+                                                state_done.hotkey_projection.clone(),
                                             );
                                         } else {
                                             dialog_host
@@ -784,8 +784,8 @@ impl SoundListInner {
         if let Err(err) = commands::remove_sounds_with_store_async(
             ids.clone(),
             Arc::clone(&self.state.config),
-            Arc::clone(&self.state.hotkeys),
             self.state.library.clone(),
+            self.state.hotkey_projection.clone(),
             move |result| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;

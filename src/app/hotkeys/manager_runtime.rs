@@ -16,6 +16,30 @@ pub struct HotkeyManager {
     deferred_start: bool,
 }
 
+#[cfg(test)]
+struct NoopHotkeyBackend;
+
+#[cfg(test)]
+impl HotkeyBackend for NoopHotkeyBackend {
+    fn name(&self) -> &'static str {
+        "test-noop"
+    }
+
+    fn register(&self, _binding_id: &str, _hotkey: &str) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn unregister(&self, _binding_id: &str) -> Result<(), HotkeyError> {
+        Ok(())
+    }
+
+    fn start_listener(&self, _sender: SyncSender<String>) {}
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 impl HotkeyManager {
     pub fn new_deferred(sender: SyncSender<String>) -> Self {
         info!("Initializing hotkey backend manager");
@@ -28,6 +52,16 @@ impl HotkeyManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_test_noop() -> Self {
+        Self {
+            backend: Some(Box::new(NoopHotkeyBackend)),
+            disabled_reason: None,
+            deferred_sender: None,
+            deferred_start: false,
+        }
+    }
+
     pub fn project_hotkey_pages_blocking<F>(
         &mut self,
         mut next_page: F,
@@ -36,8 +70,11 @@ impl HotkeyManager {
         F: FnMut() -> Result<Option<Vec<(String, String)>>, HotkeyError>,
     {
         let mut projected = 0_usize;
-        let mut staged = false;
+        let mut staged = self.backend.is_some();
         let mut first_error = None;
+        if let Some(backend) = &self.backend {
+            backend.begin_staged()?;
+        }
         loop {
             let page = match next_page() {
                 Ok(Some(page)) => page,
@@ -56,7 +93,10 @@ impl HotkeyManager {
             let backend = self.backend.as_ref().ok_or_else(|| {
                 HotkeyError::BackendUnavailable("Global hotkeys unavailable".to_string())
             })?;
-            staged = true;
+            if !staged {
+                backend.begin_staged()?;
+                staged = true;
+            }
             projected = projected.saturating_add(page.len());
             if let Err(error) = backend.stage_many(&page) {
                 first_error.get_or_insert(error);
@@ -404,7 +444,28 @@ mod tests {
 
         assert_eq!(projected, 3);
         let projection = projection.lock();
-        assert_eq!(projection.page_sizes, [1, 2]);
+        assert_eq!(projection.page_sizes, [0, 1, 2]);
+        assert_eq!(projection.commits, 1);
+    }
+
+    #[test]
+    fn empty_projection_clears_an_active_backend() {
+        let projection = Arc::new(parking_lot::Mutex::new(ProjectionState::default()));
+        let mut manager = HotkeyManager {
+            backend: Some(Box::new(ProjectionBackend(Arc::clone(&projection)))),
+            disabled_reason: None,
+            deferred_sender: None,
+            deferred_start: false,
+        };
+
+        assert_eq!(
+            manager
+                .project_hotkey_pages_blocking(|| Ok(None))
+                .expect("project empty desired state"),
+            0
+        );
+        let projection = projection.lock();
+        assert_eq!(projection.page_sizes, [0]);
         assert_eq!(projection.commits, 1);
     }
 }

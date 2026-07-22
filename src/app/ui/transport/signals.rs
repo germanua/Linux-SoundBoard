@@ -401,6 +401,7 @@ impl TransportBar {
                 if let Err(e) = commands::refresh_sounds_with_store_async(
                     Arc::clone(&state_refresh.config),
                     state_refresh.library.clone(),
+                    state_refresh.hotkey_projection.clone(),
                     move |result| {
                         match result {
                             Ok(_) => {

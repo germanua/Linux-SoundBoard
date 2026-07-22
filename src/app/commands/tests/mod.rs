@@ -42,6 +42,10 @@ fn create_mock_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(manager))
 }
 
+fn create_projection_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
+    Arc::new(Mutex::new(HotkeyManager::new_test_noop()))
+}
+
 fn create_test_library(config: &Arc<Mutex<Config>>) -> crate::library_store::LibraryStore {
     let path = std::env::temp_dir()
         .join(format!("lsb-command-library-{}", uuid::Uuid::new_v4()))
@@ -269,7 +273,7 @@ fn test_save_config() {
 #[allow(clippy::print_stdout)]
 fn test_set_hotkey_valid() {
     let config = create_test_config_state();
-    let hotkeys = create_mock_hotkey_manager();
+    let hotkeys = create_projection_hotkey_manager();
 
     let mut config_guard = config.lock();
     config_guard
@@ -277,13 +281,16 @@ fn test_set_hotkey_valid() {
         .push(Sound::new("Test".to_string(), "/tmp/test.mp3".to_string()));
     let sound_id = config_guard.sounds[0].id.clone();
     drop(config_guard);
+    let library = create_test_library(&config);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
     let result = commands::set_hotkey(
         sound_id,
         Some("Ctrl+1".to_string()),
         config.clone(),
-        hotkeys,
-        create_test_library(&config),
+        library,
+        projection,
     );
     match result {
         Ok(_) => {
@@ -303,7 +310,7 @@ fn test_set_hotkey_valid() {
 #[allow(clippy::print_stdout)]
 fn test_set_hotkey_clear() {
     let config = create_test_config_state();
-    let hotkeys = create_mock_hotkey_manager();
+    let hotkeys = create_projection_hotkey_manager();
 
     let mut config_guard = config.lock();
     let mut sound = Sound::new("Test".to_string(), "/tmp/test.mp3".to_string());
@@ -311,14 +318,11 @@ fn test_set_hotkey_clear() {
     config_guard.sounds.push(sound);
     let sound_id = config_guard.sounds[0].id.clone();
     drop(config_guard);
+    let library = create_test_library(&config);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
-    let result = commands::set_hotkey(
-        sound_id,
-        None,
-        config.clone(),
-        hotkeys,
-        create_test_library(&config),
-    );
+    let result = commands::set_hotkey(sound_id, None, config.clone(), library, projection);
     match result {
         Ok(_) => {
             let cfg = config.lock();
@@ -339,13 +343,16 @@ fn test_set_control_hotkey_rejects_duplicate_control_binding() {
         ControlHotkeyAction::PlayPause,
         Some("Ctrl+Alt+KeyP".to_string()),
     );
+    let library = create_test_library(&config);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
         config.clone(),
-        hotkeys,
-        create_test_library(&config),
+        library,
+        projection,
     );
 
     let err = result.expect_err("duplicate control hotkey must be rejected");
@@ -363,13 +370,16 @@ fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
     let mut sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
     sound.hotkey = Some("Ctrl+Alt+KeyP".to_string());
     config.lock().sounds.push(sound);
+    let library = create_test_library(&config);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
     let result = commands::set_control_hotkey(
         ControlHotkeyAction::StopAll.id().to_string(),
         Some("Ctrl+Alt+KeyP".to_string()),
         config.clone(),
-        hotkeys,
-        create_test_library(&config),
+        library,
+        projection,
     );
 
     let err = result.expect_err("duplicate sound hotkey must be rejected");

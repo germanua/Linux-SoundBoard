@@ -290,8 +290,8 @@ impl DialogHost {
         &self,
         title: &str,
         message: &str,
-        config: Arc<Mutex<crate::config::Config>>,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
     ) {
         self.prepare("message", title, message);
         self.configure_actions(
@@ -306,8 +306,8 @@ impl DialogHost {
             if response == "install" {
                 if let Some(host) = host.upgrade() {
                     host.prompt_swhkd_install(
-                        Arc::clone(&config),
                         Arc::clone(&hotkeys),
+                        projection.clone(),
                         &message_text,
                     );
                 }
@@ -318,8 +318,8 @@ impl DialogHost {
 
     pub fn prompt_swhkd_install(
         &self,
-        config: Arc<Mutex<crate::config::Config>>,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
         reason: &str,
     ) {
         let prompt = format!(
@@ -348,8 +348,8 @@ impl DialogHost {
 
             let result_host = host.clone();
             if let Err(err) = crate::commands::install_swhkd_async(
-                Arc::clone(&config),
                 Arc::clone(&hotkeys),
+                projection.clone(),
                 move |result| {
                     if let Some(host) = result_host.upgrade() {
                         match result {
