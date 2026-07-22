@@ -623,7 +623,7 @@ mod tests {
     fn about_uses_the_supported_audio_format_list() {
         assert_eq!(
             crate::ui::dnd_import::supported_audio_formats(),
-            "MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
+            "WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
         );
     }
 }

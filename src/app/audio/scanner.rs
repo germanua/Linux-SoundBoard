@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 
-pub(crate) const AUDIO_EXTENSIONS: &[&str] = &["mp3", "ogg", "opus", "flac", "m4a", "aac", "mp4"];
+pub(crate) const AUDIO_EXTENSIONS: &[&str] =
+    &["wav", "mp3", "ogg", "opus", "flac", "m4a", "aac", "mp4"];
 
 #[derive(Debug, Clone)]
 pub struct AudioFile {
@@ -249,6 +250,12 @@ mod tests {
     fn is_audio_file_accepts_opus_case_insensitive() {
         assert!(is_audio_file("/tmp/sound.opus"));
         assert!(is_audio_file("/tmp/sound.OPUS"));
+    }
+
+    #[test]
+    fn is_audio_file_accepts_wav_case_insensitive() {
+        assert!(is_audio_file("/tmp/sound.wav"));
+        assert!(is_audio_file("/tmp/sound.WAV"));
     }
 
     #[test]
