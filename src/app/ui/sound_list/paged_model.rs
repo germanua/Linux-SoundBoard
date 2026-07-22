@@ -12,6 +12,26 @@ use crate::library_store::{LibraryScope, LibraryStore, PAGE_SIZE};
 use super::SoundRowData;
 
 const MAX_CACHED_PAGES: usize = 4;
+const MAX_CACHED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+
+fn row_payload_bytes(row: &SoundRowData) -> usize {
+    let sound_bytes = row.sound.as_ref().map_or(0, |sound| {
+        sound.id.capacity()
+            + sound.name.capacity()
+            + sound.path.capacity()
+            + sound.source_path.as_ref().map_or(0, String::capacity)
+            + sound.hotkey.as_ref().map_or(0, String::capacity)
+            + sound
+                .loudness_source_fingerprint
+                .as_ref()
+                .map_or(0, String::capacity)
+    });
+    std::mem::size_of::<SoundRowData>()
+        + row.id.capacity()
+        + row.name.capacity()
+        + row.hotkey.as_ref().map_or(0, String::capacity)
+        + sound_bytes
+}
 
 mod imp {
     use super::*;
@@ -25,8 +45,11 @@ mod imp {
         pub scope: RefCell<Option<LibraryScope>>,
         pub search: RefCell<String>,
         pub pages: RefCell<HashMap<u32, Vec<BoxedAnyObject>>>,
+        pub identities: RefCell<HashMap<(u64, u32), glib::WeakRef<BoxedAnyObject>>>,
         pub pending: RefCell<HashSet<u32>>,
         pub lru: RefCell<VecDeque<u32>>,
+        pub page_payload_bytes: RefCell<HashMap<u32, usize>>,
+        pub cached_payload_bytes: Cell<usize>,
     }
 
     #[glib::object_subclass]
@@ -84,8 +107,11 @@ impl PagedSoundModel {
         *imp.search.borrow_mut() = search.clone();
         let old_total = imp.total.replace(0);
         imp.pages.borrow_mut().clear();
+        imp.identities.borrow_mut().clear();
         imp.pending.borrow_mut().clear();
         imp.lru.borrow_mut().clear();
+        imp.page_payload_bytes.borrow_mut().clear();
+        imp.cached_payload_bytes.set(0);
         if old_total > 0 {
             self.items_changed(0, old_total, 0);
         }
@@ -132,17 +158,15 @@ impl PagedSoundModel {
         if len == 0 {
             return;
         }
+        imp.identities
+            .borrow_mut()
+            .retain(|_, weak| weak.upgrade().is_some());
+        let generation = imp.generation.get();
         let placeholders = (0..len)
-            .map(|_| {
-                BoxedAnyObject::new(SoundRowData {
-                    id: String::new(),
-                    name: "Loading…".to_string(),
-                    duration_ms: None,
-                    hotkey: None,
-                })
-            })
+            .map(|offset| self.placeholder(generation, start.saturating_add(offset as u32)))
             .collect();
         imp.pages.borrow_mut().insert(page, placeholders);
+        self.set_page_payload(page, 0);
         self.touch_page(page);
 
         if !imp.pending.borrow_mut().insert(page) {
@@ -155,7 +179,6 @@ impl PagedSoundModel {
             return;
         };
         let search = imp.search.borrow().clone();
-        let generation = imp.generation.get();
         let response = library.page(scope, &search, page as usize);
         let weak = self.downgrade();
         glib::timeout_add_local(Duration::from_millis(2), move || {
@@ -177,6 +200,31 @@ impl PagedSoundModel {
         });
     }
 
+    fn placeholder(&self, generation: u64, position: u32) -> BoxedAnyObject {
+        let key = (generation, position);
+        if let Some(row) = self
+            .imp()
+            .identities
+            .borrow()
+            .get(&key)
+            .and_then(glib::WeakRef::upgrade)
+        {
+            return row;
+        }
+        let row = BoxedAnyObject::new(SoundRowData {
+            id: String::new(),
+            name: "Loading…".to_string(),
+            duration_ms: None,
+            hotkey: None,
+            sound: None,
+        });
+        self.imp()
+            .identities
+            .borrow_mut()
+            .insert(key, row.downgrade());
+        row
+    }
+
     fn touch_page(&self, page: u32) {
         let imp = self.imp();
         let mut lru = imp.lru.borrow_mut();
@@ -184,11 +232,41 @@ impl PagedSoundModel {
             lru.remove(position);
         }
         lru.push_back(page);
-        while lru.len() > MAX_CACHED_PAGES {
+        while lru.len() > MAX_CACHED_PAGES
+            || self.imp().cached_payload_bytes.get() > MAX_CACHED_PAYLOAD_BYTES
+        {
             if let Some(evicted) = lru.pop_front() {
-                imp.pages.borrow_mut().remove(&evicted);
-                imp.pending.borrow_mut().remove(&evicted);
+                self.evict_page(evicted);
             }
+        }
+    }
+
+    fn set_page_payload(&self, page: u32, payload_bytes: usize) {
+        let previous = self
+            .imp()
+            .page_payload_bytes
+            .borrow_mut()
+            .insert(page, payload_bytes)
+            .unwrap_or(0);
+        self.imp().cached_payload_bytes.set(
+            self.imp()
+                .cached_payload_bytes
+                .get()
+                .saturating_sub(previous)
+                .saturating_add(payload_bytes),
+        );
+    }
+
+    fn evict_page(&self, page: u32) {
+        self.imp().pages.borrow_mut().remove(&page);
+        self.imp().pending.borrow_mut().remove(&page);
+        if let Some(payload) = self.imp().page_payload_bytes.borrow_mut().remove(&page) {
+            self.imp().cached_payload_bytes.set(
+                self.imp()
+                    .cached_payload_bytes
+                    .get()
+                    .saturating_sub(payload),
+            );
         }
     }
 
@@ -205,13 +283,20 @@ impl PagedSoundModel {
         let changed = objects.len().min(sounds.len());
         for (object, sound) in objects.iter().zip(sounds) {
             *object.borrow_mut::<SoundRowData>() = SoundRowData {
-                id: sound.id,
-                name: sound.name,
+                id: sound.id.clone(),
+                name: sound.name.clone(),
                 duration_ms: sound.duration_ms,
-                hotkey: sound.hotkey,
+                hotkey: sound.hotkey.clone(),
+                sound: Some(sound),
             };
         }
+        let payload_bytes = objects
+            .iter()
+            .map(|object| row_payload_bytes(&object.borrow::<SoundRowData>()))
+            .fold(0_usize, usize::saturating_add);
         drop(pages);
+        self.set_page_payload(page, payload_bytes);
+        self.touch_page(page);
         if changed > 0 {
             self.items_changed(
                 page.saturating_mul(PAGE_SIZE as u32),
@@ -225,16 +310,22 @@ impl PagedSoundModel {
     pub(super) fn replace_at(&self, position: u32, row: SoundRowData) {
         let page = position / PAGE_SIZE as u32;
         let offset = position as usize % PAGE_SIZE;
-        if let Some(object) = self
-            .imp()
-            .pages
-            .borrow()
-            .get(&page)
-            .and_then(|rows| rows.get(offset))
-        {
+        let payload_bytes = {
+            let pages = self.imp().pages.borrow();
+            let Some(rows) = pages.get(&page) else {
+                return;
+            };
+            let Some(object) = rows.get(offset) else {
+                return;
+            };
             *object.borrow_mut::<SoundRowData>() = row;
-            self.items_changed(position, 1, 1);
-        }
+            rows.iter()
+                .map(|object| row_payload_bytes(&object.borrow::<SoundRowData>()))
+                .fold(0_usize, usize::saturating_add)
+        };
+        self.set_page_payload(page, payload_bytes);
+        self.touch_page(page);
+        self.items_changed(position, 1, 1);
     }
 
     pub(super) fn position_for_id(&self, id: &str) -> Option<u32> {
@@ -246,11 +337,26 @@ impl PagedSoundModel {
         })
     }
 
+    pub(super) fn sound_by_id(&self, id: &str) -> Option<Sound> {
+        self.imp()
+            .identities
+            .borrow()
+            .values()
+            .filter_map(glib::WeakRef::upgrade)
+            .find_map(|object| {
+                let row = object.borrow::<SoundRowData>();
+                (row.id == id).then(|| row.sound.clone()).flatten()
+            })
+    }
+
     pub(super) fn clear(&self) {
         let old_total = self.imp().total.replace(0);
         self.imp().pages.borrow_mut().clear();
+        self.imp().identities.borrow_mut().clear();
         self.imp().pending.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
+        self.imp().page_payload_bytes.borrow_mut().clear();
+        self.imp().cached_payload_bytes.set(0);
         if old_total > 0 {
             self.items_changed(0, old_total, 0);
         }
@@ -270,6 +376,13 @@ impl PagedSoundModel {
     }
 
     #[cfg(test)]
+    fn install_test_sound(&self, position: u32, sound: Sound) {
+        let page = position / PAGE_SIZE as u32;
+        self.install_test_page(page);
+        assert!(self.install_page(page, self.generation(), vec![sound]));
+    }
+
+    #[cfg(test)]
     fn install_test_page_for_generation(&self, page: u32, generation: u64) -> bool {
         if self.generation() != generation {
             return false;
@@ -284,16 +397,16 @@ impl PagedSoundModel {
         self.imp().pages.borrow_mut().insert(
             page,
             (0..len)
-                .map(|_| {
-                    BoxedAnyObject::new(SoundRowData {
-                        id: String::new(),
-                        name: "Loading…".to_string(),
-                        duration_ms: None,
-                        hotkey: None,
-                    })
+                .map(|offset| {
+                    self.placeholder(
+                        generation,
+                        page.saturating_mul(PAGE_SIZE as u32)
+                            .saturating_add(offset as u32),
+                    )
                 })
                 .collect(),
         );
+        self.set_page_payload(page, 0);
         self.touch_page(page);
         true
     }
@@ -303,7 +416,10 @@ impl PagedSoundModel {
         self.imp().generation.set(self.generation().wrapping_add(1));
         self.imp().total.set(total);
         self.imp().pages.borrow_mut().clear();
+        self.imp().identities.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
+        self.imp().page_payload_bytes.borrow_mut().clear();
+        self.imp().cached_payload_bytes.set(0);
     }
 
     #[cfg(test)]
@@ -324,7 +440,7 @@ impl PagedSoundModel {
 
 #[cfg(test)]
 mod tests {
-    use super::PagedSoundModel;
+    use super::{PagedSoundModel, SoundRowData};
 
     #[test]
     fn cache_never_keeps_more_than_four_pages() {
@@ -343,5 +459,80 @@ mod tests {
         model.reset_for_test(512);
         assert!(!model.install_test_page_for_generation(0, first_generation));
         assert_eq!(model.cached_page_count(), 0);
+    }
+
+    #[test]
+    fn externally_referenced_row_keeps_identity_after_page_eviction() {
+        use gio::prelude::*;
+
+        let model = PagedSoundModel::new_for_test(10_000);
+        let original = model.item(0).expect("first row");
+        for page in 1..=4 {
+            model.install_test_page(page);
+        }
+        let restored = model.item(0).expect("restored first row");
+
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn externally_referenced_loaded_row_remains_actionable_after_page_eviction() {
+        use gio::prelude::*;
+
+        let model = PagedSoundModel::new_for_test(10_000);
+        let mut sound =
+            crate::config::Sound::new("Retained".to_string(), "/music/retained.flac".to_string());
+        sound.id = "retained".to_string();
+        model.install_test_sound(0, sound);
+        let retained = model.item(0).expect("retained row");
+
+        for page in 1..=4 {
+            model.install_test_page(page);
+        }
+
+        assert!(model.sound_by_id("retained").is_some());
+        drop(retained);
+    }
+
+    #[test]
+    fn strong_page_cache_stays_under_two_mebibytes_of_row_payload() {
+        let model = PagedSoundModel::new_for_test(10_000);
+        let large_path = format!("/music/{}", "x".repeat(1_200_000));
+
+        for (page, id) in [(0, "first"), (1, "second")] {
+            let mut sound = crate::config::Sound::new(id.to_string(), large_path.clone());
+            sound.id = id.to_string();
+            model.install_test_sound(page * crate::library_store::PAGE_SIZE as u32, sound);
+        }
+
+        assert_eq!(model.cached_page_count(), 1);
+    }
+
+    #[test]
+    fn replacing_a_row_reapplies_the_payload_limit() {
+        let model = PagedSoundModel::new_for_test(10_000);
+        for (page, id) in [(0, "first"), (1, "second")] {
+            let mut sound = crate::config::Sound::new(id.to_string(), format!("/music/{id}.flac"));
+            sound.id = id.to_string();
+            model.install_test_sound(page * crate::library_store::PAGE_SIZE as u32, sound);
+        }
+
+        let mut large = crate::config::Sound::new(
+            "Large".to_string(),
+            format!("/music/{}", "x".repeat(2_100_000)),
+        );
+        large.id = "first".to_string();
+        model.replace_at(
+            0,
+            SoundRowData {
+                id: large.id.clone(),
+                name: large.name.clone(),
+                duration_ms: large.duration_ms,
+                hotkey: large.hotkey.clone(),
+                sound: Some(large),
+            },
+        );
+
+        assert!(model.cached_page_count() < 2);
     }
 }

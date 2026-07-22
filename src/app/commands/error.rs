@@ -61,6 +61,11 @@ pub enum CommandError {
     #[error("{0}")]
     Hotkey(String),
 
+    /// SQLite saved the desired hotkey, but the active desktop backend could
+    /// not apply it. The UI must keep showing the durable choice as pending.
+    #[error("Shortcut was saved but could not be activated: {0}")]
+    HotkeyProjection(String),
+
     /// An error surfaced by loudness analysis.
     #[error("{0}")]
     Analysis(String),

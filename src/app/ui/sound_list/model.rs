@@ -46,7 +46,7 @@ impl SoundListInner {
     }
 
     pub(super) fn lookup_sound(&self, sound_id: &str) -> Option<Sound> {
-        self.state.config.lock().get_sound(sound_id).cloned()
+        self.store.sound_by_id(sound_id)
     }
 
     pub(super) fn current_scope(&self) -> crate::library_store::LibraryScope {
@@ -71,6 +71,7 @@ mod tests {
             name: id.to_string(),
             duration_ms: None,
             hotkey: None,
+            sound: None,
         }
     }
 
@@ -142,6 +143,7 @@ mod tests {
                 name: sound.name.clone(),
                 duration_ms: sound.duration_ms,
                 hotkey: sound.hotkey.clone(),
+                sound: Some(sound.clone()),
             })
             .collect::<Vec<_>>();
         let notifications = Rc::new(Cell::new(0));

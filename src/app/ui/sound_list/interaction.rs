@@ -41,28 +41,43 @@ impl SoundListInner {
             if !is_missing_on_demand {
                 let sound_name = sound.name.clone();
                 let sound_id = sound.id.clone();
+                let sound_id_for_dispatch = sound.id.clone();
+                let sound_name_for_dispatch = sound.name.clone();
                 let invalid_ids_for_play = Arc::clone(&invalid_ids);
                 let inner_weak_for_play = Rc::downgrade(&inner);
                 crate::ui_event_bridge::mark_explicit_play_pending();
-                if let Err(e) = commands::play_sound_async(
-                    sound.id.clone(),
-                    Arc::clone(&inner.state),
-                    move |result| {
-                        if let Err(e) = result {
-                            crate::ui_event_bridge::clear_explicit_play_pending();
-                            log::warn!("Play failed for '{}': {}", sound_name, e);
-                            if matches!(e, commands::CommandError::SourceUnavailable(_)) {
-                                invalid_ids_for_play.lock().insert(sound_id.clone());
-                                if let Some(inner) = inner_weak_for_play.upgrade() {
-                                    let changed_ids = HashSet::from([sound_id.clone()]);
-                                    inner.rebind_rows_for_ids(&changed_ids);
-                                }
+                let on_complete = move |result| {
+                    if let Err(e) = result {
+                        crate::ui_event_bridge::clear_explicit_play_pending();
+                        log::warn!("Play failed for '{}': {}", sound_name, e);
+                        if matches!(e, commands::CommandError::SourceUnavailable(_)) {
+                            invalid_ids_for_play.lock().insert(sound_id.clone());
+                            if let Some(inner) = inner_weak_for_play.upgrade() {
+                                let changed_ids = HashSet::from([sound_id.clone()]);
+                                inner.rebind_rows_for_ids(&changed_ids);
                             }
                         }
-                    },
-                ) {
+                    }
+                };
+                let dispatch = match sound.sound {
+                    Some(sound) => commands::play_loaded_sound_async(
+                        sound,
+                        Arc::clone(&inner.state),
+                        on_complete,
+                    ),
+                    None => commands::play_sound_async(
+                        sound_id_for_dispatch,
+                        Arc::clone(&inner.state),
+                        on_complete,
+                    ),
+                };
+                if let Err(e) = dispatch {
                     crate::ui_event_bridge::clear_explicit_play_pending();
-                    log::warn!("Failed to dispatch play for '{}': {}", sound.name, e);
+                    log::warn!(
+                        "Failed to dispatch play for '{}': {}",
+                        sound_name_for_dispatch,
+                        e
+                    );
                 }
                 return;
             }
@@ -492,14 +507,21 @@ impl SoundListInner {
                     "Enter a new name:",
                     &sound.name,
                     "Rename",
-                    move |new_name| match commands::rename_sound_with_store(
-                        sound.id.clone(),
-                        new_name,
-                        Arc::clone(&state_confirm.config),
-                        state_confirm.library.clone(),
-                    ) {
-                        Ok(_) => inner_confirm.refresh_from_state_inner(),
-                        Err(e) => log::warn!("Rename failed: {e}"),
+                    move |new_name| {
+                        let inner_done = Rc::clone(&inner_confirm);
+                        let dispatch = commands::rename_sound_with_store_async(
+                            sound.id.clone(),
+                            new_name,
+                            Arc::clone(&state_confirm.config),
+                            state_confirm.library.clone(),
+                            move |result| match result {
+                                Ok(_) => inner_done.refresh_from_state_inner(),
+                                Err(e) => log::warn!("Rename failed: {e}"),
+                            },
+                        );
+                        if let Err(error) = dispatch {
+                            log::warn!("Failed to dispatch rename: {error}");
+                        }
                     },
                 );
             });
@@ -517,49 +539,52 @@ impl SoundListInner {
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 let dialog_host_weak = dialog_host.downgrade();
-                let config_for_capture = Arc::clone(&state.config);
-                let hotkeys_for_capture = Arc::clone(&state.hotkeys);
-                let sound_id_for_capture = sound.id.clone();
                 dialog_host.show_hotkey_capture(
                     sound.hotkey.as_deref(),
                     move |hotkey| {
-                        {
-                            let cfg = config_for_capture.lock();
-                            commands::validate_hotkey_available(
-                                &cfg,
-                                &sound_id_for_capture,
-                                hotkey,
-                            )
-                            .map_err(|e| e.to_string())?;
-                        }
-                        hotkeys_for_capture
-                            .lock()
-                            .validate_hotkey_blocking(hotkey)
-                            .map_err(|e| e.to_string())
+                        crate::hotkeys::canonicalize_hotkey_string(hotkey)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
                     },
-                    move |hotkey| match commands::set_hotkey(
-                        sound.id.clone(),
-                        hotkey,
-                        Arc::clone(&state_confirm.config),
-                        Arc::clone(&state_confirm.hotkeys),
-                        state_confirm.library.clone(),
-                    ) {
-                        Ok(_) => inner_confirm.refresh_from_state_inner(),
-                        Err(e) => {
-                            log::warn!("Set hotkey failed: {e}");
-                            let detail = e.to_string();
-                            let message = crate::hotkeys::format_hotkey_error(&detail);
-                            if let Some(dialog_host) = dialog_host_weak.upgrade() {
-                                if crate::hotkeys::should_offer_swhkd_install(&detail) {
-                                    dialog_host.show_hotkey_error_with_install_option(
-                                        "Failed to Set Hotkey",
-                                        &message,
-                                        Arc::clone(&state_confirm.config),
-                                        Arc::clone(&state_confirm.hotkeys),
-                                    );
-                                } else {
-                                    dialog_host.show_error("Failed to Set Hotkey", &message);
+                    move |hotkey| {
+                        let inner_done = Rc::clone(&inner_confirm);
+                        let state_done = Arc::clone(&state_confirm);
+                        let dialog_done = dialog_host_weak.clone();
+                        let dispatch = commands::set_hotkey_async(
+                            sound.id.clone(),
+                            hotkey,
+                            Arc::clone(&state_confirm.config),
+                            Arc::clone(&state_confirm.hotkeys),
+                            state_confirm.library.clone(),
+                            move |result| match result {
+                                Ok(_) => inner_done.refresh_from_state_inner(),
+                                Err(e) => {
+                                    if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
+                                        inner_done.refresh_from_state_inner();
+                                    }
+                                    log::warn!("Set hotkey failed: {e}");
+                                    let detail = e.to_string();
+                                    let message = crate::hotkeys::format_hotkey_error(&detail);
+                                    if let Some(dialog_host) = dialog_done.upgrade() {
+                                        if crate::hotkeys::should_offer_swhkd_install(&detail) {
+                                            dialog_host.show_hotkey_error_with_install_option(
+                                                "Failed to Set Hotkey",
+                                                &message,
+                                                Arc::clone(&state_done.config),
+                                                Arc::clone(&state_done.hotkeys),
+                                            );
+                                        } else {
+                                            dialog_host
+                                                .show_error("Failed to Set Hotkey", &message);
+                                        }
+                                    }
                                 }
+                            },
+                        );
+                        if let Err(error) = dispatch {
+                            log::warn!("Failed to dispatch hotkey update: {error}");
+                            if let Some(dialog_host) = dialog_host_weak.upgrade() {
+                                dialog_host.show_error("Failed to Set Hotkey", &error.to_string());
                             }
                         }
                     },

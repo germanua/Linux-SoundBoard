@@ -398,6 +398,141 @@ fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
 }
 
 #[test]
+fn hotkey_projection_excludes_stale_scan_sounds_but_keeps_controls() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "control:stop".to_string(),
+        owner: HotkeyBindingOwner::Control("stop".to_string()),
+        accelerator: "Alt+KeyS".to_string(),
+        normalized: Some("Alt+KeyS".to_string()),
+        issue: None,
+    })));
+
+    let staged_generation = wait(store.begin_root_scan("/music", 0));
+    let mut staged_sound = sound("staged", "Staged", "/music/staged.flac");
+    staged_sound.hotkey = Some("Ctrl+KeyP".to_string());
+    wait(store.apply_root_scan_batch(
+        "/music",
+        staged_generation,
+        Vec::new(),
+        vec![SoundRecord {
+            sound: staged_sound,
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: None,
+                relative_path: "staged.flac".to_string(),
+            }],
+        }],
+    ));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "staged".to_string(),
+        owner: HotkeyBindingOwner::Sound("staged".to_string()),
+        accelerator: "Ctrl+KeyP".to_string(),
+        normalized: Some("Ctrl+KeyP".to_string()),
+        issue: None,
+    })));
+
+    let bindings = wait(store.hotkey_bindings_after(None));
+    assert_eq!(bindings.bindings.len(), 1);
+    assert_eq!(bindings.bindings[0].binding_id, "control:stop");
+}
+
+#[test]
+fn completed_scan_releases_stale_sound_hotkey_for_reassignment() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+
+    let first_generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        first_generation,
+        Vec::new(),
+        vec![SoundRecord {
+            sound: sound("removed", "Removed", "/music/removed.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/music".to_string(),
+                folder_relative_path: None,
+                relative_path: "removed.flac".to_string(),
+            }],
+        }],
+    ));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "removed".to_string(),
+        owner: HotkeyBindingOwner::Sound("removed".to_string()),
+        accelerator: "Ctrl+KeyP".to_string(),
+        normalized: Some("Ctrl+KeyP".to_string()),
+        issue: None,
+    })));
+    assert!(wait(store.finish_root_scan("/music", first_generation)));
+
+    let empty_generation = wait(store.begin_root_scan("/music", 0));
+    assert!(wait(store.finish_root_scan("/music", empty_generation)));
+
+    assert!(wait(store.hotkey_conflict("control:stop", "Ctrl+KeyP")).is_none());
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "control:stop".to_string(),
+        owner: HotkeyBindingOwner::Control("stop".to_string()),
+        accelerator: "Ctrl+KeyP".to_string(),
+        normalized: Some("Ctrl+KeyP".to_string()),
+        issue: None,
+    })));
+}
+
+#[test]
+fn moving_a_sound_between_staged_roots_preserves_its_hotkey() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+
+    let first_generation = wait(store.begin_root_scan("/first", 0));
+    let record = SoundRecord {
+        sound: sound("moving", "Moving", "/shared/moving.flac"),
+        general_position: 0,
+        locations: vec![SoundLocationRecord {
+            root_path: "/first".to_string(),
+            folder_relative_path: None,
+            relative_path: "moving.flac".to_string(),
+        }],
+    };
+    wait(store.apply_root_scan_batch("/first", first_generation, Vec::new(), vec![record]));
+    assert!(wait(store.finish_root_scan("/first", first_generation)));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "moving".to_string(),
+        owner: HotkeyBindingOwner::Sound("moving".to_string()),
+        accelerator: "Ctrl+KeyP".to_string(),
+        normalized: Some("Ctrl+KeyP".to_string()),
+        issue: None,
+    })));
+
+    let second_generation = wait(store.begin_root_scan("/second", 1));
+    wait(store.apply_root_scan_batch(
+        "/second",
+        second_generation,
+        Vec::new(),
+        vec![SoundRecord {
+            sound: sound("moving", "Moving", "/shared/moving.flac"),
+            general_position: 0,
+            locations: vec![SoundLocationRecord {
+                root_path: "/second".to_string(),
+                folder_relative_path: None,
+                relative_path: "moving.flac".to_string(),
+            }],
+        }],
+    ));
+
+    let empty_generation = wait(store.begin_root_scan("/first", 0));
+    assert!(wait(store.finish_root_scan("/first", empty_generation)));
+    assert!(wait(store.finish_root_scan("/second", second_generation)));
+
+    let bindings = wait(store.hotkey_bindings_after(None));
+    assert_eq!(bindings.bindings.len(), 1);
+    assert_eq!(bindings.bindings[0].binding_id, "moving");
+}
+
+#[test]
 fn playback_lookup_resolves_only_active_sound_bindings() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");

@@ -565,10 +565,29 @@ pub fn rename_sound_with_store(
             candidate.save().map_err(CommandError::config_save)?;
         }
         Ok::<(), CommandError>(())
-    }) {
+    })
+    .and_then(|result| result)
+    {
         log::warn!("Legacy library mirror failed after renaming sound: {error}");
     }
     Ok(sound)
+}
+
+pub fn rename_sound_with_store_async<F>(
+    id: String,
+    name: String,
+    config: Arc<Mutex<Config>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Sound, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "rename_sound",
+        move || rename_sound_with_store(id, name, config, library),
+        on_complete,
+    )
 }
 
 pub fn remove_sound(

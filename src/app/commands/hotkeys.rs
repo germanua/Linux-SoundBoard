@@ -5,7 +5,7 @@ use crate::config::{Config, ControlHotkeyAction};
 use crate::hotkeys::HotkeyManager;
 use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
 
-use super::shared::{dispatch_async_result, with_config, with_config_mut};
+use super::shared::{dispatch_async_result, with_config_mut};
 use super::CommandError;
 
 fn canonical_hotkey_matches(stored_hotkey: &str, canonical_hotkey: &str) -> bool {
@@ -63,6 +63,27 @@ fn ensure_hotkey_available(
     }
 }
 
+fn ensure_store_hotkey_available(
+    library: &LibraryStore,
+    current_binding_id: &str,
+    canonical_hotkey: Option<&str>,
+) -> Result<(), CommandError> {
+    let Some(canonical_hotkey) = canonical_hotkey else {
+        return Ok(());
+    };
+    if let Some(conflict) = library
+        .hotkey_conflict(current_binding_id, canonical_hotkey)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+    {
+        Err(CommandError::Hotkey(
+            crate::hotkeys::hotkey_conflict(&conflict).to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub fn validate_hotkey_available(
     config: &Config,
     current_binding_id: &str,
@@ -95,10 +116,7 @@ pub fn set_hotkey(
         None => None,
     };
 
-    with_config(&config, |cfg| {
-        ensure_hotkey_available(cfg, &id, canonical_new.as_deref())?;
-        Ok::<(), CommandError>(())
-    })??;
+    ensure_store_hotkey_available(&library, &id, canonical_new.as_deref())?;
 
     if let Some(hotkey) = canonical_new.as_ref() {
         library
@@ -118,18 +136,38 @@ pub fn set_hotkey(
             .map_err(|error| CommandError::Library(error.to_string()))?;
     }
 
-    with_config_mut(&config, |cfg| {
+    if let Err(error) = with_config_mut(&config, |cfg| {
         cfg.set_hotkey(&id, canonical_new.clone());
         cfg.save().map_err(CommandError::config_save)
-    })??;
+    })? {
+        log::warn!("Failed to mirror SQLite sound hotkey to legacy config: {error}");
+    }
 
     with_hotkeys(&hotkeys, |manager| match canonical_new.as_ref() {
         Some(hotkey) => manager.register_hotkey_blocking(&id, hotkey),
         None => manager.unregister_hotkey_blocking(&id),
     })?
-    .map_err(|error| CommandError::Hotkey(error.to_string()))?;
+    .map_err(|error| CommandError::HotkeyProjection(error.to_string()))?;
     crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
     Ok(())
+}
+
+pub fn set_hotkey_async<F>(
+    id: String,
+    hotkey: Option<String>,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "set_hotkey",
+        move || set_hotkey(id, hotkey, config, hotkeys, library),
+        on_complete,
+    )
 }
 
 pub fn set_control_hotkey(
@@ -150,10 +188,7 @@ pub fn set_control_hotkey(
         None => None,
     };
 
-    with_config(&config, |cfg| {
-        ensure_hotkey_available(cfg, binding_id, canonical_new.as_deref())?;
-        Ok::<(), CommandError>(())
-    })??;
+    ensure_store_hotkey_available(&library, binding_id, canonical_new.as_deref())?;
 
     if let Some(hotkey) = canonical_new.as_ref() {
         library
@@ -173,20 +208,40 @@ pub fn set_control_hotkey(
             .map_err(|error| CommandError::Library(error.to_string()))?;
     }
 
-    with_config_mut(&config, |cfg| {
+    if let Err(error) = with_config_mut(&config, |cfg| {
         cfg.settings
             .control_hotkeys
             .set_action(action, canonical_new.clone());
         cfg.save().map_err(CommandError::config_save)
-    })??;
+    })? {
+        log::warn!("Failed to mirror SQLite control hotkey to legacy config: {error}");
+    }
 
     with_hotkeys(&hotkeys, |manager| match canonical_new.as_ref() {
         Some(hotkey) => manager.register_hotkey_blocking(binding_id, hotkey),
         None => manager.unregister_hotkey_blocking(binding_id),
     })?
-    .map_err(|error| CommandError::Hotkey(error.to_string()))?;
+    .map_err(|error| CommandError::HotkeyProjection(error.to_string()))?;
     crate::diagnostics::set_hotkey_status(&hotkeys.lock().status_message());
     Ok(())
+}
+
+pub fn set_control_hotkey_async<F>(
+    action: String,
+    hotkey: Option<String>,
+    config: Arc<Mutex<Config>>,
+    hotkeys: Arc<Mutex<HotkeyManager>>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "set_control_hotkey",
+        move || set_control_hotkey(action, hotkey, config, hotkeys, library),
+        on_complete,
+    )
 }
 
 pub fn open_hotkey_settings(_hotkeys: Arc<Mutex<HotkeyManager>>) -> Result<(), CommandError> {

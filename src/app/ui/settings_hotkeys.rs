@@ -132,49 +132,55 @@ fn build_hotkey_row(
             let lbl2 = lbl.clone();
             let clear3 = clear2.clone();
             let dialog_host_weak = dialog_host_record.downgrade();
-            let config_for_capture = Arc::clone(&state2.config);
-            let hotkeys_for_capture = Arc::clone(&state2.hotkeys);
             dialog_host_record.show_hotkey_capture(
                 current.as_deref(),
                 move |hotkey| {
-                    {
-                        let cfg = config_for_capture.lock();
-                        commands::validate_hotkey_available(&cfg, action.binding_id(), hotkey)
-                            .map_err(|e| e.to_string())?;
-                    }
-                    hotkeys_for_capture
-                        .lock()
-                        .validate_hotkey_blocking(hotkey)
-                        .map_err(|e| e.to_string())
+                    crate::hotkeys::canonicalize_hotkey_string(hotkey)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 },
-                move |result| match result {
-                    Some(hk) => {
-                        match commands::set_control_hotkey(
-                            action.id().to_string(),
-                            Some(hk.clone()),
-                            Arc::clone(&state3.config),
-                            Arc::clone(&state3.hotkeys),
-                            state3.library.clone(),
-                        ) {
+                move |hotkey| {
+                    let display_hotkey = hotkey.clone();
+                    let state_done = Arc::clone(&state3);
+                    let dialog_done = dialog_host_weak.clone();
+                    let lbl_done = lbl2.clone();
+                    let clear_done = clear3.clone();
+                    let dispatch = commands::set_control_hotkey_async(
+                        action.id().to_string(),
+                        hotkey,
+                        Arc::clone(&state3.config),
+                        Arc::clone(&state3.hotkeys),
+                        state3.library.clone(),
+                        move |result| match result {
                             Ok(_) => {
-                                if let Some(lbl2) = lbl2.upgrade() {
-                                    lbl2.set_text(&hk);
+                                if let Some(label) = lbl_done.upgrade() {
+                                    label.set_text(display_hotkey.as_deref().unwrap_or("Not set"));
                                 }
-                                if let Some(clear3) = clear3.upgrade() {
-                                    clear3.set_sensitive(true);
+                                if let Some(clear) = clear_done.upgrade() {
+                                    clear.set_sensitive(display_hotkey.is_some());
                                 }
                             }
                             Err(e) => {
+                                if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
+                                    if let Some(label) = lbl_done.upgrade() {
+                                        label.set_text(
+                                            display_hotkey.as_deref().unwrap_or("Not set"),
+                                        );
+                                    }
+                                    if let Some(clear) = clear_done.upgrade() {
+                                        clear.set_sensitive(display_hotkey.is_some());
+                                    }
+                                }
                                 log::warn!("Set control hotkey failed: {e}");
                                 let detail = e.to_string();
                                 let message = crate::hotkeys::format_hotkey_error(&detail);
-                                if let Some(dialog_host) = dialog_host_weak.upgrade() {
+                                if let Some(dialog_host) = dialog_done.upgrade() {
                                     if crate::hotkeys::should_offer_swhkd_install(&detail) {
                                         dialog_host.show_hotkey_error_with_install_option(
                                             "Failed to Set Control Hotkey",
                                             &message,
-                                            Arc::clone(&state3.config),
-                                            Arc::clone(&state3.hotkeys),
+                                            Arc::clone(&state_done.config),
+                                            Arc::clone(&state_done.hotkeys),
                                         );
                                     } else {
                                         dialog_host
@@ -182,33 +188,13 @@ fn build_hotkey_row(
                                     }
                                 }
                             }
-                        }
-                    }
-                    None => {
-                        match commands::set_control_hotkey(
-                            action.id().to_string(),
-                            None,
-                            Arc::clone(&state3.config),
-                            Arc::clone(&state3.hotkeys),
-                            state3.library.clone(),
-                        ) {
-                            Ok(_) => {
-                                if let Some(lbl2) = lbl2.upgrade() {
-                                    lbl2.set_text("Not set");
-                                }
-                                if let Some(clear3) = clear3.upgrade() {
-                                    clear3.set_sensitive(false);
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("Clear control hotkey failed: {e}");
-                                if let Some(dialog_host) = dialog_host_weak.upgrade() {
-                                    dialog_host.show_error(
-                                        "Failed to Clear Control Hotkey",
-                                        &e.to_string(),
-                                    );
-                                }
-                            }
+                        },
+                    );
+                    if let Err(error) = dispatch {
+                        log::warn!("Failed to dispatch control hotkey update: {error}");
+                        if let Some(dialog_host) = dialog_host_weak.upgrade() {
+                            dialog_host
+                                .show_error("Failed to Set Control Hotkey", &error.to_string());
                         }
                     }
                 },
@@ -221,23 +207,44 @@ fn build_hotkey_row(
         let lbl = hotkey_label.downgrade();
         let dialog_host_clear = dialog_host.clone();
         clear_btn.connect_clicked(move |btn| {
-            match commands::set_control_hotkey(
+            let btn = btn.downgrade();
+            let lbl_done = lbl.clone();
+            let dialog_done = dialog_host_clear.downgrade();
+            let dispatch = commands::set_control_hotkey_async(
                 action.id().to_string(),
                 None,
                 Arc::clone(&state2.config),
                 Arc::clone(&state2.hotkeys),
                 state2.library.clone(),
-            ) {
-                Ok(_) => {
-                    if let Some(lbl) = lbl.upgrade() {
-                        lbl.set_text("Not set");
+                move |result| match result {
+                    Ok(_) => {
+                        if let Some(label) = lbl_done.upgrade() {
+                            label.set_text("Not set");
+                        }
+                        if let Some(button) = btn.upgrade() {
+                            button.set_sensitive(false);
+                        }
                     }
-                    btn.set_sensitive(false);
-                }
-                Err(e) => {
-                    log::warn!("Clear control hotkey failed: {e}");
-                    dialog_host_clear.show_error("Failed to Clear Control Hotkey", &e.to_string());
-                }
+                    Err(e) => {
+                        if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
+                            if let Some(label) = lbl_done.upgrade() {
+                                label.set_text("Not set");
+                            }
+                            if let Some(button) = btn.upgrade() {
+                                button.set_sensitive(false);
+                            }
+                        }
+                        log::warn!("Clear control hotkey failed: {e}");
+                        if let Some(dialog_host) = dialog_done.upgrade() {
+                            dialog_host
+                                .show_error("Failed to Clear Control Hotkey", &e.to_string());
+                        }
+                    }
+                },
+            );
+            if let Err(error) = dispatch {
+                log::warn!("Failed to dispatch control hotkey clear: {error}");
+                dialog_host_clear.show_error("Failed to Clear Control Hotkey", &error.to_string());
             }
         });
     }

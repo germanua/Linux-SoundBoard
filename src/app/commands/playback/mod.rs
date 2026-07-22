@@ -331,7 +331,18 @@ pub fn play_sound_async<F>(
 where
     F: FnOnce(Result<String, CommandError>) + 'static,
 {
-    dispatch_play_sound_async(id, state, false, on_complete)
+    dispatch_play_sound_async(id, None, state, false, on_complete)
+}
+
+pub fn play_loaded_sound_async<F>(
+    sound: Sound,
+    state: Arc<AppState>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<String, CommandError>) + 'static,
+{
+    dispatch_play_sound_async(sound.id.clone(), Some(sound), state, false, on_complete)
 }
 
 pub fn play_hotkey_sound_async<F>(
@@ -342,7 +353,7 @@ pub fn play_hotkey_sound_async<F>(
 where
     F: FnOnce(Result<String, CommandError>) + 'static,
 {
-    dispatch_play_sound_async(binding_id, state, true, on_complete)
+    dispatch_play_sound_async(binding_id, None, state, true, on_complete)
 }
 
 pub fn play_adjacent_sound_async<F>(
@@ -367,6 +378,7 @@ where
 
 fn dispatch_play_sound_async<F>(
     id: String,
+    loaded_sound: Option<Sound>,
     state: Arc<AppState>,
     binding_lookup: bool,
     on_complete: F,
@@ -399,7 +411,10 @@ where
     let state_diag = Arc::clone(&state);
     dispatch_async_result(
         "play_sound",
-        move || play_sound_from_library(&id, binding_lookup, &library, player),
+        move || match loaded_sound {
+            Some(sound) => play_resolved_sound(sound, player),
+            None => play_sound_from_library(&id, binding_lookup, &library, player),
+        },
         move |result: Result<String, CommandError>| {
             if result.is_ok()
                 && first_recorded

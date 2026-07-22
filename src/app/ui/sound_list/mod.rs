@@ -30,6 +30,7 @@ pub(super) struct SoundRowData {
     pub(super) name: String,
     pub(super) duration_ms: Option<u64>,
     pub(super) hotkey: Option<String>,
+    pub(super) sound: Option<crate::config::Sound>,
 }
 
 #[derive(Debug, Clone)]

@@ -301,6 +301,11 @@ enum Request {
         binding_id: String,
         reply: mpsc::SyncSender<Result<bool, LibraryError>>,
     },
+    HotkeyConflict {
+        binding_id: String,
+        normalized: String,
+        reply: mpsc::SyncSender<Result<Option<String>, LibraryError>>,
+    },
     BeginRootScan {
         root_path: String,
         position: usize,
@@ -391,6 +396,7 @@ impl RequestQueue {
             | Request::HotkeyBindingsAfter { .. }
             | Request::SetHotkeyBinding { .. }
             | Request::DeleteHotkeyBinding { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
+            Request::HotkeyConflict { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
             Request::Count { .. }
             | Request::Page { .. }
             | Request::Roots { .. }
@@ -815,6 +821,22 @@ impl LibraryStore {
         )
     }
 
+    pub fn hotkey_conflict(
+        &self,
+        binding_id: &str,
+        normalized: &str,
+    ) -> LibraryResponse<Option<String>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::HotkeyConflict {
+                binding_id: binding_id.to_string(),
+                normalized: normalized.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
     pub fn begin_root_scan(&self, root_path: &str, position: usize) -> LibraryResponse<i64> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
@@ -1066,6 +1088,13 @@ fn handle_request(connection: &mut Connection, request: Request) {
         }
         Request::DeleteHotkeyBinding { binding_id, reply } => {
             let _ = reply.send(delete_hotkey_binding(connection, &binding_id));
+        }
+        Request::HotkeyConflict {
+            binding_id,
+            normalized,
+            reply,
+        } => {
+            let _ = reply.send(load_hotkey_conflict(connection, &binding_id, &normalized));
         }
         Request::BeginRootScan {
             root_path,
@@ -1687,6 +1716,37 @@ fn finish_root_scan(
     let changed = transaction.execute(
         "UPDATE roots SET active_generation = ?2 WHERE path = ?1",
         params![root_path, generation],
+    )?;
+    let root_id: i64 =
+        transaction.query_row("SELECT id FROM roots WHERE path = ?1", [root_path], |row| {
+            row.get(0)
+        })?;
+    transaction.execute(
+        "DELETE FROM sound_locations WHERE root_id = ?1 AND generation <> ?2",
+        params![root_id, generation],
+    )?;
+    transaction.execute(
+        "DELETE FROM folder_presence
+         WHERE generation <> ?2
+           AND folder_id IN (SELECT id FROM folders WHERE root_id = ?1)",
+        params![root_id, generation],
+    )?;
+    transaction.execute(
+        &format!(
+            "UPDATE hotkey_bindings
+             SET normalized = NULL, state = 'needs_attention',
+                 issue = 'sound is no longer in the active library'
+             WHERE state = 'active' AND sound_id IS NOT NULL
+               AND NOT EXISTS(
+                   SELECT 1 FROM sounds AS sound
+                   WHERE sound.rowid = hotkey_bindings.sound_id AND {LIVE_SOUND_FILTER}
+               )
+               AND NOT EXISTS(
+                   SELECT 1 FROM sound_locations AS staged_location
+                   WHERE staged_location.sound_id = hotkey_bindings.sound_id
+               )"
+        ),
+        [],
     )?;
     transaction.execute(
         "DELETE FROM meta WHERE key = ?1",
@@ -2747,14 +2807,16 @@ fn load_hotkey_bindings_after(
     connection: &Connection,
     after: Option<&str>,
 ) -> Result<HotkeyBindingPage, LibraryError> {
-    let mut statement = connection.prepare(
+    let sql = format!(
         "SELECT binding.binding_id, sound.public_id, binding.control_action,
                 binding.accelerator, binding.normalized, binding.issue
          FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active' AND (?1 IS NULL OR binding.binding_id > ?1)
-         ORDER BY binding.binding_id LIMIT ?2",
-    )?;
+           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+         ORDER BY binding.binding_id LIMIT ?2"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params![after, usize_to_i64(PAGE_SIZE)?], |row| {
         let sound_id: Option<String> = row.get(1)?;
         let control_action: Option<String> = row.get(2)?;
@@ -2776,6 +2838,43 @@ fn load_hotkey_bindings_after(
         bindings.push(binding?);
     }
     Ok(HotkeyBindingPage { bindings })
+}
+
+fn load_hotkey_conflict(
+    connection: &Connection,
+    binding_id: &str,
+    normalized: &str,
+) -> Result<Option<String>, LibraryError> {
+    let sql = format!(
+        "SELECT sound.name, binding.control_action
+         FROM hotkey_bindings AS binding
+         LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
+         WHERE binding.state = 'active'
+           AND binding.normalized = ?1
+           AND binding.binding_id <> ?2
+           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+         LIMIT 1"
+    );
+    let conflict = connection
+        .query_row(&sql, params![normalized, binding_id], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })
+        .optional()?;
+    Ok(conflict.map(|(sound_name, control_action)| {
+        if let Some(sound_name) = sound_name {
+            format!("sound \"{sound_name}\"")
+        } else if let Some(action) = control_action
+            .as_deref()
+            .and_then(ControlHotkeyAction::from_id)
+        {
+            format!("control action \"{}\"", action.title())
+        } else {
+            "another action".to_string()
+        }
+    }))
 }
 
 fn set_hotkey_binding(
