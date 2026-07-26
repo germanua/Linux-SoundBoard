@@ -153,6 +153,10 @@ impl SoundList {
     }
 
     pub fn set_active_scope(&self, identity: String, scope: crate::library_store::LibraryScope) {
+        if *self.inner.active_tab_id.lock() == identity && *self.inner.active_scope.lock() == scope
+        {
+            return;
+        }
         *self.inner.active_tab_id.lock() = identity;
         *self.inner.active_scope.lock() = scope;
         self.refresh_from_state();

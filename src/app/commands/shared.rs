@@ -312,7 +312,13 @@ where
             if let Some(callback) = callback {
                 callback(result_any);
             }
-            let cb_elapsed = cb_started_at.elapsed().as_millis();
+            let cb_elapsed = cb_started_at.elapsed();
+            log::debug!(
+                "GTK callback latency: name={} elapsed_us={}",
+                task_name,
+                cb_elapsed.as_micros()
+            );
+            let cb_elapsed = cb_elapsed.as_millis();
             if cb_elapsed >= SLOW_GTK_CALLBACK_THRESHOLD_MS {
                 log::debug!(
                     "GTK callback latency exceeded threshold: name={} elapsed_ms={}",

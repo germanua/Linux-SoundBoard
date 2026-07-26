@@ -50,12 +50,14 @@ impl SoundListInner {
         }
 
         {
+            let store = self.store.clone();
             let playing_ids = Arc::clone(&self.playing_ids);
             let active_sound_id = Arc::clone(&self.active_sound_id);
             factory.connect_bind(move |_, item| {
                 let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
                     return;
                 };
+                store.load_position(list_item.position());
                 let Some(obj) = list_item
                     .item()
                     .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
@@ -172,6 +174,8 @@ impl SoundListInner {
         }
 
         let column = ColumnViewColumn::new(Some("NAME"), Some(factory));
+        // Avoid GTK's automatic width scan requesting every row from a large lazy model.
+        column.set_fixed_width(240);
         column.set_expand(true);
         column
     }

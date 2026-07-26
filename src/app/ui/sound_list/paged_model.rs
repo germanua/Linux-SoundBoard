@@ -1,18 +1,21 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use gio::prelude::*;
 use glib::subclass::prelude::*;
 use glib::BoxedAnyObject;
 
 use crate::config::Sound;
-use crate::library_store::{LibraryScope, LibraryStore, PAGE_SIZE};
+use crate::library_store::{LibraryError, LibraryScope, LibraryStore, PAGE_SIZE};
 
 use super::SoundRowData;
 
 const MAX_CACHED_PAGES: usize = 4;
 const MAX_CACHED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PENDING_PAGE_LOADS: usize = 2;
+const PAGE_LOAD_DEBOUNCE: Duration = Duration::from_millis(40);
 static NEXT_SEARCH_OWNER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,10 +58,14 @@ mod imp {
         pub pages: RefCell<HashMap<u32, Vec<BoxedAnyObject>>>,
         pub identities: RefCell<HashMap<(u64, u32), glib::WeakRef<BoxedAnyObject>>>,
         pub pending: RefCell<HashSet<u32>>,
+        pub deferred_visible: RefCell<VecDeque<u32>>,
+        pub load_source: RefCell<Option<glib::SourceId>>,
         pub failed: RefCell<HashSet<u32>>,
         pub lru: RefCell<VecDeque<u32>>,
         pub page_payload_bytes: RefCell<HashMap<u32, usize>>,
         pub cached_payload_bytes: Cell<usize>,
+        pub reload_started: Cell<Option<Instant>>,
+        pub first_page_generation: Cell<Option<u64>>,
     }
 
     #[glib::object_subclass]
@@ -85,12 +92,12 @@ mod imp {
                 return None;
             }
             let page = position / PAGE_SIZE as u32;
-            self.obj().ensure_page(page, PageLoadPriority::Visible);
             self.pages
                 .borrow()
                 .get(&page)
                 .and_then(|rows| rows.get(position as usize % PAGE_SIZE))
                 .cloned()
+                .or_else(|| Some(self.obj().placeholder(self.generation.get(), position)))
                 .map(Into::into)
         }
     }
@@ -116,12 +123,18 @@ impl PagedSoundModel {
         let imp = self.imp();
         let generation = imp.generation.get().wrapping_add(1);
         imp.generation.set(generation);
+        imp.reload_started.set(Some(Instant::now()));
+        imp.first_page_generation.set(None);
         *imp.scope.borrow_mut() = Some(scope.clone());
         *imp.search.borrow_mut() = search.clone();
         let old_total = imp.total.replace(0);
         imp.pages.borrow_mut().clear();
         imp.identities.borrow_mut().clear();
         imp.pending.borrow_mut().clear();
+        imp.deferred_visible.borrow_mut().clear();
+        if let Some(source) = imp.load_source.borrow_mut().take() {
+            source.remove();
+        }
         imp.failed.borrow_mut().clear();
         imp.lru.borrow_mut().clear();
         imp.page_payload_bytes.borrow_mut().clear();
@@ -149,6 +162,14 @@ impl PagedSoundModel {
                     Ok(total) => {
                         let total = u32::try_from(total).unwrap_or(u32::MAX);
                         model.imp().total.set(total);
+                        if let Some(started) = model.imp().reload_started.get() {
+                            log::debug!(
+                                "Library latency: generation={} phase=count elapsed_us={} rows={}",
+                                generation,
+                                started.elapsed().as_micros(),
+                                total
+                            );
+                        }
                         if total > 0 {
                             model.items_changed(0, 0, total);
                         }
@@ -169,6 +190,17 @@ impl PagedSoundModel {
             self.touch_page(page);
             return;
         }
+        if imp.pending.borrow().len() >= MAX_PENDING_PAGE_LOADS {
+            if priority == PageLoadPriority::Visible {
+                self.defer_visible_page(page);
+            }
+            return;
+        }
+        log::debug!(
+            "Lazy page requested: generation={} page={} priority={priority:?}",
+            imp.generation.get(),
+            page
+        );
 
         let start = page.saturating_mul(PAGE_SIZE as u32);
         let remaining = imp.total.get().saturating_sub(start) as usize;
@@ -226,14 +258,25 @@ impl PagedSoundModel {
                 }
                 match result {
                     Ok(result) => {
-                        if model.install_page(page, generation, result.sounds)
+                        let loaded = model.install_page(page, generation, result.sounds);
+                        model.drain_deferred_pages();
+                        if loaded
                             && priority == PageLoadPriority::Visible
+                            && model.imp().deferred_visible.borrow().is_empty()
                         {
                             model.prefetch_adjacent(page);
                         }
                     }
+                    Err(LibraryError::QueueFull) => {
+                        model.evict_page(page);
+                        if priority == PageLoadPriority::Visible {
+                            model.defer_visible_page(page);
+                            model.schedule_deferred_pages();
+                        }
+                    }
                     Err(error) => {
                         model.handle_page_failure(page, generation, priority);
+                        model.drain_deferred_pages();
                         log::warn!("Failed to load lazy sound page {page}: {error}");
                     }
                 }
@@ -242,6 +285,56 @@ impl PagedSoundModel {
             self.handle_page_failure(page, generation, priority);
             log::warn!("Failed to dispatch lazy sound page {page}: {error}");
         }
+    }
+
+    pub(super) fn load_position(&self, position: u32) {
+        let page = position / PAGE_SIZE as u32;
+        if self.imp().pages.borrow().contains_key(&page)
+            || self.imp().pending.borrow().contains(&page)
+            || self.imp().deferred_visible.borrow().contains(&page)
+        {
+            return;
+        }
+        self.defer_visible_page(page);
+        self.schedule_deferred_pages();
+    }
+
+    fn defer_visible_page(&self, page: u32) {
+        let mut deferred = self.imp().deferred_visible.borrow_mut();
+        if let Some(index) = deferred.iter().position(|queued| *queued == page) {
+            deferred.remove(index);
+        }
+        deferred.push_back(page);
+        while deferred.len() > MAX_PENDING_PAGE_LOADS {
+            deferred.pop_front();
+        }
+    }
+
+    fn drain_deferred_pages(&self) {
+        if self.imp().load_source.borrow().is_some() {
+            return;
+        }
+        while self.imp().pending.borrow().len() < MAX_PENDING_PAGE_LOADS {
+            let Some(page) = self.imp().deferred_visible.borrow_mut().pop_front() else {
+                break;
+            };
+            self.ensure_page(page, PageLoadPriority::Visible);
+        }
+    }
+
+    fn schedule_deferred_pages(&self) {
+        if let Some(source) = self.imp().load_source.borrow_mut().take() {
+            source.remove();
+        }
+        let weak = self.downgrade();
+        let source = glib::timeout_add_local_once(PAGE_LOAD_DEBOUNCE, move || {
+            let Some(model) = weak.upgrade() else {
+                return;
+            };
+            model.imp().load_source.borrow_mut().take();
+            model.drain_deferred_pages();
+        });
+        *self.imp().load_source.borrow_mut() = Some(source);
     }
 
     fn prefetch_adjacent(&self, page: u32) {
@@ -392,6 +485,17 @@ impl PagedSoundModel {
                 changed as u32,
                 changed as u32,
             );
+            if imp.first_page_generation.get() != Some(generation) {
+                imp.first_page_generation.set(Some(generation));
+                if let Some(started) = imp.reload_started.get() {
+                    log::debug!(
+                        "Library latency: generation={} phase=first_rows elapsed_us={} rows={}",
+                        generation,
+                        started.elapsed().as_micros(),
+                        changed
+                    );
+                }
+            }
         }
         true
     }
@@ -531,6 +635,10 @@ impl PagedSoundModel {
         self.imp().pages.borrow_mut().clear();
         self.imp().identities.borrow_mut().clear();
         self.imp().pending.borrow_mut().clear();
+        self.imp().deferred_visible.borrow_mut().clear();
+        if let Some(source) = self.imp().load_source.borrow_mut().take() {
+            source.remove();
+        }
         self.imp().failed.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
         self.imp().page_payload_bytes.borrow_mut().clear();
@@ -596,6 +704,10 @@ impl PagedSoundModel {
         self.imp().pages.borrow_mut().clear();
         self.imp().identities.borrow_mut().clear();
         self.imp().pending.borrow_mut().clear();
+        self.imp().deferred_visible.borrow_mut().clear();
+        if let Some(source) = self.imp().load_source.borrow_mut().take() {
+            source.remove();
+        }
         self.imp().failed.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
         self.imp().page_payload_bytes.borrow_mut().clear();
@@ -616,6 +728,16 @@ impl PagedSoundModel {
     fn cached_object_count(&self) -> usize {
         self.imp().pages.borrow().values().map(Vec::len).sum()
     }
+
+    #[cfg(test)]
+    fn deferred_visible_pages(&self) -> Vec<u32> {
+        self.imp()
+            .deferred_visible
+            .borrow()
+            .iter()
+            .copied()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -635,6 +757,34 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_item_lookup_does_not_start_a_page_load() {
+        use gio::prelude::*;
+
+        let model = PagedSoundModel::new_for_test(10_000);
+        assert!(model.item(9_999).is_some());
+        assert_eq!(model.cached_page_count(), 0);
+    }
+
+    #[test]
+    fn rapid_scroll_keeps_only_the_latest_two_deferred_pages() {
+        let model = PagedSoundModel::new_for_test(156_000);
+        model.defer_visible_page(2);
+        model.defer_visible_page(300);
+        model.defer_visible_page(609);
+
+        assert_eq!(model.deferred_visible_pages(), [300, 609]);
+        assert_eq!(model.cached_page_count(), 0);
+    }
+
+    #[test]
+    fn unloaded_positions_have_distinct_gtk_identities() {
+        use gio::prelude::*;
+
+        let model = PagedSoundModel::new_for_test(2);
+        assert_ne!(model.item(0), model.item(1));
+    }
+
+    #[test]
     fn stale_generation_cannot_replace_current_rows() {
         let model = PagedSoundModel::new_for_test(512);
         let first_generation = model.generation();
@@ -650,6 +800,7 @@ mod tests {
 
         let model = PagedSoundModel::new_for_test(1);
         let placeholder = model.item(0).expect("placeholder row");
+        model.install_test_page(0);
         let mut sound =
             crate::config::Sound::new("Loaded".to_string(), "/music/loaded.flac".to_string());
         sound.id = "loaded".to_string();
@@ -768,6 +919,7 @@ mod tests {
 
         let model = PagedSoundModel::new_for_test(1);
         let _ = model.item(0).expect("loading row");
+        model.install_test_page(0);
 
         assert!(model.fail_page(0, model.generation()));
         assert_eq!(model.n_items(), 1);

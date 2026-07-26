@@ -1516,4 +1516,8 @@ fn benchmark_156k_bounded_store() {
         "156k SQLite gate: import={import_elapsed:?}, slowest_query={slowest_query:?}, pss={pss_kib} KiB"
     );
     assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
+    if let Some(output) = std::env::var_os("LSB_BENCHMARK_LIBRARY_OUT") {
+        std::fs::copy(temp.path().join("library.sqlite3"), output)
+            .expect("copy retained benchmark database");
+    }
 }
