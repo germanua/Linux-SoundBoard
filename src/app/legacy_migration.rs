@@ -2,6 +2,8 @@ use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -27,6 +29,8 @@ pub enum LegacyMigrationError {
     Library(#[from] LibraryError),
     #[error("migration database error: {0}")]
     Database(#[from] rusqlite::Error),
+    #[error("migration cancelled")]
+    Cancelled,
     #[error("invalid legacy migration input: {0}")]
     Invalid(String),
 }
@@ -56,6 +60,58 @@ pub struct LegacyRestoreReport {
     pub archived_database: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyMigrationProgress {
+    BackingUp,
+    Importing,
+    Verifying,
+    PublishingDatabase,
+    PublishingSettings,
+    Complete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LegacyMigrationBoundary {
+    BeforeBackupWrite,
+    BackupSynced,
+    BackupPublished,
+    BeforeDatabaseWrite,
+    DatabaseBatchCommitted,
+    DatabaseSynced,
+    BeforeDatabasePublish,
+    DatabasePublished,
+    BeforeSettingsWrite,
+    SettingsSynced,
+    SettingsRenamed,
+    SettingsPublished,
+}
+
+#[cfg(test)]
+impl LegacyMigrationBoundary {
+    const ALL: [Self; 8] = [
+        Self::BackupSynced,
+        Self::BackupPublished,
+        Self::DatabaseBatchCommitted,
+        Self::DatabaseSynced,
+        Self::DatabasePublished,
+        Self::SettingsSynced,
+        Self::SettingsRenamed,
+        Self::SettingsPublished,
+    ];
+    const WRITE_PHASES: [Self; 3] = [
+        Self::BeforeBackupWrite,
+        Self::BeforeDatabaseWrite,
+        Self::BeforeSettingsWrite,
+    ];
+}
+
+type MigrationObserver =
+    Arc<dyn Fn(LegacyMigrationBoundary) -> Result<(), LegacyMigrationError> + Send + Sync>;
+
+fn noop_observer() -> MigrationObserver {
+    Arc::new(|_| Ok(()))
+}
+
 #[derive(Deserialize)]
 struct TabMetadata {
     id: String,
@@ -74,6 +130,7 @@ enum ImportedTab {
 
 struct ImportState {
     store: LibraryStore,
+    observer: MigrationObserver,
     schema_version: Option<u32>,
     settings: Option<serde_json::Value>,
     sounds: Vec<SoundRecord>,
@@ -93,9 +150,10 @@ struct ImportState {
 }
 
 impl ImportState {
-    fn new(store: LibraryStore) -> Self {
+    fn new(store: LibraryStore, observer: MigrationObserver) -> Self {
         Self {
             store,
+            observer,
             schema_version: None,
             settings: None,
             sounds: Vec::with_capacity(MAX_BATCH_ROWS),
@@ -119,6 +177,7 @@ impl ImportState {
         self.root_count = self.root_count.saturating_add(roots.len());
         if !roots.is_empty() {
             self.store.apply_batch(LibraryBatch::Roots(roots)).recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -153,6 +212,7 @@ impl ImportState {
             self.store
                 .apply_batch(LibraryBatch::Sounds(std::mem::take(&mut self.sounds)))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -164,6 +224,7 @@ impl ImportState {
                     &mut self.hotkeys,
                 )))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -204,6 +265,7 @@ impl ImportState {
             self.store
                 .apply_batch(LibraryBatch::ManualTabs(std::mem::take(&mut self.tabs)))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -215,6 +277,7 @@ impl ImportState {
                     &mut self.generated_tabs,
                 )))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -259,6 +322,7 @@ impl ImportState {
                     &mut self.memberships,
                 )))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -270,6 +334,7 @@ impl ImportState {
                     &mut self.generated_memberships,
                 )))
                 .recv()?;
+            (self.observer)(LegacyMigrationBoundary::DatabaseBatchCommitted)?;
         }
         Ok(())
     }
@@ -622,10 +687,23 @@ impl<'de> DeserializeSeed<'de> for MembershipIdsSeed<'_> {
 }
 
 fn sha256(path: &Path) -> Result<String, LegacyMigrationError> {
+    sha256_observed(
+        path,
+        &noop_observer(),
+        LegacyMigrationBoundary::BeforeBackupWrite,
+    )
+}
+
+fn sha256_observed(
+    path: &Path,
+    observer: &MigrationObserver,
+    boundary: LegacyMigrationBoundary,
+) -> Result<String, LegacyMigrationError> {
     let mut reader = BufReader::new(fs::File::open(path)?);
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
+        observer(boundary)?;
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
@@ -650,7 +728,11 @@ fn remove_stale_candidates(parent: &Path, prefix: &str) -> Result<(), LegacyMigr
     Ok(())
 }
 
-fn ensure_backup(source: &Path, expected_sha256: &str) -> Result<(), LegacyMigrationError> {
+fn ensure_backup(
+    source: &Path,
+    expected_sha256: &str,
+    observer: &MigrationObserver,
+) -> Result<(), LegacyMigrationError> {
     let backup = source.with_file_name("config.json.pre-v8-backup");
     if backup.exists() {
         if sha256(&backup)? == expected_sha256 {
@@ -671,15 +753,30 @@ fn ensure_backup(source: &Path, expected_sha256: &str) -> Result<(), LegacyMigra
         uuid::Uuid::new_v4()
     ));
     let result = (|| {
+        observer(LegacyMigrationBoundary::BeforeBackupWrite)?;
         let mut reader = BufReader::new(fs::File::open(source)?);
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .open(&candidate)?;
-        std::io::copy(&mut reader, &mut file)?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            observer(LegacyMigrationBoundary::BeforeBackupWrite)?;
+            let count = reader.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            file.write_all(&buffer[..count])?;
+        }
         file.sync_all()?;
-        if sha256(&candidate)? != expected_sha256 {
+        observer(LegacyMigrationBoundary::BackupSynced)?;
+        if sha256_observed(
+            &candidate,
+            observer,
+            LegacyMigrationBoundary::BeforeBackupWrite,
+        )? != expected_sha256
+        {
             return Err(LegacyMigrationError::Invalid(
                 "the legacy config changed while its migration backup was being created"
                     .to_string(),
@@ -689,6 +786,7 @@ fn ensure_backup(source: &Path, expected_sha256: &str) -> Result<(), LegacyMigra
         if let Some(parent) = backup.parent() {
             fs::File::open(parent)?.sync_all()?;
         }
+        observer(LegacyMigrationBoundary::BackupPublished)?;
         Ok(())
     })();
     if result.is_err() {
@@ -800,6 +898,7 @@ fn finalize_database(
     library_id: &str,
     expected_sounds: usize,
     expected_hotkeys: usize,
+    observer: &MigrationObserver,
 ) -> Result<(), LegacyMigrationError> {
     let connection = Connection::open(path)?;
     connection.execute_batch(
@@ -864,6 +963,7 @@ fn finalize_database(
     )?;
     drop(connection);
     fs::File::open(path)?.sync_all()?;
+    observer(LegacyMigrationBoundary::DatabaseSynced)?;
     Ok(())
 }
 
@@ -871,14 +971,26 @@ pub fn migrate_legacy_database(
     source: &Path,
     destination: &Path,
 ) -> Result<LegacyMigrationReport, LegacyMigrationError> {
+    migrate_legacy_database_observed(source, destination, noop_observer())
+}
+
+fn migrate_legacy_database_observed(
+    source: &Path,
+    destination: &Path,
+    observer: MigrationObserver,
+) -> Result<LegacyMigrationReport, LegacyMigrationError> {
     if destination.exists() {
         return Err(LegacyMigrationError::Invalid(format!(
             "refusing to replace existing database '{}'",
             destination.display()
         )));
     }
-    let source_sha256 = sha256(source)?;
-    ensure_backup(source, &source_sha256)?;
+    let source_sha256 = sha256_observed(
+        source,
+        &observer,
+        LegacyMigrationBoundary::BeforeBackupWrite,
+    )?;
+    ensure_backup(source, &source_sha256, &observer)?;
     let parent = destination.parent().ok_or_else(|| {
         LegacyMigrationError::Invalid("library database has no parent directory".to_string())
     })?;
@@ -889,8 +1001,9 @@ pub fn migrate_legacy_database(
         uuid::Uuid::new_v4()
     ));
     let result = (|| -> Result<LegacyMigrationReport, LegacyMigrationError> {
+        observer(LegacyMigrationBoundary::BeforeDatabaseWrite)?;
         let store = LibraryStore::open(candidate.clone())?;
-        let mut state = ImportState::new(store);
+        let mut state = ImportState::new(store, Arc::clone(&observer));
         parse_pass(source, &mut state, false)?;
         state.finish_first_pass()?;
         parse_pass(source, &mut state, true)?;
@@ -916,16 +1029,21 @@ pub fn migrate_legacy_database(
             &report.library_id,
             report.sounds,
             report.hotkeys,
+            &observer,
         )?;
-        if sha256(source)? != source_sha256 {
+        if sha256_observed(source, &observer, LegacyMigrationBoundary::DatabaseSynced)?
+            != source_sha256
+        {
             return Err(LegacyMigrationError::Invalid(
                 "legacy config changed while migration was running".to_string(),
             ));
         }
+        observer(LegacyMigrationBoundary::BeforeDatabasePublish)?;
         fs::rename(&candidate, destination)?;
         if let Some(parent) = destination.parent() {
             fs::File::open(parent)?.sync_all()?;
         }
+        observer(LegacyMigrationBoundary::DatabasePublished)?;
         Ok(report)
     })();
     if result.is_err() {
@@ -1014,13 +1132,36 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
 }
 
 fn write_schema_8_config(path: &Path, settings: Settings) -> Result<(), LegacyMigrationError> {
+    write_schema_8_config_observed(path, settings, &noop_observer())
+}
+
+fn write_schema_8_config_observed(
+    path: &Path,
+    settings: Settings,
+    observer: &MigrationObserver,
+) -> Result<(), LegacyMigrationError> {
     let mut config = crate::config::Config {
         settings,
         ..crate::config::Config::default()
     };
-    config
-        .save_to_path(path)
-        .map_err(|error| LegacyMigrationError::Invalid(error.to_string()))
+    let result = config.save_to_path_observed(path, |boundary| {
+        observer(match boundary {
+            crate::config::ConfigSaveBoundary::CandidateSynced => {
+                LegacyMigrationBoundary::SettingsSynced
+            }
+            crate::config::ConfigSaveBoundary::Renamed => LegacyMigrationBoundary::SettingsRenamed,
+            crate::config::ConfigSaveBoundary::DirectorySynced => {
+                LegacyMigrationBoundary::SettingsPublished
+            }
+        })
+    });
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => match error.downcast::<LegacyMigrationError>() {
+            Ok(error) => Err(*error),
+            Err(error) => Err(LegacyMigrationError::Invalid(error.to_string())),
+        },
+    }
 }
 
 pub fn complete_legacy_settings_cutover(
@@ -1052,8 +1193,64 @@ pub fn migrate_legacy_config(
     source: &Path,
     destination: &Path,
 ) -> Result<LegacyMigrationReport, LegacyMigrationError> {
-    let report = migrate_legacy_database(source, destination)?;
-    write_schema_8_config(source, report.settings.clone())?;
+    migrate_legacy_config_observed(source, destination, noop_observer())
+}
+
+pub fn migrate_legacy_config_controlled(
+    source: &Path,
+    destination: &Path,
+    cancelled: Arc<AtomicBool>,
+    on_progress: Arc<dyn Fn(LegacyMigrationProgress) + Send + Sync>,
+) -> Result<LegacyMigrationReport, LegacyMigrationError> {
+    let last_progress = AtomicU8::new(u8::MAX);
+    migrate_legacy_config_observed(
+        source,
+        destination,
+        Arc::new(move |boundary| {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(LegacyMigrationError::Cancelled);
+            }
+            let progress = match boundary {
+                LegacyMigrationBoundary::BeforeBackupWrite
+                | LegacyMigrationBoundary::BackupSynced
+                | LegacyMigrationBoundary::BackupPublished => LegacyMigrationProgress::BackingUp,
+                LegacyMigrationBoundary::BeforeDatabaseWrite
+                | LegacyMigrationBoundary::DatabaseBatchCommitted => {
+                    LegacyMigrationProgress::Importing
+                }
+                LegacyMigrationBoundary::DatabaseSynced => LegacyMigrationProgress::Verifying,
+                LegacyMigrationBoundary::BeforeDatabasePublish
+                | LegacyMigrationBoundary::DatabasePublished => {
+                    LegacyMigrationProgress::PublishingDatabase
+                }
+                LegacyMigrationBoundary::BeforeSettingsWrite
+                | LegacyMigrationBoundary::SettingsSynced
+                | LegacyMigrationBoundary::SettingsRenamed => {
+                    LegacyMigrationProgress::PublishingSettings
+                }
+                LegacyMigrationBoundary::SettingsPublished => LegacyMigrationProgress::Complete,
+            };
+            let progress_id = progress as u8;
+            if last_progress.swap(progress_id, Ordering::Relaxed) != progress_id {
+                on_progress(progress);
+            }
+            if cancelled.load(Ordering::Relaxed) {
+                Err(LegacyMigrationError::Cancelled)
+            } else {
+                Ok(())
+            }
+        }),
+    )
+}
+
+fn migrate_legacy_config_observed(
+    source: &Path,
+    destination: &Path,
+    observer: MigrationObserver,
+) -> Result<LegacyMigrationReport, LegacyMigrationError> {
+    let report = migrate_legacy_database_observed(source, destination, Arc::clone(&observer))?;
+    observer(LegacyMigrationBoundary::BeforeSettingsWrite)?;
+    write_schema_8_config_observed(source, report.settings.clone(), &observer)?;
     let identity = database_identity(destination)?;
     if identity.library_id != report.library_id {
         return Err(LegacyMigrationError::Invalid(
@@ -1274,7 +1471,12 @@ mod tests {
         let original = br#"{"schema_version":7,"settings":{}}"#;
         fs::write(&source, original).expect("write source");
 
-        ensure_backup(&source, &sha256(&source).expect("hash source")).expect("create backup");
+        ensure_backup(
+            &source,
+            &sha256(&source).expect("hash source"),
+            &noop_observer(),
+        )
+        .expect("create backup");
         fs::write(
             &source,
             br#"{"schema_version":7,"settings":{"theme":"light"}}"#,
@@ -1322,7 +1524,12 @@ mod tests {
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
         let source_before = fs::read(&source).expect("read legacy source");
-        ensure_backup(&source, &sha256(&source).expect("hash source")).expect("create backup");
+        ensure_backup(
+            &source,
+            &sha256(&source).expect("hash source"),
+            &noop_observer(),
+        )
+        .expect("create backup");
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
             .expect("make destination read-only");
 
@@ -1447,6 +1654,40 @@ mod tests {
     }
 
     #[test]
+    fn authentic_v2_1_schema_7_fixture_preserves_generated_folder_state() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema7-fixture-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        fs::write(
+            &source,
+            include_bytes!("../tests/fixtures/config-v2.1-schema7.json"),
+        )
+        .expect("write historical fixture");
+
+        let report = migrate_legacy_config(&source, &destination).expect("migrate fixture");
+
+        assert_eq!(report.sounds, 1);
+        assert_eq!(report.roots, 1);
+        assert_eq!(report.manual_tabs, 1);
+        assert_eq!(report.manual_memberships, 1);
+        assert_eq!(report.generated_tabs_deferred, 1);
+        assert_eq!(report.hotkeys, 2);
+        let store = LibraryStore::open(destination).expect("open migrated database");
+        assert_eq!(
+            store
+                .manual_tabs(0)
+                .recv()
+                .expect("load migrated tabs")
+                .total,
+            2
+        );
+        drop(store);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
     fn full_cutover_publishes_small_schema_8_settings_with_matching_identity() {
         let directory =
             std::env::temp_dir().join(format!("lsb-schema8-cutover-{}", uuid::Uuid::new_v4()));
@@ -1500,6 +1741,257 @@ mod tests {
     }
 
     #[test]
+    fn controlled_migration_reports_ordered_progress() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-migration-progress-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.sounds.push(Sound::new(
+            "Tone".to_string(),
+            "/music/tone.wav".to_string(),
+        ));
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&progress);
+
+        migrate_legacy_config_controlled(
+            &source,
+            &destination,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(move |update| captured.lock().unwrap().push(update)),
+        )
+        .expect("run controlled migration");
+
+        assert_eq!(
+            *progress.lock().unwrap(),
+            [
+                LegacyMigrationProgress::BackingUp,
+                LegacyMigrationProgress::Importing,
+                LegacyMigrationProgress::Verifying,
+                LegacyMigrationProgress::PublishingDatabase,
+                LegacyMigrationProgress::PublishingSettings,
+                LegacyMigrationProgress::Complete,
+            ]
+        );
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn controlled_migration_cancels_before_publication_and_retries_cleanly() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-migration-cancel-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        config.sounds.push(Sound::new(
+            "Tone".to_string(),
+            "/music/tone.wav".to_string(),
+        ));
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        let source_before = fs::read(&source).expect("read source");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_from_progress = Arc::clone(&cancelled);
+
+        let result = migrate_legacy_config_controlled(
+            &source,
+            &destination,
+            cancelled,
+            Arc::new(move |progress| {
+                if progress == LegacyMigrationProgress::Importing {
+                    cancel_from_progress.store(true, Ordering::Relaxed);
+                }
+            }),
+        );
+
+        assert!(matches!(result, Err(LegacyMigrationError::Cancelled)));
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+        assert!(!destination.exists());
+        migrate_legacy_config(&source, &destination).expect("retry cancelled migration");
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn every_durable_migration_boundary_is_restart_safe() {
+        for boundary in LegacyMigrationBoundary::ALL {
+            let directory = std::env::temp_dir().join(format!(
+                "lsb-migration-boundary-{boundary:?}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir_all(&directory).expect("create test directory");
+            let source = directory.join("config.json");
+            let destination = directory.join("library.sqlite3");
+            let mut config = Config::default();
+            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            config.sounds.push(Sound::new(
+                "Tone".to_string(),
+                "/music/tone.wav".to_string(),
+            ));
+            serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+            let source_before = fs::read(&source).expect("read legacy source");
+
+            let result = migrate_legacy_config_observed(
+                &source,
+                &destination,
+                Arc::new(move |current| {
+                    if current == boundary {
+                        return Err(LegacyMigrationError::Io(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            format!("interrupted at {current:?}"),
+                        )));
+                    }
+                    Ok(())
+                }),
+            );
+
+            assert!(result.is_err(), "{boundary:?} did not interrupt");
+            assert!(
+                !directory
+                    .read_dir()
+                    .expect("read migration directory")
+                    .any(|entry| {
+                        let name = entry
+                            .expect("read migration entry")
+                            .file_name()
+                            .to_string_lossy()
+                            .into_owned();
+                        name.starts_with(".library.sqlite3.importing.")
+                            || name.starts_with(".config.json.pre-v8-backup.")
+                            || name.starts_with("config.json.tmp.")
+                    }),
+                "{boundary:?} left a disposable candidate"
+            );
+
+            if destination.exists() {
+                database_identity(&destination).expect("published database remains valid");
+                if config_schema_version(&source).expect("read config schema")
+                    <= crate::config::LAST_LEGACY_SCHEMA_VERSION
+                {
+                    complete_legacy_settings_cutover(&source, &destination)
+                        .expect("restart completes settings cutover");
+                }
+                assert_eq!(
+                    config_schema_version(&source).expect("read recovered schema"),
+                    crate::config::CURRENT_SCHEMA_VERSION
+                );
+            } else {
+                assert_eq!(
+                    fs::read(&source).expect("read preserved legacy source"),
+                    source_before
+                );
+                migrate_legacy_config(&source, &destination)
+                    .expect("restart retries unpublished migration");
+            }
+
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
+    }
+
+    #[test]
+    fn abrupt_exit_at_every_durable_boundary_recovers_on_restart() {
+        for boundary in LegacyMigrationBoundary::ALL {
+            let directory = std::env::temp_dir().join(format!(
+                "lsb-migration-crash-{boundary:?}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir_all(&directory).expect("create test directory");
+            let source = directory.join("config.json");
+            let destination = directory.join("library.sqlite3");
+            let mut config = Config::default();
+            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            config.sounds.push(Sound::new(
+                "Tone".to_string(),
+                "/music/tone.wav".to_string(),
+            ));
+            serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+
+            let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = migrate_legacy_config_observed(
+                    &source,
+                    &destination,
+                    Arc::new(move |current| {
+                        if current == boundary {
+                            panic!("simulated process exit at {current:?}");
+                        }
+                        Ok(())
+                    }),
+                );
+            }));
+            assert!(interrupted.is_err(), "{boundary:?} did not stop");
+
+            if destination.exists() {
+                database_identity(&destination).expect("published database remains valid");
+                if config_schema_version(&source).unwrap()
+                    <= crate::config::LAST_LEGACY_SCHEMA_VERSION
+                {
+                    complete_legacy_settings_cutover(&source, &destination)
+                        .expect("restart completes settings cutover");
+                }
+            } else {
+                migrate_legacy_config(&source, &destination)
+                    .expect("restart retries unpublished migration");
+            }
+            assert_eq!(
+                config_schema_version(&source).unwrap(),
+                crate::config::CURRENT_SCHEMA_VERSION
+            );
+            database_identity(&destination).expect("recovered database remains valid");
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
+    }
+
+    #[test]
+    fn disk_full_at_each_write_phase_preserves_a_restartable_source() {
+        for boundary in LegacyMigrationBoundary::WRITE_PHASES {
+            let directory = std::env::temp_dir().join(format!(
+                "lsb-migration-disk-full-{boundary:?}-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir_all(&directory).expect("create test directory");
+            let source = directory.join("config.json");
+            let destination = directory.join("library.sqlite3");
+            let mut config = Config::default();
+            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+            let source_before = fs::read(&source).expect("read legacy source");
+
+            let result = migrate_legacy_config_observed(
+                &source,
+                &destination,
+                Arc::new(move |current| {
+                    if current == boundary {
+                        return Err(LegacyMigrationError::Io(std::io::Error::from_raw_os_error(
+                            28,
+                        )));
+                    }
+                    Ok(())
+                }),
+            );
+
+            let error = result.expect_err("disk-full injection must fail");
+            let LegacyMigrationError::Io(error) = error else {
+                panic!("expected disk-full I/O error, got {error}");
+            };
+            assert_eq!(error.raw_os_error(), Some(28));
+            assert_eq!(fs::read(&source).unwrap(), source_before);
+            if boundary == LegacyMigrationBoundary::BeforeSettingsWrite {
+                database_identity(&destination).expect("published database remains valid");
+                complete_legacy_settings_cutover(&source, &destination)
+                    .expect("restart completes settings cutover");
+            } else {
+                assert!(!destination.exists());
+                migrate_legacy_config(&source, &destination)
+                    .expect("retry succeeds after storage is available");
+            }
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
+    }
+
+    #[test]
     fn restart_refuses_a_ready_database_for_a_changed_legacy_source() {
         let directory =
             std::env::temp_dir().join(format!("lsb-schema8-mismatch-{}", uuid::Uuid::new_v4()));
@@ -1535,6 +2027,58 @@ mod tests {
 
         assert!(error.to_string().contains("application id"));
         fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn corrupt_and_wrong_format_databases_fail_closed_without_replacement() {
+        for (name, bytes) in [
+            ("wrong-format", b"this is not sqlite".as_slice()),
+            (
+                "corrupt",
+                b"SQLite format 3\0deliberately truncated".as_slice(),
+            ),
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("lsb-{name}-database-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&directory).expect("create test directory");
+            let destination = directory.join("library.sqlite3");
+            fs::write(&destination, bytes).expect("write invalid database");
+            let before = fs::read(&destination).expect("read invalid database");
+
+            database_identity(&destination).expect_err("invalid database must fail");
+
+            assert_eq!(
+                fs::read(&destination).expect("read preserved invalid database"),
+                before
+            );
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
+    }
+
+    #[test]
+    fn unsupported_and_non_ready_databases_fail_closed() {
+        for (name, mutate) in [
+            ("unsupported-schema", "PRAGMA user_version = 99;"),
+            (
+                "not-ready",
+                "DELETE FROM meta WHERE key = 'database_ready';",
+            ),
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("lsb-{name}-database-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&directory).expect("create test directory");
+            let destination = directory.join("library.sqlite3");
+            initialize_empty_library(&destination, "library").expect("create database");
+            let connection = Connection::open(&destination).expect("open database");
+            connection.execute_batch(mutate).expect("mutate database");
+            drop(connection);
+            let before = fs::read(&destination).expect("read invalid database");
+
+            database_identity(&destination).expect_err("invalid database must fail");
+
+            assert_eq!(fs::read(&destination).unwrap(), before);
+            fs::remove_dir_all(directory).expect("remove test directory");
+        }
     }
 
     #[test]

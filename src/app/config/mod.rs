@@ -5,6 +5,7 @@ mod persistence;
 mod types;
 
 pub use defaults::*;
+pub(crate) use persistence::ConfigSaveBoundary;
 pub use types::*;
 
 #[cfg(test)]

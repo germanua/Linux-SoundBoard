@@ -12,6 +12,13 @@ use crate::config::{Config, LoudnessAnalysisState, SoundTab};
 static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SCHEMA_6_BACKUP_FILE_NAME: &str = "config.json.pre-v6-backup";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigSaveBoundary {
+    CandidateSynced,
+    Renamed,
+    DirectorySynced,
+}
+
 fn save_temp_path(path: &Path) -> PathBuf {
     let sequence = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     path.with_file_name(format!(
@@ -157,6 +164,17 @@ impl Config {
     }
 
     pub(crate) fn save_to_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        self.save_to_path_observed(path, |_| Ok::<(), std::convert::Infallible>(()))
+    }
+
+    pub(crate) fn save_to_path_observed<E>(
+        &mut self,
+        path: &Path,
+        mut observer: impl FnMut(ConfigSaveBoundary) -> Result<(), E>,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        E: std::error::Error + 'static,
+    {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -192,6 +210,8 @@ impl Config {
                 writer.flush()?;
             }
             tmp_file.sync_all()?;
+            observer(ConfigSaveBoundary::CandidateSynced)
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
             Ok(())
         })();
 
@@ -204,6 +224,8 @@ impl Config {
             let _ = fs::remove_file(&tmp_path);
             return Err(Box::new(err));
         }
+        observer(ConfigSaveBoundary::Renamed)
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         if let Some(parent) = path.parent() {
             if let Err(err) = fs::File::open(parent).and_then(|dir| dir.sync_all()) {
                 return Err(Box::new(std::io::Error::other(format!(
@@ -211,6 +233,8 @@ impl Config {
                 ))));
             }
         }
+        observer(ConfigSaveBoundary::DirectorySynced)
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         self.persistence_path = Some(path.to_path_buf());
         Ok(())
     }

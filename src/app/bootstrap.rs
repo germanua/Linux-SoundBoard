@@ -1,8 +1,11 @@
 use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{mpsc, Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
@@ -848,31 +851,93 @@ fn prompt_legacy_migration(
         }
         let config_path = Config::config_path();
         let library_path = config_path.with_file_name("library.sqlite3");
+        let progress_label = gtk4::Label::new(Some("Preparing library upgrade…"));
+        let spinner = gtk4::Spinner::builder().spinning(true).build();
+        let cancel_button = gtk4::Button::with_label("Cancel");
+        let progress_box = gtk4::Box::builder()
+            .orientation(gtk4::Orientation::Vertical)
+            .spacing(12)
+            .halign(gtk4::Align::Center)
+            .valign(gtk4::Align::Center)
+            .build();
+        progress_box.append(&spinner);
+        progress_box.append(&progress_label);
+        progress_box.append(&cancel_button);
+        callback_parent.set_child(Some(&progress_box));
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let cancelled = Arc::clone(&cancelled);
+            let progress_label = progress_label.clone();
+            cancel_button.connect_clicked(move |button| {
+                cancelled.store(true, AtomicOrdering::Relaxed);
+                button.set_sensitive(false);
+                progress_label.set_label("Cancelling safely…");
+            });
+        }
+        let (progress_sender, progress_receiver) = mpsc::channel();
+        let progress_source = Rc::new(RefCell::new(Some(glib::timeout_add_local(
+            Duration::from_millis(50),
+            {
+                let progress_label = progress_label.clone();
+                let cancel_button = cancel_button.clone();
+                move || {
+                    while let Ok(progress) = progress_receiver.try_recv() {
+                        progress_label.set_label(migration_progress_message(progress));
+                        cancel_button.set_sensitive(migration_progress_can_cancel(progress));
+                    }
+                    glib::ControlFlow::Continue
+                }
+            },
+        ))));
         let app_done = callback_app.clone();
         let parent_done = callback_parent.clone();
+        let progress_source_done = Rc::clone(&progress_source);
+        let cancelled_worker = Arc::clone(&cancelled);
         if let Err(error) = crate::commands::dispatch_async_result(
             "migrate_legacy_library",
-            move || crate::legacy_migration::migrate_legacy_config(&config_path, &library_path),
-            move |result| match result {
-                Ok(report) => {
-                    log::info!(
-                        "Migrated {} sounds, {} roots, {} tabs, and {} hotkeys",
-                        report.sounds,
-                        report.roots,
-                        report.manual_tabs,
-                        report.hotkeys
-                    );
-                    parent_done.close();
-                    start_application_ready(&app_done, startup_mode, previous_engine_version);
+            move || {
+                crate::legacy_migration::migrate_legacy_config_controlled(
+                    &config_path,
+                    &library_path,
+                    cancelled_worker,
+                    Arc::new(move |progress| {
+                        let _ = progress_sender.send(progress);
+                    }),
+                )
+            },
+            move |result| {
+                if let Some(source) = progress_source_done.borrow_mut().take() {
+                    source.remove();
                 }
-                Err(error) => show_startup_error(
-                    &app_done,
-                    &parent_done,
-                    "Sound library upgrade failed",
-                    &format!("{error}\n\nThe original config and backup were preserved."),
-                ),
+                match result {
+                    Ok(report) => {
+                        log::info!(
+                            "Migrated {} sounds, {} roots, {} tabs, and {} hotkeys",
+                            report.sounds,
+                            report.roots,
+                            report.manual_tabs,
+                            report.hotkeys
+                        );
+                        parent_done.close();
+                        start_application_ready(&app_done, startup_mode, previous_engine_version);
+                    }
+                    Err(crate::legacy_migration::LegacyMigrationError::Cancelled) => {
+                        parent_done.close();
+                        app_done.quit();
+                    }
+                    Err(error) => show_startup_error(
+                        &app_done,
+                        &parent_done,
+                        "Sound library upgrade failed",
+                        &format!("{error}\n\nThe original config and backup were preserved."),
+                    ),
+                }
             },
         ) {
+            if let Some(source) = progress_source.borrow_mut().take() {
+                source.remove();
+            }
             show_startup_error(
                 &callback_app,
                 &callback_parent,
@@ -881,6 +946,32 @@ fn prompt_legacy_migration(
             );
         }
     });
+}
+
+fn migration_progress_message(
+    progress: crate::legacy_migration::LegacyMigrationProgress,
+) -> &'static str {
+    use crate::legacy_migration::LegacyMigrationProgress;
+    match progress {
+        LegacyMigrationProgress::BackingUp => "Backing up the existing library…",
+        LegacyMigrationProgress::Importing => "Importing sounds, folders, tabs, and hotkeys…",
+        LegacyMigrationProgress::Verifying => "Verifying the upgraded library…",
+        LegacyMigrationProgress::PublishingDatabase => "Saving the upgraded library…",
+        LegacyMigrationProgress::PublishingSettings => "Saving settings…",
+        LegacyMigrationProgress::Complete => "Upgrade complete",
+    }
+}
+
+fn migration_progress_can_cancel(
+    progress: crate::legacy_migration::LegacyMigrationProgress,
+) -> bool {
+    use crate::legacy_migration::LegacyMigrationProgress;
+    matches!(
+        progress,
+        LegacyMigrationProgress::BackingUp
+            | LegacyMigrationProgress::Importing
+            | LegacyMigrationProgress::Verifying
+    )
 }
 
 fn start_application_ready(
@@ -1596,6 +1687,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn migration_progress_disables_cancellation_before_publication() {
+        use crate::legacy_migration::LegacyMigrationProgress;
+
+        assert!(migration_progress_can_cancel(
+            LegacyMigrationProgress::Importing
+        ));
+        assert!(!migration_progress_can_cancel(
+            LegacyMigrationProgress::PublishingDatabase
+        ));
+        assert_eq!(
+            migration_progress_message(LegacyMigrationProgress::Verifying),
+            "Verifying the upgraded library…"
+        );
     }
 
     fn write_legacy_config(path: &Path) -> Vec<u8> {
