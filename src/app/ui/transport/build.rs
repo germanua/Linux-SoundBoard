@@ -339,6 +339,7 @@ impl TransportBar {
             suppress_mic_toggle: Cell::new(false),
             continue_suppressed_play_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
+            refresh_cancel: RefCell::new(None),
             state,
             has_sound_list_provider: Cell::new(false),
             sound_list_provider: RefCell::new(None),

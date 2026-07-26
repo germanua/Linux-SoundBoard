@@ -23,7 +23,14 @@ fn main_context_test_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn create_test_config() -> Config {
-    let mut cfg = Config::default();
+    let mut cfg = Config {
+        persistence_path: Some(
+            std::env::temp_dir()
+                .join(format!("lsb-command-config-{}", uuid::Uuid::new_v4()))
+                .join("config.json"),
+        ),
+        ..Config::default()
+    };
     // Disable auto_gain so library commands (add_sound, refresh_sounds, etc.)
     // do not inadvertently fire the global loudness coordinator. Tests that
     // exercise loudness-backfill behaviour opt in by setting this explicitly.

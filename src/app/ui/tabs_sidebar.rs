@@ -6,9 +6,9 @@ use std::sync::Arc;
 use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, ListView, Orientation, ScrolledWindow,
-    SelectionMode, SignalListItemFactory, SingleSelection, TreeExpander, TreeListModel,
-    TreeListRow, Widget,
+    Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, ListView, Orientation,
+    ScrolledWindow, SelectionMode, SignalListItemFactory, SingleSelection, TreeExpander,
+    TreeListModel, TreeListRow, Widget,
 };
 
 use crate::app_meta::GENERAL_TAB_ID;
@@ -33,10 +33,30 @@ pub type TabMembershipChangedCallback = Box<dyn Fn() + 'static>;
 struct FolderNode {
     root_path: String,
     relative_path: Option<String>,
-    name: String,
+    name: Rc<RefCell<String>>,
     has_children: bool,
     children: gio::ListStore,
-    children_requested: Cell<bool>,
+    children_requested: Rc<Cell<bool>>,
+    expanded: Rc<Cell<bool>>,
+    expanded_handler_connected: Cell<bool>,
+    disclosure_handlers: RefCell<Option<(Image, GestureClick, TreeListRow, glib::SignalHandlerId)>>,
+    context_gesture: RefCell<Option<GestureClick>>,
+}
+
+fn update_disclosure_icon(image: &Image, expanded: bool) {
+    icons::apply_image_icon(
+        image,
+        if expanded {
+            icons::DISCLOSURE_OPEN
+        } else {
+            icons::DISCLOSURE_CLOSED
+        },
+    );
+    image.set_tooltip_text(Some(if expanded {
+        "Hide subfolders"
+    } else {
+        "Show subfolders"
+    }));
 }
 
 impl FolderNode {
@@ -49,10 +69,14 @@ impl FolderNode {
         Self {
             root_path: path,
             relative_path: None,
-            name,
+            name: Rc::new(RefCell::new(name)),
             has_children: true,
             children: gio::ListStore::new::<BoxedAnyObject>(),
-            children_requested: Cell::new(false),
+            children_requested: Rc::new(Cell::new(false)),
+            expanded: Rc::new(Cell::new(true)),
+            expanded_handler_connected: Cell::new(false),
+            disclosure_handlers: RefCell::new(None),
+            context_gesture: RefCell::new(None),
         }
     }
 
@@ -60,10 +84,14 @@ impl FolderNode {
         Self {
             root_path,
             relative_path: Some(item.relative_path),
-            name: item.name,
+            name: Rc::new(RefCell::new(item.name)),
             has_children: item.has_children,
             children: gio::ListStore::new::<BoxedAnyObject>(),
-            children_requested: Cell::new(false),
+            children_requested: Rc::new(Cell::new(false)),
+            expanded: Rc::new(Cell::new(item.expanded)),
+            expanded_handler_connected: Cell::new(false),
+            disclosure_handlers: RefCell::new(None),
+            context_gesture: RefCell::new(None),
         }
     }
 }
@@ -167,7 +195,7 @@ impl TabsSidebar {
         let folder_roots = gio::ListStore::new::<BoxedAnyObject>();
         let folder_generation = Rc::new(Cell::new(0));
         let library_for_children = state.library.clone();
-        let folder_tree = TreeListModel::new(folder_roots.clone(), false, true, move |item| {
+        let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
             let node = boxed.borrow::<FolderNode>();
             if !node.has_children {
@@ -197,19 +225,35 @@ impl TabsSidebar {
                 .hexpand(true)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .build();
+            let disclosure = icons::image(icons::DISCLOSURE_CLOSED);
+            disclosure.set_pixel_size(16);
+            disclosure.set_size_request(20, 20);
+            disclosure.set_tooltip_text(Some("Show subfolders"));
             let expander = TreeExpander::new();
             expander.set_indent_for_depth(false);
+            expander.set_hide_expander(true);
             expander.set_child(Some(&label));
-            item.set_child(Some(&expander));
+            let row_box = GtkBox::new(Orientation::Horizontal, 2);
+            row_box.append(&disclosure);
+            row_box.append(&expander);
+            item.set_child(Some(&row_box));
         });
-        folder_factory.connect_bind(|_, item| {
+        let library_for_expansion = state.library.clone();
+        let dialog_host_for_folders = dialog_host.clone();
+        folder_factory.connect_bind(move |_, item| {
             let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
                 return;
             };
             let Some(row) = item.item().and_downcast::<TreeListRow>() else {
                 return;
             };
-            let Some(expander) = item.child().and_downcast::<TreeExpander>() else {
+            let Some(row_box) = item.child().and_downcast::<GtkBox>() else {
+                return;
+            };
+            let Some(disclosure) = row_box.first_child().and_downcast::<Image>() else {
+                return;
+            };
+            let Some(expander) = disclosure.next_sibling().and_downcast::<TreeExpander>() else {
                 return;
             };
             let Some(label) = expander.child().and_downcast::<Label>() else {
@@ -218,8 +262,198 @@ impl TabsSidebar {
             let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                 return;
             };
-            label.set_label(&boxed.borrow::<FolderNode>().name);
+            let node = boxed.borrow::<FolderNode>();
+            label.set_label(&node.name.borrow());
+            let expanded = Rc::clone(&node.expanded);
+            let restore_expanded = expanded.get();
+            let connect_expanded = !node.expanded_handler_connected.replace(true);
+            let root_path = node.root_path.clone();
+            let relative_path = node.relative_path.clone();
+            let children = node.children.clone();
+            let children_requested = Rc::clone(&node.children_requested);
+            let name = Rc::clone(&node.name);
+            let has_children = node.has_children;
+            let install_disclosure = has_children && node.disclosure_handlers.borrow().is_none();
+            let install_context_menu =
+                node.relative_path.is_some() && node.context_gesture.borrow().is_none();
+            let context_relative_path = node.relative_path.clone();
+            drop(node);
             expander.set_list_row(Some(&row));
+            row.set_expanded(restore_expanded);
+            disclosure.set_opacity(if has_children { 1.0 } else { 0.0 });
+            disclosure.set_sensitive(has_children);
+            if has_children {
+                update_disclosure_icon(&disclosure, restore_expanded);
+            } else {
+                disclosure.set_tooltip_text(None);
+            }
+            if install_disclosure {
+                let gesture = GestureClick::new();
+                gesture.set_button(1);
+                let row_for_click = row.clone();
+                gesture.connect_released(move |_, _, _, _| {
+                    row_for_click.set_expanded(!row_for_click.is_expanded());
+                });
+                disclosure.add_controller(gesture.clone());
+                let disclosure_for_expansion = disclosure.clone();
+                let expansion_handler = row.connect_expanded_notify(move |row| {
+                    update_disclosure_icon(&disclosure_for_expansion, row.is_expanded());
+                });
+                boxed
+                    .borrow::<FolderNode>()
+                    .disclosure_handlers
+                    .replace(Some((
+                        disclosure.clone(),
+                        gesture,
+                        row.clone(),
+                        expansion_handler,
+                    )));
+            }
+            if connect_expanded {
+                let library = library_for_expansion.clone();
+                let expanded_root_path = root_path.clone();
+                row.connect_expanded_notify(move |row| {
+                    let is_expanded = row.is_expanded();
+                    expanded.set(is_expanded);
+                    if !is_expanded {
+                        children.remove_all();
+                        children_requested.set(false);
+                    }
+                    let Some(relative_path) = relative_path.as_deref() else {
+                        return;
+                    };
+                    let response = library.set_folder_expanded(
+                        &expanded_root_path,
+                        relative_path,
+                        is_expanded,
+                    );
+                    if let Err(error) = commands::dispatch_async_result(
+                        "save_sidebar_folder_expansion",
+                        move || response.recv(),
+                        move |result| {
+                            if let Err(error) = result {
+                                log::warn!("Failed to save folder expansion: {error}");
+                            }
+                        },
+                    ) {
+                        log::warn!("Failed to dispatch folder expansion save: {error}");
+                    }
+                });
+            }
+            if install_context_menu {
+                let gesture = GestureClick::new();
+                gesture.set_button(3);
+                let library = library_for_expansion.clone();
+                let dialog_host = dialog_host_for_folders.clone();
+                let label = label.clone();
+                let context_root_path = root_path.clone();
+                gesture.connect_pressed(move |gesture, _, x, y| {
+                    let Some(widget) = gesture.widget() else {
+                        return;
+                    };
+                    let Some(relative_path) = context_relative_path.as_deref() else {
+                        return;
+                    };
+                    let menu_model = gio::Menu::new();
+                    menu_model.append(Some("Rename Folder"), Some("folder-ctx.rename"));
+                    let action_group = gio::SimpleActionGroup::new();
+                    let action = gio::SimpleAction::new("rename", None);
+                    let library = library.clone();
+                    let root_path = context_root_path.clone();
+                    let relative_path = relative_path.to_string();
+                    let name = Rc::clone(&name);
+                    let label = label.clone();
+                    let dialog_host = dialog_host.clone();
+                    action.connect_activate(move |_, _| {
+                        let library = library.clone();
+                        let root_path = root_path.clone();
+                        let relative_path = relative_path.clone();
+                        let name = Rc::clone(&name);
+                        let label = label.clone();
+                        let initial_name = name.borrow().clone();
+                        dialog_host.show_input(
+                            "Rename Folder",
+                            "Enter a display name:",
+                            &initial_name,
+                            "Rename",
+                            move |new_name| {
+                                let response = library.set_folder_display_name(
+                                    &root_path,
+                                    &relative_path,
+                                    Some(&new_name),
+                                );
+                                let name = Rc::clone(&name);
+                                let label = label.clone();
+                                if let Err(error) = commands::dispatch_async_result(
+                                    "rename_sidebar_folder",
+                                    move || response.recv(),
+                                    move |result| match result {
+                                        Ok(true) => {
+                                            *name.borrow_mut() = new_name.clone();
+                                            label.set_label(&new_name);
+                                        }
+                                        Ok(false) => {
+                                            log::warn!("Folder rename target no longer exists");
+                                        }
+                                        Err(error) => {
+                                            log::warn!("Failed to rename folder: {error}");
+                                        }
+                                    },
+                                ) {
+                                    log::warn!("Failed to dispatch folder rename: {error}");
+                                }
+                            },
+                        );
+                    });
+                    action_group.add_action(&action);
+                    menu::show_popover_menu(
+                        &widget,
+                        "folder-ctx",
+                        &menu_model,
+                        &action_group,
+                        x,
+                        y,
+                    );
+                });
+                expander.add_controller(gesture.clone());
+                boxed
+                    .borrow::<FolderNode>()
+                    .context_gesture
+                    .replace(Some(gesture));
+            }
+        });
+        folder_factory.connect_unbind(|_, item| {
+            let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
+                return;
+            };
+            let Some(row) = item.item().and_downcast::<TreeListRow>() else {
+                return;
+            };
+            let Some(row_box) = item.child().and_downcast::<GtkBox>() else {
+                return;
+            };
+            let Some(disclosure) = row_box.first_child().and_downcast::<Image>() else {
+                return;
+            };
+            let Some(expander) = disclosure.next_sibling().and_downcast::<TreeExpander>() else {
+                return;
+            };
+            let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
+                return;
+            };
+            let (disclosure_handlers, gesture) = {
+                let node = boxed.borrow::<FolderNode>();
+                let disclosure_handlers = node.disclosure_handlers.borrow_mut().take();
+                let gesture = node.context_gesture.borrow_mut().take();
+                (disclosure_handlers, gesture)
+            };
+            if let Some((image, click_gesture, row, expansion_handler)) = disclosure_handlers {
+                image.remove_controller(&click_gesture);
+                row.disconnect(expansion_handler);
+            }
+            if let Some(gesture) = gesture {
+                expander.remove_controller(&gesture);
+            }
         });
         let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
         folder_view.add_css_class("navigation-sidebar");

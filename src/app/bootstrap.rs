@@ -1,7 +1,9 @@
 use parking_lot::Mutex;
 use std::cmp::Ordering;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -11,6 +13,7 @@ use gtk4::{Application, Window};
 use libadwaita as adw;
 use libadwaita::prelude::*;
 use log::{info, warn};
+use nix::fcntl::{Flock, FlockArg};
 
 use crate::app_meta::{
     APP_BINARY, APP_ICON_NAME, APP_ID, APP_TITLE, APP_VERSION, BACKEND_ENV_VAR, FALLBACK_RENDERER,
@@ -22,6 +25,38 @@ use crate::timer_registry::TimerRegistry;
 
 const ENGINE_SERVICE_UNIT: &str = "linux-soundboard-engine.service";
 const ENGINE_TARGET_UNIT: &str = "linux-soundboard-engine.target";
+static STORAGE_LOCK: OnceLock<Mutex<Option<Flock<File>>>> = OnceLock::new();
+
+fn acquire_storage_lock_at(path: &Path) -> Result<Flock<File>, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| error.to_string())?;
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, error)| {
+        format!(
+            "Another Linux Soundboard process is using '{}': {error}",
+            path.display()
+        )
+    })
+}
+
+fn ensure_storage_lock() -> Result<(), String> {
+    let mut lock = STORAGE_LOCK.get_or_init(|| Mutex::new(None)).lock();
+    if lock.is_none() {
+        let path = Config::config_path().with_file_name("storage.lock");
+        *lock = Some(acquire_storage_lock_at(&path)?);
+    }
+    Ok(())
+}
 
 pub fn run() {
     init_logging();
@@ -596,20 +631,14 @@ fn prepare_startup_storage_at(
                     config_path.with_file_name("config.json.pre-v8-backup").display()
                 ));
             }
-            let mut config = Config {
-                library_id: Some(identity.library_id),
-                ..Config::default()
-            };
+            let mut config = Config::default();
             config
                 .save_to_path(config_path)
                 .map_err(|error| error.to_string())?;
             return Ok(StoragePreparation::Ready);
         }
         let mut config = Config::default();
-        let library_id = config
-            .library_id
-            .clone()
-            .ok_or_else(|| "new settings have no library identity".to_string())?;
+        let library_id = uuid::Uuid::new_v4().to_string();
         crate::legacy_migration::initialize_empty_library(library_path, &library_id)
             .map_err(|error| error.to_string())?;
         config
@@ -639,25 +668,13 @@ fn prepare_startup_storage_at(
         ));
     }
 
-    let config = Config::load_from_path(config_path).map_err(|error| error.to_string())?;
-    let expected_id = config
-        .library_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| "Schema-8 settings have no library identity".to_string())?;
+    Config::load_from_path(config_path).map_err(|error| error.to_string())?;
     if !library_path.exists() {
         return Ok(StoragePreparation::NeedsEmptyLibraryRecovery {
-            library_id: expected_id.to_string(),
+            library_id: uuid::Uuid::new_v4().to_string(),
         });
     }
-    let identity = crate::legacy_migration::database_identity(library_path)
-        .map_err(|error| error.to_string())?;
-    if identity.library_id != expected_id {
-        return Err(
-            "Schema-8 settings and library.sqlite3 have different identities; refusing to open an empty or unrelated library."
-                .to_string(),
-        );
-    }
+    crate::legacy_migration::database_identity(library_path).map_err(|error| error.to_string())?;
     Ok(StoragePreparation::Ready)
 }
 
@@ -682,6 +699,10 @@ fn start_application(
     content.append(&gtk4::Label::new(Some("Preparing sound library…")));
     parent.set_child(Some(&content));
     parent.present();
+    if let Err(error) = ensure_storage_lock() {
+        show_startup_error(app, &parent, "Sound library is already in use", &error);
+        return;
+    }
 
     let callback_app = app.clone();
     let callback_parent = parent.clone();
@@ -888,25 +909,25 @@ fn start_application_ready(
     crate::diagnostics::record_phase_with_config("startup:config_loaded", &config);
 
     let library_path = Config::config_path().with_file_name("library.sqlite3");
-    let Some(library_id) = config.library_id.as_deref() else {
-        show_config_error(
-            app,
-            &std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "schema-8 settings have no library identity",
-            ),
-        );
-        return;
+    let identity = match crate::legacy_migration::database_identity(&library_path) {
+        Ok(identity) => identity,
+        Err(error) => {
+            log::error!("Refusing to start with invalid library database: {error}");
+            show_config_error(app, &error);
+            return;
+        }
     };
-    let library =
-        match crate::library_store::LibraryStore::open_authoritative(library_path, library_id) {
-            Ok(library) => library,
-            Err(error) => {
-                log::error!("Refusing to start with unavailable library database: {error}");
-                show_config_error(app, &error);
-                return;
-            }
-        };
+    let library = match crate::library_store::LibraryStore::open_authoritative(
+        library_path,
+        &identity.library_id,
+    ) {
+        Ok(library) => library,
+        Err(error) => {
+            log::error!("Refusing to start with unavailable library database: {error}");
+            show_config_error(app, &error);
+            return;
+        }
+    };
 
     let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
     let hotkey_manager = crate::hotkeys::HotkeyManager::new_deferred(hotkey_sender);
@@ -1580,7 +1601,6 @@ mod tests {
     fn write_legacy_config(path: &Path) -> Vec<u8> {
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         config.sound_folders.push("/music".to_string());
         config.sounds.push(Sound::new(
             "Tone".to_string(),
@@ -1601,13 +1621,13 @@ mod tests {
             StoragePreparation::Ready
         );
 
-        let config = Config::load_from_path(&temp.config_path()).expect("load settings");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(temp.config_path()).expect("read settings"))
+                .expect("parse settings");
         let identity = crate::legacy_migration::database_identity(&temp.library_path())
             .expect("load database identity");
-        assert_eq!(
-            config.library_id.as_deref(),
-            Some(identity.library_id.as_str())
-        );
+        assert!(persisted.get("library_id").is_none());
+        assert!(!identity.library_id.is_empty());
     }
 
     #[test]
@@ -1641,10 +1661,11 @@ mod tests {
         );
         let config = Config::load_from_path(&temp.config_path()).expect("load schema-8 settings");
         assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
-        assert_eq!(
-            config.library_id.as_deref(),
-            Some(report.library_id.as_str())
-        );
+        assert!(!report.library_id.is_empty());
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(temp.config_path()).expect("read settings"))
+                .expect("parse settings");
+        assert!(persisted.get("library_id").is_none());
     }
 
     #[test]
@@ -1658,31 +1679,51 @@ mod tests {
         let preparation = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
             .expect("missing database should offer an explicit recovery choice");
 
-        assert_eq!(
+        assert!(matches!(
             preparation,
-            StoragePreparation::NeedsEmptyLibraryRecovery {
-                library_id: config.library_id.expect("schema-8 identity"),
-            }
-        );
+            StoragePreparation::NeedsEmptyLibraryRecovery { ref library_id }
+                if !library_id.is_empty()
+        ));
         assert!(!temp.library_path().exists());
     }
 
     #[test]
-    fn startup_preflight_refuses_mismatched_schema_8_database() {
+    fn startup_preflight_uses_ready_database_when_obsolete_json_identity_differs() {
         let temp = TestDir::new("mismatched-database");
         let mut config = Config::default();
         config
             .save_to_path(&temp.config_path())
             .expect("write schema-8 settings");
+        let mut persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(temp.config_path()).expect("read settings"))
+                .expect("parse settings");
+        persisted["library_id"] = serde_json::Value::String("obsolete-library".to_string());
+        std::fs::write(
+            temp.config_path(),
+            serde_json::to_vec_pretty(&persisted).expect("serialize settings"),
+        )
+        .expect("write obsolete identity");
         crate::legacy_migration::initialize_empty_library(
             &temp.library_path(),
             "different-library",
         )
         .expect("create mismatched database");
 
-        let error = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
-            .expect_err("mismatched database must fail");
-        assert!(error.contains("different identities"));
+        let preparation = prepare_startup_storage_at(&temp.config_path(), &temp.library_path())
+            .expect("ready canonical database must remain authoritative");
+
+        assert!(matches!(preparation, StoragePreparation::Ready));
+    }
+
+    #[test]
+    fn storage_lock_excludes_a_second_writer_until_drop() {
+        let temp = TestDir::new("storage-lock");
+        let lock_path = temp.0.join("storage.lock");
+
+        let first = acquire_storage_lock_at(&lock_path).expect("acquire first lock");
+        assert!(acquire_storage_lock_at(&lock_path).is_err());
+        drop(first);
+        assert!(acquire_storage_lock_at(&lock_path).is_ok());
     }
 
     #[test]

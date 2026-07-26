@@ -1106,6 +1106,19 @@ pub fn refresh_sounds_with_store(
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
 ) -> Result<RefreshSummary, CommandError> {
+    refresh_sounds_with_store_cancellable(library, projection, &AtomicBool::new(false))
+}
+
+fn refresh_sounds_with_store_cancellable(
+    library: LibraryStore,
+    projection: crate::hotkeys::HotkeyProjectionCoordinator,
+    cancelled: &AtomicBool,
+) -> Result<RefreshSummary, CommandError> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(CommandError::Library(
+            "sound folder refresh was cancelled".to_string(),
+        ));
+    }
     let mut folders = Vec::new();
     let mut root_page = 0_usize;
     loop {
@@ -1147,7 +1160,6 @@ pub fn refresh_sounds_with_store(
         }
     }
 
-    let cancelled = AtomicBool::new(false);
     let mut batch = StoreScanBatch::default();
     let mut next_position = 0_usize;
     let mut scan_error = None;
@@ -1176,7 +1188,7 @@ pub fn refresh_sounds_with_store(
         let mut process_pending = |pending: &mut Vec<scanner::AudioFile>| {
             let files = std::mem::take(pending);
             for (file, sound) in
-                build_scanned_metadata_batch(files, &cancelled, metadata_pool.as_ref())
+                build_scanned_metadata_batch(files, cancelled, metadata_pool.as_ref())
             {
                 if cancelled.load(Ordering::Relaxed) {
                     return Err(CommandError::Library(
@@ -1198,7 +1210,7 @@ pub fn refresh_sounds_with_store(
             }
             Ok(())
         };
-        let progress = scanner::visit_audio_files(&roots, &cancelled, |file| {
+        let progress = scanner::visit_audio_files(&roots, cancelled, |file| {
             pending_files.push(file);
             if pending_files.len() < STORE_SCAN_METADATA_BATCH {
                 return ControlFlow::Continue(());
@@ -1257,15 +1269,18 @@ pub fn refresh_sounds_with_store_async<F>(
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
     on_complete: F,
-) -> Result<(), CommandError>
+) -> Result<Arc<AtomicBool>, CommandError>
 where
     F: FnOnce(Result<RefreshSummary, CommandError>) + 'static,
 {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
     dispatch_async_result(
         "refresh_sounds",
-        move || refresh_sounds_with_store(library, projection),
+        move || refresh_sounds_with_store_cancellable(library, projection, &worker_cancelled),
         on_complete,
-    )
+    )?;
+    Ok(cancelled)
 }
 
 pub fn import_dropped_files(
@@ -1771,5 +1786,22 @@ mod batch_tests {
             build_scanned_metadata_batch(vec![scanned_file("cancelled")], &cancelled, None)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn store_refresh_honours_preexisting_user_cancellation() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-cancel-refresh-{}", uuid::Uuid::new_v4()));
+        let library =
+            LibraryStore::open(directory.join("library.sqlite3")).expect("create test library");
+        let hotkeys = Arc::new(Mutex::new(HotkeyManager::new_test_noop()));
+        let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), hotkeys);
+        let cancelled = AtomicBool::new(true);
+
+        let error = refresh_sounds_with_store_cancellable(library, projection, &cancelled)
+            .expect_err("cancelled refresh must stop");
+
+        assert!(error.to_string().contains("cancelled"));
+        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

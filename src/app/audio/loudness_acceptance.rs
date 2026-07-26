@@ -192,7 +192,13 @@ pub fn evaluate_loudness_acceptance(
 }
 
 fn build_harness_config(corpus_paths: &[String]) -> Arc<Mutex<Config>> {
-    let mut config = Config::default();
+    let mut config = Config {
+        persistence_path: Some(std::env::temp_dir().join(format!(
+            "lsb-loudness-acceptance-{}.json",
+            uuid::Uuid::new_v4()
+        ))),
+        ..Config::default()
+    };
     config.settings.auto_gain = false;
 
     config.sounds = corpus_paths

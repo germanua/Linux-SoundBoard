@@ -105,7 +105,6 @@ impl Config {
         let version = crate::legacy_migration::config_schema_version(path)?;
         if version <= crate::config::LAST_LEGACY_SCHEMA_VERSION {
             let config = Self {
-                library_id: None,
                 settings: crate::legacy_migration::read_legacy_runtime_settings(path)?,
                 ..Self::default()
             };
@@ -135,17 +134,26 @@ impl Config {
 
             let mut config: Config = serde_json::from_value(config_value)?;
             config.sanitize_for_persistence();
+            config.persistence_path = Some(path.to_path_buf());
             if version == 6 {
                 ensure_schema_6_backup(path, &content)?;
             }
             Ok(config)
         } else {
-            Ok(Self::default())
+            Ok(Self {
+                persistence_path: Some(path.to_path_buf()),
+                ..Self::default()
+            })
         }
     }
 
     pub fn save(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.save_to_path(&Self::config_path())
+        let path = self.persistence_path.clone().ok_or_else(|| {
+            std::io::Error::other(
+                "configuration has no persistence path; load it or save to an explicit path first",
+            )
+        })?;
+        self.save_to_path(&path)
     }
 
     pub(crate) fn save_to_path(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -167,6 +175,7 @@ impl Config {
                             "configuration did not serialize as an object",
                         )
                     })?;
+                    object.remove("library_id");
                     object.remove("sound_folders");
                     object.remove("sounds");
                     object.remove("tabs");
@@ -202,6 +211,7 @@ impl Config {
                 ))));
             }
         }
+        self.persistence_path = Some(path.to_path_buf());
         Ok(())
     }
 
@@ -529,7 +539,6 @@ mod tests {
         let path = dir.join("config.json");
         let mut legacy = Config {
             schema_version: crate::config::LAST_LEGACY_SCHEMA_VERSION,
-            library_id: None,
             ..Config::default()
         };
         legacy.settings.local_volume = 37;
@@ -641,7 +650,18 @@ mod tests {
     }
 
     #[test]
-    fn schema_8_save_contains_only_settings_and_library_identity() {
+    fn default_config_cannot_save_to_an_implicit_user_path() {
+        let mut config = Config::default();
+
+        let error = config
+            .save()
+            .expect_err("an unbound config must not discover a user path");
+
+        assert!(error.to_string().contains("persistence path"));
+    }
+
+    #[test]
+    fn schema_8_save_contains_only_settings() {
         let dir = test_dir();
         fs::create_dir_all(&dir).expect("create config directory");
         let path = dir.join("config.json");
@@ -659,9 +679,9 @@ mod tests {
         assert!(loaded.sounds.is_empty());
         assert!(loaded.tabs.is_empty());
         assert!(loaded.settings.control_hotkeys.stop_all.is_none());
-        assert_eq!(loaded.library_id, config.library_id);
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("read config")).expect("parse config");
+        assert!(persisted.get("library_id").is_none());
         assert!(persisted.get("sound_folders").is_none());
         assert!(persisted.get("sounds").is_none());
         assert!(persisted.get("tabs").is_none());

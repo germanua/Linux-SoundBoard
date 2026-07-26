@@ -165,8 +165,7 @@ impl V7ToV8Migration {
         let mut migrated = config;
         if let Some(obj) = migrated.as_object_mut() {
             obj.insert("schema_version".to_string(), serde_json::json!(8));
-            obj.entry("library_id".to_string())
-                .or_insert(serde_json::Value::Null);
+            obj.remove("library_id");
         }
         Ok(migrated)
     }

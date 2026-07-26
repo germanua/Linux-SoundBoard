@@ -1,9 +1,10 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use glib;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation};
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, GestureDrag, Orientation};
 use libadwaita as adw;
 use libadwaita::prelude::BreakpointBinExt;
 
@@ -19,6 +20,13 @@ use super::sound_list::SoundList;
 use super::tabs_sidebar::TabsSidebar;
 use super::theme::apply_theme;
 use super::transport::TransportBar;
+
+const MIN_SIDEBAR_WIDTH: f64 = 180.0;
+const MAX_SIDEBAR_WIDTH: f64 = 600.0;
+
+fn sidebar_width_from_drag(start_width: i32, offset_x: f64) -> f64 {
+    (f64::from(start_width) + offset_x).clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
+}
 
 pub fn build_window(
     app: &Application,
@@ -93,11 +101,40 @@ pub fn build_window(
 
     let split_view = adw::OverlaySplitView::new();
     split_view.set_vexpand(true);
-    split_view.set_min_sidebar_width(180.0);
-    split_view.set_max_sidebar_width(220.0);
+    split_view.set_min_sidebar_width(MIN_SIDEBAR_WIDTH);
+    split_view.set_max_sidebar_width(MAX_SIDEBAR_WIDTH);
+    split_view.set_sidebar_width_fraction(0.16);
 
     let tabs = TabsSidebar::new(Arc::clone(&state), dialog_host.clone());
-    split_view.set_sidebar(Some(tabs.widget()));
+    let sidebar_box = GtkBox::new(Orientation::Horizontal, 0);
+    tabs.widget().set_hexpand(true);
+    sidebar_box.append(tabs.widget());
+    let resize_handle = GtkBox::new(Orientation::Vertical, 0);
+    resize_handle.set_vexpand(true);
+    resize_handle.set_size_request(6, -1);
+    resize_handle.set_cursor_from_name(Some("col-resize"));
+    resize_handle.set_tooltip_text(Some("Drag to resize the sidebar"));
+    let drag = GestureDrag::new();
+    let drag_start_width = Rc::new(Cell::new(220));
+    {
+        let sidebar_box = sidebar_box.clone();
+        let drag_start_width = Rc::clone(&drag_start_width);
+        drag.connect_drag_begin(move |_, _, _| {
+            drag_start_width.set(sidebar_box.width());
+        });
+    }
+    {
+        let split_view = split_view.clone();
+        let drag_start_width = Rc::clone(&drag_start_width);
+        drag.connect_drag_update(move |_, offset_x, _| {
+            let width = sidebar_width_from_drag(drag_start_width.get(), offset_x);
+            let total_width = f64::from(split_view.width().max(1));
+            split_view.set_sidebar_width_fraction(width / total_width);
+        });
+    }
+    resize_handle.add_controller(drag);
+    sidebar_box.append(&resize_handle);
+    split_view.set_sidebar(Some(&sidebar_box));
 
     let sound_list = SoundList::new(Arc::clone(&state), dialog_host.clone());
 
@@ -250,8 +287,9 @@ pub fn build_window(
     breakpoint_bin.add_breakpoint(breakpoint);
 
     // Hide the overlay sidebar while collapsed; show it inline once expanded again.
-    split_view.connect_collapsed_notify(|split_view| {
+    split_view.connect_collapsed_notify(move |split_view| {
         split_view.set_show_sidebar(!split_view.is_collapsed());
+        resize_handle.set_visible(!split_view.is_collapsed());
     });
 
     // The sidebar reveal button only appears while the sidebar is collapsed.
@@ -381,4 +419,16 @@ pub fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
     let toast = adw::Toast::new(message);
     toast.set_timeout(2);
     overlay.add_toast(toast);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_drag_width_is_clamped() {
+        assert_eq!(sidebar_width_from_drag(220, 80.0), 300.0);
+        assert_eq!(sidebar_width_from_drag(220, -100.0), 180.0);
+        assert_eq!(sidebar_width_from_drag(500, 200.0), 600.0);
+    }
 }

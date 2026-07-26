@@ -635,6 +635,21 @@ fn sha256(path: &Path) -> Result<String, LegacyMigrationError> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+fn remove_stale_candidates(parent: &Path, prefix: &str) -> Result<(), LegacyMigrationError> {
+    let mut removed = false;
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() && entry.file_name().to_string_lossy().starts_with(prefix) {
+            fs::remove_file(entry.path())?;
+            removed = true;
+        }
+    }
+    if removed {
+        fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn ensure_backup(source: &Path, expected_sha256: &str) -> Result<(), LegacyMigrationError> {
     let backup = source.with_file_name("config.json.pre-v8-backup");
     if backup.exists() {
@@ -646,24 +661,40 @@ fn ensure_backup(source: &Path, expected_sha256: &str) -> Result<(), LegacyMigra
             "the existing pre-v8 backup does not match the migration source".to_string(),
         ));
     }
-    if fs::hard_link(source, &backup).is_err() {
+
+    let parent = source.parent().ok_or_else(|| {
+        LegacyMigrationError::Invalid("legacy config has no parent directory".to_string())
+    })?;
+    remove_stale_candidates(parent, ".config.json.pre-v8-backup.")?;
+    let candidate = source.with_file_name(format!(
+        ".config.json.pre-v8-backup.{}",
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
         let mut reader = BufReader::new(fs::File::open(source)?);
-        let file = fs::OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(&backup)?;
-        let mut writer = BufWriter::new(&file);
-        std::io::copy(&mut reader, &mut writer)?;
-        writer.flush()?;
-        drop(writer);
+            .open(&candidate)?;
+        std::io::copy(&mut reader, &mut file)?;
         file.sync_all()?;
+        if sha256(&candidate)? != expected_sha256 {
+            return Err(LegacyMigrationError::Invalid(
+                "the legacy config changed while its migration backup was being created"
+                    .to_string(),
+            ));
+        }
+        fs::rename(&candidate, &backup)?;
+        if let Some(parent) = backup.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(candidate);
     }
-    fs::set_permissions(&backup, fs::Permissions::from_mode(0o600))?;
-    if let Some(parent) = backup.parent() {
-        fs::File::open(parent)?.sync_all()?;
-    }
-    Ok(())
+    result
 }
 
 fn parse_pass(
@@ -848,6 +879,10 @@ pub fn migrate_legacy_database(
     }
     let source_sha256 = sha256(source)?;
     ensure_backup(source, &source_sha256)?;
+    let parent = destination.parent().ok_or_else(|| {
+        LegacyMigrationError::Invalid("library database has no parent directory".to_string())
+    })?;
+    remove_stale_candidates(parent, ".library.sqlite3.importing.")?;
     let candidate = destination.with_file_name(format!(
         ".library.sqlite3.importing.{}.{}",
         std::process::id(),
@@ -906,7 +941,15 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             path.display()
         )));
     }
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let application_id: i64 =
+        connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+    if application_id != 0 && application_id != crate::library_store::DATABASE_APPLICATION_ID {
+        return Err(LegacyMigrationError::Invalid(format!(
+            "library database application id is {application_id}, expected {}",
+            crate::library_store::DATABASE_APPLICATION_ID
+        )));
+    }
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if schema_version != 3 {
         return Err(LegacyMigrationError::Invalid(format!(
@@ -923,6 +966,18 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
     if ready.as_deref() != Some("1") {
         return Err(LegacyMigrationError::Invalid(
             "library database is not marked ready".to_string(),
+        ));
+    }
+    let flavor: Option<String> = connection
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'schema_flavor'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if flavor.as_deref() != Some("bounded-generation-v3") {
+        return Err(LegacyMigrationError::Invalid(
+            "library database metadata does not match the bounded schema".to_string(),
         ));
     }
     let library_id: Option<String> = connection
@@ -944,19 +999,22 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             |row| row.get(0),
         )
         .optional()?;
+    if application_id == 0 {
+        connection.pragma_update(
+            None,
+            "application_id",
+            crate::library_store::DATABASE_APPLICATION_ID,
+        )?;
+        fs::File::open(path)?.sync_all()?;
+    }
     Ok(DatabaseIdentity {
         library_id,
         source_sha256,
     })
 }
 
-fn write_schema_8_config(
-    path: &Path,
-    library_id: String,
-    settings: Settings,
-) -> Result<(), LegacyMigrationError> {
+fn write_schema_8_config(path: &Path, settings: Settings) -> Result<(), LegacyMigrationError> {
     let mut config = crate::config::Config {
-        library_id: Some(library_id),
         settings,
         ..crate::config::Config::default()
     };
@@ -979,12 +1037,12 @@ pub fn complete_legacy_settings_cutover(
         ));
     }
     let settings = read_legacy_runtime_settings(source)?;
-    write_schema_8_config(source, identity.library_id.clone(), settings)?;
+    write_schema_8_config(source, settings)?;
     let config = crate::config::Config::load_from_path(source)
         .map_err(|error| LegacyMigrationError::Invalid(error.to_string()))?;
-    if config.library_id.as_deref() != Some(identity.library_id.as_str()) {
+    if config.schema_version != crate::config::CURRENT_SCHEMA_VERSION {
         return Err(LegacyMigrationError::Invalid(
-            "settings/database identity verification failed".to_string(),
+            "settings schema verification failed".to_string(),
         ));
     }
     Ok(identity)
@@ -995,7 +1053,7 @@ pub fn migrate_legacy_config(
     destination: &Path,
 ) -> Result<LegacyMigrationReport, LegacyMigrationError> {
     let report = migrate_legacy_database(source, destination)?;
-    write_schema_8_config(source, report.library_id.clone(), report.settings.clone())?;
+    write_schema_8_config(source, report.settings.clone())?;
     let identity = database_identity(destination)?;
     if identity.library_id != report.library_id {
         return Err(LegacyMigrationError::Invalid(
@@ -1122,7 +1180,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         config.sound_folders.push("/music".to_string());
         for index in 0..1_025 {
             let mut sound = Sound::new(
@@ -1209,6 +1266,88 @@ mod tests {
     }
 
     #[test]
+    fn pre_v8_backup_is_independent_from_in_place_source_writes() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-backup-copy-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let original = br#"{"schema_version":7,"settings":{}}"#;
+        fs::write(&source, original).expect("write source");
+
+        ensure_backup(&source, &sha256(&source).expect("hash source")).expect("create backup");
+        fs::write(
+            &source,
+            br#"{"schema_version":7,"settings":{"theme":"light"}}"#,
+        )
+        .expect("rewrite source in place");
+
+        assert_eq!(
+            fs::read(directory.join("config.json.pre-v8-backup")).expect("read backup"),
+            original
+        );
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn restart_removes_stale_migration_candidates_before_retry() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-stale-migration-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let stale_backup = directory.join(".config.json.pre-v8-backup.interrupted");
+        let stale_database = directory.join(".library.sqlite3.importing.interrupted");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        fs::write(&stale_backup, b"partial backup").expect("write stale backup candidate");
+        fs::write(&stale_database, b"partial database").expect("write stale database candidate");
+
+        migrate_legacy_database(&source, &destination).expect("retry migration");
+
+        assert!(!stale_backup.exists());
+        assert!(!stale_database.exists());
+        assert!(destination.exists());
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn read_only_destination_preserves_legacy_source_and_publishes_nothing() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-read-only-migration-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        let mut config = Config::default();
+        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
+        let source_before = fs::read(&source).expect("read legacy source");
+        ensure_backup(&source, &sha256(&source).expect("hash source")).expect("create backup");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))
+            .expect("make destination read-only");
+
+        let result = migrate_legacy_database(&source, &destination);
+
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("restore destination permissions");
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read(&source).expect("read preserved source"),
+            source_before
+        );
+        assert!(!destination.exists());
+        assert!(!directory
+            .read_dir()
+            .expect("read test directory")
+            .any(|entry| entry
+                .expect("directory entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".importing")));
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
     fn duplicate_and_invalid_hotkeys_survive_as_needs_attention() {
         let directory =
             std::env::temp_dir().join(format!("lsb-legacy-hotkeys-{}", uuid::Uuid::new_v4()));
@@ -1217,7 +1356,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         for (id, hotkey) in [
             ("first", "Ctrl+KeyA"),
             ("second", "Ctrl+KeyA"),
@@ -1275,6 +1413,40 @@ mod tests {
     }
 
     #[test]
+    fn authentic_v2_schema_6_fixture_preserves_library_settings_and_hotkeys() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-schema6-fixture-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let source = directory.join("config.json");
+        let destination = directory.join("library.sqlite3");
+        fs::write(
+            &source,
+            include_bytes!("../tests/fixtures/config-v2.0-schema6.json"),
+        )
+        .expect("write historical fixture");
+
+        let report = migrate_legacy_config(&source, &destination).expect("migrate fixture");
+
+        assert_eq!(report.sounds, 1);
+        assert_eq!(report.roots, 1);
+        assert_eq!(report.manual_tabs, 1);
+        assert_eq!(report.manual_memberships, 1);
+        assert_eq!(report.hotkeys, 8);
+        assert_eq!(report.settings.theme, crate::config::Theme::Light);
+        assert_eq!(report.settings.local_volume, 41);
+        let store = LibraryStore::open(destination).expect("open migrated database");
+        let sound = store
+            .sound_by_id("sound-distinctive")
+            .recv()
+            .expect("load fixture sound")
+            .expect("fixture sound exists");
+        assert_eq!(sound.name, "Upgrade fixture");
+        assert_eq!(sound.duration_ms, Some(4_321));
+        drop(store);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
     fn full_cutover_publishes_small_schema_8_settings_with_matching_identity() {
         let directory =
             std::env::temp_dir().join(format!("lsb-schema8-cutover-{}", uuid::Uuid::new_v4()));
@@ -1283,7 +1455,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         config.sound_folders.push("/music".to_string());
         config.sounds.push(Sound::new(
             "Tone".to_string(),
@@ -1296,7 +1467,7 @@ mod tests {
         let persisted: serde_json::Value =
             serde_json::from_reader(fs::File::open(&source).unwrap()).unwrap();
         assert_eq!(persisted["schema_version"], serde_json::json!(8));
-        assert_eq!(persisted["library_id"], report.library_id);
+        assert!(persisted.get("library_id").is_none());
         assert!(persisted.get("sounds").is_none());
         assert!(persisted.get("sound_folders").is_none());
         assert!(persisted["settings"].get("control_hotkeys").is_none());
@@ -1317,7 +1488,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
 
         let report = migrate_legacy_database(&source, &destination).expect("publish database");
@@ -1338,7 +1508,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
         migrate_legacy_database(&source, &destination).expect("publish database");
         fs::write(&source, b"{\"schema_version\":7,\"settings\":{}}")
@@ -1346,6 +1515,51 @@ mod tests {
 
         assert!(complete_legacy_settings_cutover(&source, &destination).is_err());
         assert_eq!(config_schema_version(&source).unwrap(), 7);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn ready_database_with_wrong_application_id_is_rejected() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-wrong-app-id-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let destination = directory.join("library.sqlite3");
+        initialize_empty_library(&destination, "library").expect("create database");
+        let connection = Connection::open(&destination).expect("open database");
+        connection
+            .pragma_update(None, "application_id", 7_i64)
+            .expect("write wrong application id");
+        drop(connection);
+
+        let error = database_identity(&destination).expect_err("wrong file format must fail");
+
+        assert!(error.to_string().contains("application id"));
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn ready_unmarked_database_is_adopted_once() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-zero-app-id-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let destination = directory.join("library.sqlite3");
+        initialize_empty_library(&destination, "library").expect("create database");
+        let connection = Connection::open(&destination).expect("open database");
+        connection
+            .pragma_update(None, "application_id", 0_i64)
+            .expect("clear application id");
+        drop(connection);
+
+        database_identity(&destination).expect("adopt valid interim database");
+
+        let connection = Connection::open(&destination).expect("reopen database");
+        let application_id: i64 = connection
+            .query_row("PRAGMA application_id", [], |row| row.get(0))
+            .expect("read application id");
+        assert_eq!(
+            application_id,
+            crate::library_store::DATABASE_APPLICATION_ID
+        );
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 
@@ -1358,7 +1572,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let mut config = Config::default();
         config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
-        config.library_id = None;
         config.sounds.push(Sound::new(
             "Tone".to_string(),
             "/music/tone.wav".to_string(),

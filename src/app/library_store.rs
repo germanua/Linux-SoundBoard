@@ -12,6 +12,7 @@ use crate::config::{Config, ControlHotkeyAction, LoudnessAnalysisState, Sound};
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
 const DATABASE_SCHEMA_VERSION: i64 = 3;
+pub(crate) const DATABASE_APPLICATION_ID: i64 = 0x4c53_4244;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
 const VISIBLE_QUEUE_CAPACITY: usize = 64;
 const MAINTENANCE_QUEUE_CAPACITY: usize = 2;
@@ -255,6 +256,16 @@ enum LibraryEdit {
         display_name: Option<String>,
         sibling_position: Option<usize>,
         expanded: bool,
+    },
+    SetFolderExpanded {
+        root_path: String,
+        folder_relative_path: String,
+        expanded: bool,
+    },
+    SetFolderDisplayName {
+        root_path: String,
+        folder_relative_path: String,
+        display_name: Option<String>,
     },
 }
 
@@ -1317,6 +1328,32 @@ impl LibraryStore {
         })
     }
 
+    pub fn set_folder_expanded(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        expanded: bool,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetFolderExpanded {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            expanded,
+        })
+    }
+
+    pub fn set_folder_display_name(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        display_name: Option<&str>,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetFolderDisplayName {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            display_name: display_name.map(str::to_string),
+        })
+    }
+
     pub fn update_sound(&self, sound: Sound) -> LibraryResponse<bool> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(Request::UpdateSound { sound, reply }, response)
@@ -1513,6 +1550,13 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     }
     let connection = Connection::open(path)?;
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let application_id: i64 =
+        connection.query_row("PRAGMA application_id", [], |row| row.get(0))?;
+    if schema_version != 0 && application_id != 0 && application_id != DATABASE_APPLICATION_ID {
+        return Err(LibraryError::InvalidData(format!(
+            "library database application id is {application_id}, expected {DATABASE_APPLICATION_ID}"
+        )));
+    }
     if schema_version > DATABASE_SCHEMA_VERSION {
         return Err(LibraryError::InvalidData(format!(
             "library schema {schema_version} is newer than supported schema {DATABASE_SCHEMA_VERSION}"
@@ -1551,11 +1595,15 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
             ));
         }
     }
+    if application_id == 0 {
+        connection.pragma_update(None, "application_id", DATABASE_APPLICATION_ID)?;
+    }
     connection.execute_batch("PRAGMA optimize;")?;
     Ok(connection)
 }
 
 fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
+    connection.pragma_update(None, "application_id", DATABASE_APPLICATION_ID)?;
     connection.execute_batch(
         "BEGIN IMMEDIATE;
          CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -2380,6 +2428,32 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
                 sibling_position.map(usize_to_i64).transpose()?,
                 i64::from(expanded),
             ],
+        )?,
+        LibraryEdit::SetFolderExpanded {
+            root_path,
+            folder_relative_path,
+            expanded,
+        } => connection.execute(
+            "INSERT INTO folder_prefs(folder_id, expanded)
+             SELECT folder.id, ?3
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.relative_path = ?2
+             ON CONFLICT(folder_id) DO UPDATE SET expanded = excluded.expanded",
+            params![root_path, folder_relative_path, i64::from(expanded)],
+        )?,
+        LibraryEdit::SetFolderDisplayName {
+            root_path,
+            folder_relative_path,
+            display_name,
+        } => connection.execute(
+            "INSERT INTO folder_prefs(folder_id, display_name)
+             SELECT folder.id, ?3
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.relative_path = ?2
+             ON CONFLICT(folder_id) DO UPDATE SET display_name = excluded.display_name",
+            params![root_path, folder_relative_path, display_name],
         )?,
     };
     Ok(changed != 0)

@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
@@ -95,6 +96,7 @@ struct TransportInner {
     suppress_mic_toggle: Cell<bool>,
     continue_suppressed_play_id: RefCell<Option<String>>,
     last_track_sound_id: RefCell<Option<String>>,
+    refresh_cancel: RefCell<Option<Arc<AtomicBool>>>,
     state: Arc<AppState>,
     has_sound_list_provider: Cell<bool>,
     sound_list_provider: RefCell<Option<SoundListProvider>>,

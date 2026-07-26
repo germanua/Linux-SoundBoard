@@ -64,6 +64,10 @@ pub const PLAYMODE_CONTINUE: IconPair =
     IconPair::with_fallbacks("lsb-list-end-symbolic", &["go-last-symbolic"]);
 pub const REFRESH: IconPair =
     IconPair::with_fallbacks("lsb-refresh-symbolic", &["view-refresh-symbolic"]);
+pub const DISCLOSURE_CLOSED: IconPair =
+    IconPair::with_fallbacks("lsb-chevron-right-symbolic", &["pan-end-symbolic"]);
+pub const DISCLOSURE_OPEN: IconPair =
+    IconPair::with_fallbacks("lsb-chevron-down-symbolic", &["pan-down-symbolic"]);
 pub const SETTINGS: IconPair =
     IconPair::with_fallbacks("lsb-settings-symbolic", &["preferences-system-symbolic"]);
 pub const KEYBOARD: IconPair =
@@ -95,6 +99,8 @@ const ALL_ICONS: &[IconPair] = &[
     PLAYMODE_LOOP,
     PLAYMODE_CONTINUE,
     REFRESH,
+    DISCLOSURE_CLOSED,
+    DISCLOSURE_OPEN,
     SETTINGS,
     KEYBOARD,
     DROP_ZONE,
@@ -146,6 +152,13 @@ pub fn apply_button_icon(button: &impl IsA<gtk4::Button>, icon: IconPair) {
     let resolved = resolved_name(icon);
     if button.as_ref().icon_name().as_deref() != Some(resolved) {
         button.set_icon_name(resolved);
+    }
+}
+
+pub fn apply_image_icon(image: &Image, icon: IconPair) {
+    let resolved = resolved_name(icon);
+    if image.icon_name().as_deref() != Some(resolved) {
+        image.set_icon_name(Some(resolved));
     }
 }
 

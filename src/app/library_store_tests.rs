@@ -951,6 +951,18 @@ fn manual_and_folder_edits_are_atomic_bounded_and_immediately_visible() {
     let folders = wait(store.folder_children("/music", None, 0));
     assert_eq!(folders.folders[0].name, "Renamed Album");
     assert!(folders.folders[0].expanded);
+    assert!(wait(store.set_folder_expanded("/music", "album", false)));
+    let folders = wait(store.folder_children("/music", None, 0));
+    assert_eq!(folders.folders[0].name, "Renamed Album");
+    assert!(!folders.folders[0].expanded);
+    assert!(wait(store.set_folder_display_name(
+        "/music",
+        "album",
+        Some("Album shortcut")
+    )));
+    let folders = wait(store.folder_children("/music", None, 0));
+    assert_eq!(folders.folders[0].name, "Album shortcut");
+    assert!(!folders.folders[0].expanded);
 
     assert!(wait(store.remove_manual_membership("favourites", "second")));
     assert_eq!(
