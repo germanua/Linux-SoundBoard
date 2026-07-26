@@ -541,8 +541,9 @@ impl SoundListInner {
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
                 let dialog_host_weak = dialog_host.downgrade();
+                let current_hotkey = sound.hotkey.clone();
                 dialog_host.show_hotkey_capture(
-                    sound.hotkey.as_deref(),
+                    current_hotkey.as_deref(),
                     move |hotkey| {
                         crate::hotkeys::canonicalize_hotkey_string(hotkey)
                             .map(|_| ())
@@ -552,16 +553,18 @@ impl SoundListInner {
                         let inner_done = Rc::clone(&inner_confirm);
                         let state_done = Arc::clone(&state_confirm);
                         let dialog_done = dialog_host_weak.clone();
+                        let mut updated_sound = sound.clone();
+                        updated_sound.hotkey = hotkey.clone();
                         let dispatch = commands::set_hotkey_async(
                             sound.id.clone(),
                             hotkey,
                             state_confirm.library.clone(),
                             state_confirm.hotkey_projection.clone(),
                             move |result| match result {
-                                Ok(_) => inner_done.refresh_from_state_inner(),
+                                Ok(_) => inner_done.update_loaded_sound(updated_sound),
                                 Err(e) => {
                                     if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
-                                        inner_done.refresh_from_state_inner();
+                                        inner_done.update_loaded_sound(updated_sound);
                                     }
                                     log::warn!("Set hotkey failed: {e}");
                                     let detail = e.to_string();

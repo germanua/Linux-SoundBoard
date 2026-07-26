@@ -365,6 +365,23 @@ impl PagedSoundModel {
         self.items_changed(position, 1, 1);
     }
 
+    pub(super) fn update_loaded_sound(&self, sound: Sound) -> bool {
+        let Some(position) = self.position_for_id(&sound.id) else {
+            return false;
+        };
+        self.replace_at(
+            position,
+            SoundRowData {
+                id: sound.id.clone(),
+                name: sound.name.clone(),
+                duration_ms: sound.duration_ms,
+                hotkey: sound.hotkey.clone(),
+                sound: Some(sound),
+            },
+        );
+        true
+    }
+
     pub(super) fn position_for_id(&self, id: &str) -> Option<u32> {
         self.imp().pages.borrow().iter().find_map(|(page, rows)| {
             rows.iter().enumerate().find_map(|(offset, object)| {
@@ -477,6 +494,8 @@ impl PagedSoundModel {
 
 #[cfg(test)]
 mod tests {
+    use gio::prelude::ListModelExt;
+
     use super::{PagedSoundModel, SoundRowData};
 
     #[test]
@@ -596,5 +615,23 @@ mod tests {
         );
 
         assert!(model.cached_page_count() < 2);
+    }
+
+    #[test]
+    fn updating_a_loaded_sound_keeps_the_list_published() {
+        let model = PagedSoundModel::new_for_test(1);
+        let mut sound =
+            crate::config::Sound::new("Sound".to_string(), "/music/sound.flac".to_string());
+        sound.id = "sound".to_string();
+        model.install_test_sound(0, sound.clone());
+
+        sound.hotkey = Some("Ctrl+1".to_string());
+
+        assert!(model.update_loaded_sound(sound));
+        assert_eq!(model.n_items(), 1);
+        assert_eq!(
+            model.sound_by_id("sound").and_then(|sound| sound.hotkey),
+            Some("Ctrl+1".to_string())
+        );
     }
 }

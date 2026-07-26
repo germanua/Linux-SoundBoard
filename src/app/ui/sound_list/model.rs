@@ -35,6 +35,10 @@ impl SoundListInner {
         self.store.replace_at(position, row);
     }
 
+    pub(super) fn update_loaded_sound(&self, sound: Sound) {
+        self.store.update_loaded_sound(sound);
+    }
+
     pub(super) fn refresh_from_state_inner(&self) {
         self.reload_store();
     }
