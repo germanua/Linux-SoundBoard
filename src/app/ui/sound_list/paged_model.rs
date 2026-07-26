@@ -15,6 +15,12 @@ const MAX_CACHED_PAGES: usize = 4;
 const MAX_CACHED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 static NEXT_SEARCH_OWNER: AtomicU64 = AtomicU64::new(1);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageLoadPriority {
+    Visible,
+    Prefetch,
+}
+
 fn row_payload_bytes(row: &SoundRowData) -> usize {
     let sound_bytes = row.sound.as_ref().map_or(0, |sound| {
         sound.id.capacity()
@@ -49,6 +55,7 @@ mod imp {
         pub pages: RefCell<HashMap<u32, Vec<BoxedAnyObject>>>,
         pub identities: RefCell<HashMap<(u64, u32), glib::WeakRef<BoxedAnyObject>>>,
         pub pending: RefCell<HashSet<u32>>,
+        pub failed: RefCell<HashSet<u32>>,
         pub lru: RefCell<VecDeque<u32>>,
         pub page_payload_bytes: RefCell<HashMap<u32, usize>>,
         pub cached_payload_bytes: Cell<usize>,
@@ -78,7 +85,7 @@ mod imp {
                 return None;
             }
             let page = position / PAGE_SIZE as u32;
-            self.obj().ensure_page(page);
+            self.obj().ensure_page(page, PageLoadPriority::Visible);
             self.pages
                 .borrow()
                 .get(&page)
@@ -115,6 +122,7 @@ impl PagedSoundModel {
         imp.pages.borrow_mut().clear();
         imp.identities.borrow_mut().clear();
         imp.pending.borrow_mut().clear();
+        imp.failed.borrow_mut().clear();
         imp.lru.borrow_mut().clear();
         imp.page_payload_bytes.borrow_mut().clear();
         imp.cached_payload_bytes.set(0);
@@ -155,7 +163,7 @@ impl PagedSoundModel {
         }
     }
 
-    fn ensure_page(&self, page: u32) {
+    fn ensure_page(&self, page: u32, priority: PageLoadPriority) {
         let imp = self.imp();
         if imp.pages.borrow().contains_key(&page) {
             self.touch_page(page);
@@ -189,13 +197,22 @@ impl PagedSoundModel {
             return;
         };
         let search = imp.search.borrow().clone();
-        let response = library.page_coalesced(
-            imp.search_owner.get(),
-            generation,
-            scope,
-            &search,
-            page as usize,
-        );
+        let response = match priority {
+            PageLoadPriority::Visible => library.page_coalesced(
+                imp.search_owner.get(),
+                generation,
+                scope,
+                &search,
+                page as usize,
+            ),
+            PageLoadPriority::Prefetch => library.prefetch_page_coalesced(
+                imp.search_owner.get(),
+                generation,
+                scope,
+                &search,
+                page as usize,
+            ),
+        };
         let weak = self.downgrade();
         if let Err(error) = crate::commands::dispatch_async_result(
             "load_lazy_sound_page",
@@ -209,17 +226,55 @@ impl PagedSoundModel {
                 }
                 match result {
                     Ok(result) => {
-                        model.install_page(page, generation, result.sounds);
+                        if model.install_page(page, generation, result.sounds)
+                            && priority == PageLoadPriority::Visible
+                        {
+                            model.prefetch_adjacent(page);
+                        }
                     }
                     Err(error) => {
-                        model.imp().pending.borrow_mut().remove(&page);
+                        model.handle_page_failure(page, generation, priority);
                         log::warn!("Failed to load lazy sound page {page}: {error}");
                     }
                 }
             },
         ) {
-            self.imp().pending.borrow_mut().remove(&page);
+            self.handle_page_failure(page, generation, priority);
             log::warn!("Failed to dispatch lazy sound page {page}: {error}");
+        }
+    }
+
+    fn prefetch_adjacent(&self, page: u32) {
+        let page_count = self.imp().total.get().div_ceil(PAGE_SIZE as u32);
+        if page + 1 < page_count {
+            self.ensure_page(page + 1, PageLoadPriority::Prefetch);
+        }
+        if page > 0 {
+            self.ensure_page(page - 1, PageLoadPriority::Prefetch);
+        }
+    }
+
+    fn handle_page_failure(&self, page: u32, generation: u64, priority: PageLoadPriority) {
+        if self.imp().generation.get() != generation {
+            return;
+        }
+        match priority {
+            PageLoadPriority::Visible => {
+                self.fail_page(page, generation);
+            }
+            PageLoadPriority::Prefetch => {
+                let start = page.saturating_mul(PAGE_SIZE as u32);
+                let len = self
+                    .imp()
+                    .total
+                    .get()
+                    .saturating_sub(start)
+                    .min(PAGE_SIZE as u32);
+                self.evict_page(page);
+                if len > 0 {
+                    self.items_changed(start, len, len);
+                }
+            }
         }
     }
 
@@ -283,6 +338,7 @@ impl PagedSoundModel {
     fn evict_page(&self, page: u32) {
         self.imp().pages.borrow_mut().remove(&page);
         self.imp().pending.borrow_mut().remove(&page);
+        self.imp().failed.borrow_mut().remove(&page);
         if let Some(payload) = self.imp().page_payload_bytes.borrow_mut().remove(&page) {
             self.imp().cached_payload_bytes.set(
                 self.imp()
@@ -299,6 +355,7 @@ impl PagedSoundModel {
             return false;
         }
         imp.pending.borrow_mut().remove(&page);
+        imp.failed.borrow_mut().remove(&page);
         let mut pages = imp.pages.borrow_mut();
         let Some(objects) = pages.get_mut(&page) else {
             return false;
@@ -335,6 +392,72 @@ impl PagedSoundModel {
                 changed as u32,
                 changed as u32,
             );
+        }
+        true
+    }
+
+    fn fail_page(&self, page: u32, generation: u64) -> bool {
+        let imp = self.imp();
+        if imp.generation.get() != generation {
+            return false;
+        }
+        imp.pending.borrow_mut().remove(&page);
+        let start = page.saturating_mul(PAGE_SIZE as u32);
+        let len = {
+            let mut pages = imp.pages.borrow_mut();
+            let Some(rows) = pages.get_mut(&page) else {
+                return false;
+            };
+            for (offset, row) in rows.iter_mut().enumerate() {
+                let object = BoxedAnyObject::new(SoundRowData {
+                    id: String::new(),
+                    name: "Load failed — activate to retry".to_string(),
+                    duration_ms: None,
+                    hotkey: None,
+                    sound: None,
+                });
+                imp.identities.borrow_mut().insert(
+                    (generation, start.saturating_add(offset as u32)),
+                    object.downgrade(),
+                );
+                *row = object;
+            }
+            rows.len() as u32
+        };
+        imp.failed.borrow_mut().insert(page);
+        self.set_page_payload(page, 0);
+        self.touch_page(page);
+        if len > 0 {
+            self.items_changed(start, len, len);
+        }
+        true
+    }
+
+    pub(super) fn retry_position(&self, position: u32) -> bool {
+        let page = position / PAGE_SIZE as u32;
+        if !self.imp().failed.borrow_mut().remove(&page) {
+            return false;
+        }
+        let generation = self.imp().generation.get();
+        let start = page.saturating_mul(PAGE_SIZE as u32);
+        let len = self
+            .imp()
+            .total
+            .get()
+            .saturating_sub(start)
+            .min(PAGE_SIZE as u32);
+        self.evict_page(page);
+        self.imp()
+            .identities
+            .borrow_mut()
+            .retain(|(row_generation, position), _| {
+                *row_generation != generation
+                    || *position < start
+                    || *position >= start.saturating_add(len)
+            });
+        self.ensure_page(page, PageLoadPriority::Visible);
+        if len > 0 {
+            self.items_changed(start, len, len);
         }
         true
     }
@@ -408,6 +531,7 @@ impl PagedSoundModel {
         self.imp().pages.borrow_mut().clear();
         self.imp().identities.borrow_mut().clear();
         self.imp().pending.borrow_mut().clear();
+        self.imp().failed.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
         self.imp().page_payload_bytes.borrow_mut().clear();
         self.imp().cached_payload_bytes.set(0);
@@ -471,6 +595,8 @@ impl PagedSoundModel {
         self.imp().total.set(total);
         self.imp().pages.borrow_mut().clear();
         self.imp().identities.borrow_mut().clear();
+        self.imp().pending.borrow_mut().clear();
+        self.imp().failed.borrow_mut().clear();
         self.imp().lru.borrow_mut().clear();
         self.imp().page_payload_bytes.borrow_mut().clear();
         self.imp().cached_payload_bytes.set(0);
@@ -632,6 +758,41 @@ mod tests {
         assert_eq!(
             model.sound_by_id("sound").and_then(|sound| sound.hotkey),
             Some("Ctrl+1".to_string())
+        );
+    }
+
+    #[test]
+    fn failed_page_can_be_retried_without_unpublishing_the_list() {
+        use gio::prelude::*;
+        use glib::BoxedAnyObject;
+
+        let model = PagedSoundModel::new_for_test(1);
+        let _ = model.item(0).expect("loading row");
+
+        assert!(model.fail_page(0, model.generation()));
+        assert_eq!(model.n_items(), 1);
+        assert_eq!(
+            model
+                .item(0)
+                .expect("failed row")
+                .downcast::<BoxedAnyObject>()
+                .expect("boxed row")
+                .borrow::<SoundRowData>()
+                .name,
+            "Load failed — activate to retry"
+        );
+
+        assert!(model.retry_position(0));
+        assert_eq!(model.n_items(), 1);
+        assert_eq!(
+            model
+                .item(0)
+                .expect("retry loading row")
+                .downcast::<BoxedAnyObject>()
+                .expect("boxed row")
+                .borrow::<SoundRowData>()
+                .name,
+            "Loading…"
         );
     }
 }

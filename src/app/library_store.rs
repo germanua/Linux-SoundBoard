@@ -285,6 +285,12 @@ struct SearchGeneration {
     generation: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PagePriority {
+    Visible,
+    Prefetch,
+}
+
 enum Request {
     Count {
         scope: LibraryScope,
@@ -297,6 +303,7 @@ enum Request {
         search: String,
         page: usize,
         query_generation: Option<SearchGeneration>,
+        priority: PagePriority,
         reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
     },
     SoundById {
@@ -476,6 +483,11 @@ impl RequestQueue {
                         generation.owner == query.owner && generation.generation < query.generation
                     })
                 });
+                state.maintenance.retain(|queued| {
+                    !queued.search_generation().is_some_and(|generation| {
+                        generation.owner == query.owner && generation.generation < query.generation
+                    })
+                });
             }
         }
         let (queue, capacity) = match request {
@@ -496,7 +508,10 @@ impl RequestQueue {
                 (&mut state.control, CONTROL_QUEUE_CAPACITY)
             }
             Request::Count { .. }
-            | Request::Page { .. }
+            | Request::Page {
+                priority: PagePriority::Visible,
+                ..
+            }
             | Request::Roots { .. }
             | Request::FolderChildren { .. }
             | Request::ManualTabs { .. }
@@ -508,9 +523,12 @@ impl RequestQueue {
             | Request::FinishRootScan { .. }
             | Request::CancelRootScan { .. }
             | Request::RemoveRoot { .. } => (&mut state.visible, VISIBLE_QUEUE_CAPACITY),
-            Request::ApplyBatch { .. } | Request::RootScanBatch { .. } => {
-                (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY)
+            Request::Page {
+                priority: PagePriority::Prefetch,
+                ..
             }
+            | Request::ApplyBatch { .. }
+            | Request::RootScanBatch { .. } => (&mut state.maintenance, MAINTENANCE_QUEUE_CAPACITY),
         };
         if queue.len() >= capacity {
             return Err(LibraryError::QueueFull);
@@ -879,7 +897,7 @@ impl LibraryStore {
         search: &str,
         page: usize,
     ) -> LibraryResponse<SoundPage> {
-        self.page_request(scope, search, page, None)
+        self.page_request(scope, search, page, None, PagePriority::Visible)
     }
 
     pub(crate) fn page_coalesced(
@@ -895,6 +913,24 @@ impl LibraryStore {
             search,
             page,
             Some(SearchGeneration { owner, generation }),
+            PagePriority::Visible,
+        )
+    }
+
+    pub(crate) fn prefetch_page_coalesced(
+        &self,
+        owner: u64,
+        generation: u64,
+        scope: LibraryScope,
+        search: &str,
+        page: usize,
+    ) -> LibraryResponse<SoundPage> {
+        self.page_request(
+            scope,
+            search,
+            page,
+            Some(SearchGeneration { owner, generation }),
+            PagePriority::Prefetch,
         )
     }
 
@@ -904,6 +940,7 @@ impl LibraryStore {
         search: &str,
         page: usize,
         query_generation: Option<SearchGeneration>,
+        priority: PagePriority,
     ) -> LibraryResponse<SoundPage> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
@@ -912,6 +949,7 @@ impl LibraryStore {
                 search: search.to_lowercase(),
                 page,
                 query_generation,
+                priority,
                 reply,
             },
             response,
@@ -1327,6 +1365,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
             search,
             page,
             query_generation: _,
+            priority: _,
             reply,
         } => {
             let _ = reply.send(load_page(connection, &scope, &search, page));
@@ -3661,6 +3700,40 @@ mod tests {
     }
 
     #[test]
+    fn prefetched_page_waits_behind_visible_work() {
+        let queue = RequestQueue::default();
+        let (prefetch_reply, _) = mpsc::sync_channel(1);
+        let (visible_reply, _) = mpsc::sync_channel(1);
+        queue
+            .push(Request::Page {
+                scope: LibraryScope::General,
+                search: String::new(),
+                page: 1,
+                query_generation: None,
+                priority: PagePriority::Prefetch,
+                reply: prefetch_reply,
+            })
+            .expect("queue prefetch");
+        queue
+            .push(Request::Count {
+                scope: LibraryScope::General,
+                search: String::new(),
+                query_generation: None,
+                reply: visible_reply,
+            })
+            .expect("queue visible");
+
+        assert!(matches!(queue.pop(), Some(Request::Count { .. })));
+        assert!(matches!(
+            queue.pop(),
+            Some(Request::Page {
+                priority: PagePriority::Prefetch,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn request_queue_coalesces_older_search_generations() {
         let queue = RequestQueue::default();
         let (old_count_reply, old_count_response) = mpsc::sync_channel(1);
@@ -3689,6 +3762,7 @@ mod tests {
                 search: "old".to_string(),
                 page: 0,
                 query_generation: Some(old),
+                priority: PagePriority::Prefetch,
                 reply: old_page_reply,
             })
             .expect("queue old page");

@@ -33,6 +33,7 @@ impl SoundListInner {
             };
             let sound = obj.borrow::<SoundRowData>().clone();
             if sound.id.is_empty() {
+                store.retry_position(pos);
                 return;
             }
             let is_invalid = invalid_ids.lock().contains(&sound.id);
