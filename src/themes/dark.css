@@ -304,6 +304,11 @@ row.appearance-choice-row {
   background-color: rgba(148, 137, 121, 0.1);
 }
 
+.folder-tree treeexpander > expander {
+  color: #dfd0b8;
+  opacity: 1;
+}
+
 /* Hotkey badge — pill style */
 .hotkey-badge {
   font-family: monospace;

@@ -167,7 +167,7 @@ impl TabsSidebar {
         let folder_roots = gio::ListStore::new::<BoxedAnyObject>();
         let folder_generation = Rc::new(Cell::new(0));
         let library_for_children = state.library.clone();
-        let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
+        let folder_tree = TreeListModel::new(folder_roots.clone(), false, true, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
             let node = boxed.borrow::<FolderNode>();
             if !node.has_children {
@@ -198,6 +198,7 @@ impl TabsSidebar {
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .build();
             let expander = TreeExpander::new();
+            expander.set_indent_for_depth(false);
             expander.set_child(Some(&label));
             item.set_child(Some(&expander));
         });
@@ -222,6 +223,7 @@ impl TabsSidebar {
         });
         let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
         folder_view.add_css_class("navigation-sidebar");
+        folder_view.add_css_class("folder-tree");
         vbox.append(&folder_view);
 
         let scroll = ScrolledWindow::builder()
