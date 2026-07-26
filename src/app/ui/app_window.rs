@@ -1,10 +1,9 @@
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use glib;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, GestureDrag, Orientation};
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation, Paned};
 use libadwaita as adw;
 use libadwaita::prelude::BreakpointBinExt;
 
@@ -21,13 +20,10 @@ use super::tabs_sidebar::TabsSidebar;
 use super::theme::apply_theme;
 use super::transport::TransportBar;
 
-const MIN_SIDEBAR_WIDTH: f64 = 180.0;
-const MAX_SIDEBAR_WIDTH: f64 = 600.0;
+const MAX_SIDEBAR_WIDTH: i32 = 600;
 
-fn sidebar_width_from_drag(start_width: i32, offset_x: f64) -> f64 {
-    (f64::from(start_width) + offset_x)
-        .round()
-        .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
+fn cap_sidebar_width(width: i32) -> i32 {
+    width.min(MAX_SIDEBAR_WIDTH)
 }
 
 pub fn build_window(
@@ -101,60 +97,23 @@ pub fn build_window(
     let transport = TransportBar::new(Arc::clone(&state));
     root_box.append(transport.widget());
 
-    let split_view = adw::OverlaySplitView::new();
-    split_view.set_vexpand(true);
-    split_view.set_min_sidebar_width(MIN_SIDEBAR_WIDTH);
-    split_view.set_max_sidebar_width(MAX_SIDEBAR_WIDTH);
-    split_view.set_sidebar_width_fraction(0.16);
-
     let tabs = TabsSidebar::new(Arc::clone(&state), dialog_host.clone());
-    let sidebar_box = GtkBox::new(Orientation::Horizontal, 0);
-    tabs.widget().set_hexpand(true);
-    sidebar_box.append(tabs.widget());
-    let resize_handle = GtkBox::new(Orientation::Vertical, 0);
-    resize_handle.set_vexpand(true);
-    resize_handle.set_size_request(6, -1);
-    resize_handle.set_cursor_from_name(Some("col-resize"));
-    resize_handle.set_tooltip_text(Some("Drag to resize the sidebar"));
-    let drag = GestureDrag::new();
-    let drag_start_width = Rc::new(Cell::new(220));
-    let pending_sidebar_width = Rc::new(Cell::new(None));
-    let resize_tick_pending = Rc::new(Cell::new(false));
-    {
-        let sidebar_box = sidebar_box.clone();
-        let drag_start_width = Rc::clone(&drag_start_width);
-        drag.connect_drag_begin(move |_, _, _| {
-            drag_start_width.set(sidebar_box.width());
-        });
-    }
-    {
-        let split_view = split_view.clone();
-        let drag_start_width = Rc::clone(&drag_start_width);
-        let pending_sidebar_width = Rc::clone(&pending_sidebar_width);
-        let resize_tick_pending = Rc::clone(&resize_tick_pending);
-        drag.connect_drag_update(move |_, offset_x, _| {
-            let width = sidebar_width_from_drag(drag_start_width.get(), offset_x);
-            pending_sidebar_width.set(Some(width));
-            if resize_tick_pending.replace(true) {
-                return;
-            }
-            let pending_sidebar_width = Rc::clone(&pending_sidebar_width);
-            let resize_tick_pending = Rc::clone(&resize_tick_pending);
-            split_view.add_tick_callback(move |split_view, _| {
-                if let Some(width) = pending_sidebar_width.take() {
-                    let total_width = f64::from(split_view.width().max(1));
-                    split_view.set_sidebar_width_fraction(width / total_width);
-                }
-                resize_tick_pending.set(false);
-                glib::ControlFlow::Break
-            });
-        });
-    }
-    resize_handle.add_controller(drag);
-    sidebar_box.append(&resize_handle);
-    split_view.set_sidebar(Some(&sidebar_box));
-
     let sound_list = SoundList::new(Arc::clone(&state), dialog_host.clone());
+    let sidebar_paned = Paned::new(Orientation::Horizontal);
+    sidebar_paned.set_vexpand(true);
+    sidebar_paned.set_wide_handle(true);
+    sidebar_paned.set_resize_start_child(false);
+    sidebar_paned.set_resize_end_child(true);
+    sidebar_paned.set_shrink_start_child(false);
+    sidebar_paned.set_start_child(Some(tabs.widget()));
+    sidebar_paned.set_end_child(Some(sound_list.widget()));
+    sidebar_paned.set_position(220);
+    sidebar_paned.connect_position_notify(|paned| {
+        let position = cap_sidebar_width(paned.position());
+        if position != paned.position() {
+            paned.set_position(position);
+        }
+    });
 
     {
         let transport_snapshot = transport.clone();
@@ -242,8 +201,7 @@ pub fn build_window(
         });
     }
 
-    split_view.set_content(Some(sound_list.widget()));
-    root_box.append(&split_view);
+    root_box.append(&sidebar_paned);
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root_box));
@@ -274,9 +232,8 @@ pub fn build_window(
     let drop_overlay =
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
 
-    // Responsive layout: below a narrow width the sidebar collapses into an overlay and
-    // the transport bar reflows onto a second row. A `BreakpointBin` lets us drive adw
-    // breakpoints without switching the window away from `gtk4::ApplicationWindow`.
+    // Below a narrow width the sidebar hides and the transport bar reflows.
+    // The same GtkPaned keeps ownership at every size, avoiding reparenting during resize.
     let breakpoint_bin = adw::BreakpointBin::new();
     breakpoint_bin.set_size_request(520, 400);
     breakpoint_bin.set_child(Some(&drop_overlay));
@@ -286,43 +243,35 @@ pub fn build_window(
         960.0,
         adw::LengthUnit::Px,
     ));
+    let sidebar_toggle = transport.sidebar_toggle_button().clone();
+    sidebar_toggle.set_visible(false);
     {
-        let split_view = split_view.clone();
+        let tabs_widget = tabs.widget().clone();
+        sidebar_toggle.connect_clicked(move |_| {
+            tabs_widget.set_visible(!tabs_widget.is_visible());
+        });
+    }
+    {
+        let tabs_widget = tabs.widget().clone();
+        let toggle = sidebar_toggle.clone();
         let transport = transport.clone();
         breakpoint.connect_apply(move |_| {
-            split_view.set_collapsed(true);
+            tabs_widget.set_visible(false);
+            toggle.set_visible(true);
             transport.set_compact(true);
         });
     }
     {
-        let split_view = split_view.clone();
+        let tabs_widget = tabs.widget().clone();
+        let toggle = sidebar_toggle;
         let transport = transport.clone();
         breakpoint.connect_unapply(move |_| {
-            split_view.set_collapsed(false);
+            tabs_widget.set_visible(true);
+            toggle.set_visible(false);
             transport.set_compact(false);
         });
     }
     breakpoint_bin.add_breakpoint(breakpoint);
-
-    // Hide the overlay sidebar while collapsed; show it inline once expanded again.
-    split_view.connect_collapsed_notify(move |split_view| {
-        split_view.set_show_sidebar(!split_view.is_collapsed());
-        resize_handle.set_visible(!split_view.is_collapsed());
-    });
-
-    // The sidebar reveal button only appears while the sidebar is collapsed.
-    {
-        let toggle = transport.sidebar_toggle_button().clone();
-        split_view
-            .bind_property("collapsed", &toggle, "visible")
-            .sync_create()
-            .build();
-        let split_view = split_view.clone();
-        toggle.connect_clicked(move |_| {
-            let shown = split_view.property::<bool>("show-sidebar");
-            split_view.set_show_sidebar(!shown);
-        });
-    }
 
     window.set_child(Some(&breakpoint_bin));
 
@@ -444,10 +393,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sidebar_drag_width_is_clamped() {
-        assert_eq!(sidebar_width_from_drag(220, 80.0), 300.0);
-        assert_eq!(sidebar_width_from_drag(220, 80.4), 300.0);
-        assert_eq!(sidebar_width_from_drag(220, -100.0), 180.0);
-        assert_eq!(sidebar_width_from_drag(500, 200.0), 600.0);
+    fn native_sidebar_resize_is_capped() {
+        assert_eq!(cap_sidebar_width(220), 220);
+        assert_eq!(cap_sidebar_width(700), 600);
     }
 }
