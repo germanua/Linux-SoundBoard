@@ -25,7 +25,9 @@ const MIN_SIDEBAR_WIDTH: f64 = 180.0;
 const MAX_SIDEBAR_WIDTH: f64 = 600.0;
 
 fn sidebar_width_from_drag(start_width: i32, offset_x: f64) -> f64 {
-    (f64::from(start_width) + offset_x).clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
+    (f64::from(start_width) + offset_x)
+        .round()
+        .clamp(MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH)
 }
 
 pub fn build_window(
@@ -116,6 +118,8 @@ pub fn build_window(
     resize_handle.set_tooltip_text(Some("Drag to resize the sidebar"));
     let drag = GestureDrag::new();
     let drag_start_width = Rc::new(Cell::new(220));
+    let pending_sidebar_width = Rc::new(Cell::new(None));
+    let resize_tick_pending = Rc::new(Cell::new(false));
     {
         let sidebar_box = sidebar_box.clone();
         let drag_start_width = Rc::clone(&drag_start_width);
@@ -126,10 +130,24 @@ pub fn build_window(
     {
         let split_view = split_view.clone();
         let drag_start_width = Rc::clone(&drag_start_width);
+        let pending_sidebar_width = Rc::clone(&pending_sidebar_width);
+        let resize_tick_pending = Rc::clone(&resize_tick_pending);
         drag.connect_drag_update(move |_, offset_x, _| {
             let width = sidebar_width_from_drag(drag_start_width.get(), offset_x);
-            let total_width = f64::from(split_view.width().max(1));
-            split_view.set_sidebar_width_fraction(width / total_width);
+            pending_sidebar_width.set(Some(width));
+            if resize_tick_pending.replace(true) {
+                return;
+            }
+            let pending_sidebar_width = Rc::clone(&pending_sidebar_width);
+            let resize_tick_pending = Rc::clone(&resize_tick_pending);
+            split_view.add_tick_callback(move |split_view, _| {
+                if let Some(width) = pending_sidebar_width.take() {
+                    let total_width = f64::from(split_view.width().max(1));
+                    split_view.set_sidebar_width_fraction(width / total_width);
+                }
+                resize_tick_pending.set(false);
+                glib::ControlFlow::Break
+            });
         });
     }
     resize_handle.add_controller(drag);
@@ -428,6 +446,7 @@ mod tests {
     #[test]
     fn sidebar_drag_width_is_clamped() {
         assert_eq!(sidebar_width_from_drag(220, 80.0), 300.0);
+        assert_eq!(sidebar_width_from_drag(220, 80.4), 300.0);
         assert_eq!(sidebar_width_from_drag(220, -100.0), 180.0);
         assert_eq!(sidebar_width_from_drag(500, 200.0), 600.0);
     }
