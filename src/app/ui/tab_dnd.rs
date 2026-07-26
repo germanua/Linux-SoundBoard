@@ -6,7 +6,15 @@ pub(super) const SOUND_TAB_DND_MIME: &str = "application/x-lsb-sound-tab-dnd";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SoundTabDragPayload {
     pub source_tab_id: String,
+    #[serde(default)]
+    pub source_folder: Option<FolderDragContext>,
     pub sound_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct FolderDragContext {
+    pub root_path: String,
+    pub relative_path: String,
 }
 
 impl SoundTabDragPayload {
@@ -29,6 +37,7 @@ impl SoundTabDragPayload {
 
         Some(Self {
             source_tab_id: self.source_tab_id,
+            source_folder: self.source_folder,
             sound_ids: deduped,
         })
     }

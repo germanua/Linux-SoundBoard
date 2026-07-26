@@ -7,7 +7,6 @@ use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{DragSource, EventControllerKey, GestureClick, Widget};
 
-use crate::app_meta::GENERAL_TAB_ID;
 use crate::commands;
 use crate::ui::is_unmodified_delete_shortcut;
 
@@ -333,8 +332,19 @@ impl SoundListInner {
                 sound_ids
             );
 
+            let source_folder = match inner.current_scope() {
+                crate::library_store::LibraryScope::Folder {
+                    root_path,
+                    relative_path,
+                } => Some(tab_dnd::FolderDragContext {
+                    root_path,
+                    relative_path,
+                }),
+                _ => None,
+            };
             let payload = tab_dnd::SoundTabDragPayload {
                 source_tab_id: inner.active_tab_id.lock().clone(),
+                source_folder,
                 sound_ids: sound_ids.clone(),
             }
             .normalized();
@@ -422,7 +432,7 @@ impl SoundListInner {
         y: f64,
         sound: crate::config::Sound,
     ) {
-        let active_tab = self.active_tab_id.lock().clone();
+        let active_scope = self.current_scope();
         let tabs = self.state.manual_tabs.lock().clone();
 
         let menu_model = gio::Menu::new();
@@ -476,8 +486,21 @@ impl SoundListInner {
 
             section2.append_submenu(Some("Add to Tab"), &add_to_tab);
         }
-        if active_tab != GENERAL_TAB_ID {
-            section2.append(Some("Remove from Tab"), Some("sound-ctx.remove-from-tab"));
+        match &active_scope {
+            crate::library_store::LibraryScope::General => {}
+            crate::library_store::LibraryScope::ManualTab(_) => {
+                section2.append(Some("Remove from Tab"), Some("sound-ctx.remove-from-tab"));
+            }
+            crate::library_store::LibraryScope::Folder { .. } => {
+                section2.append(
+                    Some("Exclude from Folder"),
+                    Some("sound-ctx.exclude-from-folder"),
+                );
+                section2.append(
+                    Some("Restore Natural Membership"),
+                    Some("sound-ctx.clear-folder-override"),
+                );
+            }
         }
         if section2.n_items() > 0 {
             menu_model.append_section(None, &section2);
@@ -681,10 +704,10 @@ impl SoundListInner {
             action_group.add_action(&action);
         }
 
-        if active_tab != GENERAL_TAB_ID {
+        if let crate::library_store::LibraryScope::ManualTab(tab_id) = &active_scope {
             let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
-            let tab_id = active_tab.clone();
+            let tab_id = tab_id.clone();
             let sound_ids = target_ids.clone();
             let action = gio::SimpleAction::new("remove-from-tab", None);
             action.connect_activate(move |_, _| {
@@ -707,6 +730,90 @@ impl SoundListInner {
                 );
                 if let Err(error) = dispatch {
                     log::warn!("Failed to dispatch remove from tab: {error}");
+                }
+            });
+            action_group.add_action(&action);
+        }
+
+        if let crate::library_store::LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } = &active_scope
+        {
+            let inner = Rc::clone(self);
+            let library = self.state.library.clone();
+            let exclude_root_path = root_path.clone();
+            let exclude_relative_path = relative_path.clone();
+            let sound_ids = target_ids.clone();
+            let action = gio::SimpleAction::new("exclude-from-folder", None);
+            action.connect_activate(move |_, _| {
+                let records = sound_ids
+                    .iter()
+                    .map(|sound_id| crate::library_store::FolderOverrideRecord {
+                        root_path: exclude_root_path.clone(),
+                        folder_relative_path: exclude_relative_path.clone(),
+                        sound_public_id: sound_id.clone(),
+                        action: crate::library_store::FolderOverrideAction::Exclude,
+                    })
+                    .collect::<Vec<_>>();
+                let library_for_work = library.clone();
+                let inner_done = Rc::clone(&inner);
+                if let Err(error) = commands::dispatch_async_result(
+                    "exclude_sounds_from_folder",
+                    move || {
+                        for batch in records.chunks(crate::library_store::MAX_BATCH_ROWS) {
+                            library_for_work
+                                .apply_batch(crate::library_store::LibraryBatch::FolderOverrides(
+                                    batch.to_vec(),
+                                ))
+                                .recv()?;
+                        }
+                        Ok::<(), crate::library_store::LibraryError>(())
+                    },
+                    move |result| match result {
+                        Ok(()) => inner_done.refresh_from_state_inner(),
+                        Err(error) => {
+                            log::warn!("Failed to exclude sounds from folder: {error}");
+                            inner_done.refresh_from_state_inner();
+                        }
+                    },
+                ) {
+                    log::warn!("Failed to dispatch folder exclusion: {error}");
+                }
+            });
+            action_group.add_action(&action);
+
+            let inner = Rc::clone(self);
+            let library = self.state.library.clone();
+            let restore_root_path = root_path.clone();
+            let restore_relative_path = relative_path.clone();
+            let sound_ids = target_ids.clone();
+            let action = gio::SimpleAction::new("clear-folder-override", None);
+            action.connect_activate(move |_, _| {
+                let library_for_work = library.clone();
+                let inner_done = Rc::clone(&inner);
+                let root_path = restore_root_path.clone();
+                let relative_path = restore_relative_path.clone();
+                let sound_ids = sound_ids.clone();
+                if let Err(error) = commands::dispatch_async_result(
+                    "clear_sound_folder_overrides",
+                    move || {
+                        for batch in sound_ids.chunks(crate::library_store::MAX_BATCH_ROWS) {
+                            library_for_work
+                                .clear_folder_overrides(&root_path, &relative_path, batch.to_vec())
+                                .recv()?;
+                        }
+                        Ok::<(), crate::library_store::LibraryError>(())
+                    },
+                    move |result| match result {
+                        Ok(()) => inner_done.refresh_from_state_inner(),
+                        Err(error) => {
+                            log::warn!("Failed to restore folder membership: {error}");
+                            inner_done.refresh_from_state_inner();
+                        }
+                    },
+                ) {
+                    log::warn!("Failed to dispatch folder override reset: {error}");
                 }
             });
             action_group.add_action(&action);

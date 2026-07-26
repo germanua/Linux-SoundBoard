@@ -1135,6 +1135,164 @@ fn root_scan_api_stages_batches_and_switches_visibility_atomically() {
 }
 
 #[test]
+fn customized_disappeared_folder_becomes_an_exact_manual_tab() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("included", "Included", "/elsewhere/included.flac"),
+        general_position: 2,
+        locations: Vec::new(),
+    }])));
+
+    let first_generation = wait(store.begin_root_scan("/music", 0));
+    wait(store.apply_root_scan_batch(
+        "/music",
+        first_generation,
+        vec![
+            FolderRecord {
+                root_path: "/music".to_string(),
+                relative_path: "album".to_string(),
+                parent_relative_path: None,
+                name: "album".to_string(),
+                position: 0,
+            },
+            FolderRecord {
+                root_path: "/music".to_string(),
+                relative_path: "plain".to_string(),
+                parent_relative_path: None,
+                name: "plain".to_string(),
+                position: 1,
+            },
+        ],
+        vec![
+            SoundRecord {
+                sound: sound("kept", "Kept", "/music/album/kept.flac"),
+                general_position: 0,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: Some("album".to_string()),
+                    relative_path: "album/kept.flac".to_string(),
+                }],
+            },
+            SoundRecord {
+                sound: sound("excluded", "Excluded", "/music/album/excluded.flac"),
+                general_position: 1,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: Some("album".to_string()),
+                    relative_path: "album/excluded.flac".to_string(),
+                }],
+            },
+            SoundRecord {
+                sound: sound("plain", "Plain", "/music/plain/plain.flac"),
+                general_position: 3,
+                locations: vec![SoundLocationRecord {
+                    root_path: "/music".to_string(),
+                    folder_relative_path: Some("plain".to_string()),
+                    relative_path: "plain/plain.flac".to_string(),
+                }],
+            },
+        ],
+    ));
+    assert!(wait(store.finish_root_scan("/music", first_generation)));
+    assert!(wait(store.set_folder_display_name(
+        "/music",
+        "album",
+        Some("Saved Album")
+    )));
+    assert!(wait(store.set_folder_override(FolderOverrideRecord {
+        root_path: "/music".to_string(),
+        folder_relative_path: "album".to_string(),
+        sound_public_id: "excluded".to_string(),
+        action: FolderOverrideAction::Exclude,
+    })));
+    assert!(wait(store.set_folder_override(FolderOverrideRecord {
+        root_path: "/music".to_string(),
+        folder_relative_path: "album".to_string(),
+        sound_public_id: "included".to_string(),
+        action: FolderOverrideAction::Include,
+    })));
+
+    let empty_generation = wait(store.begin_root_scan("/music", 0));
+    assert!(wait(store.finish_root_scan("/music", empty_generation)));
+
+    assert!(wait(store.folder_children("/music", None, 0))
+        .folders
+        .is_empty());
+    let tabs = wait(store.manual_tabs(0));
+    assert_eq!(tabs.total, 1);
+    assert_eq!(tabs.tabs[0].name, "Saved Album");
+    let converted = wait(store.page(
+        LibraryScope::ManualTab(tabs.tabs[0].public_id.clone()),
+        "",
+        0,
+    ));
+    assert_eq!(
+        converted
+            .sounds
+            .iter()
+            .map(|sound| sound.id.as_str())
+            .collect::<Vec<_>>(),
+        ["kept", "included"]
+    );
+}
+
+#[test]
+fn generated_folder_order_can_move_one_sibling_at_a_time() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(
+        store.apply_batch(LibraryBatch::Folders(
+            ["a", "b", "c"]
+                .into_iter()
+                .enumerate()
+                .map(|(position, name)| FolderRecord {
+                    root_path: "/music".to_string(),
+                    relative_path: name.to_string(),
+                    parent_relative_path: None,
+                    name: name.to_string(),
+                    position,
+                })
+                .collect(),
+        )),
+    );
+
+    assert!(wait(store.move_folder("/music", "c", -1)));
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0))
+            .folders
+            .iter()
+            .map(|folder| folder.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "c", "b"]
+    );
+    assert!(wait(store.move_folder("/music", "c", -1)));
+    assert!(!wait(store.move_folder("/music", "c", -1)));
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0))
+            .folders
+            .iter()
+            .map(|folder| folder.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["c", "a", "b"]
+    );
+    drop(store);
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("reopen store");
+    assert_eq!(
+        wait(store.folder_children("/music", None, 0))
+            .folders
+            .iter()
+            .map(|folder| folder.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["c", "a", "b"]
+    );
+}
+
+#[test]
 fn cancelled_root_scan_preserves_the_previous_generation() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");

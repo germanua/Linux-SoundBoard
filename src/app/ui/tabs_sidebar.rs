@@ -41,6 +41,7 @@ struct FolderNode {
     expanded_handler_connected: Cell<bool>,
     disclosure_handlers: RefCell<Option<(Image, GestureClick, TreeListRow, glib::SignalHandlerId)>>,
     context_gesture: RefCell<Option<GestureClick>>,
+    drop_target: RefCell<Option<gtk4::DropTargetAsync>>,
 }
 
 fn update_disclosure_icon(image: &Image, expanded: bool) {
@@ -77,6 +78,7 @@ impl FolderNode {
             expanded_handler_connected: Cell::new(false),
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
+            drop_target: RefCell::new(None),
         }
     }
 
@@ -92,6 +94,7 @@ impl FolderNode {
             expanded_handler_connected: Cell::new(false),
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
+            drop_target: RefCell::new(None),
         }
     }
 }
@@ -127,6 +130,123 @@ fn drag_action_for_intent(intent: SidebarDropIntent) -> gtk4::gdk::DragAction {
         | SidebarDropIntent::RemoveFromSource
         | SidebarDropIntent::MoveBetweenCustomTabs => gtk4::gdk::DragAction::COPY,
     }
+}
+
+type FolderChangedCallback = Rc<RefCell<Option<Box<dyn Fn() + 'static>>>>;
+
+fn folder_drop_overrides(
+    payload: &tab_dnd::SoundTabDragPayload,
+    target: &tab_dnd::FolderDragContext,
+) -> Vec<crate::library_store::FolderOverrideRecord> {
+    if payload.source_folder.as_ref() == Some(target) {
+        return Vec::new();
+    }
+    let mut overrides = Vec::with_capacity(payload.sound_ids.len().saturating_mul(
+        if payload.source_folder.is_some() {
+            2
+        } else {
+            1
+        },
+    ));
+    for sound_id in &payload.sound_ids {
+        overrides.push(crate::library_store::FolderOverrideRecord {
+            root_path: target.root_path.clone(),
+            folder_relative_path: target.relative_path.clone(),
+            sound_public_id: sound_id.clone(),
+            action: crate::library_store::FolderOverrideAction::Include,
+        });
+        if let Some(source) = &payload.source_folder {
+            overrides.push(crate::library_store::FolderOverrideRecord {
+                root_path: source.root_path.clone(),
+                folder_relative_path: source.relative_path.clone(),
+                sound_public_id: sound_id.clone(),
+                action: crate::library_store::FolderOverrideAction::Exclude,
+            });
+        }
+    }
+    overrides
+}
+
+fn install_folder_drop_target(
+    widget: &GtkBox,
+    library: crate::library_store::LibraryStore,
+    root_path: String,
+    relative_path: String,
+    on_changed: FolderChangedCallback,
+) -> gtk4::DropTargetAsync {
+    let formats = gtk4::gdk::ContentFormats::builder()
+        .add_type(glib::Bytes::static_type())
+        .add_mime_type(tab_dnd::SOUND_TAB_DND_MIME)
+        .build();
+    let target = gtk4::DropTargetAsync::new(Some(formats), gtk4::gdk::DragAction::COPY);
+    target.connect_drop(move |_, drop, _, _| {
+        let drop_for_read = drop.clone();
+        let drop_for_finish = drop.clone();
+        let library = library.clone();
+        let root_path = root_path.clone();
+        let relative_path = relative_path.clone();
+        let on_changed = Rc::clone(&on_changed);
+        drop_for_read.read_value_async(
+            glib::Bytes::static_type(),
+            glib::Priority::DEFAULT,
+            None::<&gio::Cancellable>,
+            move |result| {
+                let Ok(value) = result else {
+                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                    return;
+                };
+                let Ok(bytes) = value.get::<glib::Bytes>() else {
+                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                    return;
+                };
+                let Some(payload) = tab_dnd::decode_drag_payload(&bytes) else {
+                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                    return;
+                };
+                let target_folder = tab_dnd::FolderDragContext {
+                    root_path: root_path.clone(),
+                    relative_path: relative_path.clone(),
+                };
+                let overrides = folder_drop_overrides(&payload, &target_folder);
+                if overrides.is_empty() {
+                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                    return;
+                }
+                let drop_for_complete = drop_for_finish.clone();
+                if let Err(error) = commands::dispatch_async_result(
+                    "apply_folder_sound_drop",
+                    move || {
+                        for batch in overrides.chunks(crate::library_store::MAX_BATCH_ROWS) {
+                            library
+                                .apply_batch(crate::library_store::LibraryBatch::FolderOverrides(
+                                    batch.to_vec(),
+                                ))
+                                .recv()?;
+                        }
+                        Ok::<(), crate::library_store::LibraryError>(())
+                    },
+                    move |result| match result {
+                        Ok(()) => {
+                            drop_for_complete.finish(gtk4::gdk::DragAction::COPY);
+                            if let Some(callback) = &*on_changed.borrow() {
+                                callback();
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("Folder drop failed: {error}");
+                            drop_for_complete.finish(gtk4::gdk::DragAction::empty());
+                        }
+                    },
+                ) {
+                    log::warn!("Failed to dispatch folder drop: {error}");
+                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                }
+            },
+        );
+        true
+    });
+    widget.add_controller(target.clone());
+    target
 }
 
 pub struct TabsSidebar {
@@ -194,6 +314,7 @@ impl TabsSidebar {
 
         let folder_roots = gio::ListStore::new::<BoxedAnyObject>();
         let folder_generation = Rc::new(Cell::new(0));
+        let folder_changed: FolderChangedCallback = Rc::new(RefCell::new(None));
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
@@ -240,6 +361,9 @@ impl TabsSidebar {
         });
         let library_for_expansion = state.library.clone();
         let dialog_host_for_folders = dialog_host.clone();
+        let folder_roots_for_actions = folder_roots.clone();
+        let folder_generation_for_actions = Rc::clone(&folder_generation);
+        let folder_changed_for_drop = Rc::clone(&folder_changed);
         folder_factory.connect_bind(move |_, item| {
             let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
                 return;
@@ -276,7 +400,10 @@ impl TabsSidebar {
             let install_disclosure = has_children && node.disclosure_handlers.borrow().is_none();
             let install_context_menu =
                 node.relative_path.is_some() && node.context_gesture.borrow().is_none();
+            let install_drop_target =
+                node.relative_path.is_some() && node.drop_target.borrow().is_none();
             let context_relative_path = node.relative_path.clone();
+            let drop_relative_path = node.relative_path.clone();
             drop(node);
             expander.set_list_row(Some(&row));
             row.set_expanded(restore_expanded);
@@ -347,6 +474,8 @@ impl TabsSidebar {
                 let dialog_host = dialog_host_for_folders.clone();
                 let label = label.clone();
                 let context_root_path = root_path.clone();
+                let folder_roots = folder_roots_for_actions.clone();
+                let folder_generation = Rc::clone(&folder_generation_for_actions);
                 gesture.connect_pressed(move |gesture, _, x, y| {
                     let Some(widget) = gesture.widget() else {
                         return;
@@ -356,18 +485,20 @@ impl TabsSidebar {
                     };
                     let menu_model = gio::Menu::new();
                     menu_model.append(Some("Rename Folder"), Some("folder-ctx.rename"));
+                    menu_model.append(Some("Move Up"), Some("folder-ctx.move-up"));
+                    menu_model.append(Some("Move Down"), Some("folder-ctx.move-down"));
                     let action_group = gio::SimpleActionGroup::new();
                     let action = gio::SimpleAction::new("rename", None);
-                    let library = library.clone();
-                    let root_path = context_root_path.clone();
-                    let relative_path = relative_path.to_string();
+                    let rename_library = library.clone();
+                    let rename_root_path = context_root_path.clone();
+                    let rename_relative_path = relative_path.to_string();
                     let name = Rc::clone(&name);
                     let label = label.clone();
                     let dialog_host = dialog_host.clone();
                     action.connect_activate(move |_, _| {
-                        let library = library.clone();
-                        let root_path = root_path.clone();
-                        let relative_path = relative_path.clone();
+                        let library = rename_library.clone();
+                        let root_path = rename_root_path.clone();
+                        let relative_path = rename_relative_path.clone();
                         let name = Rc::clone(&name);
                         let label = label.clone();
                         let initial_name = name.borrow().clone();
@@ -406,6 +537,39 @@ impl TabsSidebar {
                         );
                     });
                     action_group.add_action(&action);
+                    for (action_name, direction) in [("move-up", -1), ("move-down", 1)] {
+                        let action = gio::SimpleAction::new(action_name, None);
+                        let library = library.clone();
+                        let root_path = context_root_path.clone();
+                        let relative_path = relative_path.to_string();
+                        let folder_roots = folder_roots.clone();
+                        let folder_generation = Rc::clone(&folder_generation);
+                        action.connect_activate(move |_, _| {
+                            let response =
+                                library.move_folder(&root_path, &relative_path, direction);
+                            let library = library.clone();
+                            let folder_roots = folder_roots.clone();
+                            let folder_generation = Rc::clone(&folder_generation);
+                            if let Err(error) = commands::dispatch_async_result(
+                                "move_sidebar_folder",
+                                move || response.recv(),
+                                move |result| match result {
+                                    Ok(true) => TabsInner::reload_folder_roots_model(
+                                        library,
+                                        folder_roots,
+                                        folder_generation,
+                                    ),
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        log::warn!("Failed to move folder: {error}");
+                                    }
+                                },
+                            ) {
+                                log::warn!("Failed to dispatch folder move: {error}");
+                            }
+                        });
+                        action_group.add_action(&action);
+                    }
                     menu::show_popover_menu(
                         &widget,
                         "folder-ctx",
@@ -420,6 +584,22 @@ impl TabsSidebar {
                     .borrow::<FolderNode>()
                     .context_gesture
                     .replace(Some(gesture));
+            }
+            if install_drop_target {
+                let Some(relative_path) = drop_relative_path else {
+                    return;
+                };
+                let target = install_folder_drop_target(
+                    &row_box,
+                    library_for_expansion.clone(),
+                    root_path,
+                    relative_path,
+                    Rc::clone(&folder_changed_for_drop),
+                );
+                boxed
+                    .borrow::<FolderNode>()
+                    .drop_target
+                    .replace(Some(target));
             }
         });
         folder_factory.connect_unbind(|_, item| {
@@ -441,11 +621,12 @@ impl TabsSidebar {
             let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                 return;
             };
-            let (disclosure_handlers, gesture) = {
+            let (disclosure_handlers, gesture, drop_target) = {
                 let node = boxed.borrow::<FolderNode>();
                 let disclosure_handlers = node.disclosure_handlers.borrow_mut().take();
                 let gesture = node.context_gesture.borrow_mut().take();
-                (disclosure_handlers, gesture)
+                let drop_target = node.drop_target.borrow_mut().take();
+                (disclosure_handlers, gesture, drop_target)
             };
             if let Some((image, click_gesture, row, expansion_handler)) = disclosure_handlers {
                 image.remove_controller(&click_gesture);
@@ -453,6 +634,9 @@ impl TabsSidebar {
             }
             if let Some(gesture) = gesture {
                 expander.remove_controller(&gesture);
+            }
+            if let Some(target) = drop_target {
+                row_box.remove_controller(&target);
             }
         });
         let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
@@ -480,6 +664,14 @@ impl TabsSidebar {
             toast_sender: Mutex::new(None),
             dialog_host,
         });
+        {
+            let inner_weak = Arc::downgrade(&inner);
+            folder_changed.borrow_mut().replace(Box::new(move || {
+                if let Some(inner) = inner_weak.upgrade() {
+                    inner.emit_tab_membership_changed();
+                }
+            }));
+        }
 
         {
             let inner_weak = Arc::downgrade(&inner);
@@ -666,16 +858,22 @@ impl TabsInner {
     }
 
     fn reload_folder_roots(&self) {
-        let next_generation = self.folder_generation.get().wrapping_add(1);
-        self.folder_generation.set(next_generation);
-        self.folder_roots.remove_all();
-        Self::load_roots_async(
+        Self::reload_folder_roots_model(
             self.state.library.clone(),
             self.folder_roots.clone(),
-            0,
             Rc::clone(&self.folder_generation),
-            next_generation,
         );
+    }
+
+    fn reload_folder_roots_model(
+        library: crate::library_store::LibraryStore,
+        folder_roots: gio::ListStore,
+        folder_generation: Rc<Cell<u64>>,
+    ) {
+        let next_generation = folder_generation.get().wrapping_add(1);
+        folder_generation.set(next_generation);
+        folder_roots.remove_all();
+        Self::load_roots_async(library, folder_roots, 0, folder_generation, next_generation);
     }
 
     fn connect_delete_shortcut(self: &Arc<Self>) {
@@ -1416,5 +1614,66 @@ impl Clone for TabsSidebar {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_folder_drop_builds_sparse_move_overrides() {
+        let payload = tab_dnd::SoundTabDragPayload {
+            source_tab_id: "folder:source".to_string(),
+            source_folder: Some(tab_dnd::FolderDragContext {
+                root_path: "/music".to_string(),
+                relative_path: "source".to_string(),
+            }),
+            sound_ids: vec!["one".to_string(), "two".to_string()],
+        };
+        let target = tab_dnd::FolderDragContext {
+            root_path: "/music".to_string(),
+            relative_path: "target".to_string(),
+        };
+
+        let overrides = folder_drop_overrides(&payload, &target);
+        assert_eq!(overrides.len(), 4);
+        assert_eq!(
+            overrides
+                .iter()
+                .map(|record| (
+                    record.folder_relative_path.as_str(),
+                    record.sound_public_id.as_str(),
+                    record.action
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "target",
+                    "one",
+                    crate::library_store::FolderOverrideAction::Include
+                ),
+                (
+                    "source",
+                    "one",
+                    crate::library_store::FolderOverrideAction::Exclude
+                ),
+                (
+                    "target",
+                    "two",
+                    crate::library_store::FolderOverrideAction::Include
+                ),
+                (
+                    "source",
+                    "two",
+                    crate::library_store::FolderOverrideAction::Exclude
+                ),
+            ]
+        );
+        assert!(folder_drop_overrides(
+            &payload,
+            payload.source_folder.as_ref().expect("source folder")
+        )
+        .is_empty());
     }
 }

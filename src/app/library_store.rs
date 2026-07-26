@@ -205,13 +205,13 @@ pub struct LegacyGeneratedMembershipRecord {
     pub position: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderOverrideAction {
     Include,
     Exclude,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FolderOverrideRecord {
     pub root_path: String,
     pub folder_relative_path: String,
@@ -250,6 +250,11 @@ enum LibraryEdit {
         folder_relative_path: String,
         sound_public_id: String,
     },
+    ClearFolderOverrides {
+        root_path: String,
+        folder_relative_path: String,
+        sound_public_ids: Vec<String>,
+    },
     SetFolderPreferences {
         root_path: String,
         folder_relative_path: String,
@@ -266,6 +271,11 @@ enum LibraryEdit {
         root_path: String,
         folder_relative_path: String,
         display_name: Option<String>,
+    },
+    MoveFolder {
+        root_path: String,
+        folder_relative_path: String,
+        direction: i32,
     },
 }
 
@@ -1311,6 +1321,24 @@ impl LibraryStore {
         })
     }
 
+    pub fn clear_folder_overrides(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        sound_public_ids: Vec<String>,
+    ) -> LibraryResponse<bool> {
+        if sound_public_ids.len() > MAX_BATCH_ROWS {
+            return LibraryResponse::ready(Err(LibraryError::InvalidData(format!(
+                "folder override batches are limited to {MAX_BATCH_ROWS} rows"
+            ))));
+        }
+        self.edit(LibraryEdit::ClearFolderOverrides {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            sound_public_ids,
+        })
+    }
+
     pub fn set_folder_preferences(
         &self,
         root_path: &str,
@@ -1351,6 +1379,19 @@ impl LibraryStore {
             root_path: root_path.to_string(),
             folder_relative_path: folder_relative_path.to_string(),
             display_name: display_name.map(str::to_string),
+        })
+    }
+
+    pub fn move_folder(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        direction: i32,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::MoveFolder {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            direction,
         })
     }
 
@@ -2102,14 +2143,16 @@ fn finish_root_scan(
     }
     let transaction = connection.transaction()?;
     reconcile_legacy_generated_tabs(&transaction, root_path, generation)?;
+    let (root_id, old_generation): (i64, i64) = transaction.query_row(
+        "SELECT id, active_generation FROM roots WHERE path = ?1",
+        [root_path],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    convert_disappeared_custom_folders(&transaction, root_id, old_generation, generation)?;
     let changed = transaction.execute(
         "UPDATE roots SET active_generation = ?2 WHERE path = ?1",
         params![root_path, generation],
     )?;
-    let root_id: i64 =
-        transaction.query_row("SELECT id FROM roots WHERE path = ?1", [root_path], |row| {
-            row.get(0)
-        })?;
     transaction.execute(
         "DELETE FROM sound_locations WHERE root_id = ?1 AND generation <> ?2",
         params![root_id, generation],
@@ -2118,6 +2161,15 @@ fn finish_root_scan(
         "DELETE FROM folder_presence
          WHERE generation <> ?2
            AND folder_id IN (SELECT id FROM folders WHERE root_id = ?1)",
+        params![root_id, generation],
+    )?;
+    transaction.execute(
+        "DELETE FROM folders
+         WHERE root_id = ?1
+           AND NOT EXISTS (
+               SELECT 1 FROM folder_presence
+               WHERE folder_id = folders.id AND generation = ?2
+           )",
         params![root_id, generation],
     )?;
     transaction.execute(
@@ -2143,6 +2195,96 @@ fn finish_root_scan(
     )?;
     transaction.commit()?;
     Ok(changed == 1)
+}
+
+fn convert_disappeared_custom_folders(
+    transaction: &Transaction<'_>,
+    root_id: i64,
+    old_generation: i64,
+    new_generation: i64,
+) -> Result<(), LibraryError> {
+    let next_position: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM manual_tabs",
+        [],
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "WITH customized AS (
+             SELECT folder.id, COALESCE(pref.display_name, folder.name) AS name,
+                    ROW_NUMBER() OVER (ORDER BY folder.id) - 1 AS position_offset
+             FROM folders AS folder
+             JOIN folder_presence AS old_presence ON old_presence.folder_id = folder.id
+                 AND old_presence.generation = ?2
+             LEFT JOIN folder_presence AS new_presence ON new_presence.folder_id = folder.id
+                 AND new_presence.generation = ?3
+             LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+             WHERE folder.root_id = ?1
+               AND new_presence.folder_id IS NULL
+               AND (
+                   pref.folder_id IS NOT NULL
+                   OR EXISTS (
+                       SELECT 1 FROM folder_overrides
+                       WHERE folder_id = folder.id
+                   )
+               )
+         )
+         INSERT INTO manual_tabs(public_id, name, position)
+         SELECT 'converted-folder-' || id || '-' || ?3,
+                name, ?4 + position_offset
+         FROM customized",
+        params![root_id, old_generation, new_generation, next_position],
+    )?;
+    transaction.execute(
+        "WITH customized AS (
+             SELECT folder.id
+             FROM folders AS folder
+             JOIN folder_presence AS old_presence ON old_presence.folder_id = folder.id
+                 AND old_presence.generation = ?2
+             LEFT JOIN folder_presence AS new_presence ON new_presence.folder_id = folder.id
+                 AND new_presence.generation = ?3
+             LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+             WHERE folder.root_id = ?1
+               AND new_presence.folder_id IS NULL
+               AND (
+                   pref.folder_id IS NOT NULL
+                   OR EXISTS (
+                       SELECT 1 FROM folder_overrides
+                       WHERE folder_id = folder.id
+                   )
+               )
+         ), effective(folder_id, sound_id) AS (
+             SELECT customized.id, location.sound_id
+             FROM customized
+             JOIN folder_closure AS closure ON closure.ancestor_id = customized.id
+             JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                 AND location.root_id = ?1 AND location.generation = ?2
+             UNION
+             SELECT customized.id, override.sound_id
+             FROM customized
+             JOIN folder_overrides AS override ON override.folder_id = customized.id
+             WHERE override.action = 'include'
+             EXCEPT
+             SELECT customized.id, override.sound_id
+             FROM customized
+             JOIN folder_overrides AS override ON override.folder_id = customized.id
+             WHERE override.action = 'exclude'
+         ), ranked AS (
+             SELECT effective.folder_id, effective.sound_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY effective.folder_id
+                        ORDER BY sound.general_position, sound.public_id
+                    ) - 1 AS position
+             FROM effective
+             JOIN sounds AS sound ON sound.rowid = effective.sound_id
+         )
+         INSERT INTO manual_memberships(tab_id, sound_id, position)
+         SELECT tab.id, ranked.sound_id, ranked.position
+         FROM ranked
+         JOIN manual_tabs AS tab
+           ON tab.public_id = 'converted-folder-' || ranked.folder_id || '-' || ?3",
+        params![root_id, old_generation, new_generation],
+    )?;
+    Ok(())
 }
 
 fn reconcile_legacy_generated_tabs(
@@ -2405,6 +2547,32 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
              ) AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?3)",
             params![root_path, folder_relative_path, sound_public_id],
         )?,
+        LibraryEdit::ClearFolderOverrides {
+            root_path,
+            folder_relative_path,
+            sound_public_ids,
+        } => {
+            let transaction = connection.transaction()?;
+            let mut statement = transaction.prepare(
+                "DELETE FROM folder_overrides
+                 WHERE folder_id = (
+                     SELECT folder.id FROM folders AS folder
+                     JOIN roots AS root ON root.id = folder.root_id
+                     WHERE root.path = ?1 AND folder.relative_path = ?2
+                 ) AND sound_id = (SELECT rowid FROM sounds WHERE public_id = ?3)",
+            )?;
+            let mut changed = 0_usize;
+            for sound_public_id in sound_public_ids {
+                changed = changed.saturating_add(statement.execute(params![
+                    root_path,
+                    folder_relative_path,
+                    sound_public_id
+                ])?);
+            }
+            drop(statement);
+            transaction.commit()?;
+            changed
+        }
         LibraryEdit::SetFolderPreferences {
             root_path,
             folder_relative_path,
@@ -2455,8 +2623,94 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
              ON CONFLICT(folder_id) DO UPDATE SET display_name = excluded.display_name",
             params![root_path, folder_relative_path, display_name],
         )?,
+        LibraryEdit::MoveFolder {
+            root_path,
+            folder_relative_path,
+            direction,
+        } => return move_folder(connection, &root_path, &folder_relative_path, direction),
     };
     Ok(changed != 0)
+}
+
+fn move_folder(
+    connection: &mut Connection,
+    root_path: &str,
+    folder_relative_path: &str,
+    direction: i32,
+) -> Result<bool, LibraryError> {
+    if !matches!(direction, -1 | 1) {
+        return Err(LibraryError::InvalidData(
+            "folder move direction must be -1 or 1".to_string(),
+        ));
+    }
+    let transaction = connection.transaction()?;
+    let target_id = transaction
+        .query_row(
+            "SELECT folder.id
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
+             WHERE root.path = ?1 AND folder.relative_path = ?2",
+            params![root_path, folder_relative_path],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(target_id) = target_id else {
+        return Ok(false);
+    };
+    let mut statement = transaction.prepare(
+        "WITH target AS (
+             SELECT folder.id, folder.root_id, folder.parent_id, root.active_generation
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE folder.id = ?1
+         ), ordered AS (
+             SELECT folder.id,
+                    ROW_NUMBER() OVER (
+                        ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
+                    ) - 1 AS position
+             FROM folders AS folder
+             JOIN target ON target.root_id = folder.root_id
+                 AND folder.parent_id IS target.parent_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = target.active_generation
+             LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+         ), target_position AS (
+             SELECT position FROM ordered WHERE id = ?1
+         )
+         SELECT id, position FROM ordered
+         WHERE position = (SELECT position FROM target_position)
+            OR position = (SELECT position FROM target_position) + ?2",
+    )?;
+    let rows = statement.query_map(params![target_id, direction], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut pair = Vec::with_capacity(2);
+    for row in rows {
+        pair.push(row?);
+    }
+    drop(statement);
+    if pair.len() != 2 {
+        return Ok(false);
+    }
+    let target_position = pair
+        .iter()
+        .find_map(|(id, position)| (*id == target_id).then_some(*position))
+        .ok_or_else(|| LibraryError::InvalidData("folder move target disappeared".to_string()))?;
+    let (adjacent_id, adjacent_position) = pair
+        .iter()
+        .find(|(id, _)| *id != target_id)
+        .copied()
+        .ok_or_else(|| LibraryError::InvalidData("folder move sibling disappeared".to_string()))?;
+    transaction.execute(
+        "INSERT INTO folder_prefs(folder_id, sibling_position)
+         VALUES(?1, ?2), (?3, ?4)
+         ON CONFLICT(folder_id) DO UPDATE SET sibling_position = excluded.sibling_position",
+        params![target_id, adjacent_position, adjacent_id, target_position],
+    )?;
+    transaction.commit()?;
+    Ok(true)
 }
 
 fn insert_roots(transaction: &Transaction<'_>, rows: Vec<RootRecord>) -> Result<(), LibraryError> {
