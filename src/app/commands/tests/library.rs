@@ -585,6 +585,46 @@ fn store_refresh_streams_nested_folders_without_generated_tabs() {
 }
 
 #[test]
+fn store_refresh_metadata_chunks_keep_deterministic_sound_order() {
+    let root = std::env::temp_dir().join(format!("lsb-store-chunks-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).expect("create music folder");
+    for index in 0..40 {
+        fs::write(root.join(format!("{index:02}.wav")), []).expect("write sound placeholder");
+    }
+
+    let mut config = create_test_config();
+    config
+        .sound_folders
+        .push(root.to_string_lossy().into_owned());
+    let config = Arc::new(Mutex::new(config));
+    let library = create_test_library(&config);
+    let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(
+        library.clone(),
+        create_mock_hotkey_manager(),
+    );
+
+    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
+        .expect("store refresh succeeds");
+    let page = library
+        .page(crate::library_store::LibraryScope::General, "", 0)
+        .recv()
+        .expect("load sound page");
+
+    assert_eq!(summary.added, 40);
+    assert_eq!(
+        page.sounds
+            .iter()
+            .map(|sound| sound.name.as_str())
+            .collect::<Vec<_>>(),
+        (0..40)
+            .map(|index| format!("{index:02}"))
+            .collect::<Vec<_>>()
+    );
+
+    fs::remove_dir_all(root).expect("remove music folder");
+}
+
+#[test]
 fn store_backed_rename_and_remove_work_for_scanned_sounds_absent_from_legacy_json() {
     let audio_path = create_test_audio_file("mp3");
     let config = create_test_config_state();

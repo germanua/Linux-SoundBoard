@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::ops::ControlFlow;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -27,6 +27,8 @@ use super::shared::{
     ERR_FILE_DOES_NOT_EXIST, ERR_SOUND_ALREADY_EXISTS, ERR_UNSUPPORTED_AUDIO_FILE,
 };
 use super::{CommandError, LoudnessCoordinators};
+
+const STORE_SCAN_METADATA_BATCH: usize = 32;
 
 fn maybe_schedule_missing_loudness_backfill(
     config: &Arc<Mutex<Config>>,
@@ -126,6 +128,7 @@ impl StoreScanBatch {
     fn push_file(
         &mut self,
         file: scanner::AudioFile,
+        sound: Sound,
         position: usize,
         library: &LibraryStore,
     ) -> Result<(), CommandError> {
@@ -169,7 +172,7 @@ impl StoreScanBatch {
         }
 
         self.sounds.push(SoundRecord {
-            sound: build_sound_with_metadata(file.name, file.path),
+            sound,
             general_position: position,
             locations: vec![SoundLocationRecord {
                 root_path: self.root.clone(),
@@ -180,6 +183,30 @@ impl StoreScanBatch {
         self.rows = self.rows.saturating_add(2);
         Ok(())
     }
+}
+
+fn build_scanned_metadata_batch(
+    files: Vec<scanner::AudioFile>,
+    cancelled: &AtomicBool,
+    pool: Option<&rayon::ThreadPool>,
+) -> Vec<(scanner::AudioFile, Sound)> {
+    let build = || {
+        files
+            .into_par_iter()
+            .map(|file| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let sound = build_sound_with_metadata(file.name.clone(), file.path.clone());
+                (!cancelled.load(Ordering::Relaxed)).then_some((file, sound))
+            })
+            .collect::<Vec<_>>()
+    };
+    let built = match pool {
+        Some(pool) => pool.install(build),
+        None => build(),
+    };
+    built.into_iter().flatten().collect()
 }
 
 #[derive(Debug)]
@@ -1124,29 +1151,69 @@ pub fn refresh_sounds_with_store(
     let mut batch = StoreScanBatch::default();
     let mut next_position = 0_usize;
     let mut scan_error = None;
-    let progress = scanner::visit_audio_files(&roots, &cancelled, |file| {
-        let Some(&generation) = generations.get(&file.root_folder) else {
-            scan_error = Some(CommandError::Library(format!(
-                "scanner returned an unknown root: {}",
-                file.root_folder
-            )));
-            return ControlFlow::Break(());
+    let metadata_threads = std::thread::available_parallelism()
+        .map(|threads| threads.get().min(2))
+        .unwrap_or(1);
+    let metadata_pool = if metadata_threads > 1 {
+        match rayon::ThreadPoolBuilder::new()
+            .num_threads(metadata_threads)
+            .thread_name(|index| format!("scan-metadata-{index}"))
+            .build()
+        {
+            Ok(pool) => Some(pool),
+            Err(error) => {
+                log::warn!(
+                    "Failed to start bounded scan metadata workers: {error}. Falling back to sequential metadata probing."
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut pending_files = Vec::with_capacity(STORE_SCAN_METADATA_BATCH);
+    let progress = {
+        let mut process_pending = |pending: &mut Vec<scanner::AudioFile>| {
+            let files = std::mem::take(pending);
+            for (file, sound) in
+                build_scanned_metadata_batch(files, &cancelled, metadata_pool.as_ref())
+            {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(CommandError::Library(
+                        "sound folder refresh was cancelled".to_string(),
+                    ));
+                }
+                let Some(&generation) = generations.get(&file.root_folder) else {
+                    return Err(CommandError::Library(format!(
+                        "scanner returned an unknown root: {}",
+                        file.root_folder
+                    )));
+                };
+                if batch.root != file.root_folder {
+                    batch.flush(&library)?;
+                    batch.reset_for(file.root_folder.clone(), generation);
+                }
+                batch.push_file(file, sound, next_position, &library)?;
+                next_position = next_position.saturating_add(1);
+            }
+            Ok(())
         };
-        if batch.root != file.root_folder {
-            if let Err(error) = batch.flush(&library) {
+        let progress = scanner::visit_audio_files(&roots, &cancelled, |file| {
+            pending_files.push(file);
+            if pending_files.len() < STORE_SCAN_METADATA_BATCH {
+                return ControlFlow::Continue(());
+            }
+            if let Err(error) = process_pending(&mut pending_files) {
                 scan_error = Some(error);
                 return ControlFlow::Break(());
             }
-            batch.reset_for(file.root_folder.clone(), generation);
+            ControlFlow::Continue(())
+        });
+        if scan_error.is_none() {
+            scan_error = process_pending(&mut pending_files).err();
         }
-        if let Err(error) = batch.push_file(file, next_position, &library) {
-            scan_error = Some(error);
-            return ControlFlow::Break(());
-        }
-        next_position = next_position.saturating_add(1);
-        ControlFlow::Continue(())
-    });
-
+        progress
+    };
     if scan_error.is_none() {
         scan_error = batch.flush(&library).err();
     }
@@ -1656,6 +1723,7 @@ where
 #[cfg(test)]
 mod batch_tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn batch_insert_returns_only_sounds_added_under_final_lock() {
@@ -1672,5 +1740,36 @@ mod batch_tests {
         assert_eq!(inserted[0].id, added_id);
         assert_eq!(config.sounds.len(), 2);
         assert_eq!(config.sounds[1].id, added_id);
+    }
+
+    #[test]
+    fn bounded_metadata_batch_preserves_scan_order_and_honours_cancellation() {
+        let scanned_file = |name: &str| scanner::AudioFile {
+            path: format!("/missing/{name}.wav"),
+            name: name.to_string(),
+            root_folder: "/missing".to_string(),
+            relative_path: format!("{name}.wav"),
+            relative_subfolders: Vec::new(),
+        };
+        let files = ["first", "second", "third"]
+            .into_iter()
+            .map(scanned_file)
+            .collect();
+        let cancelled = AtomicBool::new(false);
+
+        let built = build_scanned_metadata_batch(files, &cancelled, None);
+        assert_eq!(
+            built
+                .iter()
+                .map(|(_, sound)| sound.name.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+
+        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            build_scanned_metadata_batch(vec![scanned_file("cancelled")], &cancelled, None)
+                .is_empty()
+        );
     }
 }
