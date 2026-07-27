@@ -109,6 +109,44 @@ fn should_restore_expansion(node_expanded: bool, already_restored: bool) -> bool
     node_expanded && !already_restored
 }
 
+/// Ceiling on folder child rows kept loaded across the whole sidebar.
+/// Collapsing normally retains its children so re-expanding needs no query;
+/// once the loaded tree exceeds this, collapsing releases them instead.
+/// 4096 rows is ~3 MB at the measured ~750 bytes per row, in the same range as
+/// the lazy sound model's 2 MiB payload bound.
+const MAX_RETAINED_CHILD_ROWS: usize = 4_096;
+
+/// Total loaded child rows under `store`, including nested expanded folders.
+/// Walking is preferred over a running counter because rows leave in ways a
+/// counter cannot observe: rebuilding the tree drops every node, and releasing
+/// one node also drops its descendants' loaded rows. The walk is bounded by
+/// `MAX_RETAINED_CHILD_ROWS` and only runs when the user collapses a folder.
+fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
+    let mut total = 0usize;
+    for item in store.iter::<BoxedAnyObject>().flatten() {
+        total += 1;
+        let children = item.borrow::<FolderNode>().children.clone();
+        total += count_loaded_child_rows(&children);
+    }
+    total
+}
+
+fn should_release_collapsed_children(total_retained_rows: usize, cap: usize) -> bool {
+    total_retained_rows > cap
+}
+
+/// A node whose children were released by the cap still reports `has_children`
+/// but has no loaded rows and no pager. `GtkTreeListModel` caches the child
+/// model per row and never re-runs the create-closure, so expanding such a
+/// node must restart its pager explicitly or it renders empty.
+fn should_start_fresh_load_on_expand(
+    has_children: bool,
+    loaded_rows: usize,
+    has_pager: bool,
+) -> bool {
+    has_children && loaded_rows == 0 && !has_pager
+}
+
 fn update_disclosure_icon(image: &Image, expanded: bool) {
     icons::apply_image_icon(
         image,
@@ -454,6 +492,7 @@ impl TabsSidebar {
             item.set_child(Some(&row_box));
         });
         let library_for_expansion = state.library.clone();
+        let folder_roots_for_expansion = folder_roots.clone();
         let dialog_host_for_folders = dialog_host.clone();
         let folder_roots_for_actions = folder_roots.clone();
         let folder_generation_for_actions = Rc::clone(&folder_generation);
@@ -500,6 +539,9 @@ impl TabsSidebar {
             let drop_relative_path = node.relative_path.clone();
             let sibling_index = node.sibling_index;
             let sibling_pager = node.sibling_pager.clone();
+            let children = node.children.clone();
+            let children_pager = Rc::clone(&node.children_pager);
+            let children_requested = Rc::clone(&node.children_requested);
             drop(node);
             if let Some(pager) = sibling_pager.as_ref().and_then(std::rc::Weak::upgrade) {
                 if should_request_next_sibling_page(
@@ -547,13 +589,38 @@ impl TabsSidebar {
             if connect_expanded {
                 let library = library_for_expansion.clone();
                 let expanded_root_path = root_path.clone();
+                let loaded_tree = folder_roots_for_expansion.clone();
                 let expansion_handler = row.connect_expanded_notify(move |row| {
                     let is_expanded = row.is_expanded();
                     expanded.set(is_expanded);
-                    // Collapsed children stay loaded. GtkTreeListModel hides them, and
-                    // retaining them (~600 bytes per row, see
+                    // Collapsed children normally stay loaded: GtkTreeListModel hides
+                    // them, and retaining them (~750 bytes per row, see
                     // `measure_retained_folder_child_row_cost`) is far cheaper than
-                    // re-querying a page on every re-expand.
+                    // re-querying a page on every re-expand. Only once the loaded tree
+                    // exceeds MAX_RETAINED_CHILD_ROWS does collapsing give rows back.
+                    if is_expanded {
+                        if should_start_fresh_load_on_expand(
+                            has_children,
+                            children.n_items() as usize,
+                            children_pager.borrow().is_some(),
+                        ) {
+                            children_requested.set(true);
+                            TabsInner::start_children_pager(
+                                library.clone(),
+                                children.clone(),
+                                expanded_root_path.clone(),
+                                relative_path.clone(),
+                                &children_pager,
+                            );
+                        }
+                    } else if should_release_collapsed_children(
+                        count_loaded_child_rows(&loaded_tree),
+                        MAX_RETAINED_CHILD_ROWS,
+                    ) {
+                        children.remove_all();
+                        children_pager.replace(None);
+                        children_requested.set(false);
+                    }
                     let Some(relative_path) = relative_path.as_deref() else {
                         return;
                     };
@@ -1859,6 +1926,119 @@ mod tests {
         // index 223 is one short of the margin, should not.
         assert!(should_request_next_sibling_page(224, 256, true, false));
         assert!(!should_request_next_sibling_page(223, 256, true, false));
+    }
+
+    /// Builds a node holding `child_count` loaded children, each of which may
+    /// itself hold `grandchildren` loaded children.
+    fn node_with_loaded_children(child_count: usize, grandchildren: usize) -> BoxedAnyObject {
+        let parent = FolderNode::folder_at(
+            "/music".to_string(),
+            crate::library_store::FolderItem {
+                id: 0,
+                relative_path: "albums".to_string(),
+                name: "albums".to_string(),
+                expanded: true,
+                has_children: true,
+            },
+            0,
+            None,
+        );
+        for index in 0..child_count {
+            let child = FolderNode::folder_at(
+                "/music".to_string(),
+                crate::library_store::FolderItem {
+                    id: index as i64 + 1,
+                    relative_path: format!("albums/Album {index}"),
+                    name: format!("Album {index}"),
+                    expanded: false,
+                    has_children: grandchildren > 0,
+                },
+                index,
+                None,
+            );
+            for deep in 0..grandchildren {
+                child
+                    .children
+                    .append(&BoxedAnyObject::new(FolderNode::folder_at(
+                        "/music".to_string(),
+                        crate::library_store::FolderItem {
+                            id: 1_000 + deep as i64,
+                            relative_path: format!("albums/Album {index}/Disc {deep}"),
+                            name: format!("Disc {deep}"),
+                            expanded: false,
+                            has_children: false,
+                        },
+                        deep,
+                        None,
+                    )));
+            }
+            parent.children.append(&BoxedAnyObject::new(child));
+        }
+        BoxedAnyObject::new(parent)
+    }
+
+    #[test]
+    fn counts_directly_loaded_child_rows() {
+        let node = node_with_loaded_children(5, 0);
+        let store = gio::ListStore::new::<BoxedAnyObject>();
+        store.append(&node);
+        // 1 parent row + its 5 loaded children.
+        assert_eq!(count_loaded_child_rows(&store), 6);
+    }
+
+    #[test]
+    fn counts_rows_loaded_under_nested_folders() {
+        // This is the case a running counter gets wrong: releasing the parent
+        // also drops the grandchildren, so they must be counted as retained.
+        let node = node_with_loaded_children(3, 4);
+        let store = gio::ListStore::new::<BoxedAnyObject>();
+        store.append(&node);
+        // 1 parent + 3 children + 3*4 grandchildren.
+        assert_eq!(count_loaded_child_rows(&store), 16);
+    }
+
+    #[test]
+    fn counts_nothing_for_an_empty_tree() {
+        let store = gio::ListStore::new::<BoxedAnyObject>();
+        assert_eq!(count_loaded_child_rows(&store), 0);
+    }
+
+    #[test]
+    fn collapsing_retains_children_while_under_the_row_cap() {
+        // The common case: collapsing is free and re-expanding needs no query.
+        assert!(!should_release_collapsed_children(1_000, 4_096));
+    }
+
+    #[test]
+    fn collapsing_releases_children_once_over_the_row_cap() {
+        assert!(should_release_collapsed_children(4_097, 4_096));
+    }
+
+    #[test]
+    fn row_cap_boundary_retains_at_exactly_the_cap() {
+        assert!(!should_release_collapsed_children(4_096, 4_096));
+        assert!(should_release_collapsed_children(4_097, 4_096));
+    }
+
+    #[test]
+    fn expanding_an_evicted_node_starts_a_fresh_load() {
+        // Released by the cap: has children, none loaded, pager cleared.
+        assert!(should_start_fresh_load_on_expand(true, 0, false));
+    }
+
+    #[test]
+    fn expanding_a_retained_node_does_not_reload() {
+        assert!(!should_start_fresh_load_on_expand(true, 256, false));
+    }
+
+    #[test]
+    fn expanding_never_starts_a_second_load_while_a_pager_exists() {
+        assert!(!should_start_fresh_load_on_expand(true, 0, true));
+    }
+
+    #[test]
+    fn expanding_a_leaf_never_loads() {
+        assert!(!should_start_fresh_load_on_expand(false, 0, false));
     }
 
     #[test]
