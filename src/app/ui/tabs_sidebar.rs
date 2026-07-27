@@ -94,6 +94,11 @@ struct SiblingPager {
     loaded_pages: RefCell<std::collections::BTreeSet<usize>>,
     /// Page most recently brought into view; eviction keeps its neighbours.
     focus_page: Cell<usize>,
+    /// Pages asked for while another load was in flight. Fast scrolling binds
+    /// placeholders faster than the store answers, and a dropped request would
+    /// leave those rows blank for good because nothing rebinds them. A set,
+    /// not a single page: a viewport straddling a page boundary asks for two.
+    pending_pages: RefCell<std::collections::BTreeSet<usize>>,
     /// The owning node's "children already requested" latch. Held so a failed
     /// page load can clear it; see [`SiblingPager::mark_reloadable`].
     children_requested: Rc<Cell<bool>>,
@@ -1121,6 +1126,7 @@ impl TabsInner {
             in_flight: Cell::new(false),
             loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
             focus_page: Cell::new(0),
+            pending_pages: RefCell::new(std::collections::BTreeSet::new()),
             children_requested,
         });
         pager_slot.replace(Some(Rc::clone(&pager)));
@@ -1141,6 +1147,9 @@ impl TabsInner {
             return;
         }
         if pager.in_flight.replace(true) {
+            // Keep the most recent request: it is the one the user is looking
+            // at. Dropping it would leave those rows blank permanently.
+            pager.pending_pages.borrow_mut().insert(page);
             return;
         }
         let response = pager.library.folder_children(
@@ -1192,6 +1201,7 @@ impl TabsInner {
                     pager_for_result.loaded_pages.borrow_mut().insert(page);
                     pager_for_result.in_flight.set(false);
                     Self::evict_distant_sibling_pages(&pager_for_result);
+                    Self::drain_pending_sibling_page(&pager_for_result);
                 }
                 Err(error) => {
                     log::warn!("Failed to load sound folder children: {error}");
@@ -1200,6 +1210,7 @@ impl TabsInner {
                     // Transient store failures (a saturated worker queue, for
                     // one) must not leave this folder empty for good.
                     pager_for_result.mark_reloadable();
+                    Self::drain_pending_sibling_page(&pager_for_result);
                 }
             },
         ) {
@@ -1207,6 +1218,26 @@ impl TabsInner {
             pager.in_flight.set(false);
             pager.mark_reloadable();
         }
+    }
+
+    /// Starts the page that was asked for while the pager was busy.
+    fn drain_pending_sibling_page(pager: &Rc<SiblingPager>) {
+        // Nearest to the viewport first, so what the user is looking at fills
+        // in before anything they have already scrolled past.
+        let focus = pager.focus_page.get();
+        let next = pager
+            .pending_pages
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|page| !pager.loaded_pages.borrow().contains(page))
+            .min_by_key(|page| page.abs_diff(focus));
+        let Some(page) = next else {
+            pager.pending_pages.borrow_mut().clear();
+            return;
+        };
+        pager.pending_pages.borrow_mut().remove(&page);
+        Self::load_sibling_page(Rc::clone(pager), page);
     }
 
     /// Turns pages outside the loaded window back into placeholders. The store
@@ -2187,6 +2218,7 @@ mod tests {
             in_flight: Cell::new(false),
             loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
             focus_page: Cell::new(0),
+            pending_pages: RefCell::new(std::collections::BTreeSet::new()),
             children_requested: Rc::clone(&children_requested),
         });
 
@@ -2202,6 +2234,39 @@ mod tests {
     /// A placeholder row shares the store with real folder nodes. Every path
     /// that reads a row must tolerate it: downcasting blind aborted the
     /// process the first time a user scrolled back to an evicted page.
+    /// Fast scrolling binds placeholder rows faster than the store answers.
+    /// A request dropped while another is in flight leaves those rows blank
+    /// permanently, because a bound row is never re-bound on its own.
+    #[test]
+    fn a_page_requested_while_busy_is_remembered() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-pending-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create test dir");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open disposable library store");
+        let pager = Rc::new(SiblingPager {
+            library,
+            children: gio::ListStore::new::<BoxedAnyObject>(),
+            root_path: "/music".to_string(),
+            parent_relative_path: None,
+            loaded: Cell::new(0),
+            next_page: Cell::new(0),
+            has_more: Cell::new(true),
+            in_flight: Cell::new(true),
+            loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
+            focus_page: Cell::new(0),
+            pending_pages: RefCell::new(std::collections::BTreeSet::new()),
+            children_requested: Rc::new(Cell::new(true)),
+        });
+
+        TabsInner::load_sibling_page(Rc::clone(&pager), 5);
+
+        assert!(
+            pager.pending_pages.borrow().contains(&5),
+            "a page requested while busy was dropped, so its rows stay blank"
+        );
+    }
+
     #[test]
     fn placeholder_rows_do_not_break_the_retention_walk() {
         let store = gio::ListStore::new::<BoxedAnyObject>();
@@ -2563,6 +2628,7 @@ mod tests {
             in_flight: Cell::new(false),
             loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
             focus_page: Cell::new(0),
+            pending_pages: RefCell::new(std::collections::BTreeSet::new()),
             children_requested: Rc::new(Cell::new(true)),
         });
 
