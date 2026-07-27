@@ -89,6 +89,11 @@ struct SiblingPager {
     next_page: Cell<usize>,
     has_more: Cell<bool>,
     in_flight: Cell<bool>,
+    /// Pages currently materialized in `children`. Everything else in the
+    /// store is a placeholder.
+    loaded_pages: RefCell<std::collections::BTreeSet<usize>>,
+    /// Page most recently brought into view; eviction keeps its neighbours.
+    focus_page: Cell<usize>,
     /// The owning node's "children already requested" latch. Held so a failed
     /// page load can clear it; see [`SiblingPager::mark_reloadable`].
     children_requested: Rc<Cell<bool>>,
@@ -147,6 +152,38 @@ fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
         }
     }
     total
+}
+
+/// Stands in for a row whose page has been evicted. Deliberately tiny: a full
+/// `FolderNode` placeholder measured 598 bytes because of its four `Rc` boxes
+/// and its GObject wrapper, which defeats the point of evicting the page.
+/// Binding one re-reads its page from SQLite.
+struct PlaceholderRow {
+    sibling_index: usize,
+    pager: std::rc::Weak<SiblingPager>,
+}
+
+/// How many pages of one folder's children stay materialized. Rows outside
+/// this window become placeholders and are re-read from SQLite when scrolled
+/// back to, which costs one bounded page query (~12 ms).
+const MAX_LOADED_SIBLING_PAGES: usize = 6;
+
+/// Chooses the page to drop when a folder holds more than `max_pages`.
+/// Farthest from the page being looked at wins, so scrolling back a little
+/// never discards what is about to come into view. Ties drop the lower page:
+/// scrolling forward is the common case, so prefer keeping what is ahead.
+fn page_to_evict(
+    loaded_pages: &std::collections::BTreeSet<usize>,
+    keep_near: usize,
+    max_pages: usize,
+) -> Option<usize> {
+    if loaded_pages.len() <= max_pages {
+        return None;
+    }
+    loaded_pages
+        .iter()
+        .copied()
+        .max_by_key(|page| (page.abs_diff(keep_near), std::cmp::Reverse(*page)))
 }
 
 fn should_release_collapsed_children(total_retained_rows: usize, cap: usize) -> bool {
@@ -551,7 +588,26 @@ impl TabsSidebar {
             let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                 return;
             };
-            let node = boxed.borrow::<FolderNode>();
+            if let Ok(placeholder) = boxed.try_borrow::<PlaceholderRow>() {
+                // This row's page was evicted. Blank it and read the page back;
+                // the reload splices real rows over these positions in place,
+                // so the row count and the scroll position never change.
+                label.set_label("");
+                disclosure.set_opacity(0.0);
+                disclosure.set_sensitive(false);
+                expander.set_list_row(Some(&row));
+                let page = placeholder.sibling_index / crate::library_store::PAGE_SIZE;
+                let pager = placeholder.pager.upgrade();
+                drop(placeholder);
+                if let Some(pager) = pager {
+                    pager.focus_page.set(page);
+                    TabsInner::load_sibling_page(pager, page);
+                }
+                return;
+            }
+            let Ok(node) = boxed.try_borrow::<FolderNode>() else {
+                return;
+            };
             label.set_label(&node.name.borrow());
             let expanded = Rc::clone(&node.expanded);
             let restore_expanded = expanded.get();
@@ -576,6 +632,11 @@ impl TabsSidebar {
             let children_requested = Rc::clone(&node.children_requested);
             drop(node);
             if let Some(pager) = sibling_pager.as_ref().and_then(std::rc::Weak::upgrade) {
+                // Track where the viewport is so eviction drops the pages
+                // farthest from it rather than whatever loaded first.
+                pager
+                    .focus_page
+                    .set(sibling_index / crate::library_store::PAGE_SIZE);
                 if should_request_next_sibling_page(
                     sibling_index,
                     pager.loaded.get(),
@@ -1046,21 +1107,30 @@ impl TabsInner {
             next_page: Cell::new(0),
             has_more: Cell::new(true),
             in_flight: Cell::new(false),
+            loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
+            focus_page: Cell::new(0),
             children_requested,
         });
         pager_slot.replace(Some(Rc::clone(&pager)));
         Self::load_folder_children_async(pager);
     }
 
-    /// Loads exactly one page of a folder's children into `pager`'s shared
-    /// list store. Call again (via [`should_request_next_sibling_page`]) to
-    /// fetch subsequent pages as the user scrolls near the loaded end.
+    /// Loads the next page onto the end of a folder's children.
     fn load_folder_children_async(pager: Rc<SiblingPager>) {
-        if pager.in_flight.replace(true) {
-            log::warn!("Sidebar sibling page request already in flight; ignoring");
+        let page = pager.next_page.get();
+        Self::load_sibling_page(pager, page);
+    }
+
+    /// Loads one page and installs it at that page's fixed position. Growth
+    /// appends; re-reading an evicted page splices over its placeholders so
+    /// the row count never changes and the scroll position stays put.
+    fn load_sibling_page(pager: Rc<SiblingPager>, page: usize) {
+        if pager.loaded_pages.borrow().contains(&page) {
             return;
         }
-        let page = pager.next_page.get();
+        if pager.in_flight.replace(true) {
+            return;
+        }
         let response = pager.library.folder_children(
             &pager.root_path,
             pager.parent_relative_path.as_deref(),
@@ -1072,24 +1142,44 @@ impl TabsInner {
             move || response.recv(),
             move |result| match result {
                 Ok(result) => {
-                    let start_index = pager_for_result.loaded.get();
+                    let start_index = page * crate::library_store::PAGE_SIZE;
                     let count = result.folders.len();
-                    for (offset, folder) in result.folders.into_iter().enumerate() {
-                        pager_for_result.children.append(&BoxedAnyObject::new(
-                            FolderNode::folder_at(
+                    let nodes: Vec<BoxedAnyObject> = result
+                        .folders
+                        .into_iter()
+                        .enumerate()
+                        .map(|(offset, folder)| {
+                            BoxedAnyObject::new(FolderNode::folder_at(
                                 pager_for_result.root_path.clone(),
                                 folder,
                                 start_index + offset,
                                 Some(Rc::downgrade(&pager_for_result)),
-                            ),
-                        ));
+                            ))
+                        })
+                        .collect();
+                    let existing = pager_for_result.children.n_items() as usize;
+                    if start_index >= existing {
+                        for node in &nodes {
+                            pager_for_result.children.append(node);
+                        }
+                        pager_for_result.loaded.set(start_index + count);
+                        pager_for_result.next_page.set(page.saturating_add(1));
+                        pager_for_result
+                            .has_more
+                            .set(count == crate::library_store::PAGE_SIZE);
+                    } else {
+                        // Replace this page's placeholders in place: equal
+                        // counts keep every index and the scroll position.
+                        let replaced = count.min(existing - start_index);
+                        pager_for_result.children.splice(
+                            start_index as u32,
+                            replaced as u32,
+                            &nodes[..replaced],
+                        );
                     }
-                    pager_for_result.loaded.set(start_index + count);
-                    pager_for_result.next_page.set(page.saturating_add(1));
-                    pager_for_result
-                        .has_more
-                        .set(count == crate::library_store::PAGE_SIZE);
+                    pager_for_result.loaded_pages.borrow_mut().insert(page);
                     pager_for_result.in_flight.set(false);
+                    Self::evict_distant_sibling_pages(&pager_for_result);
                 }
                 Err(error) => {
                     log::warn!("Failed to load sound folder children: {error}");
@@ -1104,6 +1194,38 @@ impl TabsInner {
             log::warn!("Failed to dispatch sound folder child load: {error}");
             pager.in_flight.set(false);
             pager.mark_reloadable();
+        }
+    }
+
+    /// Turns pages outside the loaded window back into placeholders. The store
+    /// keeps the same number of rows, so GTK sees a content change and not a
+    /// structural one.
+    fn evict_distant_sibling_pages(pager: &Rc<SiblingPager>) {
+        loop {
+            let victim = {
+                let pages = pager.loaded_pages.borrow();
+                page_to_evict(&pages, pager.focus_page.get(), MAX_LOADED_SIBLING_PAGES)
+            };
+            let Some(page) = victim else {
+                return;
+            };
+            let start = page * crate::library_store::PAGE_SIZE;
+            let total = pager.children.n_items() as usize;
+            if start >= total {
+                pager.loaded_pages.borrow_mut().remove(&page);
+                continue;
+            }
+            let count = crate::library_store::PAGE_SIZE.min(total - start);
+            let blanks: Vec<BoxedAnyObject> = (0..count)
+                .map(|offset| {
+                    BoxedAnyObject::new(PlaceholderRow {
+                        sibling_index: start + offset,
+                        pager: Rc::downgrade(pager),
+                    })
+                })
+                .collect();
+            pager.children.splice(start as u32, count as u32, &blanks);
+            pager.loaded_pages.borrow_mut().remove(&page);
         }
     }
 
@@ -2051,6 +2173,8 @@ mod tests {
             next_page: Cell::new(0),
             has_more: Cell::new(false),
             in_flight: Cell::new(false),
+            loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
+            focus_page: Cell::new(0),
             children_requested: Rc::clone(&children_requested),
         });
 
@@ -2061,6 +2185,30 @@ mod tests {
             "a failed load left the request latch set, so the create-closure \
              will never start a new pager and the folder stays empty"
         );
+    }
+
+    #[test]
+    fn keeps_every_page_while_within_the_window() {
+        let pages: std::collections::BTreeSet<usize> = (0..4).collect();
+        assert_eq!(page_to_evict(&pages, 2, 6), None);
+    }
+
+    #[test]
+    fn drops_the_page_farthest_from_the_viewport() {
+        let pages: std::collections::BTreeSet<usize> = [0, 5, 6, 7, 8, 9, 10].into_iter().collect();
+        assert_eq!(page_to_evict(&pages, 7, 6), Some(0));
+    }
+
+    #[test]
+    fn drops_pages_ahead_when_they_are_farther_than_pages_behind() {
+        let pages: std::collections::BTreeSet<usize> = [0, 1, 2, 3, 4, 5, 20].into_iter().collect();
+        assert_eq!(page_to_evict(&pages, 1, 6), Some(20));
+    }
+
+    #[test]
+    fn breaks_distance_ties_by_dropping_the_lower_page() {
+        let pages: std::collections::BTreeSet<usize> = [3, 4, 5, 6, 7].into_iter().collect();
+        assert_eq!(page_to_evict(&pages, 5, 4), Some(3));
     }
 
     #[test]
@@ -2250,6 +2398,104 @@ mod tests {
         );
     }
 
+    /// Scrolling a wide folder must not keep every row it passed: pages beyond
+    /// the window become placeholders, and the row count never changes so the
+    /// scroll position is stable.
+    #[test]
+    #[ignore = "drives the shared GTK main context: needs a display and must \
+                run alone, e.g. cargo test --lib -- --ignored --exact \
+                ui::tabs_sidebar::tests::scrolling_a_wide_folder_bounds_loaded_pages"]
+    #[allow(clippy::print_stderr)]
+    fn scrolling_a_wide_folder_bounds_loaded_pages() {
+        if gtk4::init().is_err() {
+            eprintln!("skipped: no display available");
+            return;
+        }
+        const PAGE: usize = crate::library_store::PAGE_SIZE;
+        const FOLDERS: usize = PAGE * (MAX_LOADED_SIBLING_PAGES + 4);
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-window-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create test dir");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open disposable library store");
+        let root_path = temp_dir.to_string_lossy().into_owned();
+        library
+            .apply_batch(crate::library_store::LibraryBatch::Roots(vec![
+                crate::library_store::RootRecord {
+                    path: root_path.clone(),
+                    position: 0,
+                },
+            ]))
+            .recv()
+            .expect("insert root");
+        for chunk_start in (0..FOLDERS).step_by(500) {
+            let chunk = (chunk_start..(chunk_start + 500).min(FOLDERS))
+                .map(|index| crate::library_store::FolderRecord {
+                    root_path: root_path.clone(),
+                    relative_path: format!("Album {index:05}"),
+                    parent_relative_path: None,
+                    name: format!("Album {index:05}"),
+                    position: index,
+                })
+                .collect();
+            library
+                .apply_batch(crate::library_store::LibraryBatch::Folders(chunk))
+                .recv()
+                .expect("insert folders");
+        }
+
+        let node = FolderNode::root(root_path.clone());
+        let children = node.children();
+        let pager_slot = Rc::clone(&node.children_pager);
+        let requested = Rc::clone(&node.children_requested);
+        TabsInner::start_children_pager(
+            library,
+            children.clone(),
+            root_path,
+            None,
+            &pager_slot,
+            requested,
+        );
+        assert!(
+            pump_until(|| children.n_items() as usize == PAGE),
+            "first page never arrived"
+        );
+        let pager = pager_slot.borrow().clone().expect("pager installed");
+
+        // Walk forward the way binding rows does, requesting each next page.
+        for page in 1..(FOLDERS / PAGE) {
+            pager.focus_page.set(page);
+            TabsInner::load_folder_children_async(Rc::clone(&pager));
+            assert!(
+                pump_until(|| !pager.in_flight.get()),
+                "page {page} never settled"
+            );
+        }
+
+        assert_eq!(
+            children.n_items() as usize,
+            FOLDERS,
+            "row count must stay at the full folder count so indices are stable"
+        );
+        assert!(
+            pager.loaded_pages.borrow().len() <= MAX_LOADED_SIBLING_PAGES,
+            "loaded pages {} exceeded the window of {}",
+            pager.loaded_pages.borrow().len(),
+            MAX_LOADED_SIBLING_PAGES
+        );
+
+        // Page 0 is farthest from the end: it must have become placeholders.
+        let first = children
+            .item(0)
+            .and_downcast::<BoxedAnyObject>()
+            .expect("row 0");
+        assert!(
+            first.try_borrow::<PlaceholderRow>().is_ok(),
+            "row 0 should have been evicted to a placeholder"
+        );
+    }
+
     #[test]
     fn restores_persisted_expansion_only_on_first_bind() {
         assert!(should_restore_expansion(true, false));
@@ -2288,6 +2534,8 @@ mod tests {
             next_page: Cell::new(1),
             has_more: Cell::new(false),
             in_flight: Cell::new(false),
+            loaded_pages: RefCell::new(std::collections::BTreeSet::new()),
+            focus_page: Cell::new(0),
             children_requested: Rc::new(Cell::new(true)),
         });
 
