@@ -308,13 +308,21 @@ fn test_set_auto_gain_schedules_loudness_backfill_for_missing_sounds() {
         audio_path.to_string_lossy().to_string(),
     ));
     let config = Arc::new(Mutex::new(config));
+    let library = create_test_library(&config);
+    // Schema-8 keeps no sounds in the config: the library is the only
+    // authority. Enabling auto-gain must still find work to do.
+    config.lock().sounds.clear();
     let player = create_test_audio_player();
     let coords = commands::LoudnessCoordinators::new();
 
-    let result = commands::set_auto_gain(true, Arc::clone(&config), player, &coords);
+    let result = commands::set_auto_gain(true, Arc::clone(&config), library, player, &coords);
 
     assert!(result.is_ok());
-    assert_eq!(coords.backfill.start_count(), 1);
+    assert_eq!(
+        coords.backfill.start_count(),
+        1,
+        "enabling auto-gain must schedule backfill from the library store"
+    );
     wait_for_coords_idle(&coords);
 
     cleanup_test_audio_path(&audio_path);

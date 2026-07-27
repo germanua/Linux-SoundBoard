@@ -255,8 +255,32 @@ pub(super) fn install_volume_editor(adjustment: &Adjustment, label: &Label, entr
     }
 }
 
+/// A track name is resolved asynchronously, so the user may have started
+/// something else before it arrives. Only label the track it was asked about.
+pub(super) fn should_apply_resolved_track_name(
+    current_play_id: Option<&str>,
+    resolved_for: &str,
+) -> bool {
+    current_play_id == Some(resolved_for)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn applies_a_resolved_track_name_to_the_track_it_was_asked_about() {
+        assert!(should_apply_resolved_track_name(Some("play-1"), "play-1"));
+    }
+
+    #[test]
+    fn discards_a_resolved_track_name_after_the_user_started_something_else() {
+        assert!(!should_apply_resolved_track_name(Some("play-2"), "play-1"));
+    }
+
+    #[test]
+    fn discards_a_resolved_track_name_when_playback_already_stopped() {
+        assert!(!should_apply_resolved_track_name(None, "play-1"));
+    }
+
     use super::*;
     use gtk4::gdk;
 

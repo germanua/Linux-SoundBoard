@@ -419,11 +419,13 @@ fn test_validate_hotkey_available_reports_duplicate_before_save() {
 #[test]
 fn test_set_auto_gain_enabled() {
     let config = create_test_config_state();
+    let library = create_test_library(&config);
     let player = create_test_audio_player();
 
     let result = commands::set_auto_gain(
         true,
         config.clone(),
+        library,
         player,
         &commands::LoudnessCoordinators::new(),
     );
@@ -436,11 +438,13 @@ fn test_set_auto_gain_enabled() {
 #[test]
 fn test_set_auto_gain_disabled() {
     let config = create_test_config_state();
+    let library = create_test_library(&config);
     let player = create_test_audio_player();
 
     let result = commands::set_auto_gain(
         false,
         config.clone(),
+        library,
         player,
         &commands::LoudnessCoordinators::new(),
     );

@@ -550,6 +550,7 @@ where
 pub fn set_auto_gain(
     enabled: bool,
     config: Arc<Mutex<Config>>,
+    library: crate::library_store::LibraryStore,
     player: Arc<AudioPlayer>,
     coords: &LoudnessCoordinators,
 ) -> Result<(), CommandError> {
@@ -562,7 +563,16 @@ pub fn set_auto_gain(
         |player| player.set_auto_gain_enabled(enabled),
     )?;
     if enabled {
-        trigger_missing_loudness_analysis(Arc::clone(&config), false, None, coords).map(|_| ())?;
+        // The library store is the only sound authority under schema 8; the
+        // config-backed trigger sees an empty library and never schedules.
+        trigger_missing_loudness_analysis_with_store(
+            Arc::clone(&config),
+            library,
+            false,
+            None,
+            coords,
+        )
+        .map(|_| ())?;
     }
     Ok(())
 }

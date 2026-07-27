@@ -133,6 +133,7 @@ pub(super) fn build_playback_groups(
                 let _ = commands::set_auto_gain(
                     row.is_active(),
                     Arc::clone(&state3.config),
+                    state3.library.clone(),
                     Arc::clone(&state3.player),
                     &state3.loudness_coordinators,
                 );
