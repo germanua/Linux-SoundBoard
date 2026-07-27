@@ -184,6 +184,75 @@ impl PagedSoundModel {
         let Some(library) = imp.library.borrow().clone() else {
             return;
         };
+
+        // Reserve page 0 up front so the first-page fetch below and the
+        // count fetch that follows race freely: whichever arrives first
+        // publishes readable rows without waiting on the other, and the
+        // reservation makes the scroll-triggered path (`load_position`,
+        // `ensure_page`) treat page 0 as already in flight instead of
+        // issuing a second, redundant request for it.
+        let placeholders = (0..PAGE_SIZE as u32)
+            .map(|offset| self.placeholder(generation, offset))
+            .collect();
+        imp.pages.borrow_mut().insert(0, placeholders);
+        self.set_page_payload(0, 0);
+        self.touch_page(0);
+        imp.pending.borrow_mut().insert(0);
+
+        let page_response = library.page_coalesced(
+            imp.search_owner.get(),
+            generation,
+            scope.clone(),
+            &search,
+            0,
+        );
+        let weak_page = self.downgrade();
+        if let Err(error) = crate::commands::dispatch_async_result(
+            "load_first_lazy_sound_page",
+            move || page_response.recv(),
+            move |result| {
+                let Some(model) = weak_page.upgrade() else {
+                    return;
+                };
+                if model.imp().generation.get() != generation {
+                    return;
+                }
+                match result {
+                    Ok(result) => {
+                        if model.imp().total.get() == 0 {
+                            model.imp().pending.borrow_mut().remove(&0);
+                            let provisional_total =
+                                u32::try_from(result.sounds.len()).unwrap_or(u32::MAX);
+                            if model.publish_initial_page(
+                                generation,
+                                provisional_total,
+                                result.sounds,
+                            ) && provisional_total > PAGE_SIZE as u32
+                            {
+                                model.prefetch_adjacent(0);
+                            }
+                        } else {
+                            let loaded = model.install_page(0, generation, result.sounds);
+                            model.drain_deferred_pages();
+                            if loaded && model.imp().deferred_visible.borrow().is_empty() {
+                                model.prefetch_adjacent(0);
+                            }
+                        }
+                    }
+                    Err(LibraryError::QueueFull) => {
+                        model.evict_page(0);
+                    }
+                    Err(error) => {
+                        model.evict_page(0);
+                        log::warn!("Failed to load first lazy sound page: {error}");
+                    }
+                }
+            },
+        ) {
+            self.evict_page(0);
+            log::warn!("Failed to dispatch first lazy sound page: {error}");
+        }
+
         let response = library.count_coalesced(imp.search_owner.get(), generation, scope, &search);
         let weak = self.downgrade();
         if let Err(error) = crate::commands::dispatch_async_result(
@@ -199,7 +268,6 @@ impl PagedSoundModel {
                 match result {
                     Ok(total) => {
                         let total = u32::try_from(total).unwrap_or(u32::MAX);
-                        model.imp().total.set(total);
                         if let Some(started) = model.imp().reload_started.get() {
                             log::debug!(
                                 "Library latency: generation={} phase=count elapsed_us={} rows={}",
@@ -208,9 +276,7 @@ impl PagedSoundModel {
                                 total
                             );
                         }
-                        if total > 0 {
-                            model.items_changed(0, 0, total);
-                        }
+                        model.apply_exact_total(generation, total);
                     }
                     Err(error) => {
                         log::warn!("Failed to count lazy sound rows: {error}");
@@ -524,7 +590,52 @@ impl PagedSoundModel {
         true
     }
 
+    /// Reconciles a provisional total (published from a first page that
+    /// arrived before the exact count) with the exact count once it arrives.
+    ///
+    /// `total` is always exactly what has been announced to GTK: every site
+    /// that changes it emits the matching `items_changed` in the same
+    /// statement sequence. So the delta against the previous total is
+    /// precisely what GTK still needs to hear. Rows already announced are
+    /// left untouched; only the size delta is announced, which is what keeps
+    /// the already-published first page's row identities intact. When
+    /// nothing has been published yet (previous total 0) this degenerates to
+    /// the plain count-only announcement.
+    fn apply_exact_total(&self, generation: u64, exact_total: u32) -> bool {
+        let imp = self.imp();
+        if imp.generation.get() != generation {
+            return false;
+        }
+        let previous = imp.total.replace(exact_total);
+        match exact_total.cmp(&previous) {
+            std::cmp::Ordering::Greater => {
+                self.items_changed(previous, 0, exact_total - previous);
+            }
+            std::cmp::Ordering::Less => {
+                self.items_changed(exact_total, previous - exact_total, 0);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+        true
+    }
+
     fn notify_replacements(&self, generation: u64, start: u32, len: u32, record_first_rows: bool) {
+        // Never report a change for a row past `total`, i.e. past what GTK
+        // has been told exists. `reload` reserves page 0 with a full
+        // PAGE_SIZE of placeholders *before* any count is known, so that
+        // page's vector — unlike every page `ensure_page` builds, which is
+        // sized `min(total - start, PAGE_SIZE)` — is not bounded by `total`.
+        // If the exact count lands first and is smaller than the page query
+        // subsequently returns (the two are independent queries; the store
+        // can gain rows between them), `install_page`/`fail_page` would
+        // otherwise announce replacements for rows beyond `total` and trip
+        // the same list-item-manager assertion. Clamping here covers every
+        // caller at once; the two that already clamp to `total` themselves
+        // are unaffected.
+        let len = len.min(self.imp().total.get().saturating_sub(start));
+        if len == 0 {
+            return;
+        }
         let weak = self.downgrade();
         let mut chunks: VecDeque<_> = replacement_chunks(start, len).into();
         glib::idle_add_local(move || {
@@ -963,6 +1074,34 @@ mod tests {
         );
     }
 
+    // Note for anyone adding a test here that needs a scheduled idle
+    // callback (`notify_replacements`, and anything else routed through
+    // `glib::idle_add_local`) to actually *run*: do not pump
+    // `glib::MainContext::default()` from a test in this module.
+    //
+    // `glib::idle_add_local`/`idle_add_local_once` always attach to the
+    // global default `MainContext` — verified in the vendored glib 0.20.12
+    // source, where the context is hardcoded rather than taken from the
+    // thread-default, so a test cannot redirect them to a private, isolated
+    // context. Several tests in this module (e.g.
+    // `count_arriving_first_then_page_installs_without_duplicating_rows`,
+    // via `install_page` -> `notify_replacements`) schedule real, non-Send
+    // idle closures on that shared context and never drain them, and each
+    // closure is bound to whichever OS thread the Rust test harness ran its
+    // test on. The first test that pumps the default context can therefore
+    // be handed a leftover closure belonging to a different thread and
+    // aborts the entire test binary with
+    // `thread_guard.rs:54: Value accessed from different thread than where
+    // it was created` (SIGABRT — a non-unwinding panic, so it cannot be
+    // caught).
+    //
+    // This was reproduced directly: such a test passed in isolation and
+    // reliably killed the full `cargo test` run when executed after its
+    // siblings. It is a structural property of this test binary (one shared
+    // global `MainContext`, one OS thread per test), not something an
+    // individual test can work around. Assert on state that is set
+    // synchronously instead.
+
     #[test]
     fn externally_referenced_row_keeps_identity_after_page_eviction() {
         use gio::prelude::*;
@@ -1054,6 +1193,112 @@ mod tests {
             model.sound_by_id("sound").and_then(|sound| sound.hotkey),
             Some("Ctrl+1".to_string())
         );
+    }
+
+    #[test]
+    fn provisional_first_page_is_readable_before_exact_count_arrives() {
+        use gio::prelude::*;
+        use glib::BoxedAnyObject;
+
+        let model = PagedSoundModel::new_for_test(0);
+        let mut sound = crate::config::Sound::new(
+            "Provisional".to_string(),
+            "/music/provisional.flac".to_string(),
+        );
+        sound.id = "provisional".to_string();
+
+        assert!(model.publish_initial_page(model.generation(), 1, vec![sound]));
+        assert_eq!(model.n_items(), 1);
+        assert_eq!(
+            model
+                .item(0)
+                .expect("provisional row")
+                .downcast::<BoxedAnyObject>()
+                .expect("boxed row")
+                .borrow::<SoundRowData>()
+                .name,
+            "Provisional"
+        );
+    }
+
+    #[test]
+    fn exact_total_growing_after_provisional_page_preserves_row_identity() {
+        use gio::prelude::*;
+
+        let model = PagedSoundModel::new_for_test(0);
+        let mut sound = crate::config::Sound::new(
+            "Provisional".to_string(),
+            "/music/provisional.flac".to_string(),
+        );
+        sound.id = "provisional".to_string();
+        let generation = model.generation();
+
+        assert!(model.publish_initial_page(generation, 1, vec![sound]));
+        let before = model.item(0).expect("row before reconciliation");
+
+        assert!(model.apply_exact_total(generation, 5));
+        assert_eq!(model.n_items(), 5);
+
+        let after = model.item(0).expect("row after reconciliation");
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn exact_total_shrinking_after_provisional_page_shrinks_item_count() {
+        let model = PagedSoundModel::new_for_test(0);
+        let mut sound = crate::config::Sound::new(
+            "Provisional".to_string(),
+            "/music/provisional.flac".to_string(),
+        );
+        sound.id = "provisional".to_string();
+        let generation = model.generation();
+
+        assert!(model.publish_initial_page(generation, 5, vec![sound]));
+        assert!(model.apply_exact_total(generation, 1));
+        assert_eq!(model.n_items(), 1);
+    }
+
+    #[test]
+    fn exact_total_matching_provisional_total_sends_no_notification() {
+        let model = PagedSoundModel::new_for_test(0);
+        let mut sound = crate::config::Sound::new(
+            "Provisional".to_string(),
+            "/music/provisional.flac".to_string(),
+        );
+        sound.id = "provisional".to_string();
+        let generation = model.generation();
+
+        assert!(model.publish_initial_page(generation, 1, vec![sound]));
+        assert!(model.apply_exact_total(generation, 1));
+        assert_eq!(model.n_items(), 1);
+    }
+
+    #[test]
+    fn count_arriving_first_then_page_installs_without_duplicating_rows() {
+        let model = PagedSoundModel::new_for_test(0);
+        let generation = model.generation();
+
+        assert!(model.apply_exact_total(generation, 1));
+        assert_eq!(model.n_items(), 1);
+
+        model.install_test_page(0);
+        let mut sound =
+            crate::config::Sound::new("Loaded".to_string(), "/music/loaded.flac".to_string());
+        sound.id = "loaded".to_string();
+        assert!(model.install_page(0, generation, vec![sound]));
+
+        assert_eq!(model.n_items(), 1);
+        assert_eq!(model.cached_object_count(), 1);
+    }
+
+    #[test]
+    fn stale_generation_cannot_apply_exact_total() {
+        let model = PagedSoundModel::new_for_test(0);
+        let first_generation = model.generation();
+        model.reset_for_test(3);
+
+        assert!(!model.apply_exact_total(first_generation, 3));
+        assert_eq!(model.n_items(), 3);
     }
 
     #[test]
