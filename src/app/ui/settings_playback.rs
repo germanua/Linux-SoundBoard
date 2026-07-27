@@ -335,12 +335,10 @@ pub(super) fn build_playback_groups(
             let state2 = Arc::clone(&state);
             let spinner2 = spinner.downgrade();
             analyze_btn.connect_clicked(move |btn| {
-                let in_flight = commands::get_loudness_status_summary_with_store(
-                    state2.library.clone(),
-                    &state2.loudness_coordinators,
-                )
-                .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
-                .unwrap_or(false);
+                // The in-flight flags live on the coordinators; querying the
+                // library for them blocked this click behind the busy worker.
+                let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
+                    || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
                     commands::cancel_loudness_analysis();
                     crate::ui_event_bridge::post_loudness_status_refresh();
@@ -387,12 +385,10 @@ pub(super) fn build_playback_groups(
             let state2 = Arc::clone(&state);
             let refine_spinner2 = refine_spinner.downgrade();
             refine_btn.connect_clicked(move |btn| {
-                let in_flight = commands::get_loudness_status_summary_with_store(
-                    state2.library.clone(),
-                    &state2.loudness_coordinators,
-                )
-                .map(|summary| summary.in_flight_backfill || summary.in_flight_refinement)
-                .unwrap_or(false);
+                // The in-flight flags live on the coordinators; querying the
+                // library for them blocked this click behind the busy worker.
+                let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
+                    || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
                     commands::cancel_loudness_analysis();
                     crate::ui_event_bridge::post_loudness_status_refresh();
@@ -438,6 +434,12 @@ pub(super) fn build_playback_groups(
         let refine_btn_weak = refine_btn.downgrade();
         let refine_spinner_weak = refine_spinner.downgrade();
 
+        // One status query at a time, off the GTK thread. Refinement posts a
+        // refresh every few sounds, and reading the summary synchronously here
+        // blocked the main loop against the busy SQLite worker -- which froze
+        // the frame clock and stopped the spinners animating.
+        let status_query_in_flight = Rc::new(std::cell::Cell::new(false));
+        let status_query_pending = Rc::new(std::cell::Cell::new(false));
         let refresh_loudness_status: Rc<dyn Fn()> = Rc::new({
             let state2 = Arc::clone(&state2);
             let status_row_weak = status_row_weak.clone();
@@ -446,46 +448,81 @@ pub(super) fn build_playback_groups(
             let analyze_spinner_weak = analyze_spinner_weak.clone();
             let refine_btn_weak = refine_btn_weak.clone();
             let refine_spinner_weak = refine_spinner_weak.clone();
+            let in_flight = Rc::clone(&status_query_in_flight);
+            let pending = Rc::clone(&status_query_pending);
             move || {
-                let Some(status_row) = status_row_weak.upgrade() else {
+                if in_flight.replace(true) {
+                    pending.set(true);
                     return;
-                };
-                let Some(status_badge) = status_badge_weak.upgrade() else {
-                    return;
-                };
-                let Some(analyze_btn) = analyze_btn_weak.upgrade() else {
-                    return;
-                };
-                let Some(analyze_spinner) = analyze_spinner_weak.upgrade() else {
-                    return;
-                };
-                let Some(refine_btn) = refine_btn_weak.upgrade() else {
-                    return;
-                };
-                let Some(refine_spinner) = refine_spinner_weak.upgrade() else {
-                    return;
-                };
+                }
 
-                let summary = match commands::get_loudness_status_summary_with_store(
-                    state2.library.clone(),
-                    &state2.loudness_coordinators,
+                let coords = state2.loudness_coordinators.clone();
+                let response = state2.library.loudness_stats();
+                let status_row_weak = status_row_weak.clone();
+                let status_badge_weak = status_badge_weak.clone();
+                let analyze_btn_weak = analyze_btn_weak.clone();
+                let analyze_spinner_weak = analyze_spinner_weak.clone();
+                let refine_btn_weak = refine_btn_weak.clone();
+                let refine_spinner_weak = refine_spinner_weak.clone();
+                let in_flight_for_result = Rc::clone(&in_flight);
+                let pending = Rc::clone(&pending);
+                if let Err(error) = commands::dispatch_async_result(
+                    "load_loudness_status_summary",
+                    move || response.recv(),
+                    move |result| {
+                        in_flight_for_result.set(false);
+                        match result {
+                            Ok(stats) => {
+                                let summary = commands::LoudnessStatusSummary {
+                                    total_sounds: stats.total,
+                                    pending_count: stats.pending,
+                                    estimated_count: stats.estimated,
+                                    refined_count: stats.refined,
+                                    unavailable_count: stats.unavailable,
+                                    missing_loudness_count: stats.missing,
+                                    in_flight_backfill: coords.backfill.is_in_flight(),
+                                    in_flight_refinement: coords.refinement.is_in_flight(),
+                                };
+                                if let (
+                                    Some(status_row),
+                                    Some(status_badge),
+                                    Some(analyze_btn),
+                                    Some(analyze_spinner),
+                                    Some(refine_btn),
+                                    Some(refine_spinner),
+                                ) = (
+                                    status_row_weak.upgrade(),
+                                    status_badge_weak.upgrade(),
+                                    analyze_btn_weak.upgrade(),
+                                    analyze_spinner_weak.upgrade(),
+                                    refine_btn_weak.upgrade(),
+                                    refine_spinner_weak.upgrade(),
+                                ) {
+                                    apply_loudness_status_summary(
+                                        &summary,
+                                        &status_row,
+                                        &status_badge,
+                                        &analyze_btn,
+                                        &analyze_spinner,
+                                        &refine_btn,
+                                        &refine_spinner,
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                log::warn!("Failed to read loudness status summary: {error}")
+                            }
+                        }
+                        // A refresh that arrived mid-query is answered once,
+                        // not queued per request.
+                        if pending.replace(false) {
+                            crate::ui_event_bridge::post_loudness_status_refresh();
+                        }
+                    },
                 ) {
-                    Ok(summary) => summary,
-                    Err(e) => {
-                        log::warn!("Failed to read loudness status summary: {e}");
-                        return;
-                    }
-                };
-
-                apply_loudness_status_summary(
-                    &summary,
-                    &status_row,
-                    &status_badge,
-                    &analyze_btn,
-                    &analyze_spinner,
-                    &refine_btn,
-                    &refine_spinner,
-                );
+                    in_flight.set(false);
+                    log::warn!("Failed to dispatch loudness status summary: {error}");
+                }
             }
         });
 
