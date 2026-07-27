@@ -641,6 +641,16 @@ pub(super) fn maybe_trigger_estimated_loudness_refinement_with_store(
     })
 }
 
+/// The settings view reads its loudness counts from the store, so a run that
+/// only writes when a whole page finishes looks frozen. Flush partial progress
+/// every few sounds: refinement analysis dominates the cost, so the extra
+/// transactions are not measurable against it.
+const LOUDNESS_PROGRESS_FLUSH_ROWS: usize = 8;
+
+fn should_flush_loudness_progress(pending: usize, page_finished: bool) -> bool {
+    pending > 0 && (page_finished || pending >= LOUDNESS_PROGRESS_FLUSH_ROWS)
+}
+
 fn refine_estimated_loudness_with_store(
     library: LibraryStore,
     force: bool,
@@ -696,13 +706,22 @@ fn refine_estimated_loudness_with_store(
                 }
             };
             updates.push(refinement_update(outcome, &sound));
-            crate::ui_event_bridge::post_loudness_status_refresh();
+            // Publish partial progress so the settings view, which reads its
+            // counts from the store, moves while the run is still going.
+            if should_flush_loudness_progress(updates.len(), false) {
+                library
+                    .apply_loudness_updates(std::mem::take(&mut updates))
+                    .recv()
+                    .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+                crate::ui_event_bridge::post_loudness_status_refresh();
+            }
         }
-        if !updates.is_empty() {
+        if should_flush_loudness_progress(updates.len(), true) {
             library
-                .apply_loudness_updates(updates)
+                .apply_loudness_updates(std::mem::take(&mut updates))
                 .recv()
                 .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+            crate::ui_event_bridge::post_loudness_status_refresh();
         }
         if !force || loudness::is_loudness_analysis_cancelled() {
             break;
@@ -806,6 +825,29 @@ pub fn analyze_all_loudness_with_store(
 
 #[cfg(test)]
 mod progress_tests {
+    #[test]
+    fn flushes_loudness_progress_once_the_pending_batch_fills() {
+        assert!(should_flush_loudness_progress(
+            LOUDNESS_PROGRESS_FLUSH_ROWS,
+            false
+        ));
+    }
+
+    #[test]
+    fn holds_loudness_progress_while_the_batch_is_small() {
+        assert!(!should_flush_loudness_progress(1, false));
+    }
+
+    #[test]
+    fn always_flushes_what_is_left_when_a_page_finishes() {
+        assert!(should_flush_loudness_progress(1, true));
+    }
+
+    #[test]
+    fn never_flushes_an_empty_batch() {
+        assert!(!should_flush_loudness_progress(0, true));
+    }
+
     use super::*;
 
     #[test]
