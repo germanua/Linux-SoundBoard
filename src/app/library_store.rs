@@ -3527,13 +3527,18 @@ fn load_folder_children(
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
     let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = usize_to_i64(offset)?;
+    // `child.root_id = root.id` is redundant for correctness (children always
+    // share their parent's root) but required for performance: it lets the
+    // EXISTS use `folders_parent_order`, whose leading column is `root_id`.
+    // Without it SQLite scans every folder in the active generation once per
+    // output row.
     let fields = "folder.id, folder.relative_path,
                   COALESCE(pref.display_name, folder.name), COALESCE(pref.expanded, 0),
                   EXISTS(SELECT 1 FROM folders AS child
                          JOIN folder_presence AS child_presence
                            ON child_presence.folder_id = child.id
                           AND child_presence.generation = root.active_generation
-                         WHERE child.parent_id = folder.id)";
+                         WHERE child.root_id = root.id AND child.parent_id = folder.id)";
     let (total, folders) = if let Some(parent_relative_path) = parent_relative_path {
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM folders AS folder

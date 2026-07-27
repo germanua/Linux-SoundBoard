@@ -1679,3 +1679,165 @@ fn benchmark_156k_bounded_store() {
             .expect("copy retained benchmark database");
     }
 }
+
+#[test]
+#[ignore = "production-scale GUI folder-tree fixture generator"]
+#[allow(clippy::print_stderr)]
+fn benchmark_20k_wide_folder_tree_store() {
+    const FOLDER_COUNT: usize = 20_000;
+    const ROOT_PATH: &str = "/home/flinux/Музика";
+
+    let temp = TestDir::new();
+    let db_path = temp.path().join("library.sqlite3");
+
+    {
+        let store = LibraryStore::open(db_path.clone()).expect("open store");
+        wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+            path: ROOT_PATH.to_string(),
+            position: 0,
+        }])));
+
+        let started = std::time::Instant::now();
+
+        // 20,000 sibling album folders directly under the root: the wide
+        // fan-out the sidebar folder tree has never had to page through.
+        let folders_per_batch = 500;
+        for batch_start in (0..FOLDER_COUNT).step_by(folders_per_batch) {
+            let batch_end = (batch_start + folders_per_batch).min(FOLDER_COUNT);
+            let rows = (batch_start..batch_end)
+                .map(|index| {
+                    let name = format!("Album {index:05}");
+                    FolderRecord {
+                        root_path: ROOT_PATH.to_string(),
+                        relative_path: name.clone(),
+                        parent_relative_path: None,
+                        name,
+                        position: index,
+                    }
+                })
+                .collect();
+            wait(store.apply_batch(LibraryBatch::Folders(rows)));
+        }
+
+        // One deep nested chain under the first album for depth coverage.
+        wait(store.apply_batch(LibraryBatch::Folders(vec![
+            FolderRecord {
+                root_path: ROOT_PATH.to_string(),
+                relative_path: "Album 00000/Disc 1".to_string(),
+                parent_relative_path: Some("Album 00000".to_string()),
+                name: "Disc 1".to_string(),
+                position: 0,
+            },
+            FolderRecord {
+                root_path: ROOT_PATH.to_string(),
+                relative_path: "Album 00000/Disc 1/Bonus".to_string(),
+                parent_relative_path: Some("Album 00000/Disc 1".to_string()),
+                name: "Bonus".to_string(),
+                position: 0,
+            },
+        ])));
+
+        // One sound per top-level folder, so every folder is audio-bearing
+        // and therefore actually appears in the folder tree.
+        let sounds_per_batch = MAX_BATCH_ROWS / 2;
+        for batch_start in (0..FOLDER_COUNT).step_by(sounds_per_batch) {
+            let batch_end = (batch_start + sounds_per_batch).min(FOLDER_COUNT);
+            let rows = (batch_start..batch_end)
+                .map(|index| {
+                    let folder = format!("Album {index:05}");
+                    let relative_path = format!("{folder}/Track.flac");
+                    SoundRecord {
+                        sound: sound(
+                            &format!("sound-{index:05}"),
+                            &format!("Track {index:05}"),
+                            &format!("{ROOT_PATH}/{relative_path}"),
+                        ),
+                        general_position: index,
+                        locations: vec![SoundLocationRecord {
+                            root_path: ROOT_PATH.to_string(),
+                            folder_relative_path: Some(folder),
+                            relative_path,
+                        }],
+                    }
+                })
+                .collect();
+            wait(store.apply_batch(LibraryBatch::Sounds(rows)));
+        }
+
+        // A sound in the deepest node of the nested chain.
+        wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+            sound: sound(
+                "sound-bonus",
+                "Bonus Track",
+                &format!("{ROOT_PATH}/Album 00000/Disc 1/Bonus/Bonus.flac"),
+            ),
+            general_position: FOLDER_COUNT,
+            locations: vec![SoundLocationRecord {
+                root_path: ROOT_PATH.to_string(),
+                folder_relative_path: Some("Album 00000/Disc 1/Bonus".to_string()),
+                relative_path: "Album 00000/Disc 1/Bonus/Bonus.flac".to_string(),
+            }],
+        }])));
+
+        let import_elapsed = started.elapsed();
+
+        let top = wait(store.folder_children(ROOT_PATH, None, 0));
+        assert_eq!(top.total, FOLDER_COUNT);
+        assert_eq!(top.folders.len(), PAGE_SIZE);
+
+        let last_page = (FOLDER_COUNT - 1) / PAGE_SIZE;
+        let last_page_rows = FOLDER_COUNT - last_page * PAGE_SIZE;
+        let tail = wait(store.folder_children(ROOT_PATH, None, last_page));
+        assert_eq!(tail.folders.len(), last_page_rows);
+
+        // Deep-page regression gate: the `has_children` EXISTS subquery must
+        // stay on the `folders_parent_order` index. If it loses that index,
+        // SQLite scans every folder in the active generation per output row
+        // and this page goes from ~12ms to multiple seconds.
+        let deep_page_started = std::time::Instant::now();
+        let deep_page = wait(store.folder_children(ROOT_PATH, None, last_page));
+        let deep_page_elapsed = deep_page_started.elapsed();
+        assert_eq!(deep_page.folders.len(), last_page_rows);
+        assert!(
+            deep_page_elapsed < std::time::Duration::from_millis(2000),
+            "deep folder page took {deep_page_elapsed:?}; the EXISTS subquery has likely lost its index (see folders_parent_order)"
+        );
+
+        let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
+        let pss_kib = smaps
+            .lines()
+            .find_map(|line| line.strip_prefix("Pss:"))
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("parse PSS");
+        eprintln!(
+            "20k wide folder tree gate: import={import_elapsed:?}, deep_page={deep_page_elapsed:?}, pss={pss_kib} KiB"
+        );
+        assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
+    }
+    // `store` (and its worker thread's SQLite connection) is dropped here,
+    // releasing the file so a plain connection can stamp the two meta rows
+    // production startup requires. This mirrors what
+    // legacy_migration::initialize_empty_library does for a fresh database;
+    // that helper itself can't be reused because it refuses to open a path
+    // that already exists.
+    {
+        let connection = rusqlite::Connection::open(&db_path).expect("open raw connection");
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES('library_id', ?1)",
+                [uuid::Uuid::new_v4().to_string()],
+            )
+            .expect("stamp library_id");
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES('database_ready', '1')",
+                [],
+            )
+            .expect("stamp database_ready");
+    }
+
+    if let Some(output) = std::env::var_os("LSB_BENCHMARK_LIBRARY_OUT") {
+        std::fs::copy(&db_path, output).expect("copy retained benchmark database");
+    }
+}

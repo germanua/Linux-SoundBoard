@@ -38,10 +38,75 @@ struct FolderNode {
     children: gio::ListStore,
     children_requested: Rc<Cell<bool>>,
     expanded: Rc<Cell<bool>>,
-    expanded_handler_connected: Cell<bool>,
+    /// The row-expansion handler is attached to a `TreeListRow`, and those
+    /// rows are created/destroyed as the virtualized tree scrolls -- a node
+    /// gets rebound onto a different row each time. Storing `(row, handler)`
+    /// here (mirroring `disclosure_handlers` below) lets `connect_unbind`
+    /// disconnect the handler from the exact row it was attached to, so a
+    /// stale handler never keeps mutating this node's state after rebind.
+    expanded_handler: RefCell<Option<(TreeListRow, glib::SignalHandlerId)>>,
+    /// Whether persisted expansion has already been applied to a
+    /// `TreeListRow` for this node. Set on the node's first bind and never
+    /// cleared. Writing `TreeListRow::set_expanded` from `connect_bind` on
+    /// every bind (not just the first) re-expands rows during GTK's own
+    /// collapse propagation: `gtk_tree_list_row_set_expanded()` emits
+    /// `items-changed` on the tree model before it emits the `expanded`
+    /// property notification, so a collapse click can cause GTK to rebind
+    /// this node onto a visible row before `connect_expanded_notify` has run
+    /// and updated `expanded` -- at which point re-applying the still-stale
+    /// `true` value would immediately re-expand the row the user just
+    /// collapsed.
+    expansion_restored: Cell<bool>,
     disclosure_handlers: RefCell<Option<(Image, GestureClick, TreeListRow, glib::SignalHandlerId)>>,
     context_gesture: RefCell<Option<GestureClick>>,
     drop_target: RefCell<Option<gtk4::DropTargetAsync>>,
+    /// Position of this node among its loaded siblings; used to decide when
+    /// scrolling has gotten close enough to the end to prefetch more.
+    sibling_index: usize,
+    /// Pager that loads more of this node's siblings on demand. `None` for
+    /// roots (there are few roots, so they are still loaded eagerly). Weak
+    /// because the pager's `children` store holds this node: a strong ref
+    /// here would create pager -> children -> node -> pager cycle that never
+    /// frees. The only strong owner is the parent node's `children_pager`.
+    sibling_pager: Option<std::rc::Weak<SiblingPager>>,
+    /// Pager that loads this node's own children, one page at a time.
+    /// Created lazily on first expand and cleared on collapse.
+    children_pager: Rc<RefCell<Option<Rc<SiblingPager>>>>,
+}
+
+/// Shared, single-page-at-a-time loader for one folder's children. All
+/// siblings under the same parent hold an `Rc` to the same pager so any of
+/// them can trigger the next page as the user scrolls near the loaded end.
+struct SiblingPager {
+    library: crate::library_store::LibraryStore,
+    children: gio::ListStore,
+    root_path: String,
+    parent_relative_path: Option<String>,
+    loaded: Cell<usize>,
+    next_page: Cell<usize>,
+    has_more: Cell<bool>,
+    in_flight: Cell<bool>,
+}
+
+/// How many unrendered rows are allowed to remain between the last bound
+/// sibling and the end of what's loaded before the next page is requested.
+const SIBLING_PREFETCH_MARGIN: usize = 32;
+
+fn should_request_next_sibling_page(
+    child_index: usize,
+    loaded: usize,
+    more: bool,
+    in_flight: bool,
+) -> bool {
+    more && !in_flight && child_index + SIBLING_PREFETCH_MARGIN >= loaded
+}
+
+/// Persisted expansion is applied to a `TreeListRow` only on a node's first
+/// bind. Re-applying it on later binds re-expands rows during GTK's collapse
+/// propagation, because `items-changed` is emitted before the `expanded`
+/// notification.
+fn should_restore_expansion(node_expanded: bool, already_restored: bool) -> bool {
+    node_expanded && !already_restored
 }
 
 fn update_disclosure_icon(image: &Image, expanded: bool) {
@@ -75,14 +140,33 @@ impl FolderNode {
             children: gio::ListStore::new::<BoxedAnyObject>(),
             children_requested: Rc::new(Cell::new(false)),
             expanded: Rc::new(Cell::new(true)),
-            expanded_handler_connected: Cell::new(false),
+            expanded_handler: RefCell::new(None),
+            expansion_restored: Cell::new(false),
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
             drop_target: RefCell::new(None),
+            sibling_index: 0,
+            sibling_pager: None,
+            children_pager: Rc::new(RefCell::new(None)),
         }
     }
 
+    /// Only used by the retained-row memory measurement test; production
+    /// code always goes through [`FolderNode::folder_at`] so it can carry
+    /// sibling paging context.
+    #[cfg(test)]
     fn folder(root_path: String, item: crate::library_store::FolderItem) -> Self {
+        Self::folder_at(root_path, item, 0, None)
+    }
+
+    /// Like [`FolderNode::folder`], but also records this node's position
+    /// among its siblings and the shared pager that can load more of them.
+    fn folder_at(
+        root_path: String,
+        item: crate::library_store::FolderItem,
+        sibling_index: usize,
+        sibling_pager: Option<std::rc::Weak<SiblingPager>>,
+    ) -> Self {
         Self {
             root_path,
             relative_path: Some(item.relative_path),
@@ -91,10 +175,14 @@ impl FolderNode {
             children: gio::ListStore::new::<BoxedAnyObject>(),
             children_requested: Rc::new(Cell::new(false)),
             expanded: Rc::new(Cell::new(item.expanded)),
-            expanded_handler_connected: Cell::new(false),
+            expanded_handler: RefCell::new(None),
+            expansion_restored: Cell::new(false),
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
             drop_target: RefCell::new(None),
+            sibling_index,
+            sibling_pager,
+            children_pager: Rc::new(RefCell::new(None)),
         }
     }
 }
@@ -254,7 +342,7 @@ pub struct TabsSidebar {
 }
 
 struct TabsInner {
-    scroll: ScrolledWindow,
+    root: GtkBox,
     list_box: ListBox,
     folder_roots: gio::ListStore,
     folder_generation: Rc<Cell<u64>>,
@@ -299,7 +387,13 @@ impl TabsSidebar {
             .selection_mode(SelectionMode::Single)
             .css_classes(vec!["navigation-sidebar"])
             .build();
-        vbox.append(&list_box);
+        let tabs_scroll = ScrolledWindow::builder()
+            .child(&list_box)
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(320)
+            .build();
+        vbox.append(&tabs_scroll);
 
         let folders_title = Label::builder()
             .label("FOLDERS")
@@ -323,12 +417,12 @@ impl TabsSidebar {
                 return None;
             }
             if !node.children_requested.replace(true) {
-                TabsInner::load_folder_children_async(
+                TabsInner::start_children_pager(
                     library_for_children.clone(),
                     node.children.clone(),
                     node.root_path.clone(),
                     node.relative_path.clone(),
-                    0,
+                    &node.children_pager,
                 );
             }
             Some(node.children.clone().upcast())
@@ -390,11 +484,11 @@ impl TabsSidebar {
             label.set_label(&node.name.borrow());
             let expanded = Rc::clone(&node.expanded);
             let restore_expanded = expanded.get();
-            let connect_expanded = !node.expanded_handler_connected.replace(true);
+            let restore_expansion =
+                should_restore_expansion(restore_expanded, node.expansion_restored.replace(true));
+            let connect_expanded = node.expanded_handler.borrow().is_none();
             let root_path = node.root_path.clone();
             let relative_path = node.relative_path.clone();
-            let children = node.children.clone();
-            let children_requested = Rc::clone(&node.children_requested);
             let name = Rc::clone(&node.name);
             let has_children = node.has_children;
             let install_disclosure = has_children && node.disclosure_handlers.borrow().is_none();
@@ -404,9 +498,23 @@ impl TabsSidebar {
                 node.relative_path.is_some() && node.drop_target.borrow().is_none();
             let context_relative_path = node.relative_path.clone();
             let drop_relative_path = node.relative_path.clone();
+            let sibling_index = node.sibling_index;
+            let sibling_pager = node.sibling_pager.clone();
             drop(node);
+            if let Some(pager) = sibling_pager.as_ref().and_then(std::rc::Weak::upgrade) {
+                if should_request_next_sibling_page(
+                    sibling_index,
+                    pager.loaded.get(),
+                    pager.has_more.get(),
+                    pager.in_flight.get(),
+                ) {
+                    TabsInner::load_folder_children_async(pager);
+                }
+            }
             expander.set_list_row(Some(&row));
-            row.set_expanded(restore_expanded);
+            if restore_expansion {
+                row.set_expanded(true);
+            }
             disclosure.set_opacity(if has_children { 1.0 } else { 0.0 });
             disclosure.set_sensitive(has_children);
             if has_children {
@@ -439,13 +547,13 @@ impl TabsSidebar {
             if connect_expanded {
                 let library = library_for_expansion.clone();
                 let expanded_root_path = root_path.clone();
-                row.connect_expanded_notify(move |row| {
+                let expansion_handler = row.connect_expanded_notify(move |row| {
                     let is_expanded = row.is_expanded();
                     expanded.set(is_expanded);
-                    if !is_expanded {
-                        children.remove_all();
-                        children_requested.set(false);
-                    }
+                    // Collapsed children stay loaded. GtkTreeListModel hides them, and
+                    // retaining them (~600 bytes per row, see
+                    // `measure_retained_folder_child_row_cost`) is far cheaper than
+                    // re-querying a page on every re-expand.
                     let Some(relative_path) = relative_path.as_deref() else {
                         return;
                     };
@@ -466,6 +574,10 @@ impl TabsSidebar {
                         log::warn!("Failed to dispatch folder expansion save: {error}");
                     }
                 });
+                boxed
+                    .borrow::<FolderNode>()
+                    .expanded_handler
+                    .replace(Some((row.clone(), expansion_handler)));
             }
             if install_context_menu {
                 let gesture = GestureClick::new();
@@ -621,15 +733,19 @@ impl TabsSidebar {
             let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                 return;
             };
-            let (disclosure_handlers, gesture, drop_target) = {
+            let (disclosure_handlers, expanded_handler, gesture, drop_target) = {
                 let node = boxed.borrow::<FolderNode>();
                 let disclosure_handlers = node.disclosure_handlers.borrow_mut().take();
+                let expanded_handler = node.expanded_handler.borrow_mut().take();
                 let gesture = node.context_gesture.borrow_mut().take();
                 let drop_target = node.drop_target.borrow_mut().take();
-                (disclosure_handlers, gesture, drop_target)
+                (disclosure_handlers, expanded_handler, gesture, drop_target)
             };
             if let Some((image, click_gesture, row, expansion_handler)) = disclosure_handlers {
                 image.remove_controller(&click_gesture);
+                row.disconnect(expansion_handler);
+            }
+            if let Some((row, expansion_handler)) = expanded_handler {
                 row.disconnect(expansion_handler);
             }
             if let Some(gesture) = gesture {
@@ -642,16 +758,16 @@ impl TabsSidebar {
         let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
         folder_view.add_css_class("navigation-sidebar");
         folder_view.add_css_class("folder-tree");
-        vbox.append(&folder_view);
 
-        let scroll = ScrolledWindow::builder()
-            .child(&vbox)
+        let folders_scroll = ScrolledWindow::builder()
+            .child(&folder_view)
             .vexpand(true)
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .build();
+        vbox.append(&folders_scroll);
 
         let inner = Arc::new(TabsInner {
-            scroll,
+            root: vbox,
             list_box: list_box.clone(),
             folder_roots,
             folder_generation,
@@ -687,8 +803,10 @@ impl TabsSidebar {
                 };
                 let node = boxed.borrow::<FolderNode>();
                 let Some(relative_path) = node.relative_path.clone() else {
-                    drop(node);
-                    row.set_expanded(!row.is_expanded());
+                    // Root rows are not a selectable scope. Do not toggle expansion here:
+                    // the click that selects this row has already run the disclosure
+                    // gesture's toggle, so toggling again flips the row straight back and
+                    // discards the children the collapse branch just released.
                     return;
                 };
                 let root_path = node.root_path.clone();
@@ -750,7 +868,7 @@ impl TabsSidebar {
     }
 
     pub fn widget(&self) -> &Widget {
-        self.inner.scroll.upcast_ref()
+        self.inner.root.upcast_ref()
     }
 
     pub fn connect_tab_selected<F: Fn(SidebarSelection) + 'static>(&self, f: F) {
@@ -818,42 +936,79 @@ impl TabsInner {
         }
     }
 
-    fn load_folder_children_async(
+    /// Creates a fresh [`SiblingPager`] for a folder node's children, stores
+    /// it in `pager_slot`, and kicks off loading page 0. Called once, from
+    /// the `TreeListModel` create-closure, the first time a node's children
+    /// are requested.
+    fn start_children_pager(
         library: crate::library_store::LibraryStore,
-        model: gio::ListStore,
+        children: gio::ListStore,
         root_path: String,
-        parent_relative_path: Option<String>,
-        page: usize,
+        relative_path: Option<String>,
+        pager_slot: &Rc<RefCell<Option<Rc<SiblingPager>>>>,
     ) {
-        let response = library.folder_children(&root_path, parent_relative_path.as_deref(), page);
+        let pager = Rc::new(SiblingPager {
+            library,
+            children,
+            root_path,
+            parent_relative_path: relative_path,
+            loaded: Cell::new(0),
+            next_page: Cell::new(0),
+            has_more: Cell::new(true),
+            in_flight: Cell::new(false),
+        });
+        pager_slot.replace(Some(Rc::clone(&pager)));
+        Self::load_folder_children_async(pager);
+    }
+
+    /// Loads exactly one page of a folder's children into `pager`'s shared
+    /// list store. Call again (via [`should_request_next_sibling_page`]) to
+    /// fetch subsequent pages as the user scrolls near the loaded end.
+    fn load_folder_children_async(pager: Rc<SiblingPager>) {
+        if pager.in_flight.replace(true) {
+            log::warn!("Sidebar sibling page request already in flight; ignoring");
+            return;
+        }
+        let page = pager.next_page.get();
+        let response = pager.library.folder_children(
+            &pager.root_path,
+            pager.parent_relative_path.as_deref(),
+            page,
+        );
+        let pager_for_result = Rc::clone(&pager);
         if let Err(error) = commands::dispatch_async_result(
             "load_sidebar_folder_children",
             move || response.recv(),
             move |result| match result {
                 Ok(result) => {
+                    let start_index = pager_for_result.loaded.get();
                     let count = result.folders.len();
-                    for folder in result.folders {
-                        model.append(&BoxedAnyObject::new(FolderNode::folder(
-                            root_path.clone(),
-                            folder,
-                        )));
+                    for (offset, folder) in result.folders.into_iter().enumerate() {
+                        pager_for_result.children.append(&BoxedAnyObject::new(
+                            FolderNode::folder_at(
+                                pager_for_result.root_path.clone(),
+                                folder,
+                                start_index + offset,
+                                Some(Rc::downgrade(&pager_for_result)),
+                            ),
+                        ));
                     }
-                    if count == crate::library_store::PAGE_SIZE {
-                        Self::load_folder_children_async(
-                            library.clone(),
-                            model.clone(),
-                            root_path.clone(),
-                            parent_relative_path.clone(),
-                            page.saturating_add(1),
-                        );
-                    }
+                    pager_for_result.loaded.set(start_index + count);
+                    pager_for_result.next_page.set(page.saturating_add(1));
+                    pager_for_result
+                        .has_more
+                        .set(count == crate::library_store::PAGE_SIZE);
+                    pager_for_result.in_flight.set(false);
                 }
                 Err(error) => {
                     log::warn!("Failed to load sound folder children: {error}");
+                    pager_for_result.has_more.set(false);
+                    pager_for_result.in_flight.set(false);
                 }
             },
         ) {
             log::warn!("Failed to dispatch sound folder child load: {error}");
+            pager.in_flight.set(false);
         }
     }
 
@@ -1675,5 +1830,155 @@ mod tests {
             payload.source_folder.as_ref().expect("source folder")
         )
         .is_empty());
+    }
+
+    #[test]
+    fn should_request_next_sibling_page_triggers_near_loaded_end() {
+        // 32 rows from the end of what's loaded, more pages exist, nothing in flight.
+        assert!(should_request_next_sibling_page(224, 256, true, false));
+    }
+
+    #[test]
+    fn should_request_next_sibling_page_does_not_trigger_far_from_end() {
+        assert!(!should_request_next_sibling_page(0, 256, true, false));
+    }
+
+    #[test]
+    fn should_request_next_sibling_page_never_triggers_without_more_pages() {
+        assert!(!should_request_next_sibling_page(255, 256, false, false));
+    }
+
+    #[test]
+    fn should_request_next_sibling_page_never_triggers_while_in_flight() {
+        assert!(!should_request_next_sibling_page(224, 256, true, true));
+    }
+
+    #[test]
+    fn should_request_next_sibling_page_boundary_exactly_at_margin() {
+        // margin is 32: index 224 is exactly loaded(256) - margin, should trigger;
+        // index 223 is one short of the margin, should not.
+        assert!(should_request_next_sibling_page(224, 256, true, false));
+        assert!(!should_request_next_sibling_page(223, 256, true, false));
+    }
+
+    #[test]
+    fn restores_persisted_expansion_only_on_first_bind() {
+        assert!(should_restore_expansion(true, false));
+        assert!(!should_restore_expansion(true, true));
+    }
+
+    #[test]
+    fn never_forces_collapse_from_bind() {
+        assert!(!should_restore_expansion(false, false));
+        assert!(!should_restore_expansion(false, true));
+    }
+
+    #[test]
+    fn expansion_latch_only_restores_on_first_bind_of_a_node() {
+        let already_restored = Cell::new(false);
+        let first_bind = should_restore_expansion(true, already_restored.replace(true));
+        let second_bind = should_restore_expansion(true, already_restored.replace(true));
+        assert_eq!([first_bind, second_bind], [true, false]);
+    }
+
+    #[test]
+    fn sibling_pager_is_released_when_parent_drops() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-tabs-sidebar-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create test dir");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open disposable library store");
+
+        let children = gio::ListStore::new::<BoxedAnyObject>();
+        let pager = Rc::new(SiblingPager {
+            library,
+            children: children.clone(),
+            root_path: "/music".to_string(),
+            parent_relative_path: None,
+            loaded: Cell::new(3),
+            next_page: Cell::new(1),
+            has_more: Cell::new(false),
+            in_flight: Cell::new(false),
+        });
+
+        for index in 0..3usize {
+            let item = crate::library_store::FolderItem {
+                id: index as i64,
+                relative_path: format!("albums/Album {index:05}"),
+                name: format!("Album {index:05}"),
+                expanded: false,
+                has_children: false,
+            };
+            children.append(&BoxedAnyObject::new(FolderNode::folder_at(
+                "/music".to_string(),
+                item,
+                index,
+                Some(Rc::downgrade(&pager)),
+            )));
+        }
+
+        let weak = Rc::downgrade(&pager);
+        drop(pager);
+        drop(children);
+
+        assert!(
+            weak.upgrade().is_none(),
+            "SiblingPager was still reachable after all outside owners dropped it; \
+             pager<->children<->FolderNode reference cycle is leaking"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    fn read_pss_kib() -> usize {
+        let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
+        smaps
+            .lines()
+            .find_map(|line| line.strip_prefix("Pss:"))
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| value.parse::<usize>().ok())
+            .expect("parse PSS")
+    }
+
+    #[test]
+    #[ignore = "manual measurement: needs a display, run under xvfb-run"]
+    #[allow(clippy::print_stdout)]
+    fn measure_retained_folder_child_row_cost() {
+        if gtk4::init().is_err() {
+            println!(
+                "retained folder child row cost: skipped, gtk4::init() failed (no display available)"
+            );
+            return;
+        }
+
+        let root_path = "/home/flinux/Музика".to_string();
+
+        for count in [1_000usize, 10_000, 50_000] {
+            let before_kib = read_pss_kib();
+
+            let store = gio::ListStore::new::<BoxedAnyObject>();
+            for index in 0..count {
+                let item = crate::library_store::FolderItem {
+                    id: index as i64,
+                    relative_path: format!("albums/Album {index:05}"),
+                    name: format!("Album {index:05}"),
+                    expanded: false,
+                    has_children: false,
+                };
+                store.append(&BoxedAnyObject::new(FolderNode::folder(
+                    root_path.clone(),
+                    item,
+                )));
+            }
+
+            let after_kib = read_pss_kib();
+            drop(store);
+
+            let delta_kib = after_kib.saturating_sub(before_kib);
+            let bytes_per_row = (delta_kib * 1024) as f64 / count as f64;
+            println!(
+                "retained folder child row cost: n={count} delta_kib={delta_kib} bytes_per_row={bytes_per_row:.1}"
+            );
+        }
     }
 }
