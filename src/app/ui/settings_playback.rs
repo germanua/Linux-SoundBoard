@@ -2,11 +2,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
-use gtk4::Image;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use super::icons;
 use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{AutoGainApplyTo, AutoGainMode};
@@ -35,26 +33,12 @@ fn loudness_activity_text(status: &commands::LoudnessStatusSummary) -> &'static 
     }
 }
 
-/// Drives the busy indicator with the theme's own `spin` animation rather than
-/// `GtkSpinner`, whose animation comes from the system Adwaita stylesheet and
-/// does not run here. The transport refresh button already uses this class.
-fn set_spinner_running(spinner: &Image, running: bool) {
-    if running {
-        spinner.add_css_class("spinning");
-    } else {
-        spinner.remove_css_class("spinning");
-    }
-    spinner.set_visible(running);
-}
-
 fn apply_loudness_status_summary(
     summary: &commands::LoudnessStatusSummary,
     status_row: &adw::ActionRow,
     status_badge: &gtk4::Label,
     analyze_btn: &gtk4::Button,
-    analyze_spinner: &Image,
     refine_btn: &gtk4::Button,
-    refine_spinner: &Image,
 ) {
     status_row.set_subtitle(&format_loudness_status_subtitle(summary));
     status_badge.set_text(loudness_activity_text(summary));
@@ -76,7 +60,6 @@ fn apply_loudness_status_summary(
         analyze_btn.set_label("Analyze");
         analyze_btn.set_sensitive(summary.pending_count > 0);
     }
-    set_spinner_running(analyze_spinner, summary.in_flight_backfill);
 
     if summary.in_flight_backfill || summary.in_flight_refinement {
         refine_btn.set_label("Stop");
@@ -85,7 +68,6 @@ fn apply_loudness_status_summary(
         refine_btn.set_label("Refine");
         refine_btn.set_sensitive(summary.estimated_count > 0);
     }
-    set_spinner_running(refine_spinner, summary.in_flight_refinement);
 }
 
 pub(super) fn build_playback_groups(
@@ -332,14 +314,9 @@ pub(super) fn build_playback_groups(
             .css_classes(vec!["settings-primary-btn"])
             .valign(gtk4::Align::Center)
             .build();
-        let spinner = icons::image(icons::REFRESH);
-        spinner.set_valign(gtk4::Align::Center);
-        spinner.set_visible(false);
-        analyze_row.add_suffix(&spinner);
         analyze_row.add_suffix(&analyze_btn);
         {
             let state2 = Arc::clone(&state);
-            let spinner2 = spinner.downgrade();
             analyze_btn.connect_clicked(move |btn| {
                 // The in-flight flags live on the coordinators; querying the
                 // library for them blocked this click behind the busy worker.
@@ -360,9 +337,6 @@ pub(super) fn build_playback_groups(
                     &state2.loudness_coordinators,
                 ) {
                     Ok(commands::MissingLoudnessAnalysisTrigger::Started) => {
-                        if let Some(spinner2) = spinner2.upgrade() {
-                            set_spinner_running(&spinner2, true);
-                        }
                         btn.set_sensitive(false);
                     }
                     Ok(_) => {}
@@ -381,14 +355,9 @@ pub(super) fn build_playback_groups(
             .css_classes(vec!["settings-primary-btn"])
             .valign(gtk4::Align::Center)
             .build();
-        let refine_spinner = icons::image(icons::REFRESH);
-        refine_spinner.set_valign(gtk4::Align::Center);
-        refine_spinner.set_visible(false);
-        refine_row.add_suffix(&refine_spinner);
         refine_row.add_suffix(&refine_btn);
         {
             let state2 = Arc::clone(&state);
-            let refine_spinner2 = refine_spinner.downgrade();
             refine_btn.connect_clicked(move |btn| {
                 // The in-flight flags live on the coordinators; querying the
                 // library for them blocked this click behind the busy worker.
@@ -406,9 +375,6 @@ pub(super) fn build_playback_groups(
                     &state2.loudness_coordinators,
                 ) {
                     Ok(commands::EstimatedLoudnessRefinementTrigger::Started) => {
-                        if let Some(refine_spinner2) = refine_spinner2.upgrade() {
-                            set_spinner_running(&refine_spinner2, true);
-                        }
                         btn.set_sensitive(false);
                     }
                     Ok(_) => {}
@@ -435,14 +401,11 @@ pub(super) fn build_playback_groups(
         let status_row_weak = status_row.downgrade();
         let status_badge_weak = status_badge.downgrade();
         let analyze_btn_weak = analyze_btn.downgrade();
-        let analyze_spinner_weak = spinner.downgrade();
         let refine_btn_weak = refine_btn.downgrade();
-        let refine_spinner_weak = refine_spinner.downgrade();
 
         // One status query at a time, off the GTK thread. Refinement posts a
         // refresh every few sounds, and reading the summary synchronously here
-        // blocked the main loop against the busy SQLite worker -- which froze
-        // the frame clock and stopped the spinners animating.
+        // blocked the main loop against the busy SQLite worker.
         let status_query_in_flight = Rc::new(std::cell::Cell::new(false));
         let status_query_pending = Rc::new(std::cell::Cell::new(false));
         let refresh_loudness_status: Rc<dyn Fn()> = Rc::new({
@@ -450,9 +413,7 @@ pub(super) fn build_playback_groups(
             let status_row_weak = status_row_weak.clone();
             let status_badge_weak = status_badge_weak.clone();
             let analyze_btn_weak = analyze_btn_weak.clone();
-            let analyze_spinner_weak = analyze_spinner_weak.clone();
             let refine_btn_weak = refine_btn_weak.clone();
-            let refine_spinner_weak = refine_spinner_weak.clone();
             let in_flight = Rc::clone(&status_query_in_flight);
             let pending = Rc::clone(&status_query_pending);
             move || {
@@ -466,9 +427,7 @@ pub(super) fn build_playback_groups(
                 let status_row_weak = status_row_weak.clone();
                 let status_badge_weak = status_badge_weak.clone();
                 let analyze_btn_weak = analyze_btn_weak.clone();
-                let analyze_spinner_weak = analyze_spinner_weak.clone();
                 let refine_btn_weak = refine_btn_weak.clone();
-                let refine_spinner_weak = refine_spinner_weak.clone();
                 let in_flight_for_result = Rc::clone(&in_flight);
                 let pending = Rc::clone(&pending);
                 if let Err(error) = commands::dispatch_async_result(
@@ -492,25 +451,19 @@ pub(super) fn build_playback_groups(
                                     Some(status_row),
                                     Some(status_badge),
                                     Some(analyze_btn),
-                                    Some(analyze_spinner),
                                     Some(refine_btn),
-                                    Some(refine_spinner),
                                 ) = (
                                     status_row_weak.upgrade(),
                                     status_badge_weak.upgrade(),
                                     analyze_btn_weak.upgrade(),
-                                    analyze_spinner_weak.upgrade(),
                                     refine_btn_weak.upgrade(),
-                                    refine_spinner_weak.upgrade(),
                                 ) {
                                     apply_loudness_status_summary(
                                         &summary,
                                         &status_row,
                                         &status_badge,
                                         &analyze_btn,
-                                        &analyze_spinner,
                                         &refine_btn,
-                                        &refine_spinner,
                                     );
                                 }
                             }
