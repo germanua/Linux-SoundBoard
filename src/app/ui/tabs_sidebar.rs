@@ -86,6 +86,19 @@ struct SiblingPager {
     next_page: Cell<usize>,
     has_more: Cell<bool>,
     in_flight: Cell<bool>,
+    /// The owning node's "children already requested" latch. Held so a failed
+    /// page load can clear it; see [`SiblingPager::mark_reloadable`].
+    children_requested: Rc<Cell<bool>>,
+}
+
+impl SiblingPager {
+    /// A failed page load must not poison the node. The `TreeListModel`
+    /// create-closure only starts a pager when the node's request latch is
+    /// clear, so leaving it set after a failure means the folder stays empty
+    /// for the rest of the session no matter how often it is expanded.
+    fn mark_reloadable(&self) {
+        self.children_requested.set(false);
+    }
 }
 
 /// How many unrendered rows are allowed to remain between the last bound
@@ -135,16 +148,13 @@ fn should_release_collapsed_children(total_retained_rows: usize, cap: usize) -> 
     total_retained_rows > cap
 }
 
-/// A node whose children were released by the cap still reports `has_children`
-/// but has no loaded rows and no pager. `GtkTreeListModel` caches the child
-/// model per row and never re-runs the create-closure, so expanding such a
-/// node must restart its pager explicitly or it renders empty.
-fn should_start_fresh_load_on_expand(
-    has_children: bool,
-    loaded_rows: usize,
-    has_pager: bool,
-) -> bool {
-    has_children && loaded_rows == 0 && !has_pager
+/// Collapsing a folder makes GTK emit `expanded` notifications for every
+/// loaded descendant row as it tears them down, even though those folders were
+/// never expanded and their state does not change. Acting on them once cost a
+/// database write and a full tree walk per row, which saturated the library
+/// worker queue and made the collapsing folder's own reload fail.
+fn should_handle_expansion_change(previous: bool, next: bool) -> bool {
+    previous != next
 }
 
 fn update_disclosure_icon(image: &Image, expanded: bool) {
@@ -461,6 +471,7 @@ impl TabsSidebar {
                     node.root_path.clone(),
                     node.relative_path.clone(),
                     &node.children_pager,
+                    Rc::clone(&node.children_requested),
                 );
             }
             Some(node.children.clone().upcast())
@@ -592,31 +603,21 @@ impl TabsSidebar {
                 let loaded_tree = folder_roots_for_expansion.clone();
                 let expansion_handler = row.connect_expanded_notify(move |row| {
                     let is_expanded = row.is_expanded();
-                    expanded.set(is_expanded);
+                    if !should_handle_expansion_change(expanded.replace(is_expanded), is_expanded) {
+                        return;
+                    }
                     // Collapsed children normally stay loaded: GtkTreeListModel hides
                     // them, and retaining them (~750 bytes per row, see
                     // `measure_retained_folder_child_row_cost`) is far cheaper than
                     // re-querying a page on every re-expand. Only once the loaded tree
-                    // exceeds MAX_RETAINED_CHILD_ROWS does collapsing give rows back.
-                    if is_expanded {
-                        if should_start_fresh_load_on_expand(
-                            has_children,
-                            children.n_items() as usize,
-                            children_pager.borrow().is_some(),
-                        ) {
-                            children_requested.set(true);
-                            TabsInner::start_children_pager(
-                                library.clone(),
-                                children.clone(),
-                                expanded_root_path.clone(),
-                                relative_path.clone(),
-                                &children_pager,
-                            );
-                        }
-                    } else if should_release_collapsed_children(
-                        count_loaded_child_rows(&loaded_tree),
-                        MAX_RETAINED_CHILD_ROWS,
-                    ) {
+                    // exceeds MAX_RETAINED_CHILD_ROWS does collapsing give rows back;
+                    // the create-closure reloads them the next time it is expanded.
+                    if !is_expanded
+                        && should_release_collapsed_children(
+                            count_loaded_child_rows(&loaded_tree),
+                            MAX_RETAINED_CHILD_ROWS,
+                        )
+                    {
                         children.remove_all();
                         children_pager.replace(None);
                         children_requested.set(false);
@@ -1013,6 +1014,7 @@ impl TabsInner {
         root_path: String,
         relative_path: Option<String>,
         pager_slot: &Rc<RefCell<Option<Rc<SiblingPager>>>>,
+        children_requested: Rc<Cell<bool>>,
     ) {
         let pager = Rc::new(SiblingPager {
             library,
@@ -1023,6 +1025,7 @@ impl TabsInner {
             next_page: Cell::new(0),
             has_more: Cell::new(true),
             in_flight: Cell::new(false),
+            children_requested,
         });
         pager_slot.replace(Some(Rc::clone(&pager)));
         Self::load_folder_children_async(pager);
@@ -1071,11 +1074,15 @@ impl TabsInner {
                     log::warn!("Failed to load sound folder children: {error}");
                     pager_for_result.has_more.set(false);
                     pager_for_result.in_flight.set(false);
+                    // Transient store failures (a saturated worker queue, for
+                    // one) must not leave this folder empty for good.
+                    pager_for_result.mark_reloadable();
                 }
             },
         ) {
             log::warn!("Failed to dispatch sound folder child load: {error}");
             pager.in_flight.set(false);
+            pager.mark_reloadable();
         }
     }
 
@@ -2003,6 +2010,53 @@ mod tests {
         assert_eq!(count_loaded_child_rows(&store), 0);
     }
 
+    /// A transient store failure (the live one was "library worker queue is
+    /// full") must not leave the folder permanently empty.
+    #[test]
+    fn a_failed_page_load_leaves_the_node_reloadable() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-reloadable-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create test dir");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open disposable library store");
+
+        let children_requested = Rc::new(Cell::new(true));
+        let pager = Rc::new(SiblingPager {
+            library,
+            children: gio::ListStore::new::<BoxedAnyObject>(),
+            root_path: "/music".to_string(),
+            parent_relative_path: Some("albums".to_string()),
+            loaded: Cell::new(0),
+            next_page: Cell::new(0),
+            has_more: Cell::new(false),
+            in_flight: Cell::new(false),
+            children_requested: Rc::clone(&children_requested),
+        });
+
+        pager.mark_reloadable();
+
+        assert!(
+            !children_requested.get(),
+            "a failed load left the request latch set, so the create-closure \
+             will never start a new pager and the folder stays empty"
+        );
+    }
+
+    #[test]
+    fn ignores_the_expansion_notification_storm_from_a_collapsing_parent() {
+        // GTK notifies every descendant row as it tears them down. Those
+        // folders were never expanded, so false -> false must do nothing:
+        // acting on them flooded the library queue and broke the real reload.
+        assert!(!should_handle_expansion_change(false, false));
+        assert!(!should_handle_expansion_change(true, true));
+    }
+
+    #[test]
+    fn handles_a_real_expansion_change() {
+        assert!(should_handle_expansion_change(true, false));
+        assert!(should_handle_expansion_change(false, true));
+    }
+
     #[test]
     fn collapsing_retains_children_while_under_the_row_cap() {
         // The common case: collapsing is free and re-expanding needs no query.
@@ -2020,25 +2074,114 @@ mod tests {
         assert!(should_release_collapsed_children(4_097, 4_096));
     }
 
-    #[test]
-    fn expanding_an_evicted_node_starts_a_fresh_load() {
-        // Released by the cap: has children, none loaded, pager cleared.
-        assert!(should_start_fresh_load_on_expand(true, 0, false));
+    /// Drives the real GTK main context until `done` holds or the budget runs
+    /// out, so async store replies land the way they do in the running app.
+    fn pump_until(done: impl Fn() -> bool) -> bool {
+        let context = glib::MainContext::default();
+        for _ in 0..2_000 {
+            while context.iteration(false) {}
+            if done() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        done()
     }
 
+    /// Reproduces the sidebar's real expansion wiring: a `TreeListModel` whose
+    /// create-closure starts a pager the first time a node's children are
+    /// requested, exactly as `TabsInner::build` does.
+    ///
+    /// This must stay the only test that calls `gtk4::init`. The harness runs
+    /// each test on its own thread even under `--test-threads=1`, and GTK
+    /// panics if a second thread initializes it.
     #[test]
-    fn expanding_a_retained_node_does_not_reload() {
-        assert!(!should_start_fresh_load_on_expand(true, 256, false));
-    }
+    #[ignore = "drives the shared GTK main context: needs a display and must \
+                run alone, e.g. cargo test --lib -- --ignored --exact \
+                ui::tabs_sidebar::tests::releasing_a_collapsed_node_reloads_its_children_on_reexpand"]
+    #[allow(clippy::print_stderr)]
+    fn releasing_a_collapsed_node_reloads_its_children_on_reexpand() {
+        if gtk4::init().is_err() {
+            eprintln!("skipped: no display available");
+            return;
+        }
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-reexpand-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create test dir");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open disposable library store");
+        let root_path = temp_dir.to_string_lossy().into_owned();
 
-    #[test]
-    fn expanding_never_starts_a_second_load_while_a_pager_exists() {
-        assert!(!should_start_fresh_load_on_expand(true, 0, true));
-    }
+        library
+            .apply_batch(crate::library_store::LibraryBatch::Roots(vec![
+                crate::library_store::RootRecord {
+                    path: root_path.clone(),
+                    position: 0,
+                },
+            ]))
+            .recv()
+            .expect("insert root");
+        let folders = (0..8usize)
+            .map(|index| crate::library_store::FolderRecord {
+                root_path: root_path.clone(),
+                relative_path: format!("Album {index}"),
+                parent_relative_path: None,
+                name: format!("Album {index}"),
+                position: index,
+            })
+            .collect();
+        library
+            .apply_batch(crate::library_store::LibraryBatch::Folders(folders))
+            .recv()
+            .expect("insert folders");
 
-    #[test]
-    fn expanding_a_leaf_never_loads() {
-        assert!(!should_start_fresh_load_on_expand(false, 0, false));
+        let roots = gio::ListStore::new::<BoxedAnyObject>();
+        let node = FolderNode::root(root_path.clone());
+        let children = node.children.clone();
+        let children_pager = Rc::clone(&node.children_pager);
+        let children_requested = Rc::clone(&node.children_requested);
+        roots.append(&BoxedAnyObject::new(node));
+
+        let library_for_children = library.clone();
+        let tree = TreeListModel::new(roots.clone(), false, false, move |item| {
+            let boxed = item.downcast_ref::<BoxedAnyObject>()?;
+            let node = boxed.borrow::<FolderNode>();
+            if !node.has_children {
+                return None;
+            }
+            if !node.children_requested.replace(true) {
+                TabsInner::start_children_pager(
+                    library_for_children.clone(),
+                    node.children.clone(),
+                    node.root_path.clone(),
+                    node.relative_path.clone(),
+                    &node.children_pager,
+                    Rc::clone(&node.children_requested),
+                );
+            }
+            Some(node.children.clone().upcast())
+        });
+
+        let row = tree.row(0).expect("root row");
+        row.set_expanded(true);
+        assert!(
+            pump_until(|| children.n_items() == 8),
+            "first expand never loaded children, got {}",
+            children.n_items()
+        );
+
+        // Exactly what the cap does when the loaded tree is over budget.
+        row.set_expanded(false);
+        children.remove_all();
+        children_pager.replace(None);
+        children_requested.set(false);
+
+        row.set_expanded(true);
+        assert!(
+            pump_until(|| children.n_items() == 8),
+            "re-expanding a released node did not reload its children, got {}",
+            children.n_items()
+        );
     }
 
     #[test]
@@ -2079,6 +2222,7 @@ mod tests {
             next_page: Cell::new(1),
             has_more: Cell::new(false),
             in_flight: Cell::new(false),
+            children_requested: Rc::new(Cell::new(true)),
         });
 
         for index in 0..3usize {
