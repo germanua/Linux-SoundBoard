@@ -16,12 +16,25 @@ const MAX_CACHED_PAGES: usize = 4;
 const MAX_CACHED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PENDING_PAGE_LOADS: usize = 2;
 const PAGE_LOAD_DEBOUNCE: Duration = Duration::from_millis(40);
+const ROW_CHANGE_CHUNK: u32 = 64;
 static NEXT_SEARCH_OWNER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PageLoadPriority {
     Visible,
     Prefetch,
+}
+
+fn replacement_chunks(start: u32, len: u32) -> Vec<(u32, u32)> {
+    (0..len)
+        .step_by(ROW_CHANGE_CHUNK as usize)
+        .map(|offset| {
+            (
+                start.saturating_add(offset),
+                len.saturating_sub(offset).min(ROW_CHANGE_CHUNK),
+            )
+        })
+        .collect()
 }
 
 fn row_payload_bytes(row: &SoundRowData) -> usize {
@@ -66,6 +79,7 @@ mod imp {
         pub cached_payload_bytes: Cell<usize>,
         pub reload_started: Cell<Option<Instant>>,
         pub first_page_generation: Cell<Option<u64>>,
+        pub initial_page: RefCell<Option<(u32, Vec<Sound>)>>,
     }
 
     #[glib::object_subclass]
@@ -109,13 +123,21 @@ glib::wrapper! {
 }
 
 impl PagedSoundModel {
-    pub(super) fn new(library: LibraryStore) -> Self {
+    pub(super) fn new(
+        library: LibraryStore,
+        initial_sound_count: usize,
+        initial_sounds: Vec<Sound>,
+    ) -> Self {
         let model: Self = glib::Object::builder().build();
         model
             .imp()
             .search_owner
             .set(NEXT_SEARCH_OWNER.fetch_add(1, Ordering::Relaxed));
         *model.imp().library.borrow_mut() = Some(library);
+        model.imp().initial_page.replace(Some((
+            u32::try_from(initial_sound_count).unwrap_or(u32::MAX),
+            initial_sounds,
+        )));
         model
     }
 
@@ -141,6 +163,22 @@ impl PagedSoundModel {
         imp.cached_payload_bytes.set(0);
         if old_total > 0 {
             self.items_changed(0, old_total, 0);
+        }
+        if matches!(scope, LibraryScope::General) && search.is_empty() {
+            if let Some((total, sounds)) = imp.initial_page.borrow_mut().take() {
+                let weak = self.downgrade();
+                glib::idle_add_local_once(move || {
+                    let Some(model) = weak.upgrade() else {
+                        return;
+                    };
+                    if model.publish_initial_page(generation, total, sounds)
+                        && total > PAGE_SIZE as u32
+                    {
+                        model.prefetch_adjacent(0);
+                    }
+                });
+                return;
+            }
         }
 
         let Some(library) = imp.library.borrow().clone() else {
@@ -365,7 +403,7 @@ impl PagedSoundModel {
                     .min(PAGE_SIZE as u32);
                 self.evict_page(page);
                 if len > 0 {
-                    self.items_changed(start, len, len);
+                    self.notify_replacements(generation, start, len, false);
                 }
             }
         }
@@ -442,6 +480,90 @@ impl PagedSoundModel {
         }
     }
 
+    fn publish_initial_page(&self, generation: u64, total: u32, sounds: Vec<Sound>) -> bool {
+        let imp = self.imp();
+        if imp.generation.get() != generation || imp.total.get() != 0 {
+            return false;
+        }
+        imp.total.set(total);
+        let mut objects = Vec::with_capacity(sounds.len());
+        for (position, sound) in sounds.into_iter().enumerate() {
+            let object = BoxedAnyObject::new(SoundRowData {
+                id: sound.id.clone(),
+                name: sound.name.clone(),
+                duration_ms: sound.duration_ms,
+                hotkey: sound.hotkey.clone(),
+                sound: Some(sound),
+            });
+            imp.identities
+                .borrow_mut()
+                .insert((generation, position as u32), object.downgrade());
+            objects.push(object);
+        }
+        let payload_bytes = objects
+            .iter()
+            .map(|object| row_payload_bytes(&object.borrow::<SoundRowData>()))
+            .fold(0_usize, usize::saturating_add);
+        if !objects.is_empty() {
+            imp.pages.borrow_mut().insert(0, objects);
+            self.set_page_payload(0, payload_bytes);
+            self.touch_page(0);
+        }
+        if total > 0 {
+            self.items_changed(0, 0, total);
+            imp.first_page_generation.set(Some(generation));
+            if let Some(started) = imp.reload_started.get() {
+                log::debug!(
+                    "Library latency: generation={} phase=first_rows elapsed_us={} rows={}",
+                    generation,
+                    started.elapsed().as_micros(),
+                    total.min(PAGE_SIZE as u32)
+                );
+            }
+        }
+        true
+    }
+
+    fn notify_replacements(&self, generation: u64, start: u32, len: u32, record_first_rows: bool) {
+        let weak = self.downgrade();
+        let mut chunks: VecDeque<_> = replacement_chunks(start, len).into();
+        glib::idle_add_local(move || {
+            let Some(model) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if model.imp().generation.get() != generation {
+                return glib::ControlFlow::Break;
+            }
+            let Some((chunk_start, chunk_len)) = chunks.pop_front() else {
+                return glib::ControlFlow::Break;
+            };
+            let notify_started = Instant::now();
+            model.items_changed(chunk_start, chunk_len, chunk_len);
+            log::debug!(
+                "GTK row notification latency: start={} rows={} elapsed_us={}",
+                chunk_start,
+                chunk_len,
+                notify_started.elapsed().as_micros()
+            );
+            if record_first_rows && model.imp().first_page_generation.get() != Some(generation) {
+                model.imp().first_page_generation.set(Some(generation));
+                if let Some(started) = model.imp().reload_started.get() {
+                    log::debug!(
+                        "Library latency: generation={} phase=first_rows elapsed_us={} rows={}",
+                        generation,
+                        started.elapsed().as_micros(),
+                        chunk_len
+                    );
+                }
+            }
+            if chunks.is_empty() {
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+
     fn install_page(&self, page: u32, generation: u64, sounds: Vec<Sound>) -> bool {
         let imp = self.imp();
         if imp.generation.get() != generation {
@@ -480,22 +602,12 @@ impl PagedSoundModel {
         self.set_page_payload(page, payload_bytes);
         self.touch_page(page);
         if changed > 0 {
-            self.items_changed(
+            self.notify_replacements(
+                generation,
                 page.saturating_mul(PAGE_SIZE as u32),
                 changed as u32,
-                changed as u32,
+                imp.first_page_generation.get() != Some(generation),
             );
-            if imp.first_page_generation.get() != Some(generation) {
-                imp.first_page_generation.set(Some(generation));
-                if let Some(started) = imp.reload_started.get() {
-                    log::debug!(
-                        "Library latency: generation={} phase=first_rows elapsed_us={} rows={}",
-                        generation,
-                        started.elapsed().as_micros(),
-                        changed
-                    );
-                }
-            }
         }
         true
     }
@@ -532,7 +644,7 @@ impl PagedSoundModel {
         self.set_page_payload(page, 0);
         self.touch_page(page);
         if len > 0 {
-            self.items_changed(start, len, len);
+            self.notify_replacements(generation, start, len, false);
         }
         true
     }
@@ -561,7 +673,7 @@ impl PagedSoundModel {
             });
         self.ensure_page(page, PageLoadPriority::Visible);
         if len > 0 {
-            self.items_changed(start, len, len);
+            self.notify_replacements(generation, start, len, false);
         }
         true
     }
@@ -744,7 +856,15 @@ impl PagedSoundModel {
 mod tests {
     use gio::prelude::ListModelExt;
 
-    use super::{PagedSoundModel, SoundRowData};
+    use super::{replacement_chunks, PagedSoundModel, SoundRowData};
+
+    #[test]
+    fn loaded_page_notifications_are_split_into_frame_sized_chunks() {
+        assert_eq!(
+            replacement_chunks(256, 130),
+            [(256, 64), (320, 64), (384, 2)]
+        );
+    }
 
     #[test]
     fn cache_never_keeps_more_than_four_pages() {
@@ -816,6 +936,30 @@ mod tests {
                 .borrow::<SoundRowData>()
                 .name,
             "Loaded"
+        );
+    }
+
+    #[test]
+    fn prepared_first_page_is_published_without_a_second_store_request() {
+        use gio::prelude::*;
+        use glib::BoxedAnyObject;
+
+        let model = PagedSoundModel::new_for_test(0);
+        let mut sound =
+            crate::config::Sound::new("Prepared".to_string(), "/music/prepared.flac".to_string());
+        sound.id = "prepared".to_string();
+
+        assert!(model.publish_initial_page(model.generation(), 2, vec![sound]));
+        assert_eq!(model.n_items(), 2);
+        assert_eq!(
+            model
+                .item(0)
+                .expect("prepared row")
+                .downcast::<BoxedAnyObject>()
+                .expect("boxed row")
+                .borrow::<SoundRowData>()
+                .name,
+            "Prepared"
         );
     }
 

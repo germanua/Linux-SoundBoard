@@ -585,28 +585,6 @@ fn show_storage_recovery_error(
     });
 }
 
-fn show_config_error(app: &Application, error: &dyn std::error::Error) {
-    let parent = gtk4::ApplicationWindow::builder()
-        .application(app)
-        .title(APP_TITLE)
-        .default_width(480)
-        .default_height(160)
-        .build();
-    parent.present();
-    let path = Config::config_path();
-    show_startup_error(
-        app,
-        &parent,
-        "Configuration could not be loaded",
-        &format!(
-            "{}\n\nNo audio engine was started and '{}' was not replaced. Fix the file, or stop all Linux Soundboard processes and restore '{}.pre-v6-backup'.",
-            error,
-            path.display(),
-            path.display()
-        ),
-    );
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum StoragePreparation {
     Ready,
@@ -714,9 +692,9 @@ fn start_application(
         prepare_startup_storage,
         move |result| match result {
             Ok(StoragePreparation::Ready) => {
-                callback_parent.close();
                 start_application_ready(
                     &callback_app,
+                    &callback_parent,
                     startup_mode,
                     previous_engine_version.clone(),
                 );
@@ -919,8 +897,12 @@ fn prompt_legacy_migration(
                             report.manual_tabs,
                             report.hotkeys
                         );
-                        parent_done.close();
-                        start_application_ready(&app_done, startup_mode, previous_engine_version);
+                        start_application_ready(
+                            &app_done,
+                            &parent_done,
+                            startup_mode,
+                            previous_engine_version,
+                        );
                     }
                     Err(crate::legacy_migration::LegacyMigrationError::Cancelled) => {
                         parent_done.close();
@@ -974,26 +956,70 @@ fn migration_progress_can_cancel(
     )
 }
 
+struct PreparedApplication {
+    config: Config,
+    library: crate::library_store::LibraryStore,
+    initial_sound_count: usize,
+    initial_sound_page: crate::library_store::SoundPage,
+    player: crate::audio::AudioPlayer,
+    pipewire_status: crate::audio::pipewire_detection::PipeWireStatus,
+    engine_update_notice: Option<EngineUpdateNotice>,
+}
+
+struct StartupFailure {
+    title: &'static str,
+    message: String,
+}
+
 fn start_application_ready(
     app: &Application,
+    parent: &gtk4::ApplicationWindow,
     startup_mode: StartupMode,
     previous_engine_version: Option<String>,
 ) {
-    if let Some(display) = gtk4::gdk::Display::default() {
-        info!("GTK display backend: {:?}", display.backend());
-    } else {
-        warn!("GTK display backend is unavailable during activation");
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    if let Err(error) = crate::commands::dispatch_async_result(
+        "prepare_application_runtime",
+        move || prepare_application(startup_mode, previous_engine_version),
+        move |result| match result {
+            Ok(prepared) => {
+                callback_parent.close();
+                finish_application_ready(&callback_app, prepared);
+            }
+            Err(failure) => show_startup_error(
+                &callback_app,
+                &callback_parent,
+                failure.title,
+                &failure.message,
+            ),
+        },
+    ) {
+        show_startup_error(
+            app,
+            parent,
+            "Application startup could not continue",
+            &error.to_string(),
+        );
     }
+}
 
+fn prepare_application(
+    startup_mode: StartupMode,
+    previous_engine_version: Option<String>,
+) -> Result<PreparedApplication, StartupFailure> {
     let config = match load_config() {
         Ok(config) => config,
         Err(err) => {
-            log::error!(
-                "Refusing to start with unreadable config '{}': {err}",
-                Config::config_path().display()
-            );
-            show_config_error(app, err.as_ref());
-            return;
+            let path = Config::config_path();
+            return Err(StartupFailure {
+                title: "Configuration could not be loaded",
+                message: format!(
+                    "{err}\n\nNo audio engine was started and '{}' was not replaced. Fix the file, or stop all Linux Soundboard processes and restore '{}.pre-v6-backup'.",
+                    path.display(),
+                    path.display()
+                ),
+            });
         }
     };
     crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
@@ -1003,9 +1029,10 @@ fn start_application_ready(
     let identity = match crate::legacy_migration::database_identity(&library_path) {
         Ok(identity) => identity,
         Err(error) => {
-            log::error!("Refusing to start with invalid library database: {error}");
-            show_config_error(app, &error);
-            return;
+            return Err(StartupFailure {
+                title: "Sound library could not be opened",
+                message: error.to_string(),
+            });
         }
     };
     let library = match crate::library_store::LibraryStore::open_authoritative(
@@ -1014,15 +1041,14 @@ fn start_application_ready(
     ) {
         Ok(library) => library,
         Err(error) => {
-            log::error!("Refusing to start with unavailable library database: {error}");
-            show_config_error(app, &error);
-            return;
+            return Err(StartupFailure {
+                title: "Sound library could not be opened",
+                message: error.to_string(),
+            });
         }
     };
-
-    let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
-    let hotkey_manager = crate::hotkeys::HotkeyManager::new_deferred(hotkey_sender);
-    crate::diagnostics::set_hotkey_status(&hotkey_manager.status_message());
+    let initial_sound_count = library.count(crate::library_store::LibraryScope::General, "");
+    let initial_sound_page = library.page(crate::library_store::LibraryScope::General, "", 0);
 
     let previous_engine_version = match startup_mode {
         StartupMode::Persistent => previous_engine_version.or_else(incompatible_engine_version),
@@ -1031,15 +1057,10 @@ fn start_application_ready(
     let (player, connected_remotely) = match initialize_player(&config, startup_mode) {
         Ok(player) => player,
         Err(error) => {
-            let parent = gtk4::ApplicationWindow::builder()
-                .application(app)
-                .title(APP_TITLE)
-                .default_width(480)
-                .default_height(160)
-                .build();
-            parent.present();
-            show_startup_error(app, &parent, "Persistent audio engine unavailable", &error);
-            return;
+            return Err(StartupFailure {
+                title: "Persistent audio engine unavailable",
+                message: error,
+            });
         }
     };
     let engine_update_notice = engine_update_notice(previous_engine_version, connected_remotely);
@@ -1048,6 +1069,44 @@ fn start_application_ready(
     crate::diagnostics::record_phase_with_config("startup:player_initialized", &config);
 
     let pipewire_status = crate::audio::pipewire_detection::check_pipewire();
+    let initial_sound_count = initial_sound_count.recv().map_err(|error| StartupFailure {
+        title: "Sound library could not be opened",
+        message: error.to_string(),
+    })?;
+    let initial_sound_page = initial_sound_page.recv().map_err(|error| StartupFailure {
+        title: "Sound library could not be opened",
+        message: error.to_string(),
+    })?;
+    Ok(PreparedApplication {
+        config,
+        library,
+        initial_sound_count,
+        initial_sound_page,
+        player,
+        pipewire_status,
+        engine_update_notice,
+    })
+}
+
+fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
+    if let Some(display) = gtk4::gdk::Display::default() {
+        info!("GTK display backend: {:?}", display.backend());
+    } else {
+        warn!("GTK display backend is unavailable during activation");
+    }
+
+    let PreparedApplication {
+        config,
+        library,
+        initial_sound_count,
+        initial_sound_page,
+        player,
+        pipewire_status,
+        engine_update_notice,
+    } = prepared;
+    let (hotkey_sender, hotkey_receiver) = mpsc::sync_channel::<String>(64);
+    let hotkey_manager = crate::hotkeys::HotkeyManager::new_deferred(hotkey_sender);
+    crate::diagnostics::set_hotkey_status(&hotkey_manager.status_message());
 
     let hotkeys = Arc::new(Mutex::new(hotkey_manager));
     let hotkey_projection =
@@ -1067,8 +1126,13 @@ fn start_application_ready(
 
     let timer_registry = TimerRegistry::new();
 
-    let (window, transport) =
-        crate::ui::app_window::build_window(app, Arc::clone(&state), &timer_registry);
+    let (window, transport) = crate::ui::app_window::build_window(
+        app,
+        Arc::clone(&state),
+        &timer_registry,
+        initial_sound_count,
+        initial_sound_page,
+    );
     crate::diagnostics::set_validation_runtime(0, "deferred", 0);
     crate::diagnostics::memory::log_memory_snapshot("startup:window_built");
     record_state_phase("startup:window_built", &state);
@@ -1687,6 +1751,13 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn prepared_application_can_cross_the_startup_worker_boundary() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<PreparedApplication>();
     }
 
     #[test]

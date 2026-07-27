@@ -1,5 +1,6 @@
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use glib;
 use gtk4::prelude::*;
@@ -30,11 +31,18 @@ pub fn build_window(
     app: &Application,
     state: Arc<AppState>,
     _timers: &TimerRegistry,
+    initial_sound_count: usize,
+    initial_sound_page: crate::library_store::SoundPage,
 ) -> (ApplicationWindow, TransportBar) {
+    let build_started = Instant::now();
     {
         let cfg = state.config.lock();
         apply_theme(cfg.settings.theme);
     }
+    log::debug!(
+        "Window build latency: phase=theme elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -46,6 +54,10 @@ pub fn build_window(
         .height_request(400)
         .build();
     window.add_css_class("main-window");
+    log::debug!(
+        "Window build latency: phase=window elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let dialog_host = DialogHost::new();
     let root_box = GtkBox::new(Orientation::Vertical, 0);
@@ -93,12 +105,33 @@ pub fn build_window(
             root_box.append(&banner);
         }
     }
+    log::debug!(
+        "Window build latency: phase=banners elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let transport = TransportBar::new(Arc::clone(&state));
+    log::debug!(
+        "Window build latency: phase=transport elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
     root_box.append(transport.widget());
 
     let tabs = TabsSidebar::new(Arc::clone(&state), dialog_host.clone());
-    let sound_list = SoundList::new(Arc::clone(&state), dialog_host.clone());
+    log::debug!(
+        "Window build latency: phase=tabs elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
+    let sound_list = SoundList::new(
+        Arc::clone(&state),
+        dialog_host.clone(),
+        initial_sound_count,
+        initial_sound_page,
+    );
+    log::debug!(
+        "Window build latency: phase=sound_list elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
     let sidebar_paned = Paned::new(Orientation::Horizontal);
     sidebar_paned.set_vexpand(true);
     sidebar_paned.set_wide_handle(true);
@@ -231,6 +264,7 @@ pub fn build_window(
 
     let drop_overlay =
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
+    drop_overlay.add_overlay(dialog_host.widget());
 
     // Below a narrow width the sidebar hides and the transport bar reflows.
     // The same GtkPaned keeps ownership at every size, avoiding reparenting during resize.
@@ -294,17 +328,24 @@ pub fn build_window(
             })
         };
 
-        let settings_overlay = settings::build_settings_overlay(
-            window.upcast_ref::<gtk4::Window>(),
-            Arc::clone(&state),
-            dialog_host.clone(),
-            Some(on_library_changed),
-            Some(on_list_style_changed),
-        );
-        drop_overlay.add_overlay(&settings_overlay);
-        drop_overlay.add_overlay(dialog_host.widget());
-
+        let settings_overlay = Rc::new(std::cell::RefCell::new(None));
+        let window = window.clone();
+        let state = Arc::clone(&state);
+        let dialog_host = dialog_host.clone();
+        let drop_overlay = drop_overlay.clone();
         transport.connect_settings_requested(move || {
+            let mut settings_overlay = settings_overlay.borrow_mut();
+            let settings_overlay = settings_overlay.get_or_insert_with(|| {
+                let overlay = settings::build_settings_overlay(
+                    window.upcast_ref::<gtk4::Window>(),
+                    Arc::clone(&state),
+                    dialog_host.clone(),
+                    Some(Rc::clone(&on_library_changed)),
+                    Some(Rc::clone(&on_list_style_changed)),
+                );
+                drop_overlay.add_overlay(&overlay);
+                overlay
+            });
             settings_overlay.set_visible(true);
             settings_overlay.grab_focus();
         });
@@ -320,6 +361,10 @@ pub fn build_window(
         glib::Propagation::Proceed
     });
 
+    log::debug!(
+        "Window build latency: phase=complete elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
     (window, transport)
 }
 

@@ -69,8 +69,17 @@ pub(super) struct SoundListInner {
 }
 
 impl SoundList {
-    pub fn new(state: Arc<AppState>, dialog_host: DialogHost) -> Self {
-        let store = PagedSoundModel::new(state.library.clone());
+    pub fn new(
+        state: Arc<AppState>,
+        dialog_host: DialogHost,
+        initial_sound_count: usize,
+        initial_sound_page: crate::library_store::SoundPage,
+    ) -> Self {
+        let store = PagedSoundModel::new(
+            state.library.clone(),
+            initial_sound_count,
+            initial_sound_page.sounds,
+        );
         let selection = MultiSelection::new(Some(store.clone()));
         let col_view = ColumnView::new(Some(selection.clone()));
         col_view.set_vexpand(true);
