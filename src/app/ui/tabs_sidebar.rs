@@ -146,7 +146,12 @@ fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
     let mut total = 0usize;
     for item in store.iter::<BoxedAnyObject>().flatten() {
         total += 1;
-        let children = item.borrow::<FolderNode>().loaded_children();
+        // Placeholder rows stand in for evicted pages and have no children.
+        let Ok(node) = item.try_borrow::<FolderNode>() else {
+            continue;
+        };
+        let children = node.loaded_children();
+        drop(node);
         if let Some(children) = children {
             total += count_loaded_child_rows(&children);
         }
@@ -518,7 +523,9 @@ impl TabsSidebar {
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
-            let node = boxed.borrow::<FolderNode>();
+            // A placeholder stands in for an evicted page: it is never
+            // expandable, and its real node reappears when the page reloads.
+            let node = boxed.try_borrow::<FolderNode>().ok()?;
             if !node.has_children {
                 return None;
             }
@@ -669,15 +676,14 @@ impl TabsSidebar {
                 let expansion_handler = row.connect_expanded_notify(move |row| {
                     update_disclosure_icon(&disclosure_for_expansion, row.is_expanded());
                 });
-                boxed
-                    .borrow::<FolderNode>()
-                    .disclosure_handlers
-                    .replace(Some((
+                if let Ok(node) = boxed.try_borrow::<FolderNode>() {
+                    node.disclosure_handlers.replace(Some((
                         disclosure.clone(),
                         gesture,
                         row.clone(),
                         expansion_handler,
                     )));
+                }
             }
             if connect_expanded {
                 let library = library_for_expansion.clone();
@@ -724,10 +730,10 @@ impl TabsSidebar {
                         log::warn!("Failed to dispatch folder expansion save: {error}");
                     }
                 });
-                boxed
-                    .borrow::<FolderNode>()
-                    .expanded_handler
-                    .replace(Some((row.clone(), expansion_handler)));
+                if let Ok(node) = boxed.try_borrow::<FolderNode>() {
+                    node.expanded_handler
+                        .replace(Some((row.clone(), expansion_handler)));
+                }
             }
             if install_context_menu {
                 let gesture = GestureClick::new();
@@ -842,10 +848,9 @@ impl TabsSidebar {
                     );
                 });
                 expander.add_controller(gesture.clone());
-                boxed
-                    .borrow::<FolderNode>()
-                    .context_gesture
-                    .replace(Some(gesture));
+                if let Ok(node) = boxed.try_borrow::<FolderNode>() {
+                    node.context_gesture.replace(Some(gesture));
+                }
             }
             if install_drop_target {
                 let Some(relative_path) = drop_relative_path else {
@@ -858,10 +863,9 @@ impl TabsSidebar {
                     relative_path,
                     Rc::clone(&folder_changed_for_drop),
                 );
-                boxed
-                    .borrow::<FolderNode>()
-                    .drop_target
-                    .replace(Some(target));
+                if let Ok(node) = boxed.try_borrow::<FolderNode>() {
+                    node.drop_target.replace(Some(target));
+                }
             }
         });
         folder_factory.connect_unbind(|_, item| {
@@ -884,7 +888,11 @@ impl TabsSidebar {
                 return;
             };
             let (disclosure_handlers, expanded_handler, gesture, drop_target) = {
-                let node = boxed.borrow::<FolderNode>();
+                let Ok(node) = boxed.try_borrow::<FolderNode>() else {
+                    // Placeholder rows install no handlers, so there is
+                    // nothing to disconnect.
+                    return;
+                };
                 let disclosure_handlers = node.disclosure_handlers.borrow_mut().take();
                 let expanded_handler = node.expanded_handler.borrow_mut().take();
                 let gesture = node.context_gesture.borrow_mut().take();
@@ -951,7 +959,11 @@ impl TabsSidebar {
                 let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                     return;
                 };
-                let node = boxed.borrow::<FolderNode>();
+                let Ok(node) = boxed.try_borrow::<FolderNode>() else {
+                    // A placeholder is not a selectable scope; its page is
+                    // already being re-read.
+                    return;
+                };
                 let Some(relative_path) = node.relative_path.clone() else {
                     // Root rows are not a selectable scope. Do not toggle expansion here:
                     // the click that selects this row has already run the disclosure
@@ -2185,6 +2197,21 @@ mod tests {
             "a failed load left the request latch set, so the create-closure \
              will never start a new pager and the folder stays empty"
         );
+    }
+
+    /// A placeholder row shares the store with real folder nodes. Every path
+    /// that reads a row must tolerate it: downcasting blind aborted the
+    /// process the first time a user scrolled back to an evicted page.
+    #[test]
+    fn placeholder_rows_do_not_break_the_retention_walk() {
+        let store = gio::ListStore::new::<BoxedAnyObject>();
+        store.append(&node_with_loaded_children(2, 0));
+        store.append(&BoxedAnyObject::new(PlaceholderRow {
+            sibling_index: 512,
+            pager: std::rc::Weak::new(),
+        }));
+        // 1 parent + its 2 children + 1 placeholder.
+        assert_eq!(count_loaded_child_rows(&store), 4);
     }
 
     #[test]
