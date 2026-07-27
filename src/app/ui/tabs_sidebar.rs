@@ -35,7 +35,10 @@ struct FolderNode {
     relative_path: Option<String>,
     name: Rc<RefCell<String>>,
     has_children: bool,
-    children: gio::ListStore,
+    /// Child rows, allocated only for folders that can actually have children.
+    /// An empty `gio::ListStore` costs ~186 bytes, and in a wide library the
+    /// overwhelming majority of folders are leaves that would never use one.
+    children: RefCell<Option<gio::ListStore>>,
     children_requested: Rc<Cell<bool>>,
     expanded: Rc<Cell<bool>>,
     /// The row-expansion handler is attached to a `TreeListRow`, and those
@@ -138,8 +141,10 @@ fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
     let mut total = 0usize;
     for item in store.iter::<BoxedAnyObject>().flatten() {
         total += 1;
-        let children = item.borrow::<FolderNode>().children.clone();
-        total += count_loaded_child_rows(&children);
+        let children = item.borrow::<FolderNode>().loaded_children();
+        if let Some(children) = children {
+            total += count_loaded_child_rows(&children);
+        }
     }
     total
 }
@@ -174,6 +179,22 @@ fn update_disclosure_icon(image: &Image, expanded: bool) {
 }
 
 impl FolderNode {
+    /// The child store, created on first use and retained from then on. Only
+    /// reached for nodes that report `has_children`, so leaf folders never
+    /// allocate one.
+    fn children(&self) -> gio::ListStore {
+        self.children
+            .borrow_mut()
+            .get_or_insert_with(gio::ListStore::new::<BoxedAnyObject>)
+            .clone()
+    }
+
+    /// The child store only if it has already been created. Used by the
+    /// retention walk, which must not allocate stores just to count them.
+    fn loaded_children(&self) -> Option<gio::ListStore> {
+        self.children.borrow().clone()
+    }
+
     fn root(path: String) -> Self {
         let name = std::path::Path::new(&path)
             .file_name()
@@ -185,7 +206,7 @@ impl FolderNode {
             relative_path: None,
             name: Rc::new(RefCell::new(name)),
             has_children: true,
-            children: gio::ListStore::new::<BoxedAnyObject>(),
+            children: RefCell::new(Some(gio::ListStore::new::<BoxedAnyObject>())),
             children_requested: Rc::new(Cell::new(false)),
             expanded: Rc::new(Cell::new(true)),
             expanded_handler: RefCell::new(None),
@@ -220,7 +241,7 @@ impl FolderNode {
             relative_path: Some(item.relative_path),
             name: Rc::new(RefCell::new(item.name)),
             has_children: item.has_children,
-            children: gio::ListStore::new::<BoxedAnyObject>(),
+            children: RefCell::new(None),
             children_requested: Rc::new(Cell::new(false)),
             expanded: Rc::new(Cell::new(item.expanded)),
             expanded_handler: RefCell::new(None),
@@ -467,14 +488,14 @@ impl TabsSidebar {
             if !node.children_requested.replace(true) {
                 TabsInner::start_children_pager(
                     library_for_children.clone(),
-                    node.children.clone(),
+                    node.children(),
                     node.root_path.clone(),
                     node.relative_path.clone(),
                     &node.children_pager,
                     Rc::clone(&node.children_requested),
                 );
             }
-            Some(node.children.clone().upcast())
+            Some(node.children().upcast())
         });
         let folder_selection = SingleSelection::new(Some(folder_tree.clone()));
         folder_selection.set_autoselect(false);
@@ -550,7 +571,7 @@ impl TabsSidebar {
             let drop_relative_path = node.relative_path.clone();
             let sibling_index = node.sibling_index;
             let sibling_pager = node.sibling_pager.clone();
-            let children = node.children.clone();
+            let children = node.children();
             let children_pager = Rc::clone(&node.children_pager);
             let children_requested = Rc::clone(&node.children_requested);
             drop(node);
@@ -1965,7 +1986,7 @@ mod tests {
             );
             for deep in 0..grandchildren {
                 child
-                    .children
+                    .children()
                     .append(&BoxedAnyObject::new(FolderNode::folder_at(
                         "/music".to_string(),
                         crate::library_store::FolderItem {
@@ -1979,7 +2000,7 @@ mod tests {
                         None,
                     )));
             }
-            parent.children.append(&BoxedAnyObject::new(child));
+            parent.children().append(&BoxedAnyObject::new(child));
         }
         BoxedAnyObject::new(parent)
     }
@@ -2039,6 +2060,51 @@ mod tests {
             !children_requested.get(),
             "a failed load left the request latch set, so the create-closure \
              will never start a new pager and the folder stays empty"
+        );
+    }
+
+    #[test]
+    fn leaf_folders_allocate_no_child_store() {
+        // An empty gio::ListStore costs ~186 bytes. In a wide library almost
+        // every folder is a leaf, so allocating one per node is pure waste.
+        let leaf = FolderNode::folder_at(
+            "/music".to_string(),
+            crate::library_store::FolderItem {
+                id: 1,
+                relative_path: "albums/Album 1".to_string(),
+                name: "Album 1".to_string(),
+                expanded: false,
+                has_children: false,
+            },
+            0,
+            None,
+        );
+        assert!(
+            leaf.loaded_children().is_none(),
+            "leaf folder allocated a child store it can never use"
+        );
+    }
+
+    #[test]
+    fn folders_with_children_still_get_a_store_on_demand() {
+        let parent = FolderNode::folder_at(
+            "/music".to_string(),
+            crate::library_store::FolderItem {
+                id: 1,
+                relative_path: "albums".to_string(),
+                name: "albums".to_string(),
+                expanded: false,
+                has_children: true,
+            },
+            0,
+            None,
+        );
+        let store = parent.children();
+        store.append(&BoxedAnyObject::new(1u8));
+        assert_eq!(
+            parent.children().n_items(),
+            1,
+            "the lazily created store must be retained, not rebuilt per call"
         );
     }
 
@@ -2137,7 +2203,7 @@ mod tests {
 
         let roots = gio::ListStore::new::<BoxedAnyObject>();
         let node = FolderNode::root(root_path.clone());
-        let children = node.children.clone();
+        let children = node.children();
         let children_pager = Rc::clone(&node.children_pager);
         let children_requested = Rc::clone(&node.children_requested);
         roots.append(&BoxedAnyObject::new(node));
@@ -2152,14 +2218,14 @@ mod tests {
             if !node.children_requested.replace(true) {
                 TabsInner::start_children_pager(
                     library_for_children.clone(),
-                    node.children.clone(),
+                    node.children(),
                     node.root_path.clone(),
                     node.relative_path.clone(),
                     &node.children_pager,
                     Rc::clone(&node.children_requested),
                 );
             }
-            Some(node.children.clone().upcast())
+            Some(node.children().upcast())
         });
 
         let row = tree.row(0).expect("root row");
