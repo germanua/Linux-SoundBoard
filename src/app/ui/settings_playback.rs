@@ -2,9 +2,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
+use gtk4::Image;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
+use super::icons;
 use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{AutoGainApplyTo, AutoGainMode};
@@ -33,9 +35,14 @@ fn loudness_activity_text(status: &commands::LoudnessStatusSummary) -> &'static 
     }
 }
 
-fn set_spinner_running(spinner: &gtk4::Spinner, running: bool) {
-    if spinner.is_spinning() != running {
-        spinner.set_spinning(running);
+/// Drives the busy indicator with the theme's own `spin` animation rather than
+/// `GtkSpinner`, whose animation comes from the system Adwaita stylesheet and
+/// does not run here. The transport refresh button already uses this class.
+fn set_spinner_running(spinner: &Image, running: bool) {
+    if running {
+        spinner.add_css_class("spinning");
+    } else {
+        spinner.remove_css_class("spinning");
     }
     spinner.set_visible(running);
 }
@@ -45,9 +52,9 @@ fn apply_loudness_status_summary(
     status_row: &adw::ActionRow,
     status_badge: &gtk4::Label,
     analyze_btn: &gtk4::Button,
-    analyze_spinner: &gtk4::Spinner,
+    analyze_spinner: &Image,
     refine_btn: &gtk4::Button,
-    refine_spinner: &gtk4::Spinner,
+    refine_spinner: &Image,
 ) {
     status_row.set_subtitle(&format_loudness_status_subtitle(summary));
     status_badge.set_text(loudness_activity_text(summary));
@@ -325,10 +332,9 @@ pub(super) fn build_playback_groups(
             .css_classes(vec!["settings-primary-btn"])
             .valign(gtk4::Align::Center)
             .build();
-        let spinner = gtk4::Spinner::builder()
-            .valign(gtk4::Align::Center)
-            .visible(false)
-            .build();
+        let spinner = icons::image(icons::REFRESH);
+        spinner.set_valign(gtk4::Align::Center);
+        spinner.set_visible(false);
         analyze_row.add_suffix(&spinner);
         analyze_row.add_suffix(&analyze_btn);
         {
@@ -375,10 +381,9 @@ pub(super) fn build_playback_groups(
             .css_classes(vec!["settings-primary-btn"])
             .valign(gtk4::Align::Center)
             .build();
-        let refine_spinner = gtk4::Spinner::builder()
-            .valign(gtk4::Align::Center)
-            .visible(false)
-            .build();
+        let refine_spinner = icons::image(icons::REFRESH);
+        refine_spinner.set_valign(gtk4::Align::Center);
+        refine_spinner.set_visible(false);
         refine_row.add_suffix(&refine_spinner);
         refine_row.add_suffix(&refine_btn);
         {

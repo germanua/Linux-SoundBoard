@@ -1257,6 +1257,9 @@ fn refresh_sounds_with_store_cancellable(
     projection
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)?;
+    // A refresh changes how many sounds lack loudness data, so any settings
+    // view that is already open must re-read its counts.
+    crate::ui_event_bridge::post_loudness_status_refresh();
     Ok(RefreshSummary {
         added: after.saturating_sub(before),
         removed: before.saturating_sub(after),
