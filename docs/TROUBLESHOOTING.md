@@ -29,7 +29,7 @@ Install the host FUSE package and retry:
 Use APT to resolve dependencies instead of `dpkg -i` alone:
 
 ```bash
-sudo apt install ./linux-soundboard_2.1.2-1_amd64.deb
+sudo apt install ./linux-soundboard_2.2.0-1_amd64.deb
 ```
 
 If host audio packages are missing:
@@ -43,7 +43,7 @@ sudo apt install pipewire wireplumber
 Install with DNF:
 
 ```bash
-sudo dnf install ./linux-soundboard-2.1.2-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.2.0-1.x86_64.rpm
 ```
 
 If the audio stack is missing:
@@ -241,6 +241,47 @@ chmod 600 ~/.config/linux-soundboard/config.json
 ```
 
 Then start the service or GUI again. Do not copy the backup while a newer process is running, because it may save migrated state over the restored file.
+
+### The sound library moved out of config.json in v2.2.0
+
+Sounds, folders, tab membership, and hotkey bindings now live in
+`~/.config/linux-soundboard/library.sqlite3`. `config.json` keeps settings only.
+
+The first v2.2.0 launch migrates an existing configuration and preserves the
+original as `~/.config/linux-soundboard/config.json.pre-v8-backup` with `0600`
+permissions. Both files matter when you back up or move a profile; copying
+`config.json` alone no longer carries the library.
+
+### Sound library could not be opened
+
+Startup shows this when the database is missing, unreadable, or does not match
+the expected schema. If a pre-v8 backup exists, the dialog offers **Restore
+pre-v8 backup**, which archives the current `config.json` and `library.sqlite3`
+as `.pre-restore-<id>` files, restores the backed-up configuration, and migrates
+it again. Nothing is deleted.
+
+Inspect the state before deciding:
+
+```bash
+systemctl --user stop linux-soundboard-engine.service
+pgrep -af linux-soundboard   # this must print no remaining GUI or engine process
+ls -l ~/.config/linux-soundboard/
+sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA integrity_check;'
+```
+
+`integrity_check` printing `ok` means the file is intact and the failure is
+elsewhere; check `journalctl --user -u linux-soundboard-engine.service` and the
+GUI output. If the database is corrupt and no backup is offered, move it aside
+and start over:
+
+```bash
+mv ~/.config/linux-soundboard/library.sqlite3{,.corrupt}
+```
+
+The next launch starts with an empty library. The scanned folders are stored in
+that database as well, so add them again under `Settings` → `General` →
+`Sound Folders`; tabs, hotkey bindings, and folder customizations do not come
+back. No audio file on disk is affected.
 
 ### AppImage temporary versus installed behavior
 

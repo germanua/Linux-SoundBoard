@@ -170,7 +170,9 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 - **Supported formats** — MP3, Ogg Vorbis, mono/stereo Ogg Opus (`.opus` or `.ogg`), FLAC, AAC-LC, M4A (AAC-LC or ALAC), and MP4 audio tracks (AAC-LC, ALAC, or mono/stereo Opus). WebM and multichannel Opus are not supported.
 - **Tabs** — organize sounds into named tabs; the General tab shows all sounds
+- **Folders** — browse the full folder hierarchy in the sidebar; reorder, combine, remove, and restore folders without touching the files on disk
 - **Folder sync** — point at a folder; files added or removed from disk are picked up on startup and manual refresh
+- **SQLite library** — sounds, folders, tabs, and hotkey bindings live in `~/.config/linux-soundboard/library.sqlite3`, loaded in bounded pages so large libraries stay responsive
 - **Drag and drop** — drag files or folders from a file manager directly into the window
 - **Search** — real-time search bar filters the visible list
 - **Hotkeys** — assign a global key combination to any sound; Wayland uses `swhkd`, X11 uses a native XInput2 backend

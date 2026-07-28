@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.1.2
+Version:        2.2.0
 Release:        1%{?dist}
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -151,6 +151,13 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Tue Jul 28 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.2.0-1
+- Store the sound library in SQLite and migrate existing configurations
+- Show the complete folder hierarchy in the sidebar
+- Remove, restore, reorder, and combine sidebar folders
+- Cancel the folder scan started by Add Folder
+- Cut startup and wide-library latency and memory
+
 * Sun Jul 19 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.2-1
 - Add correct mono and stereo Ogg Opus support
 - Default new configurations to Dynamic auto-gain

@@ -48,11 +48,11 @@ For source builds or when you want to manage the download yourself:
 
 ```bash
 # 1. Download the latest release tarball from the Releases page
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.1.2-linux-x86_64.tar.gz
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.2.0-linux-x86_64.tar.gz
 
 # 2. Extract it
-tar -xzf linux-soundboard-2.1.2-linux-x86_64.tar.gz
-cd linux-soundboard-2.1.2-linux-x86_64
+tar -xzf linux-soundboard-2.2.0-linux-x86_64.tar.gz
+cd linux-soundboard-2.2.0-linux-x86_64
 
 # 3. Run the installer — an interactive menu guides you through the install
 ./install-user.sh
@@ -74,6 +74,8 @@ Or install non-interactively, skipping the menu:
 | Engine service      | `~/.config/systemd/user/linux-soundboard-engine.service`      | Starts the audio engine at login                    |
 | Legacy cleanup      | Old PipeWire/PulseAudio/WirePlumber soundboard routing files  | Disables obsolete persistent virtual mic setup      |
 | Microphone routing  | App setting in `~/.config/linux-soundboard/config.json`       | Routes recording apps while leaving system defaults alone by default |
+| Settings            | `~/.config/linux-soundboard/config.json`                      | Application settings only                           |
+| Sound library       | `~/.config/linux-soundboard/library.sqlite3`                  | Scanned folders, sounds, tabs, and hotkey bindings   |
 
 The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It uses low PipeWire priority, unmutes the virtual mic on registration, and claims the system default mic so recording apps use it automatically. Switch to **Manual** routing if you prefer to manage the default mic yourself.
 
@@ -130,7 +132,7 @@ The stable AUR package follows tagged releases and installs the app, icons, help
 Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
 
 ```bash
-sudo apt install ./linux-soundboard_2.1.2-1_amd64.deb
+sudo apt install ./linux-soundboard_2.2.0-1_amd64.deb
 ```
 
 Required runtime packages (usually already present on modern Ubuntu/Debian):
@@ -156,7 +158,7 @@ for global hotkeys.
 ### Fedora
 
 ```bash
-sudo dnf install ./linux-soundboard-2.1.2-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.2.0-1.x86_64.rpm
 ```
 
 Required runtime packages:

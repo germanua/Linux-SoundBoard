@@ -1,3 +1,13 @@
+linux-soundboard (2.2.0-1) unstable; urgency=medium
+
+  * Store the sound library in SQLite and migrate existing configurations
+  * Show the complete folder hierarchy in the sidebar
+  * Remove, restore, reorder, and combine sidebar folders
+  * Cancel the folder scan started by Add Folder
+  * Cut startup and wide-library latency and memory
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Tue, 28 Jul 2026 12:00:00 +0000
+
 linux-soundboard (2.1.2-1) unstable; urgency=medium
 
   * Add correct mono and stereo Ogg Opus support

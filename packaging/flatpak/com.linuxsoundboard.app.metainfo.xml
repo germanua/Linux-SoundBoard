@@ -55,6 +55,18 @@
   </keywords>
   
   <releases>
+    <release version="2.2.0" date="2026-07-28">
+      <description>
+        <p>Sound library and folder navigation update:</p>
+        <ul>
+          <li>Stores the sound library in SQLite and migrates existing configurations</li>
+          <li>Shows the complete folder hierarchy in the sidebar</li>
+          <li>Removes, restores, reorders, and combines sidebar folders</li>
+          <li>Cancels the folder scan started by Add Folder</li>
+          <li>Cuts startup and wide-library latency and memory</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.2" date="2026-07-19">
       <description>
         <p>Ogg Opus and auto-gain reliability update:</p>
