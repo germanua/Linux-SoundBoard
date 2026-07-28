@@ -6,20 +6,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
-### Added
-
-- **Installer menu:** The one-line install command now opens a menu to install the newest version, install a previous release, uninstall, fix setup problems, generate a bug report, or show status. Every action is also a command (`install --version`, `versions`, `fix`, `report`), and piping the script with no arguments still installs directly. Each entry states whether it needs your password, based on the distro, session type, and whether a native package is installed.
-- **Previous releases:** Any published release can be installed from its tarball into `~/.local` without root. A native package that would shadow it is removed first, with confirmation.
-- **Audio snapshots:** Installs and updates record the default microphone and speakers, the engine service state, and checksums of the PipeWire, WirePlumber, and PulseAudio configuration before making changes. Uninstall prints what changed since that snapshot and asks once whether to restore it. Inspect it any time with `install-user.sh snapshot-diff`.
-- **Bug reports:** `install.sh report` writes a single file with a system report, an application report, and a blank for the user to fill in, then explains how to attach screenshots to a GitHub issue. The home path and username are replaced; sound-device names are kept.
-
-### Fixed
-
-- **Installer prompts through the one-liner:** Prompts read from the terminal instead of the piped script, so the installer can ask questions when started with `curl ... | bash`. Previously every prompt silently took its non-interactive default.
-- **Uninstall leftovers:** Removing the user installation now also removes the licence and notice files it deployed, so `~/.local/opt/linux-soundboard/` no longer survives an uninstall.
-- **Default microphone after a PipeWire or WirePlumber restart:** The engine forgets what it believed about the system default whenever the metadata object carrying it is replaced or goes away, and re-evaluates. A replaced object reports no properties, so an engine that kept its previous belief would skip the reclaim and go silent while the system had no default at all. The change is also logged, because the failure it caused left no trace.
-- **Default microphone after an engine restart:** In Default routing mode the engine reclaims the virtual microphone when the system default is cleared, not only when another device is selected. Restarting the engine — which every update does — replaces the virtual microphone node and clears the default, so the soundboard could silently stop being the default input until something else set one. Reclaiming a cleared default now writes the default source directly instead of asking WirePlumber to switch to the device it already had configured, which changed nothing and left the system on a fallback microphone.
-
 ## [2.2.0] - 2026-07-28
 
 ### Added
@@ -32,6 +18,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 - **Combine folders:** Dropping a folder onto another folder's row offers to move every sound it resolves to into that folder. Files are not moved or renamed, and a folder cannot be combined into its own subtree.
 - **Folder membership overrides:** Sounds can be dragged onto a folder to include them, excluded with `Exclude from Folder`, and reset with `Restore Natural Membership`.
 - **Cancellable folder scans:** The scan that follows `Add Folder…` can be stopped from the folder row or the `Stop` button beside it.
+- **Installer menu:** The one-line install command now opens a menu to install the newest version, install a previous release, uninstall, fix setup problems, generate a bug report, or show status. Every action is also a command (`install --version`, `versions`, `fix`, `report`), and piping the script with no arguments still installs directly. Each entry states whether it needs your password, based on the distro, session type, and whether a native package is installed.
+- **Previous releases:** Any published release can be installed from its tarball into `~/.local` without root. A native package that would shadow it is removed first, with confirmation.
+- **Audio snapshots:** Installs and updates record the default microphone and speakers, the engine service state, and checksums of the PipeWire, WirePlumber, and PulseAudio configuration before making changes. Uninstall prints what changed since that snapshot and asks once whether to restore it. Inspect it any time with `install-user.sh snapshot-diff`.
+- **Bug reports:** `install.sh report` writes a single file with a system report, an application report, and a blank for the user to fill in, then explains how to attach screenshots to a GitHub issue. The home path and username are replaced; sound-device names are kept.
 
 ### Changed
 
@@ -48,6 +38,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 - **Transport track name:** The playing sound's name is shown again.
 - **Engine shutdown:** A stale engine's shutdown request can no longer stop the current persistent engine.
 - **Settings appearance:** Settings rows no longer draw a focus ring inside a focus ring, and sidebar resize no longer renders incorrectly.
+- **Default microphone after an engine restart:** In Default routing mode the engine reclaims the virtual microphone when the system default is cleared, not only when another device is selected. Restarting the engine — which every update does — replaces the virtual microphone node and clears the default, so the soundboard could silently stop being the default input until something else set one. Reclaiming a cleared default now writes the default source directly instead of asking WirePlumber to switch to the device it already had configured, which changed nothing and left the system on a fallback microphone.
+- **Default microphone after a PipeWire or WirePlumber restart:** The engine forgets what it believed about the system default whenever the metadata object carrying it is replaced or goes away, and re-evaluates. A replaced object reports no properties, so an engine that kept its previous belief would skip the reclaim and go silent while the system had no default at all. The change is also logged, because the failure it caused left no trace.
+- **Installer prompts through the one-liner:** Prompts read from the terminal instead of the piped script, so the installer can ask questions when started with `curl ... | bash`. Previously every prompt silently took its non-interactive default.
+- **Uninstall leftovers:** Removing the user installation now also removes the licence and notice files it deployed, so `~/.local/opt/linux-soundboard/` no longer survives an uninstall.
 
 ### Performance
 
