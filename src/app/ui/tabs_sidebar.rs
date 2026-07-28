@@ -212,6 +212,15 @@ fn should_handle_expansion_change(previous: bool, next: bool) -> bool {
     previous != next
 }
 
+/// Rebuilding the folder tree drops every row, and GTK notifies `expanded =
+/// false` for each one as it goes. Those notifications look exactly like a user
+/// collapsing the folder, so persisting them overwrites the expansion the user
+/// actually chose — a reorder or a library refresh would silently flatten the
+/// whole tree and there would be nothing left to restore from.
+fn should_persist_expansion_change(changed: bool, rebuilding: bool) -> bool {
+    changed && !rebuilding
+}
+
 fn update_disclosure_icon(image: &Image, expanded: bool) {
     icons::apply_image_icon(
         image,
@@ -465,6 +474,10 @@ struct TabsInner {
     list_box: ListBox,
     folder_roots: gio::ListStore,
     folder_generation: Rc<Cell<u64>>,
+    /// Set while the folder tree is being torn down and rebuilt, so the
+    /// expansion notifications GTK emits for the dropped rows are not mistaken
+    /// for the user collapsing those folders.
+    folder_rebuilding: Rc<Cell<bool>>,
     tab_generation: Cell<u64>,
     state: Arc<AppState>,
     on_tab_selected: RefCell<Option<TabSelectedCallback>>,
@@ -527,6 +540,7 @@ impl TabsSidebar {
 
         let folder_roots = gio::ListStore::new::<BoxedAnyObject>();
         let folder_generation = Rc::new(Cell::new(0));
+        let folder_rebuilding = Rc::new(Cell::new(false));
         let folder_changed: FolderChangedCallback = Rc::new(RefCell::new(None));
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
@@ -580,6 +594,8 @@ impl TabsSidebar {
         let dialog_host_for_folders = dialog_host.clone();
         let folder_roots_for_actions = folder_roots.clone();
         let folder_generation_for_actions = Rc::clone(&folder_generation);
+        let folder_rebuilding_for_expansion = Rc::clone(&folder_rebuilding);
+        let folder_rebuilding_for_actions = Rc::clone(&folder_rebuilding);
         let folder_changed_for_drop = Rc::clone(&folder_changed);
         folder_factory.connect_bind(move |_, item| {
             let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
@@ -697,6 +713,7 @@ impl TabsSidebar {
                 let library = library_for_expansion.clone();
                 let expanded_root_path = root_path.clone();
                 let loaded_tree = folder_roots_for_expansion.clone();
+                let rebuilding = Rc::clone(&folder_rebuilding_for_expansion);
                 let expansion_handler = row.connect_expanded_notify(move |row| {
                     let is_expanded = row.is_expanded();
                     if !should_handle_expansion_change(expanded.replace(is_expanded), is_expanded) {
@@ -721,6 +738,9 @@ impl TabsSidebar {
                     let Some(relative_path) = relative_path.as_deref() else {
                         return;
                     };
+                    if !should_persist_expansion_change(true, rebuilding.get()) {
+                        return;
+                    }
                     let response = library.set_folder_expanded(
                         &expanded_root_path,
                         relative_path,
@@ -752,6 +772,7 @@ impl TabsSidebar {
                 let context_root_path = root_path.clone();
                 let folder_roots = folder_roots_for_actions.clone();
                 let folder_generation = Rc::clone(&folder_generation_for_actions);
+                let folder_rebuilding_ctx = Rc::clone(&folder_rebuilding_for_actions);
                 gesture.connect_pressed(move |gesture, _, x, y| {
                     let Some(widget) = gesture.widget() else {
                         return;
@@ -820,12 +841,14 @@ impl TabsSidebar {
                         let relative_path = relative_path.to_string();
                         let folder_roots = folder_roots.clone();
                         let folder_generation = Rc::clone(&folder_generation);
+                        let folder_rebuilding = Rc::clone(&folder_rebuilding_ctx);
                         action.connect_activate(move |_, _| {
                             let response =
                                 library.move_folder(&root_path, &relative_path, direction);
                             let library = library.clone();
                             let folder_roots = folder_roots.clone();
                             let folder_generation = Rc::clone(&folder_generation);
+                            let folder_rebuilding = Rc::clone(&folder_rebuilding);
                             if let Err(error) = commands::dispatch_async_result(
                                 "move_sidebar_folder",
                                 move || response.recv(),
@@ -834,6 +857,7 @@ impl TabsSidebar {
                                         library,
                                         folder_roots,
                                         folder_generation,
+                                        folder_rebuilding,
                                     ),
                                     Ok(false) => {}
                                     Err(error) => {
@@ -937,6 +961,7 @@ impl TabsSidebar {
             list_box: list_box.clone(),
             folder_roots,
             folder_generation,
+            folder_rebuilding,
             tab_generation: Cell::new(0),
             state,
             on_tab_selected: RefCell::new(None),
@@ -1280,6 +1305,7 @@ impl TabsInner {
             self.state.library.clone(),
             self.folder_roots.clone(),
             Rc::clone(&self.folder_generation),
+            Rc::clone(&self.folder_rebuilding),
         );
     }
 
@@ -1287,10 +1313,16 @@ impl TabsInner {
         library: crate::library_store::LibraryStore,
         folder_roots: gio::ListStore,
         folder_generation: Rc<Cell<u64>>,
+        folder_rebuilding: Rc<Cell<bool>>,
     ) {
         let next_generation = folder_generation.get().wrapping_add(1);
         folder_generation.set(next_generation);
+        // Dropping the rows makes GTK notify `expanded = false` for every
+        // expanded folder. Those are not user collapses, and persisting them
+        // would erase the expansion this rebuild is about to restore.
+        folder_rebuilding.set(true);
         folder_roots.remove_all();
+        folder_rebuilding.set(false);
         Self::load_roots_async(library, folder_roots, 0, folder_generation, next_generation);
     }
 
@@ -2378,6 +2410,26 @@ mod tests {
     fn handles_a_real_expansion_change() {
         assert!(should_handle_expansion_change(true, false));
         assert!(should_handle_expansion_change(false, true));
+    }
+
+    #[test]
+    fn tearing_the_tree_down_does_not_persist_collapse() {
+        // Rebuilding the model drops every row, and GTK notifies `expanded =
+        // false` for each one on the way out. Persisting that would overwrite
+        // the folder expansion the user actually chose, so a refresh or a
+        // reorder would silently flatten their tree.
+        assert!(
+            !should_persist_expansion_change(true, true),
+            "a collapse caused by rebuilding the tree is not user intent"
+        );
+        assert!(
+            should_persist_expansion_change(true, false),
+            "a real user collapse must still be saved"
+        );
+        assert!(
+            !should_persist_expansion_change(false, false),
+            "an unchanged row writes nothing"
+        );
     }
 
     #[test]
