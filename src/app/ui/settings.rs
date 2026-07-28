@@ -285,11 +285,41 @@ fn build_general_page(
 
     let folder_rows: FolderRowRefs = Rc::new(RefCell::new(Vec::new()));
     let rebuild_pending: RebuildPending = Rc::new(Cell::new(false));
-    // Handle for the scan that follows adding a folder. Held while the scan
-    // runs so activating the row again cancels it instead of opening a second
-    // file dialog on top of a scan the user cannot stop.
+    // Handle for the scan that follows adding a folder, so the Stop button
+    // below can cancel it. The row itself keeps adding folders throughout.
     let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
         Rc::new(RefCell::new(None));
+    // The row keeps adding folders while a scan runs, so a second scan can
+    // start before the first finishes. Only the newest one owns the Stop
+    // button; an older run finishing must not hide it out from under the
+    // newer one.
+    let scan_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+    let scan_stop_btn = gtk4::Button::builder()
+        .label("Stop")
+        .css_classes(vec!["settings-primary-btn"])
+        .valign(gtk4::Align::Center)
+        .visible(false)
+        .tooltip_text("Cancel the folder scan")
+        .build();
+    add_folder_row.add_suffix(&scan_stop_btn);
+
+    {
+        let add_folder_cancel_stop = Rc::clone(&add_folder_cancel);
+        let add_folder_row_stop = add_folder_row.downgrade();
+        scan_stop_btn.connect_clicked(move |btn| {
+            // Copy the handle out before touching widgets: GTK can re-enter a
+            // handler, and a borrow held across a widget call aborts.
+            let pending = add_folder_cancel_stop.borrow().as_ref().map(Arc::clone);
+            let Some(cancelled) = pending else {
+                return;
+            };
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            btn.set_sensitive(false);
+            if let Some(row) = add_folder_row_stop.upgrade() {
+                row.set_subtitle("Cancelling scan…");
+            }
+        });
+    }
 
     {
         let state2 = Arc::clone(&state);
@@ -300,16 +330,9 @@ fn build_general_page(
         let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
         let add_folder_cancel2 = Rc::clone(&add_folder_cancel);
-        add_folder_row.connect_activated(move |row| {
-            // Release the borrow before touching widgets: GTK can re-enter this
-            // handler, and a live borrow would abort rather than fail.
-            let pending = add_folder_cancel2.borrow().as_ref().map(Arc::clone);
-            if let Some(cancelled) = pending {
-                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                row.set_subtitle("Cancelling scan…");
-                row.set_sensitive(false);
-                return;
-            }
+        let scan_generation2 = Rc::clone(&scan_generation);
+        let scan_stop_btn2 = scan_stop_btn.clone();
+        add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
                 .title("Select Sound Folder")
                 .build();
@@ -321,6 +344,8 @@ fn build_general_page(
             let rebuild_pending3 = Rc::clone(&rebuild_pending2);
             let on_library_changed3 = on_library_changed2.clone();
             let add_folder_cancel3 = Rc::clone(&add_folder_cancel2);
+            let scan_generation3 = Rc::clone(&scan_generation2);
+            let scan_stop_btn3 = scan_stop_btn2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
                 gtk4::gio::Cancellable::NONE,
@@ -343,13 +368,26 @@ fn build_general_page(
                                         log::info!("Add folder command succeeded");
                                         let add_folder_row_refresh = add_folder_row_done.clone();
                                         let cancel_done = Rc::clone(&add_folder_cancel3);
+                                        let stop_btn_done = scan_stop_btn3.clone();
+                                        // Claim the generation before
+                                        // dispatching: the completion runs on
+                                        // this same main loop, so it cannot
+                                        // fire before this returns.
+                                        let scan_id =
+                                            scan_generation3.get().wrapping_add(1);
+                                        scan_generation3.set(scan_id);
+                                        let generation_done = Rc::clone(&scan_generation3);
                                         match commands::refresh_sounds_with_store_async(
                                             state3.library.clone(),
                                             state3.hotkey_projection.clone(),
                                             move |result| {
-                                                cancel_done.borrow_mut().take();
-                                                add_folder_row_refresh.set_sensitive(true);
-                                                add_folder_row_refresh.set_subtitle("");
+                                                if generation_done.get() == scan_id {
+                                                    cancel_done.borrow_mut().take();
+                                                    stop_btn_done.set_visible(false);
+                                                    stop_btn_done.set_sensitive(true);
+                                                    add_folder_row_refresh.set_sensitive(true);
+                                                    add_folder_row_refresh.set_subtitle("");
+                                                }
                                                 match result {
                                                     Err(e)
                                                         if e.to_string().contains("cancelled") =>
@@ -385,13 +423,16 @@ fn build_general_page(
                                             },
                                         ) {
                                             Ok(cancelled) => {
-                                                // The scan is the slow part, so
-                                                // hand the row back as a cancel
-                                                // control while it runs.
+                                                // The scan is the slow part. Show
+                                                // Stop beside the row and leave
+                                                // the row itself free to add
+                                                // another folder.
                                                 *add_folder_cancel3.borrow_mut() = Some(cancelled);
                                                 add_folder_row_done
-                                                    .set_subtitle("Scanning… activate to cancel");
+                                                    .set_subtitle("Scanning for audio files…");
                                                 add_folder_row_done.set_sensitive(true);
+                                                scan_stop_btn3.set_sensitive(true);
+                                                scan_stop_btn3.set_visible(true);
                                             }
                                             Err(e) => {
                                                 add_folder_row_done.set_sensitive(true);
