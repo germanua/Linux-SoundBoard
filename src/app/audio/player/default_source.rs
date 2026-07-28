@@ -107,29 +107,45 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     let new_name = value.and_then(parse_default_source_name);
     state.default_audio_source_name = new_name.clone();
 
-    // If the user has chosen `Manual`, respect their pick and don't fight.
-    if state.runtime.default_source_mode == DefaultSourceMode::Manual {
+    if !should_reclaim_default(state.runtime.default_source_mode, new_name.as_deref()) {
         return;
     }
 
-    let Some(name) = new_name.as_deref() else {
-        return;
-    };
-    // If virtual_mic is already the default, nothing to do.
-    if name == VIRTUAL_SOURCE_NAME {
-        return;
+    match new_name.as_deref() {
+        Some(name) => {
+            info!(
+                "Default source changed externally to '{}'; re-asserting '{}'",
+                name, VIRTUAL_SOURCE_NAME
+            );
+            // Remember whatever was here BEFORE us — for uninstall restore.
+            if state.previous_default_source_name.is_none() {
+                state.previous_default_source_name = Some(name.to_string());
+            }
+        }
+        None => {
+            // Nothing to remember for a restore: the system is not pointing at
+            // a device the user picked, it is pointing at nothing.
+            info!(
+                "Default source was cleared; re-asserting '{}'",
+                VIRTUAL_SOURCE_NAME
+            );
+        }
     }
 
-    // Something else became the default. Re-assert.
-    info!(
-        "Default source changed externally to '{}'; re-asserting '{}'",
-        name, VIRTUAL_SOURCE_NAME
-    );
-    // Remember whatever was here BEFORE us — for uninstall restore.
-    if state.previous_default_source_name.is_none() {
-        state.previous_default_source_name = Some(name.to_string());
-    }
     claim_default_source_if_enabled(state);
+}
+
+/// Whether the engine should claim the default source, given the mode and the
+/// default the system now reports.
+///
+/// `None` means the property was deleted, not that the system is happy: with no
+/// default set, PipeWire falls back to whatever it ranks highest, which is not
+/// us. That has to be reclaimed exactly like a foreign device.
+fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bool {
+    if mode == DefaultSourceMode::Manual {
+        return false;
+    }
+    new_name != Some(VIRTUAL_SOURCE_NAME)
 }
 
 /// Parse the JSON-shaped metadata value into the source's node name.
@@ -242,5 +258,39 @@ mod tests {
         assert_eq!(parse_default_source_name("not json"), None);
         assert_eq!(parse_default_source_name("{}"), None);
         assert_eq!(parse_default_source_name(r#"{"name":"#), None);
+    }
+
+    #[test]
+    fn a_cleared_default_is_reclaimed() {
+        // PipeWire deletes the property rather than reassigning it when the
+        // node a default pointed at goes away, which happens on every engine
+        // restart because the virtual mic is recreated. Treating "no default"
+        // as nothing to do left the soundboard silently not the default.
+        assert!(should_reclaim_default(DefaultSourceMode::Default, None));
+    }
+
+    #[test]
+    fn a_foreign_default_is_reclaimed() {
+        assert!(should_reclaim_default(
+            DefaultSourceMode::Default,
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo")
+        ));
+    }
+
+    #[test]
+    fn our_own_default_is_left_alone() {
+        assert!(!should_reclaim_default(
+            DefaultSourceMode::Default,
+            Some(VIRTUAL_SOURCE_NAME)
+        ));
+    }
+
+    #[test]
+    fn manual_mode_never_reclaims() {
+        assert!(!should_reclaim_default(DefaultSourceMode::Manual, None));
+        assert!(!should_reclaim_default(
+            DefaultSourceMode::Manual,
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo")
+        ));
     }
 }
