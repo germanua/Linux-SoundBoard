@@ -161,6 +161,7 @@ impl PagedSoundModel {
         imp.lru.borrow_mut().clear();
         imp.page_payload_bytes.borrow_mut().clear();
         imp.cached_payload_bytes.set(0);
+        self.publish_cache_diagnostics();
         if old_total > 0 {
             self.items_changed(0, old_total, 0);
         }
@@ -530,6 +531,7 @@ impl PagedSoundModel {
                 .saturating_sub(previous)
                 .saturating_add(payload_bytes),
         );
+        self.publish_cache_diagnostics();
     }
 
     fn evict_page(&self, page: u32) {
@@ -544,6 +546,20 @@ impl PagedSoundModel {
                     .saturating_sub(payload),
             );
         }
+        self.publish_cache_diagnostics();
+    }
+
+    /// Diagnostics runs on worker threads too, so the cache size is copied out
+    /// rather than read back off this main-thread object.
+    fn publish_cache_diagnostics(&self) {
+        let imp = self.imp();
+        let pages = imp.pages.borrow();
+        let row_count = pages.values().map(|rows| rows.len()).sum();
+        crate::diagnostics::memory::set_ui_row_cache(
+            pages.len(),
+            imp.cached_payload_bytes.get(),
+            row_count,
+        );
     }
 
     fn publish_initial_page(&self, generation: u64, total: u32, sounds: Vec<Sound>) -> bool {
