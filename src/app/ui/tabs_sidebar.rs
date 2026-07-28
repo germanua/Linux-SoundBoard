@@ -63,6 +63,7 @@ struct FolderNode {
     disclosure_handlers: RefCell<Option<(Image, GestureClick, TreeListRow, glib::SignalHandlerId)>>,
     context_gesture: RefCell<Option<GestureClick>>,
     drop_target: RefCell<Option<gtk4::DropTargetAsync>>,
+    drag_source: RefCell<Option<gtk4::DragSource>>,
     /// Position of this node among its loaded siblings; used to decide when
     /// scrolling has gotten close enough to the end to prefetch more.
     sibling_index: usize,
@@ -221,6 +222,34 @@ fn should_persist_expansion_change(changed: bool, rebuilding: bool) -> bool {
     changed && !rebuilding
 }
 
+/// Parent of a folder, derived from its relative path: `albumA/disc1` sits
+/// under `albumA`, and a top-level folder has none. Reordering is offered only
+/// among a folder's own siblings, so both sides of a drag compare this.
+fn folder_parent_relative_path(relative_path: &str) -> Option<String> {
+    std::path::Path::new(relative_path)
+        .parent()
+        .filter(|parent| parent.components().next().is_some())
+        .map(|parent| parent.to_string_lossy().into_owned())
+}
+
+/// Index a dragged folder should land on, given the row it was dropped against.
+///
+/// Removing the folder before re-inserting shifts every later slot down by one,
+/// so dropping below a row that already sits after the folder must not add the
+/// usual +1 or the folder overshoots by one place.
+fn folder_reorder_target_index(dragged_index: usize, target_index: usize, after: bool) -> usize {
+    let raw = if after {
+        target_index + 1
+    } else {
+        target_index
+    };
+    if dragged_index < raw {
+        raw.saturating_sub(1)
+    } else {
+        raw
+    }
+}
+
 fn update_disclosure_icon(image: &Image, expanded: bool) {
     icons::apply_image_icon(
         image,
@@ -273,6 +302,7 @@ impl FolderNode {
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
             drop_target: RefCell::new(None),
+            drag_source: RefCell::new(None),
             sibling_index: 0,
             sibling_pager: None,
             children_pager: Rc::new(RefCell::new(None)),
@@ -308,6 +338,7 @@ impl FolderNode {
             disclosure_handlers: RefCell::new(None),
             context_gesture: RefCell::new(None),
             drop_target: RefCell::new(None),
+            drag_source: RefCell::new(None),
             sibling_index,
             sibling_pager,
             children_pager: Rc::new(RefCell::new(None)),
@@ -383,38 +414,196 @@ fn folder_drop_overrides(
     overrides
 }
 
+/// Lets a folder row be dragged. The payload carries the folder's identity and
+/// its parent, so the drop side can reject anything that is not a sibling
+/// without having to walk the tree.
+fn install_folder_drag_source(
+    widget: &GtkBox,
+    root_path: String,
+    relative_path: String,
+) -> gtk4::DragSource {
+    let source = gtk4::DragSource::new();
+    source.set_actions(gtk4::gdk::DragAction::COPY);
+    source.connect_prepare(move |_, _, _| {
+        let payload = tab_dnd::FolderDragPayload {
+            root_path: root_path.clone(),
+            relative_path: relative_path.clone(),
+            parent_relative_path: folder_parent_relative_path(&relative_path),
+        };
+        let bytes = tab_dnd::encode_folder_drag(&payload)?;
+        // The value half is what `read_value_async::<Bytes>` negotiates against;
+        // the mime half is how a drop target tells a folder drag from a sound
+        // drag. Advertising only the mime leaves the reader no matching format.
+        let providers = [
+            gtk4::gdk::ContentProvider::for_value(&bytes.to_value()),
+            gtk4::gdk::ContentProvider::for_bytes(tab_dnd::FOLDER_DND_MIME, &bytes),
+        ];
+        Some(gtk4::gdk::ContentProvider::new_union(&providers))
+    });
+    widget.add_controller(source.clone());
+    source
+}
+
+/// The row a folder was dropped against.
+struct FolderDropTargetRow<'a> {
+    root_path: &'a str,
+    relative_path: &'a str,
+    sibling_index: usize,
+}
+
+/// Applies a folder-on-folder drop.
+///
+/// Only reordering among a folder's own siblings is accepted: a drop into a gap
+/// that belongs to another parent would be a reparent, which is a different
+/// operation and far too easy to trigger by mis-aiming on a deep tree.
+fn handle_folder_reorder_drop(
+    bytes: &glib::Bytes,
+    library: &crate::library_store::LibraryStore,
+    row: FolderDropTargetRow<'_>,
+    zone: tab_dnd::FolderDropZone,
+    drop: &gtk4::gdk::Drop,
+    on_changed: &FolderChangedCallback,
+) {
+    // Refusals are a normal outcome of a mis-aimed drag, so they are logged at
+    // debug rather than warn, but never silently.
+    let reject = |reason: &str| {
+        log::debug!("Folder reorder drop refused: {reason}");
+        drop.finish(gtk4::gdk::DragAction::empty());
+    };
+    let Some(payload) = tab_dnd::decode_folder_drag(bytes) else {
+        reject("payload is not a folder drag");
+        return;
+    };
+    let after = match zone {
+        tab_dnd::FolderDropZone::Before => false,
+        tab_dnd::FolderDropZone::After => true,
+        // Merging folders is not wired yet; rejecting is honest, and it keeps a
+        // centre-aimed drop from silently reordering instead.
+        tab_dnd::FolderDropZone::Into => {
+            reject("merging folders is not wired yet");
+            return;
+        }
+    };
+    if payload.root_path != row.root_path || payload.relative_path == row.relative_path {
+        reject("different root, or dropped on itself");
+        return;
+    }
+    if payload.parent_relative_path.as_deref()
+        != folder_parent_relative_path(row.relative_path).as_deref()
+    {
+        reject("target is not a sibling");
+        return;
+    }
+    let Some(dragged_index) = dragged_sibling_index(library, &payload) else {
+        reject("dragged folder is no longer among its siblings");
+        return;
+    };
+    let destination = folder_reorder_target_index(dragged_index, row.sibling_index, after);
+
+    let response = library.reorder_folder(&payload.root_path, &payload.relative_path, destination);
+    let drop_for_complete = drop.clone();
+    let on_changed = Rc::clone(on_changed);
+    if let Err(error) = commands::dispatch_async_result(
+        "reorder_sidebar_folder",
+        move || response.recv(),
+        move |result| match result {
+            Ok(_) => {
+                drop_for_complete.finish(gtk4::gdk::DragAction::COPY);
+                if let Some(callback) = &*on_changed.borrow() {
+                    callback();
+                }
+            }
+            Err(error) => {
+                log::warn!("Failed to reorder folder: {error}");
+                drop_for_complete.finish(gtk4::gdk::DragAction::empty());
+            }
+        },
+    ) {
+        log::warn!("Failed to dispatch folder reorder: {error}");
+        drop.finish(gtk4::gdk::DragAction::empty());
+    }
+}
+
+/// Current position of the dragged folder among its siblings, read back from
+/// the store rather than carried in the payload: the tree may have been
+/// refreshed since the drag began.
+fn dragged_sibling_index(
+    library: &crate::library_store::LibraryStore,
+    payload: &tab_dnd::FolderDragPayload,
+) -> Option<usize> {
+    let page = library
+        .folder_children(
+            &payload.root_path,
+            payload.parent_relative_path.as_deref(),
+            0,
+        )
+        .recv()
+        .ok()?;
+    page.folders
+        .iter()
+        .position(|folder| folder.relative_path == payload.relative_path)
+}
+
 fn install_folder_drop_target(
     widget: &GtkBox,
     library: crate::library_store::LibraryStore,
     root_path: String,
     relative_path: String,
+    sibling_index: usize,
     on_changed: FolderChangedCallback,
+    on_reordered: FolderChangedCallback,
 ) -> gtk4::DropTargetAsync {
     let formats = gtk4::gdk::ContentFormats::builder()
         .add_type(glib::Bytes::static_type())
         .add_mime_type(tab_dnd::SOUND_TAB_DND_MIME)
+        .add_mime_type(tab_dnd::FOLDER_DND_MIME)
         .build();
     let target = gtk4::DropTargetAsync::new(Some(formats), gtk4::gdk::DragAction::COPY);
-    target.connect_drop(move |_, drop, _, _| {
+    target.connect_drop(move |target, drop, _, y| {
+        // A folder drop reorders; a sound drop changes membership. The zone
+        // only matters for folders, so it is resolved before reading the data.
+        let row_height = f64::from(target.widget().map(|w| w.height()).unwrap_or(0));
+        let zone = tab_dnd::folder_drop_zone(y, row_height);
+        let is_folder_drag = drop.formats().contain_mime_type(tab_dnd::FOLDER_DND_MIME);
         let drop_for_read = drop.clone();
         let drop_for_finish = drop.clone();
         let library = library.clone();
         let root_path = root_path.clone();
         let relative_path = relative_path.clone();
         let on_changed = Rc::clone(&on_changed);
+        let on_reordered = Rc::clone(&on_reordered);
         drop_for_read.read_value_async(
             glib::Bytes::static_type(),
             glib::Priority::DEFAULT,
             None::<&gio::Cancellable>,
             move |result| {
-                let Ok(value) = result else {
-                    drop_for_finish.finish(gtk4::gdk::DragAction::empty());
-                    return;
+                let value = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        log::debug!("Drop payload could not be read: {error}");
+                        drop_for_finish.finish(gtk4::gdk::DragAction::empty());
+                        return;
+                    }
                 };
                 let Ok(bytes) = value.get::<glib::Bytes>() else {
                     drop_for_finish.finish(gtk4::gdk::DragAction::empty());
                     return;
                 };
+                if is_folder_drag {
+                    handle_folder_reorder_drop(
+                        &bytes,
+                        &library,
+                        FolderDropTargetRow {
+                            root_path: &root_path,
+                            relative_path: &relative_path,
+                            sibling_index,
+                        },
+                        zone,
+                        &drop_for_finish,
+                        &on_reordered,
+                    );
+                    return;
+                }
                 let Some(payload) = tab_dnd::decode_drag_payload(&bytes) else {
                     drop_for_finish.finish(gtk4::gdk::DragAction::empty());
                     return;
@@ -542,6 +731,7 @@ impl TabsSidebar {
         let folder_generation = Rc::new(Cell::new(0));
         let folder_rebuilding = Rc::new(Cell::new(false));
         let folder_changed: FolderChangedCallback = Rc::new(RefCell::new(None));
+        let folder_reordered: FolderChangedCallback = Rc::new(RefCell::new(None));
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
@@ -597,6 +787,7 @@ impl TabsSidebar {
         let folder_rebuilding_for_expansion = Rc::clone(&folder_rebuilding);
         let folder_rebuilding_for_actions = Rc::clone(&folder_rebuilding);
         let folder_changed_for_drop = Rc::clone(&folder_changed);
+        let folder_reordered_for_drop = Rc::clone(&folder_reordered);
         folder_factory.connect_bind(move |_, item| {
             let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
                 return;
@@ -891,12 +1082,24 @@ impl TabsSidebar {
                 let target = install_folder_drop_target(
                     &row_box,
                     library_for_expansion.clone(),
-                    root_path,
-                    relative_path,
+                    root_path.clone(),
+                    relative_path.clone(),
+                    sibling_index,
                     Rc::clone(&folder_changed_for_drop),
+                    Rc::clone(&folder_reordered_for_drop),
                 );
                 if let Ok(node) = boxed.try_borrow::<FolderNode>() {
                     node.drop_target.replace(Some(target));
+                }
+                if let Ok(node) = boxed.try_borrow::<FolderNode>() {
+                    if node.drag_source.borrow().is_none() {
+                        let source = install_folder_drag_source(
+                            &row_box,
+                            root_path.clone(),
+                            relative_path.clone(),
+                        );
+                        node.drag_source.replace(Some(source));
+                    }
                 }
             }
         });
@@ -976,6 +1179,16 @@ impl TabsSidebar {
             folder_changed.borrow_mut().replace(Box::new(move || {
                 if let Some(inner) = inner_weak.upgrade() {
                     inner.emit_tab_membership_changed();
+                }
+            }));
+        }
+        {
+            // A reorder only changes sibling order, so the tree is rebuilt but
+            // membership listeners are left alone.
+            let inner_weak = Arc::downgrade(&inner);
+            folder_reordered.borrow_mut().replace(Box::new(move || {
+                if let Some(inner) = inner_weak.upgrade() {
+                    inner.reload_folder_roots();
                 }
             }));
         }
@@ -2410,6 +2623,32 @@ mod tests {
     fn handles_a_real_expansion_change() {
         assert!(should_handle_expansion_change(true, false));
         assert!(should_handle_expansion_change(false, true));
+    }
+
+    #[test]
+    fn dropping_below_a_later_row_does_not_overshoot() {
+        // The dragged folder is removed before being re-inserted, so every slot
+        // after it shifts down by one. Dropping "below row 3" while dragging
+        // row 1 must land on index 3, not 4.
+        assert_eq!(folder_reorder_target_index(1, 3, true), 3);
+        assert_eq!(folder_reorder_target_index(1, 3, false), 2);
+    }
+
+    #[test]
+    fn dropping_above_an_earlier_row_keeps_the_slot() {
+        // Dragging downwards to upwards: nothing shifts, so the raw slot stands.
+        assert_eq!(folder_reorder_target_index(3, 1, false), 1);
+        assert_eq!(folder_reorder_target_index(3, 1, true), 2);
+    }
+
+    #[test]
+    fn a_folders_parent_comes_from_its_relative_path() {
+        assert_eq!(folder_parent_relative_path("albumA"), None);
+        assert_eq!(
+            folder_parent_relative_path("albumA/disc1").as_deref(),
+            Some("albumA")
+        );
+        assert_eq!(folder_parent_relative_path("a/b/c").as_deref(), Some("a/b"));
     }
 
     #[test]
