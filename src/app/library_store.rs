@@ -11,7 +11,10 @@ use crate::config::{ControlHotkeyAction, LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
-const DATABASE_SCHEMA_VERSION: i64 = 3;
+pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 4;
+/// Metadata tag written beside the schema version. Migrations keep their own
+/// historical literals; this is only ever the current one.
+pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v4";
 pub(crate) const DATABASE_APPLICATION_ID: i64 = 0x4c53_4244;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
 const VISIBLE_QUEUE_CAPACITY: usize = 64;
@@ -83,6 +86,21 @@ pub struct FolderItem {
 pub struct FolderPage {
     pub total: usize,
     pub folders: Vec<FolderItem>,
+}
+
+/// A folder the user removed from the library. Carries its root so it can be
+/// restored without walking the tree it is currently absent from.
+#[derive(Debug, Clone)]
+pub struct HiddenFolderItem {
+    pub root_path: String,
+    pub relative_path: String,
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct HiddenFolderPage {
+    pub total: usize,
+    pub folders: Vec<HiddenFolderItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +290,11 @@ enum LibraryEdit {
         folder_relative_path: String,
         expanded: bool,
     },
+    SetFolderHidden {
+        root_path: String,
+        folder_relative_path: String,
+        hidden: bool,
+    },
     SetFolderDisplayName {
         root_path: String,
         folder_relative_path: String,
@@ -432,6 +455,10 @@ enum Request {
         page: usize,
         reply: mpsc::SyncSender<Result<FolderPage, LibraryError>>,
     },
+    HiddenFolders {
+        page: usize,
+        reply: mpsc::SyncSender<Result<HiddenFolderPage, LibraryError>>,
+    },
     ManualTabs {
         page: usize,
         reply: mpsc::SyncSender<Result<ManualTabPage, LibraryError>>,
@@ -540,6 +567,7 @@ impl RequestQueue {
             }
             | Request::Roots { .. }
             | Request::FolderChildren { .. }
+            | Request::HiddenFolders { .. }
             | Request::ManualTabs { .. }
             | Request::Edit { .. }
             | Request::UpdateSound { .. }
@@ -1240,6 +1268,27 @@ impl LibraryStore {
         })
     }
 
+    /// Hides or restores a folder. Hiding takes the whole subtree and the
+    /// sounds that live only inside it out of the library; nothing on disk is
+    /// touched, and a rescan will not bring it back.
+    pub fn set_folder_hidden(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        hidden: bool,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::SetFolderHidden {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            hidden,
+        })
+    }
+
+    pub fn hidden_folders(&self, page: usize) -> LibraryResponse<HiddenFolderPage> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(Request::HiddenFolders { page, reply }, response)
+    }
+
     pub fn set_folder_display_name(
         &self,
         root_path: &str,
@@ -1383,6 +1432,7 @@ impl Request {
             | Request::ApplyBatch { .. }
             | Request::Roots { .. }
             | Request::FolderChildren { .. }
+            | Request::HiddenFolders { .. }
             | Request::ManualTabs { .. } => false,
         }
     }
@@ -1564,6 +1614,9 @@ fn handle_request(connection: &mut Connection, request: Request) {
                 page,
             ));
         }
+        Request::HiddenFolders { page, reply } => {
+            let _ = reply.send(load_hidden_folders(connection, page));
+        }
         Request::ManualTabs { page, reply } => {
             let _ = reply.send(load_manual_tabs(connection, page));
         }
@@ -1614,8 +1667,12 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     } else if schema_version == 1 {
         migrate_schema_1_to_2(&connection)?;
         migrate_schema_2_to_3(&connection)?;
+        migrate_schema_3_to_4(&connection)?;
     } else if schema_version == 2 {
         migrate_schema_2_to_3(&connection)?;
+        migrate_schema_3_to_4(&connection)?;
+    } else if schema_version == 3 {
+        migrate_schema_3_to_4(&connection)?;
     } else {
         let meta_version: String = connection.query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -1627,8 +1684,7 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
             [],
             |row| row.get(0),
         )?;
-        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != "bounded-generation-v3"
-        {
+        if meta_version != DATABASE_SCHEMA_VERSION.to_string() || flavor != DATABASE_SCHEMA_FLAVOR {
             return Err(LibraryError::InvalidData(
                 "library metadata does not match the bounded schema".to_string(),
             ));
@@ -1754,7 +1810,8 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              folder_id INTEGER PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
              display_name TEXT,
              sibling_position INTEGER,
-             expanded INTEGER NOT NULL DEFAULT 0 CHECK(expanded IN (0, 1))
+             expanded INTEGER NOT NULL DEFAULT 0 CHECK(expanded IN (0, 1)),
+             hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0, 1))
          );
          CREATE TABLE folder_overrides(
              folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
@@ -1780,9 +1837,9 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              VALUES('delete', old.rowid, old.search_name);
              INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
          END;
-         INSERT INTO meta(key, value) VALUES('schema_version', '3');
-         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v3');
-         PRAGMA user_version = 3;
+         INSERT INTO meta(key, value) VALUES('schema_version', '4');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v4');
+         PRAGMA user_version = 4;
          COMMIT;",
     )?;
     Ok(())
@@ -1869,6 +1926,29 @@ fn migrate_schema_2_to_3(connection: &Connection) -> Result<(), LibraryError> {
          UPDATE meta SET value = '3' WHERE key = 'schema_version';
          UPDATE meta SET value = 'bounded-generation-v3' WHERE key = 'schema_flavor';
          PRAGMA user_version = 3;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
+fn migrate_schema_3_to_4(connection: &Connection) -> Result<(), LibraryError> {
+    let flavor: String = connection.query_row(
+        "SELECT value FROM meta WHERE key = 'schema_flavor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if flavor != "bounded-generation-v3" {
+        return Err(LibraryError::InvalidData(
+            "library metadata does not match schema 3".to_string(),
+        ));
+    }
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         ALTER TABLE folder_prefs
+             ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0, 1));
+         UPDATE meta SET value = '4' WHERE key = 'schema_version';
+         UPDATE meta SET value = 'bounded-generation-v4' WHERE key = 'schema_flavor';
+         PRAGMA user_version = 4;
          COMMIT;",
     )?;
     Ok(())
@@ -2608,6 +2688,19 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
              ON CONFLICT(folder_id) DO UPDATE SET expanded = excluded.expanded",
             params![root_path, folder_relative_path, i64::from(expanded)],
         )?,
+        LibraryEdit::SetFolderHidden {
+            root_path,
+            folder_relative_path,
+            hidden,
+        } => connection.execute(
+            "INSERT INTO folder_prefs(folder_id, hidden)
+             SELECT folder.id, ?3
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE root.path = ?1 AND folder.relative_path = ?2
+             ON CONFLICT(folder_id) DO UPDATE SET hidden = excluded.hidden",
+            params![root_path, folder_relative_path, i64::from(hidden)],
+        )?,
         LibraryEdit::SetFolderDisplayName {
             root_path,
             folder_relative_path,
@@ -3128,7 +3221,20 @@ const LIVE_SOUND_FILTER: &str = "(sound.standalone = 1
       OR EXISTS(SELECT 1 FROM sound_locations AS live_location
                 JOIN roots AS live_root ON live_root.id = live_location.root_id
                 WHERE live_location.sound_id = sound.rowid
-                  AND live_location.generation = live_root.active_generation))";
+                  AND live_location.generation = live_root.active_generation
+                  AND NOT EXISTS(SELECT 1 FROM folder_closure AS hidden_closure
+                                 JOIN folder_prefs AS hidden_pref
+                                     ON hidden_pref.folder_id = hidden_closure.ancestor_id
+                                 WHERE hidden_closure.descendant_id = live_location.folder_id
+                                   AND hidden_pref.hidden = 1)))";
+
+/// True when a folder is hidden, or sits under a folder that is. Written
+/// against `folder.id`, so a query must expose the folder it is testing under
+/// that alias.
+const HIDDEN_FOLDER_FILTER: &str = "EXISTS(
+          SELECT 1 FROM folder_closure AS hidden_closure
+          JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
+          WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1)";
 
 const SOUND_FIELDS: &str = "sound.public_id, sound.name, sound.path, sound.source_path,
     (SELECT binding.accelerator FROM hotkey_bindings AS binding
@@ -3616,7 +3722,13 @@ fn load_folder_children(
                          JOIN folder_presence AS child_presence
                            ON child_presence.folder_id = child.id
                           AND child_presence.generation = root.active_generation
-                         WHERE child.root_id = root.id AND child.parent_id = folder.id)";
+                         WHERE child.root_id = root.id AND child.parent_id = folder.id
+                           AND NOT EXISTS(
+                               SELECT 1 FROM folder_closure AS hidden_closure
+                               JOIN folder_prefs AS hidden_pref
+                                   ON hidden_pref.folder_id = hidden_closure.ancestor_id
+                               WHERE hidden_closure.descendant_id = child.id
+                                 AND hidden_pref.hidden = 1))";
     let (total, folders) = if let Some(parent_relative_path) = parent_relative_path {
         let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM folders AS folder
@@ -3628,6 +3740,10 @@ fn load_folder_children(
                  JOIN folder_presence AS parent_presence ON parent_presence.folder_id = parent.id
                      AND parent_presence.generation = root.active_generation
                  WHERE parent.root_id = root.id AND parent.relative_path = ?2
+             ) AND NOT EXISTS(
+                 SELECT 1 FROM folder_closure AS hidden_closure
+                 JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
+                 WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1
              )",
             params![root_path, parent_relative_path],
             |row| row.get(0),
@@ -3643,7 +3759,7 @@ fn load_folder_children(
                  JOIN folder_presence AS parent_presence ON parent_presence.folder_id = parent.id
                      AND parent_presence.generation = root.active_generation
                  WHERE parent.root_id = root.id AND parent.relative_path = ?2
-             )
+             ) AND NOT {HIDDEN_FOLDER_FILTER}
              ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
              LIMIT ?3 OFFSET ?4"
         );
@@ -3659,7 +3775,13 @@ fn load_folder_children(
              JOIN roots AS root ON root.id = folder.root_id
              JOIN folder_presence AS presence ON presence.folder_id = folder.id
                  AND presence.generation = root.active_generation
-             WHERE root.path = ?1 AND folder.parent_id IS NULL",
+             WHERE root.path = ?1 AND folder.parent_id IS NULL
+                 AND NOT EXISTS(
+                     SELECT 1 FROM folder_closure AS hidden_closure
+                     JOIN folder_prefs AS hidden_pref
+                         ON hidden_pref.folder_id = hidden_closure.ancestor_id
+                     WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1
+                 )",
             [root_path],
             |row| row.get(0),
         )?;
@@ -3669,7 +3791,7 @@ fn load_folder_children(
              JOIN folder_presence AS presence ON presence.folder_id = folder.id
                  AND presence.generation = root.active_generation
              LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
-             WHERE root.path = ?1 AND folder.parent_id IS NULL
+             WHERE root.path = ?1 AND folder.parent_id IS NULL AND NOT {HIDDEN_FOLDER_FILTER}
              ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id
              LIMIT ?2 OFFSET ?3"
         );
@@ -3678,6 +3800,52 @@ fn load_folder_children(
         (count, collect_folders(rows)?)
     };
     Ok(FolderPage {
+        total: usize::try_from(total)
+            .map_err(|_| LibraryError::InvalidData("negative folder count".to_string()))?,
+        folders,
+    })
+}
+
+/// Folders the user removed, newest-shallowest first so a hidden parent is
+/// listed before anything nested under it.
+fn load_hidden_folders(
+    connection: &Connection,
+    page: usize,
+) -> Result<HiddenFolderPage, LibraryError> {
+    let offset = page
+        .checked_mul(PAGE_SIZE)
+        .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
+    let total: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM folder_prefs AS pref
+         JOIN folders AS folder ON folder.id = pref.folder_id
+         WHERE pref.hidden = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT root.path, folder.relative_path, COALESCE(pref.display_name, folder.name)
+         FROM folder_prefs AS pref
+         JOIN folders AS folder ON folder.id = pref.folder_id
+         JOIN roots AS root ON root.id = folder.root_id
+         WHERE pref.hidden = 1
+         ORDER BY root.path, folder.relative_path
+         LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = statement.query_map(
+        params![usize_to_i64(PAGE_SIZE)?, usize_to_i64(offset)?],
+        |row| {
+            Ok(HiddenFolderItem {
+                root_path: row.get(0)?,
+                relative_path: row.get(1)?,
+                name: row.get(2)?,
+            })
+        },
+    )?;
+    let mut folders = Vec::new();
+    for folder in rows {
+        folders.push(folder?);
+    }
+    Ok(HiddenFolderPage {
         total: usize::try_from(total)
             .map_err(|_| LibraryError::InvalidData("negative folder count".to_string()))?,
         folders,

@@ -1068,10 +1068,14 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             crate::library_store::DATABASE_APPLICATION_ID
         )));
     }
+    // This gate runs before the store opens the database, so it has to accept
+    // anything the store can still migrate forward. Demanding the current
+    // version would lock a user out of their library on every schema bump.
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if schema_version != 3 {
+    if !(1..=crate::library_store::DATABASE_SCHEMA_VERSION).contains(&schema_version) {
         return Err(LegacyMigrationError::Invalid(format!(
-            "library database schema is {schema_version}, expected 3"
+            "library database schema is {schema_version}, expected 1 to {}",
+            crate::library_store::DATABASE_SCHEMA_VERSION
         )));
     }
     let ready: Option<String> = connection
@@ -1093,7 +1097,10 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             |row| row.get(0),
         )
         .optional()?;
-    if flavor.as_deref() != Some("bounded-generation-v3") {
+    // Each schema version carries its own flavor tag, so the expected one
+    // follows the version found above rather than the current release.
+    let expected_flavor = format!("bounded-generation-v{schema_version}");
+    if flavor.as_deref() != Some(expected_flavor.as_str()) {
         return Err(LegacyMigrationError::Invalid(
             "library database metadata does not match the bounded schema".to_string(),
         ));
@@ -1995,6 +2002,53 @@ mod tests {
 
         assert!(complete_legacy_settings_cutover(&source, &destination).is_err());
         assert_eq!(config_schema_version(&source).unwrap(), 7);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn a_database_from_an_older_schema_is_accepted_and_migrated_on_open() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-older-schema-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let destination = directory.join("library.sqlite3");
+        initialize_empty_library(&destination, "library").expect("create database");
+
+        // Stand in for a library written by the previous release. The startup
+        // gate runs before the store migrates, so demanding the current version
+        // there would lock every existing user out of their library.
+        let previous = crate::library_store::DATABASE_SCHEMA_VERSION - 1;
+        let connection = Connection::open(&destination).expect("open database");
+        connection
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+                rusqlite::params![previous.to_string()],
+            )
+            .expect("downgrade schema version");
+        connection
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = 'schema_flavor'",
+                rusqlite::params![format!("bounded-generation-v{previous}")],
+            )
+            .expect("downgrade schema flavor");
+        connection
+            .execute_batch(&format!("PRAGMA user_version = {previous};"))
+            .expect("downgrade user version");
+        connection
+            .execute_batch("ALTER TABLE folder_prefs DROP COLUMN hidden;")
+            .expect("drop the column the current schema adds");
+        drop(connection);
+
+        database_identity(&destination).expect("an older library must still be accepted");
+
+        let store = crate::library_store::LibraryStore::open(destination.clone())
+            .expect("open migrates the store");
+        drop(store);
+        let connection = Connection::open(&destination).expect("reopen database");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read migrated version");
+        assert_eq!(version, crate::library_store::DATABASE_SCHEMA_VERSION);
+        drop(connection);
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 

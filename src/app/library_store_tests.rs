@@ -1433,6 +1433,12 @@ fn schema_one_migration_preserves_duplicate_hotkeys_for_user_resolution() {
              CREATE INDEX sounds_hotkey ON sounds(hotkey) WHERE hotkey IS NOT NULL;
              INSERT INTO sounds(public_id, hotkey) VALUES
                  ('first', 'Ctrl+KeyA'), ('second', 'ctrl+keya'), ('third', 'Alt+KeyB');
+             CREATE TABLE folder_prefs(
+                 folder_id INTEGER PRIMARY KEY,
+                 display_name TEXT,
+                 sibling_position INTEGER,
+                 expanded INTEGER NOT NULL DEFAULT 0 CHECK(expanded IN (0, 1))
+             );
              PRAGMA user_version = 1;",
         )
         .expect("seed schema one database");
@@ -1471,7 +1477,7 @@ fn schema_one_migration_preserves_duplicate_hotkeys_for_user_resolution() {
     let version: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("read migrated schema version");
-    assert_eq!(version, 3);
+    assert_eq!(version, crate::library_store::DATABASE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -1840,4 +1846,85 @@ fn a_folder_can_be_reordered_to_an_arbitrary_slot_without_touching_other_prefere
     drop(store);
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("reopen store");
     assert_eq!(order(&store), ["a", "d", "b", "c"]);
+}
+
+#[test]
+fn hiding_a_folder_removes_its_subtree_and_sounds_until_it_is_restored() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(store.apply_batch(LibraryBatch::Folders(vec![
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "albums".to_string(),
+            parent_relative_path: None,
+            name: "albums".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "albums/singles".to_string(),
+            parent_relative_path: Some("albums".to_string()),
+            name: "singles".to_string(),
+            position: 0,
+        },
+        FolderRecord {
+            root_path: "/music".to_string(),
+            relative_path: "effects".to_string(),
+            parent_relative_path: None,
+            name: "effects".to_string(),
+            position: 1,
+        },
+    ])));
+    let located = |id: &str, folder: Option<&str>, general_position: usize| SoundRecord {
+        sound: sound(id, id, &format!("/music/{id}.wav")),
+        general_position,
+        locations: vec![SoundLocationRecord {
+            root_path: "/music".to_string(),
+            folder_relative_path: folder.map(str::to_string),
+            relative_path: format!("{id}.wav"),
+        }],
+    };
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        located("in-singles", Some("albums/singles"), 0),
+        located("in-effects", Some("effects"), 1),
+        located("in-root", None, 2),
+    ])));
+
+    let visible_ids = || {
+        wait(store.page(LibraryScope::General, "", 0))
+            .sounds
+            .into_iter()
+            .map(|sound| sound.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(visible_ids(), ["in-singles", "in-effects", "in-root"]);
+
+    // Hiding the parent must take the whole subtree with it, not just the row.
+    assert!(wait(store.set_folder_hidden("/music", "albums", true)));
+
+    let top = wait(store.folder_children("/music", None, 0));
+    assert_eq!(
+        top.folders
+            .iter()
+            .map(|folder| folder.relative_path.as_str())
+            .collect::<Vec<_>>(),
+        ["effects"]
+    );
+    assert_eq!(top.total, 1);
+    // A sound sitting directly in the root is not inside any hidden folder.
+    assert_eq!(visible_ids(), ["in-effects", "in-root"]);
+
+    let hidden = wait(store.hidden_folders(0));
+    assert_eq!(hidden.total, 1);
+    assert_eq!(hidden.folders[0].root_path, "/music");
+    assert_eq!(hidden.folders[0].relative_path, "albums");
+
+    assert!(wait(store.set_folder_hidden("/music", "albums", false)));
+    assert_eq!(wait(store.hidden_folders(0)).total, 0);
+    assert_eq!(visible_ids(), ["in-singles", "in-effects", "in-root"]);
+    assert_eq!(wait(store.folder_children("/music", None, 0)).total, 2);
 }

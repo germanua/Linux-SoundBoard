@@ -863,6 +863,7 @@ impl TabsSidebar {
         let folder_changed: FolderChangedCallback = Rc::new(RefCell::new(None));
         let folder_reordered: FolderChangedCallback = Rc::new(RefCell::new(None));
         let folder_merged: FolderMergeCallback = Rc::new(RefCell::new(None));
+        let folder_removed: FolderChangedCallback = Rc::new(RefCell::new(None));
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
@@ -918,6 +919,7 @@ impl TabsSidebar {
         let folder_generation_for_actions = Rc::clone(&folder_generation);
         let folder_rebuilding_for_expansion = Rc::clone(&folder_rebuilding);
         let folder_rebuilding_for_actions = Rc::clone(&folder_rebuilding);
+        let folder_removed_for_menu = Rc::clone(&folder_removed);
         let folder_drop_callbacks = FolderDropCallbacks {
             changed: Rc::clone(&folder_changed),
             reordered: Rc::clone(&folder_reordered),
@@ -1099,6 +1101,7 @@ impl TabsSidebar {
                 let folder_roots = folder_roots_for_actions.clone();
                 let folder_generation = Rc::clone(&folder_generation_for_actions);
                 let folder_rebuilding_ctx = Rc::clone(&folder_rebuilding_for_actions);
+                let folder_removed_ctx = Rc::clone(&folder_removed_for_menu);
                 gesture.connect_pressed(move |gesture, _, x, y| {
                     let Some(widget) = gesture.widget() else {
                         return;
@@ -1110,7 +1113,10 @@ impl TabsSidebar {
                     menu_model.append(Some("Rename Folder"), Some("folder-ctx.rename"));
                     menu_model.append(Some("Move Up"), Some("folder-ctx.move-up"));
                     menu_model.append(Some("Move Down"), Some("folder-ctx.move-down"));
+                    menu_model.append(Some("Remove Folder"), Some("folder-ctx.remove"));
                     let action_group = gio::SimpleActionGroup::new();
+                    let name_for_remove = Rc::clone(&name);
+                    let dialog_host_for_remove = dialog_host.clone();
                     let action = gio::SimpleAction::new("rename", None);
                     let rename_library = library.clone();
                     let rename_root_path = context_root_path.clone();
@@ -1192,6 +1198,93 @@ impl TabsSidebar {
                                 },
                             ) {
                                 log::warn!("Failed to dispatch folder move: {error}");
+                            }
+                        });
+                        action_group.add_action(&action);
+                    }
+                    {
+                        let action = gio::SimpleAction::new("remove", None);
+                        let library = library.clone();
+                        let root_path = context_root_path.clone();
+                        let relative_path = relative_path.to_string();
+                        let dialog_host = dialog_host_for_remove.clone();
+                        let name = Rc::clone(&name_for_remove);
+                        let on_removed = Rc::clone(&folder_removed_ctx);
+                        action.connect_activate(move |_, _| {
+                            let scope = crate::library_store::LibraryScope::Folder {
+                                root_path: root_path.clone(),
+                                relative_path: relative_path.clone(),
+                            };
+                            let response = library.count(scope, "");
+                            let library = library.clone();
+                            let root_path = root_path.clone();
+                            let relative_path = relative_path.clone();
+                            let dialog_host = dialog_host.clone();
+                            let display_name = name.borrow().clone();
+                            let on_removed = Rc::clone(&on_removed);
+                            // The count is read first so the prompt can say what
+                            // disappears rather than leaving the user to guess.
+                            if let Err(error) = commands::dispatch_async_result(
+                                "count_folder_before_remove",
+                                move || response.recv(),
+                                move |result| {
+                                    let count = match result {
+                                        Ok(count) => count,
+                                        Err(error) => {
+                                            log::warn!("Failed to count folder sounds: {error}");
+                                            dialog_host.show_error(
+                                                "Failed to Remove Folder",
+                                                &error.to_string(),
+                                            );
+                                            return;
+                                        }
+                                    };
+                                    let plural = if count == 1 { "sound" } else { "sounds" };
+                                    let message = format!(
+                                        "Remove '{display_name}'? Its {count} {plural} stop appearing. Nothing is deleted from disk; restore it from Settings."
+                                    );
+                                    let library = library.clone();
+                                    let root_path = root_path.clone();
+                                    let relative_path = relative_path.clone();
+                                    let on_removed = Rc::clone(&on_removed);
+                                    dialog_host.show_confirm(
+                                        "Remove Folder",
+                                        &message,
+                                        "Remove",
+                                        move || {
+                                            let response = library.set_folder_hidden(
+                                                &root_path,
+                                                &relative_path,
+                                                true,
+                                            );
+                                            let on_removed = Rc::clone(&on_removed);
+                                            if let Err(error) = commands::dispatch_async_result(
+                                                "hide_sidebar_folder",
+                                                move || response.recv(),
+                                                move |result| match result {
+                                                    Ok(_) => {
+                                                        if let Some(callback) =
+                                                            &*on_removed.borrow()
+                                                        {
+                                                            callback();
+                                                        }
+                                                    }
+                                                    Err(error) => {
+                                                        log::warn!(
+                                                            "Failed to remove folder: {error}"
+                                                        );
+                                                    }
+                                                },
+                                            ) {
+                                                log::warn!(
+                                                    "Failed to dispatch folder removal: {error}"
+                                                );
+                                            }
+                                        },
+                                    );
+                                },
+                            ) {
+                                log::warn!("Failed to dispatch folder count: {error}");
                             }
                         });
                         action_group.add_action(&action);
@@ -1336,6 +1429,21 @@ impl TabsSidebar {
             folder_reordered.borrow_mut().replace(Box::new(move || {
                 if let Some(inner) = inner_weak.upgrade() {
                     inner.reload_folder_roots();
+                }
+            }));
+        }
+        {
+            // Removing a folder takes the row, its sounds, and part of the
+            // General total away, so the tree, the sound list, and the tab
+            // counts all have to be refreshed. Keeping the selected tab avoids
+            // yanking the user back to General.
+            let inner_weak = Arc::downgrade(&inner);
+            folder_removed.borrow_mut().replace(Box::new(move || {
+                if let Some(inner) = inner_weak.upgrade() {
+                    inner.reload_folder_roots();
+                    let selected = inner.active_tab_id.lock().clone();
+                    inner.queue_reload_tabs_and_emit(Some(selected));
+                    inner.emit_tab_membership_changed();
                 }
             }));
         }

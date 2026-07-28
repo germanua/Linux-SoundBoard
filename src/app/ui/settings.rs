@@ -285,6 +285,25 @@ fn build_general_page(
         .description("Folders scanned for audio files on startup")
         .build();
 
+    let (hidden_folders_group, refresh_hidden_folders) =
+        super::settings_folders::build_hidden_folders_group(
+            Arc::clone(&state),
+            on_library_changed.clone(),
+        );
+    // Removing a root deletes the folders under it, so anything hidden there is
+    // gone too. Refreshing from the shared callback keeps the list honest
+    // without threading it through the folder rebuild.
+    let on_library_changed = {
+        let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
+        let inner = on_library_changed.clone();
+        Some(Rc::new(move || {
+            refresh_hidden_folders();
+            if let Some(callback) = inner.as_ref() {
+                callback();
+            }
+        }) as Rc<dyn Fn() + 'static>)
+    };
+
     let add_folder_row = adw::ActionRow::builder()
         .title("Add Folder…")
         .activatable(true)
@@ -474,6 +493,14 @@ fn build_general_page(
         on_library_changed.clone(),
     );
     page.add(&folders_group);
+    // The overlay is built once and only shown and hidden afterwards, so the
+    // list has to reload every time the page appears; folders removed from the
+    // sidebar in between would otherwise be missing from it.
+    {
+        let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
+        page.connect_map(move |_| refresh_hidden_folders());
+    }
+    page.add(&hidden_folders_group);
 
     let (playback_group, auto_gain_group) =
         super::settings_playback::build_playback_groups(Arc::clone(&state), visibility_weak);

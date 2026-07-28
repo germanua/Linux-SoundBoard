@@ -399,6 +399,34 @@ Every listed format supports playback, seeking, looping, duration, and static or
 
 ---
 
+### Remove a Folder from the Sidebar
+
+- **Trigger:** Right-click a folder in the sidebar → `Remove Folder`
+- **What it does:** Hides that folder and everything under it. Its sounds stop appearing in `General` and in folder views. The confirmation states how many sounds are affected.
+
+> **Notes:**
+>
+> - Nothing is deleted or moved on disk, and a rescan does not bring the folder back
+> - A sound that also appears in a folder you kept stays visible
+> - Restore it under `Settings` → `General` → `Removed Folders`, which only appears when something is hidden
+> - Removing the whole scanned root instead deletes these entries along with the folders
+
+---
+
+### Reorder and Combine Folders
+
+- **Trigger:** Drag a folder row in the sidebar
+- **What it does:** Dropping in the gap above or below a sibling reorders the list. Dropping on the middle of another folder offers to move that folder's sounds into it.
+
+> **Notes:**
+>
+> - A line in the gap means reorder; a filled row means the sounds go into that folder
+> - Reordering is limited to a folder's own siblings; ordering is saved per folder
+> - Combining changes folder membership only — no file is moved or renamed
+> - A folder cannot be combined into itself or into one of its own subfolders
+
+---
+
 ### Drag and Drop Audio Files
 
 - **Trigger:** Drag supported audio files into the main window or directly onto the sound list
