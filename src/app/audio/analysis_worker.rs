@@ -97,11 +97,6 @@ impl MissingLoudnessAnalysisCoordinator {
     }
 
     #[cfg(test)]
-    pub fn start_count(&self) -> usize {
-        self.start_count.load(Ordering::Acquire)
-    }
-
-    #[cfg(test)]
     pub fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {

@@ -104,6 +104,9 @@ struct SiblingPager {
     children_requested: Rc<Cell<bool>>,
 }
 
+/// Widget name on the tab row's title label, so the row can be read back.
+const TAB_NAME_LABEL: &str = "tab-name-label";
+
 impl SiblingPager {
     /// A failed page load must not poison the node. The `TreeListModel`
     /// create-closure only starts a pager when the node's request latch is
@@ -1305,10 +1308,7 @@ impl TabsInner {
                 return glib::Propagation::Proceed;
             };
             let tab_id = row.widget_name().to_string();
-            let tab_name = {
-                let config = inner.state.config.lock();
-                config.get_tab(&tab_id).map(|tab| tab.name.clone())
-            };
+            let tab_name = Self::tab_row_name(&row);
             let Some(tab_name) = tab_name else {
                 return glib::Propagation::Proceed;
             };
@@ -1507,6 +1507,20 @@ impl TabsInner {
         false
     }
 
+    fn tab_row_name(row: &ListBoxRow) -> Option<String> {
+        let mut child = row.child()?.first_child();
+        while let Some(widget) = child {
+            if widget.widget_name() == TAB_NAME_LABEL {
+                return widget
+                    .downcast::<Label>()
+                    .ok()
+                    .map(|l| l.label().to_string());
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+
     fn make_tab_row(
         self: &Arc<Self>,
         id: &str,
@@ -1528,6 +1542,9 @@ impl TabsInner {
             .hexpand(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
+        // Tagged so the Delete shortcut can read the tab name back off the row
+        // instead of querying the store from the GTK thread.
+        label.set_widget_name(TAB_NAME_LABEL);
 
         hbox.append(&icon);
         hbox.append(&label);

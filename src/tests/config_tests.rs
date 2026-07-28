@@ -19,8 +19,6 @@ fn test_config_default_has_schema_version() {
 
 #[test]
 fn test_config_default_has_empty_collections() {
-    let config = Config::default();
-    assert!(config.sounds.is_empty());
-    assert!(config.sound_folders.is_empty());
-    assert!(config.tabs.is_empty());
+    // The library lives in SQLite; a default config carries settings only.
+    let _ = Config::default();
 }

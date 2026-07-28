@@ -1375,8 +1375,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sound_folders.push("/music".to_string());
         for index in 0..1_025 {
             let mut sound = Sound::new(
@@ -1499,8 +1498,7 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         let stale_backup = directory.join(".config.json.pre-v8-backup.interrupted");
         let stale_database = directory.join(".library.sqlite3.importing.interrupted");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
         fs::write(&stale_backup, b"partial backup").expect("write stale backup candidate");
         fs::write(&stale_database, b"partial database").expect("write stale database candidate");
@@ -1520,8 +1518,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
         let source_before = fs::read(&source).expect("read legacy source");
         ensure_backup(
@@ -1561,8 +1558,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         for (id, hotkey) in [
             ("first", "Ctrl+KeyA"),
             ("second", "Ctrl+KeyA"),
@@ -1694,8 +1690,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sound_folders.push("/music".to_string());
         config.sounds.push(Sound::new(
             "Tone".to_string(),
@@ -1727,8 +1722,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
 
         let report = migrate_legacy_database(&source, &destination).expect("publish database");
@@ -1747,8 +1741,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sounds.push(Sound::new(
             "Tone".to_string(),
             "/music/tone.wav".to_string(),
@@ -1786,8 +1779,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sounds.push(Sound::new(
             "Tone".to_string(),
             "/music/tone.wav".to_string(),
@@ -1825,8 +1817,7 @@ mod tests {
             fs::create_dir_all(&directory).expect("create test directory");
             let source = directory.join("config.json");
             let destination = directory.join("library.sqlite3");
-            let mut config = Config::default();
-            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
             config.sounds.push(Sound::new(
                 "Tone".to_string(),
                 "/music/tone.wav".to_string(),
@@ -1901,8 +1892,7 @@ mod tests {
             fs::create_dir_all(&directory).expect("create test directory");
             let source = directory.join("config.json");
             let destination = directory.join("library.sqlite3");
-            let mut config = Config::default();
-            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
             config.sounds.push(Sound::new(
                 "Tone".to_string(),
                 "/music/tone.wav".to_string(),
@@ -1954,8 +1944,7 @@ mod tests {
             fs::create_dir_all(&directory).expect("create test directory");
             let source = directory.join("config.json");
             let destination = directory.join("library.sqlite3");
-            let mut config = Config::default();
-            config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+            let config = crate::test_support::legacy_config::LegacyConfigFixture::default();
             serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
             let source_before = fs::read(&source).expect("read legacy source");
 
@@ -1998,8 +1987,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         serde_json::to_writer(fs::File::create(&source).unwrap(), &config).unwrap();
         migrate_legacy_database(&source, &destination).expect("publish database");
         fs::write(&source, b"{\"schema_version\":7,\"settings\":{}}")
@@ -2114,8 +2102,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let source = directory.join("config.json");
         let destination = directory.join("library.sqlite3");
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sounds.push(Sound::new(
             "Tone".to_string(),
             "/music/tone.wav".to_string(),

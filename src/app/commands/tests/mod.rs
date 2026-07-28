@@ -1,26 +1,9 @@
 use crate::audio::AudioPlayer;
 use crate::commands;
-use crate::config::{
-    Config, ControlHotkeyAction, FolderTabBinding, LoudnessAnalysisState, Sound, SoundTab,
-};
+use crate::config::{Config, ControlHotkeyAction, Sound};
 use crate::hotkeys::HotkeyManager;
-use crate::test_support::audio_fixtures::{
-    cleanup_test_audio_path, create_test_audio_file, create_test_audio_file_with_duration,
-    create_test_ogg_opus_file, create_test_vorbis_file, TestOggOpusFixture, TestVorbisFixture,
-};
 use parking_lot::Mutex;
-use std::fs;
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
-
-const BACKGROUND_ANALYSIS_TIMEOUT: Duration = Duration::from_secs(5);
-
-fn main_context_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-}
+use std::sync::Arc;
 
 fn create_test_config() -> Config {
     let mut cfg = Config {
@@ -53,60 +36,89 @@ fn create_projection_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(HotkeyManager::new_test_noop()))
 }
 
-fn create_test_library(config: &Arc<Mutex<Config>>) -> crate::library_store::LibraryStore {
+/// Commits a binding straight to the store. Going through `set_hotkey` would
+/// also try to register with the real backend, which is not available in the
+/// test environment and fails intermittently under load.
+fn seed_hotkey_binding(
+    library: &crate::library_store::LibraryStore,
+    owner: crate::library_store::HotkeyBindingOwner,
+    accelerator: &str,
+) {
+    use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryBatch};
+
+    let binding_id = match &owner {
+        HotkeyBindingOwner::Sound(id) => id.clone(),
+        HotkeyBindingOwner::Control(action) => action.clone(),
+    };
+    library
+        .apply_batch(LibraryBatch::HotkeyBindings(vec![HotkeyBindingRecord {
+            binding_id,
+            owner,
+            accelerator: accelerator.to_string(),
+            normalized: Some(accelerator.to_string()),
+            issue: None,
+        }]))
+        .recv()
+        .expect("seed hotkey binding");
+}
+
+/// Builds a store fixture directly through the bounded store API. Sounds and
+/// roots are passed in rather than read off a `Config`, which no longer carries
+/// the library.
+fn create_test_library_with(
+    roots: &[String],
+    sounds: &[Sound],
+) -> crate::library_store::LibraryStore {
+    use crate::library_store::{LibraryBatch, RootRecord, SoundRecord};
+
     let path = std::env::temp_dir()
         .join(format!("lsb-command-library-{}", uuid::Uuid::new_v4()))
         .join("library.sqlite3");
-    crate::library_store::LibraryStore::open_seeded(path, &config.lock())
-        .expect("create command test library")
+    let store =
+        crate::library_store::LibraryStore::open(path).expect("create command test library");
+
+    if !roots.is_empty() {
+        store
+            .apply_batch(LibraryBatch::Roots(
+                roots
+                    .iter()
+                    .enumerate()
+                    .map(|(position, path)| RootRecord {
+                        path: path.clone(),
+                        position,
+                    })
+                    .collect(),
+            ))
+            .recv()
+            .expect("seed roots");
+    }
+
+    if !sounds.is_empty() {
+        store
+            .apply_batch(LibraryBatch::Sounds(
+                sounds
+                    .iter()
+                    .enumerate()
+                    .map(|(general_position, sound)| SoundRecord {
+                        sound: sound.clone(),
+                        general_position,
+                        locations: Vec::new(),
+                    })
+                    .collect(),
+            ))
+            .recv()
+            .expect("seed sounds");
+    }
+
+    store
 }
 
 fn create_test_audio_player() -> Arc<AudioPlayer> {
     Arc::new(AudioPlayer::new_test_noop())
 }
 
-fn wait_for_coords_idle(coords: &commands::LoudnessCoordinators) {
-    assert!(
-        coords.backfill.wait_for_idle(BACKGROUND_ANALYSIS_TIMEOUT),
-        "timed out waiting for loudness backfill to become idle"
-    );
-    assert!(
-        coords.refinement.wait_for_idle(BACKGROUND_ANALYSIS_TIMEOUT),
-        "timed out waiting for loudness refinement to become idle"
-    );
-}
-
-fn wait_for_async_result<T>(context: &glib::MainContext, rx: std::sync::mpsc::Receiver<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        while context.pending() {
-            context.iteration(false);
-        }
-
-        match rx.try_recv() {
-            Ok(result) => return result,
-            Err(std::sync::mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                panic!("timed out waiting for async command completion");
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                panic!("async command callback disconnected");
-            }
-        }
-    }
-}
-
 mod library;
 mod tabs;
-#[test]
-fn test_validate_all_sources_empty() {
-    let config = create_test_config_state();
-    let result = commands::validate_all_sources(config);
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_empty());
-}
 
 #[test]
 fn test_set_local_volume() {
@@ -275,183 +287,6 @@ fn test_save_config() {
 
     let result = commands::save_config(config.clone());
     assert!(result.is_ok());
-}
-#[test]
-#[allow(clippy::print_stdout)]
-fn test_set_hotkey_valid() {
-    let config = create_test_config_state();
-    let hotkeys = create_projection_hotkey_manager();
-
-    let mut config_guard = config.lock();
-    config_guard
-        .sounds
-        .push(Sound::new("Test".to_string(), "/tmp/test.mp3".to_string()));
-    let sound_id = config_guard.sounds[0].id.clone();
-    drop(config_guard);
-    let library = create_test_library(&config);
-    let projection =
-        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-
-    let result = commands::set_hotkey(
-        sound_id,
-        Some("Ctrl+1".to_string()),
-        library.clone(),
-        projection,
-    );
-    match result {
-        Ok(_) => {
-            assert!(library
-                .hotkey_binding(&config.lock().sounds[0].id)
-                .recv()
-                .unwrap()
-                .is_some());
-        }
-        Err(e) => {
-            println!(
-                "Hotkey registration failed (expected without X11/swhkd): {}",
-                e
-            );
-        }
-    }
-}
-
-#[test]
-#[allow(clippy::print_stdout)]
-fn test_set_hotkey_clear() {
-    let config = create_test_config_state();
-    let hotkeys = create_projection_hotkey_manager();
-
-    let mut config_guard = config.lock();
-    let mut sound = Sound::new("Test".to_string(), "/tmp/test.mp3".to_string());
-    sound.hotkey = Some("Ctrl+1".to_string());
-    config_guard.sounds.push(sound);
-    let sound_id = config_guard.sounds[0].id.clone();
-    drop(config_guard);
-    let library = create_test_library(&config);
-    let projection =
-        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-
-    let result = commands::set_hotkey(sound_id.clone(), None, library.clone(), projection);
-    match result {
-        Ok(_) => {
-            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
-        }
-        Err(e) => {
-            println!("Hotkey clear failed: {}", e);
-        }
-    }
-}
-
-#[test]
-fn test_set_control_hotkey_rejects_duplicate_control_binding() {
-    let config = create_test_config_state();
-    let hotkeys = create_mock_hotkey_manager();
-
-    config.lock().settings.control_hotkeys.set_action(
-        ControlHotkeyAction::PlayPause,
-        Some("Ctrl+Alt+KeyP".to_string()),
-    );
-    let library = create_test_library(&config);
-    let projection =
-        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-
-    let result = commands::set_control_hotkey(
-        ControlHotkeyAction::StopAll.id().to_string(),
-        Some("Ctrl+Alt+KeyP".to_string()),
-        library,
-        projection,
-    );
-
-    let err = result.expect_err("duplicate control hotkey must be rejected");
-    assert_eq!(
-        crate::hotkeys::format_hotkey_error(&err.to_string()),
-        "That shortcut is already assigned to control action \"Play / Pause\"."
-    );
-}
-
-#[test]
-fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
-    let config = create_test_config_state();
-    let hotkeys = create_mock_hotkey_manager();
-
-    let mut sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
-    sound.hotkey = Some("Ctrl+Alt+KeyP".to_string());
-    config.lock().sounds.push(sound);
-    let library = create_test_library(&config);
-    let projection =
-        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-
-    let result = commands::set_control_hotkey(
-        ControlHotkeyAction::StopAll.id().to_string(),
-        Some("Ctrl+Alt+KeyP".to_string()),
-        library,
-        projection,
-    );
-
-    let err = result.expect_err("duplicate sound hotkey must be rejected");
-    assert_eq!(
-        crate::hotkeys::format_hotkey_error(&err.to_string()),
-        "That shortcut is already assigned to sound \"Airhorn\"."
-    );
-}
-
-#[test]
-fn test_validate_hotkey_available_reports_duplicate_before_save() {
-    let mut config = Config::default();
-    config.settings.control_hotkeys.set_action(
-        ControlHotkeyAction::PlayPause,
-        Some("Ctrl+Alt+KeyP".to_string()),
-    );
-
-    let err = commands::validate_hotkey_available(
-        &config,
-        ControlHotkeyAction::StopAll.binding_id(),
-        "Ctrl+Alt+KeyP",
-    )
-    .expect_err("duplicate hotkey must be reported during capture validation");
-
-    assert_eq!(
-        crate::hotkeys::format_hotkey_error(&err.to_string()),
-        "That shortcut is already assigned to control action \"Play / Pause\"."
-    );
-}
-
-#[test]
-fn test_set_auto_gain_enabled() {
-    let config = create_test_config_state();
-    let library = create_test_library(&config);
-    let player = create_test_audio_player();
-
-    let result = commands::set_auto_gain(
-        true,
-        config.clone(),
-        library,
-        player,
-        &commands::LoudnessCoordinators::new(),
-    );
-    assert!(result.is_ok());
-
-    let cfg = config.lock();
-    assert!(cfg.settings.auto_gain);
-}
-
-#[test]
-fn test_set_auto_gain_disabled() {
-    let config = create_test_config_state();
-    let library = create_test_library(&config);
-    let player = create_test_audio_player();
-
-    let result = commands::set_auto_gain(
-        false,
-        config.clone(),
-        library,
-        player,
-        &commands::LoudnessCoordinators::new(),
-    );
-    assert!(result.is_ok());
-
-    let cfg = config.lock();
-    assert!(!cfg.settings.auto_gain);
 }
 
 #[test]
@@ -637,13 +472,155 @@ fn test_bounded_audio_analysis_threads() {
     assert!(threads >= 1);
 }
 
+mod loudness;
+
 #[test]
-fn test_default_sound_import_dir() {
-    let dir = commands::shared::default_sound_import_dir(
-        None,
-        Some(std::path::PathBuf::from("/home/test")),
+#[allow(clippy::print_stdout)]
+fn test_set_hotkey_valid() {
+    let hotkeys = create_projection_hotkey_manager();
+
+    let sound = Sound::new("Test".to_string(), "/tmp/test.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    let result = commands::set_hotkey(
+        sound_id.clone(),
+        Some("Ctrl+1".to_string()),
+        library.clone(),
+        projection,
     );
-    assert!(dir.to_string_lossy().ends_with("soundboard-imports"));
+    match result {
+        Ok(_) => {
+            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_some());
+        }
+        Err(e) => {
+            println!(
+                "Hotkey registration failed (expected without X11/swhkd): {}",
+                e
+            );
+        }
+    }
 }
 
-mod loudness;
+#[test]
+#[allow(clippy::print_stdout)]
+fn test_set_hotkey_clear() {
+    let hotkeys = create_projection_hotkey_manager();
+
+    let mut sound = Sound::new("Test".to_string(), "/tmp/test.mp3".to_string());
+    sound.hotkey = Some("Ctrl+1".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    let result = commands::set_hotkey(sound_id.clone(), None, library.clone(), projection);
+    match result {
+        Ok(_) => {
+            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
+        }
+        Err(e) => {
+            println!("Hotkey clear failed: {}", e);
+        }
+    }
+}
+
+#[test]
+fn test_set_control_hotkey_rejects_duplicate_control_binding() {
+    let hotkeys = create_mock_hotkey_manager();
+
+    let library = create_test_library_with(&[], &[]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    // The store owns hotkey bindings now, so the conflicting one has to be
+    // committed there rather than set on the settings struct.
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Control(
+            ControlHotkeyAction::PlayPause.id().to_string(),
+        ),
+        "Ctrl+Alt+KeyP",
+    );
+
+    let result = commands::set_control_hotkey(
+        ControlHotkeyAction::StopAll.id().to_string(),
+        Some("Ctrl+Alt+KeyP".to_string()),
+        library,
+        projection,
+    );
+
+    let err = result.expect_err("duplicate control hotkey must be rejected");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&err.to_string()),
+        "That shortcut is already assigned to control action \"Play / Pause\"."
+    );
+}
+
+#[test]
+fn test_set_control_hotkey_rejects_duplicate_sound_binding() {
+    let hotkeys = create_mock_hotkey_manager();
+
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(sound_id),
+        "Ctrl+Alt+KeyP",
+    );
+
+    let result = commands::set_control_hotkey(
+        ControlHotkeyAction::StopAll.id().to_string(),
+        Some("Ctrl+Alt+KeyP".to_string()),
+        library,
+        projection,
+    );
+
+    let err = result.expect_err("duplicate sound hotkey must be rejected");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&err.to_string()),
+        "That shortcut is already assigned to sound \"Airhorn\"."
+    );
+}
+
+#[test]
+fn test_set_auto_gain_enabled() {
+    let config = create_test_config_state();
+    let library = create_test_library_with(&[], &[]);
+    let player = create_test_audio_player();
+
+    let result = commands::set_auto_gain(
+        true,
+        config.clone(),
+        library,
+        player,
+        &commands::LoudnessCoordinators::new(),
+    );
+    assert!(result.is_ok());
+
+    let cfg = config.lock();
+    assert!(cfg.settings.auto_gain);
+}
+
+#[test]
+fn test_set_auto_gain_disabled() {
+    let config = create_test_config_state();
+    let library = create_test_library_with(&[], &[]);
+    let player = create_test_audio_player();
+
+    let result = commands::set_auto_gain(
+        false,
+        config.clone(),
+        library,
+        player,
+        &commands::LoudnessCoordinators::new(),
+    );
+    assert!(result.is_ok());
+
+    let cfg = config.lock();
+    assert!(!cfg.settings.auto_gain);
+}

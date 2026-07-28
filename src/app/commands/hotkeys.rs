@@ -1,67 +1,12 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
-use crate::config::{Config, ControlHotkeyAction};
+use crate::config::ControlHotkeyAction;
 use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
 use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
 
 use super::shared::dispatch_async_result;
 use super::CommandError;
-
-fn canonical_hotkey_matches(stored_hotkey: &str, canonical_hotkey: &str) -> bool {
-    crate::hotkeys::canonicalize_hotkey_string(stored_hotkey)
-        .map(|stored| stored == canonical_hotkey)
-        .unwrap_or_else(|_| stored_hotkey == canonical_hotkey)
-}
-
-fn find_hotkey_conflict(
-    config: &Config,
-    current_binding_id: &str,
-    canonical_hotkey: &str,
-) -> Option<String> {
-    config
-        .sounds
-        .iter()
-        .find_map(|sound| {
-            let hotkey = sound.hotkey.as_deref()?;
-            if sound.id != current_binding_id && canonical_hotkey_matches(hotkey, canonical_hotkey)
-            {
-                Some(format!("sound \"{}\"", sound.name))
-            } else {
-                None
-            }
-        })
-        .or_else(|| {
-            ControlHotkeyAction::all().iter().find_map(|meta| {
-                let hotkey = config.settings.control_hotkeys.get_cloned(meta.action)?;
-                if meta.binding_id != current_binding_id
-                    && canonical_hotkey_matches(&hotkey, canonical_hotkey)
-                {
-                    Some(format!("control action \"{}\"", meta.title))
-                } else {
-                    None
-                }
-            })
-        })
-}
-
-fn ensure_hotkey_available(
-    config: &Config,
-    current_binding_id: &str,
-    canonical_hotkey: Option<&str>,
-) -> Result<(), CommandError> {
-    let Some(canonical_hotkey) = canonical_hotkey else {
-        return Ok(());
-    };
-
-    if let Some(conflict) = find_hotkey_conflict(config, current_binding_id, canonical_hotkey) {
-        Err(CommandError::Hotkey(
-            crate::hotkeys::hotkey_conflict(&conflict).to_string(),
-        ))
-    } else {
-        Ok(())
-    }
-}
 
 fn ensure_store_hotkey_available(
     library: &LibraryStore,
@@ -82,16 +27,6 @@ fn ensure_store_hotkey_available(
     } else {
         Ok(())
     }
-}
-
-pub fn validate_hotkey_available(
-    config: &Config,
-    current_binding_id: &str,
-    hotkey: &str,
-) -> Result<(), CommandError> {
-    let canonical_hotkey = crate::hotkeys::canonicalize_hotkey_string(hotkey)
-        .map_err(|e| CommandError::Hotkey(e.to_string()))?;
-    ensure_hotkey_available(config, current_binding_id, Some(&canonical_hotkey))
 }
 
 pub fn set_hotkey(

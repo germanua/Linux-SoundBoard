@@ -750,9 +750,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: default_schema_version(),
-            sound_folders: vec![],
-            sounds: vec![],
-            tabs: vec![],
             settings: Settings::default(),
             persistence_path: None,
         }
@@ -763,12 +760,6 @@ impl Default for Config {
 pub struct Config {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-    #[serde(default)]
-    pub sound_folders: Vec<String>,
-    #[serde(default)]
-    pub sounds: Vec<Sound>,
-    #[serde(default)]
-    pub tabs: Vec<SoundTab>,
     pub settings: Settings,
     #[serde(skip)]
     pub(crate) persistence_path: Option<PathBuf>,

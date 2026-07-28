@@ -15,19 +15,12 @@ pub struct AudioFile {
     pub name: String,
     pub root_folder: String,
     pub relative_path: String,
-    pub relative_subfolders: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ScannedSubfolder {
     pub root_folder: String,
     pub relative_subfolder: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AudioScan {
-    pub files: Vec<AudioFile>,
-    pub subfolders: Vec<ScannedSubfolder>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -131,13 +124,6 @@ where
                 continue;
             }
             let relative = file_path.strip_prefix(root).unwrap_or(file_path);
-            let relative_subfolders = relative
-                .parent()
-                .into_iter()
-                .flat_map(Path::ancestors)
-                .filter(|ancestor| ancestor.components().next().is_some())
-                .map(|ancestor| ancestor.to_string_lossy().into_owned())
-                .collect();
             let file = AudioFile {
                 path: file_path.to_string_lossy().into_owned(),
                 name: file_path
@@ -146,7 +132,6 @@ where
                     .unwrap_or_else(|| "Unknown".to_string()),
                 root_folder: folder.clone(),
                 relative_path: relative.to_string_lossy().into_owned(),
-                relative_subfolders,
             };
             progress.files += 1;
             if visitor(file).is_break() {
@@ -156,66 +141,6 @@ where
         }
     }
     progress
-}
-
-#[cfg(test)]
-fn scan_folder(folder: &str) -> AudioScan {
-    let mut scan = AudioScan::default();
-    let cancelled = AtomicBool::new(false);
-    visit_audio_files(&[folder.to_string()], &cancelled, |file| {
-        scan.subfolders
-            .extend(
-                file.relative_subfolders
-                    .iter()
-                    .map(|relative_subfolder| ScannedSubfolder {
-                        root_folder: file.root_folder.clone(),
-                        relative_subfolder: relative_subfolder.clone(),
-                    }),
-            );
-        scan.files.push(file);
-        ControlFlow::Continue(())
-    });
-
-    scan.files
-        .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-    scan.subfolders.sort();
-    scan.subfolders.dedup();
-    info!("Found {} audio files in {}", scan.files.len(), folder);
-    scan
-}
-
-pub fn scan_folders(folders: &[String]) -> AudioScan {
-    let mut combined = AudioScan::default();
-    let cancelled = AtomicBool::new(false);
-    visit_audio_files(folders, &cancelled, |file| {
-        combined
-            .subfolders
-            .extend(
-                file.relative_subfolders
-                    .iter()
-                    .map(|relative_subfolder| ScannedSubfolder {
-                        root_folder: file.root_folder.clone(),
-                        relative_subfolder: relative_subfolder.clone(),
-                    }),
-            );
-        combined.files.push(file);
-        ControlFlow::Continue(())
-    });
-
-    combined.files.sort_by(|a, b| {
-        a.root_folder
-            .cmp(&b.root_folder)
-            .then(a.relative_path.cmp(&b.relative_path))
-            .then(a.path.cmp(&b.path))
-    });
-    let mut seen_paths = HashSet::new();
-    combined.files.retain(|file| {
-        seen_paths
-            .insert(fs::canonicalize(&file.path).unwrap_or_else(|_| PathBuf::from(&file.path)))
-    });
-    combined.subfolders.sort();
-    combined.subfolders.dedup();
-    combined
 }
 
 pub fn is_audio_file(path: &str) -> bool {
@@ -265,127 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn scan_folder_imports_mp4_files() {
-        let dir = test_dir();
-        fs::create_dir_all(&dir).expect("create test dir");
-        let mp4_path = dir.join("clip.mp4");
-        let txt_path = dir.join("notes.txt");
-        fs::write(&mp4_path, []).expect("write mp4 placeholder");
-        fs::write(txt_path, []).expect("write unsupported placeholder");
-
-        let scan = scan_folder(&dir.to_string_lossy());
-
-        fs::remove_dir_all(&dir).expect("cleanup test dir");
-        assert_eq!(scan.files.len(), 1);
-        assert_eq!(scan.files[0].name, "clip");
-        assert_eq!(scan.files[0].path, mp4_path.to_string_lossy());
-    }
-
-    #[test]
-    fn scan_folder_imports_opus_files() {
-        let dir = test_dir();
-        fs::create_dir_all(&dir).expect("create test dir");
-        let opus_path = dir.join("clip.OPUS");
-        fs::write(&opus_path, []).expect("write opus placeholder");
-
-        let scan = scan_folder(&dir.to_string_lossy());
-
-        fs::remove_dir_all(&dir).expect("cleanup test dir");
-        assert_eq!(scan.files.len(), 1);
-        assert_eq!(scan.files[0].path, opus_path.to_string_lossy());
-    }
-
-    #[test]
-    fn scan_folder_omits_subfolders_without_supported_audio() {
-        let root = test_dir();
-        let with_audio = root.join("With Audio").join("Nested");
-        let empty = root.join("Empty");
-        let unsupported = root.join("Documents");
-        fs::create_dir_all(&with_audio).expect("create audio subfolder");
-        fs::create_dir_all(&empty).expect("create empty subfolder");
-        fs::create_dir_all(&unsupported).expect("create unsupported subfolder");
-        fs::write(with_audio.join("clip.OPUS"), []).expect("write supported audio");
-        fs::write(unsupported.join("notes.txt"), []).expect("write unsupported file");
-
-        let scan = scan_folder(&root.to_string_lossy());
-
-        assert_eq!(
-            scan.subfolders,
-            [
-                ScannedSubfolder {
-                    root_folder: root.to_string_lossy().to_string(),
-                    relative_subfolder: "With Audio".to_string(),
-                },
-                ScannedSubfolder {
-                    root_folder: root.to_string_lossy().to_string(),
-                    relative_subfolder: "With Audio/Nested".to_string(),
-                },
-            ]
-        );
-        fs::remove_dir_all(root).expect("cleanup test tree");
-    }
-
-    #[test]
-    fn scan_folders_preserves_folder_relationships_and_deduplicates_overlaps() {
-        let root = test_dir();
-        let nested = root.join("Меми").join("Nested");
-        fs::create_dir_all(&nested).expect("create nested test tree");
-        let root_file = root.join("root.mp3");
-        let nested_file = nested.join("clip.ogg");
-        fs::write(&root_file, []).expect("write root audio placeholder");
-        fs::write(&nested_file, []).expect("write nested audio placeholder");
-
-        let scan = scan_folders(&[
-            nested.parent().unwrap().to_string_lossy().to_string(),
-            root.to_string_lossy().to_string(),
-        ]);
-
-        assert_eq!(scan.files.len(), 2);
-        let root_audio = scan
-            .files
-            .iter()
-            .find(|file| file.path == root_file.to_string_lossy())
-            .unwrap();
-        assert_eq!(root_audio.root_folder, root.to_string_lossy());
-        assert_eq!(root_audio.relative_path, "root.mp3");
-        assert!(root_audio.relative_subfolders.is_empty());
-        let nested_audio = scan
-            .files
-            .iter()
-            .find(|file| file.path == nested_file.to_string_lossy())
-            .unwrap();
-        assert_eq!(nested_audio.relative_path, "Меми/Nested/clip.ogg");
-        assert_eq!(nested_audio.relative_subfolders, ["Меми/Nested", "Меми"]);
-        assert!(scan.subfolders.iter().any(|folder| {
-            folder.root_folder == root.to_string_lossy() && folder.relative_subfolder == "Меми"
-        }));
-
-        fs::remove_dir_all(root).expect("cleanup test tree");
-    }
-
-    #[test]
-    fn scan_folders_parent_root_owns_configured_child() {
-        let root = test_dir();
-        let alerts = root.join("Alerts");
-        fs::create_dir_all(&alerts).expect("create test tree");
-        let sound = alerts.join("alert.mp3");
-        fs::write(&sound, []).expect("write sound");
-
-        let scan = scan_folders(&[
-            alerts.to_string_lossy().to_string(),
-            root.to_string_lossy().to_string(),
-        ]);
-
-        assert_eq!(scan.files.len(), 1);
-        assert_eq!(scan.files[0].root_folder, root.to_string_lossy());
-        assert_eq!(scan.subfolders.len(), 1);
-        assert_eq!(scan.subfolders[0].root_folder, root.to_string_lossy());
-        assert_eq!(scan.subfolders[0].relative_subfolder, "Alerts");
-
-        fs::remove_dir_all(root).expect("cleanup test tree");
-    }
-
-    #[test]
     fn streaming_scan_is_deterministic_and_stops_at_callback_boundary() {
         let root = test_dir();
         fs::create_dir_all(&root).expect("create test tree");
@@ -428,31 +232,5 @@ mod tests {
         assert_eq!(progress.files, 0);
         assert!(progress.cancelled);
         fs::remove_dir_all(root).expect("cleanup test tree");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_folders_deduplicates_symbolic_link_roots() {
-        use std::os::unix::fs::symlink;
-
-        let base = test_dir();
-        let root = base.join("actual");
-        let alias = base.join("alias");
-        let alerts = root.join("Alerts");
-        fs::create_dir_all(&alerts).expect("create test tree");
-        fs::write(alerts.join("alert.mp3"), []).expect("write sound");
-        symlink(&root, &alias).expect("create root alias");
-
-        let scan = scan_folders(&[
-            root.to_string_lossy().to_string(),
-            alias.to_string_lossy().to_string(),
-        ]);
-
-        assert_eq!(scan.files.len(), 1);
-        assert_eq!(scan.subfolders.len(), 1);
-        assert_eq!(scan.files[0].root_folder, scan.subfolders[0].root_folder);
-
-        fs::remove_file(alias).expect("remove root alias");
-        fs::remove_dir_all(base).expect("cleanup test tree");
     }
 }

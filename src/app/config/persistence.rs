@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -7,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::config::defaults::{config_dir_name, CONFIG_FILE_NAME};
-use crate::config::{Config, LoudnessAnalysisState, SoundTab};
+use crate::config::Config;
 
 static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const SCHEMA_6_BACKUP_FILE_NAME: &str = "config.json.pre-v6-backup";
@@ -194,9 +193,6 @@ impl Config {
                         )
                     })?;
                     object.remove("library_id");
-                    object.remove("sound_folders");
-                    object.remove("sounds");
-                    object.remove("tabs");
                     if let Some(settings) = object
                         .get_mut("settings")
                         .and_then(serde_json::Value::as_object_mut)
@@ -239,194 +235,10 @@ impl Config {
         Ok(())
     }
 
-    pub fn add_sound_folder(&mut self, folder: String) {
-        if !self.sound_folders.contains(&folder) {
-            log::info!("Config: Adding folder: {}", folder);
-            self.sound_folders.push(folder);
-            log::info!("Config: Total folders now: {}", self.sound_folders.len());
-        } else {
-            log::info!("Config: Folder already exists: {}", folder);
-        }
-    }
-
-    pub fn remove_sound_folder(&mut self, folder: &str) {
-        log::info!("Config: Removing folder: {}", folder);
-        let before = self.sound_folders.len();
-        self.sound_folders.retain(|f| f != folder);
-        let after = self.sound_folders.len();
-        log::info!("Config: Folders before: {}, after: {}", before, after);
-    }
-
-    pub fn add_sound(&mut self, sound: crate::config::Sound) {
-        if !self.sounds.iter().any(|s| s.path == sound.path) {
-            self.sounds.push(sound);
-        }
-    }
-
-    pub fn remove_sound(&mut self, id: &str) {
-        self.remove_sounds(&[id.to_string()]);
-    }
-
-    pub fn remove_sounds(&mut self, ids: &[String]) {
-        if ids.is_empty() {
-            return;
-        }
-
-        let remove_set: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        self.sounds
-            .retain(|sound| !remove_set.contains(sound.id.as_str()));
-        for tab in &mut self.tabs {
-            tab.sound_ids
-                .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
-        }
-    }
-
-    pub fn get_sound(&self, id: &str) -> Option<&crate::config::Sound> {
-        self.sounds.iter().find(|s| s.id == id)
-    }
-
-    pub fn get_sound_mut(&mut self, id: &str) -> Option<&mut crate::config::Sound> {
-        self.sounds.iter_mut().find(|s| s.id == id)
-    }
-
-    pub fn set_hotkey(&mut self, id: &str, hotkey: Option<String>) {
-        if let Some(sound) = self.get_sound_mut(id) {
-            sound.hotkey = hotkey;
-        }
-    }
-
-    pub fn set_sound_name(&mut self, id: &str, name: String) {
-        if let Some(sound) = self.get_sound_mut(id) {
-            sound.name = name;
-        }
-    }
-
+    /// Normalises the persisted settings. The library itself lives in SQLite,
+    /// so there are no sound rows left here to sanitize.
     pub fn sanitize_for_persistence(&mut self) {
-        for sound in &mut self.sounds {
-            if sound.source_path.as_deref() == Some(sound.path.as_str()) {
-                sound.source_path = None;
-            }
-            if sound
-                .loudness_source_fingerprint
-                .as_ref()
-                .is_some_and(|fingerprint| fingerprint.trim().is_empty())
-            {
-                sound.loudness_source_fingerprint = None;
-            }
-            if matches!(sound.loudness_lufs, Some(v) if !v.is_finite()) {
-                log::warn!(
-                    "Dropping non-finite loudness for sound '{}' [{}]",
-                    sound.name,
-                    sound.path
-                );
-                sound.loudness_lufs = None;
-                sound.loudness_analysis_state = LoudnessAnalysisState::Unavailable;
-            }
-
-            match sound.loudness_confidence {
-                Some(confidence) if !confidence.is_finite() => {
-                    sound.loudness_confidence = None;
-                }
-                Some(confidence) => {
-                    sound.loudness_confidence = Some(confidence.clamp(0.0, 1.0));
-                }
-                None => {}
-            }
-
-            if sound.loudness_lufs.is_some() {
-                if matches!(
-                    sound.loudness_analysis_state,
-                    LoudnessAnalysisState::Pending | LoudnessAnalysisState::Unavailable
-                ) {
-                    // Backward compatibility: old configs did not store loudness state.
-                    sound.loudness_analysis_state = LoudnessAnalysisState::Refined;
-                }
-                if sound.loudness_confidence.is_none() {
-                    sound.loudness_confidence = Some(1.0);
-                }
-            } else if matches!(
-                sound.loudness_analysis_state,
-                LoudnessAnalysisState::Estimated | LoudnessAnalysisState::Refined
-            ) {
-                sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
-                sound.loudness_confidence = None;
-            }
-
-            if sound.loudness_analysis_state == LoudnessAnalysisState::Unavailable {
-                sound.loudness_confidence = None;
-            }
-        }
-
         self.settings.normalize_for_persistence();
-    }
-
-    pub fn create_tab(&mut self, name: String) -> SoundTab {
-        let order = self.tabs.iter().map(|t| t.order).max().unwrap_or(0) + 1;
-        let tab = SoundTab::new(name, order);
-        self.tabs.push(tab.clone());
-        tab
-    }
-
-    pub fn rename_tab(&mut self, id: &str, name: String) -> bool {
-        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
-            tab.name = name;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn delete_tab(&mut self, id: &str) -> bool {
-        let len_before = self.tabs.len();
-        self.tabs.retain(|t| t.id != id);
-        self.tabs.len() < len_before
-    }
-
-    pub fn get_tab(&self, id: &str) -> Option<&SoundTab> {
-        self.tabs.iter().find(|t| t.id == id)
-    }
-
-    pub fn get_tab_mut(&mut self, id: &str) -> Option<&mut SoundTab> {
-        self.tabs.iter_mut().find(|t| t.id == id)
-    }
-
-    pub fn add_sounds_to_tab(&mut self, tab_id: &str, sound_ids: Vec<String>) -> bool {
-        if let Some(tab) = self.get_tab_mut(tab_id) {
-            let mut existing_ids = tab.sound_ids.iter().cloned().collect::<HashSet<_>>();
-            for sound_id in sound_ids {
-                if existing_ids.insert(sound_id.clone()) {
-                    tab.sound_ids.push(sound_id);
-                }
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn remove_sound_from_tab(&mut self, tab_id: &str, sound_id: &str) -> bool {
-        if let Some(tab) = self.get_tab_mut(tab_id) {
-            let len_before = tab.sound_ids.len();
-            tab.sound_ids.retain(|id| id != sound_id);
-            tab.sound_ids.len() < len_before
-        } else {
-            false
-        }
-    }
-
-    pub fn remove_sounds_from_tab(&mut self, tab_id: &str, sound_ids: &[String]) -> bool {
-        let Some(tab) = self.get_tab_mut(tab_id) else {
-            return false;
-        };
-
-        if sound_ids.is_empty() {
-            return true;
-        }
-
-        let remove_set: HashSet<&str> = sound_ids.iter().map(String::as_str).collect();
-        tab.sound_ids
-            .retain(|sound_id| !remove_set.contains(sound_id.as_str()));
-        true
     }
 }
 
@@ -445,27 +257,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "release-scale gate for large manual-tab imports"]
-    #[allow(clippy::print_stderr)]
-    fn benchmark_large_tab_batch_membership() {
-        let mut config = Config::default();
-        let mut tab = SoundTab::new("Large manual tab".to_string(), 0);
-        tab.id = "large-manual".to_string();
-        config.tabs.push(tab);
-        let ids = (0..20_000)
-            .map(|index| format!("sound-{index:06}"))
-            .collect::<Vec<_>>();
-
-        let started = std::time::Instant::now();
-        assert!(config.add_sounds_to_tab("large-manual", ids));
-        let elapsed = started.elapsed();
-
-        eprintln!("large-tab memberships=20000 add_ms={}", elapsed.as_millis());
-        assert_eq!(config.tabs[0].sound_ids.len(), 20_000);
-        assert!(elapsed <= std::time::Duration::from_millis(100));
-    }
-
-    #[test]
     fn schema_6_load_creates_exact_private_backup_and_preserves_user_fields() {
         let dir = test_dir();
         fs::create_dir_all(&dir).expect("create config directory");
@@ -475,22 +266,9 @@ mod tests {
         let config = Config::load_from_path(&path).expect("migrate schema 6 fixture");
 
         assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
-        assert_eq!(config.sound_folders, ["/home/test/Sound Library"]);
-        assert_eq!(config.sounds[0].id, "sound-distinctive");
-        assert_eq!(config.sounds[0].name, "Upgrade fixture");
-        assert_eq!(
-            config.sounds[0].source_path.as_deref(),
-            Some("/home/test/source/upgrade.flac")
-        );
-        assert_eq!(config.sounds[0].hotkey.as_deref(), Some("Ctrl+Alt+9"));
-        assert_eq!(config.sounds[0].duration_ms, Some(4321));
-        assert_eq!(config.sounds[0].volume, 37);
-        assert!(!config.sounds[0].enabled);
-        assert_eq!(config.tabs[0].id, "tab-distinctive");
-        assert_eq!(config.tabs[0].name, "Upgrade tab");
-        assert_eq!(config.tabs[0].order, 7);
-        assert_eq!(config.tabs[0].folder_binding, None);
-        assert_eq!(config.tabs[0].sound_ids, ["sound-distinctive"]);
+        // The library itself is no longer carried by this type; the legacy
+        // sounds, tabs and folders are preserved by the exact backup asserted
+        // below and imported by the migration, not by the runtime settings.
         assert_eq!(
             config.settings.mic_source.as_deref(),
             Some("easyeffects_source")
@@ -561,10 +339,7 @@ mod tests {
         let dir = test_dir();
         fs::create_dir_all(&dir).expect("create config directory");
         let path = dir.join("config.json");
-        let mut legacy = Config {
-            schema_version: crate::config::LAST_LEGACY_SCHEMA_VERSION,
-            ..Config::default()
-        };
+        let mut legacy = crate::test_support::legacy_config::LegacyConfigFixture::default();
         legacy.settings.local_volume = 37;
         legacy.sounds = (0..2_048)
             .map(|index| {
@@ -579,10 +354,13 @@ mod tests {
         let runtime =
             Config::load_runtime_settings_from_path(&path).expect("load bounded runtime settings");
 
+        // The runtime type no longer models the legacy arrays at all, so a
+        // 2048-sound legacy file costs nothing to load: only settings survive.
         assert_eq!(runtime.settings.local_volume, 37);
-        assert!(runtime.sounds.is_empty());
-        assert!(runtime.tabs.is_empty());
-        assert!(runtime.sound_folders.is_empty());
+        assert_eq!(
+            runtime.schema_version,
+            crate::config::CURRENT_SCHEMA_VERSION
+        );
         fs::remove_dir_all(dir).expect("cleanup config directory");
     }
 
@@ -690,7 +468,6 @@ mod tests {
         fs::create_dir_all(&dir).expect("create config directory");
         let path = dir.join("config.json");
         let mut config = Config::default();
-        config.sound_folders.push("/tmp/sounds".to_string());
         config.settings.control_hotkeys.set_action(
             crate::config::ControlHotkeyAction::StopAll,
             Some("F8".to_string()),
@@ -699,9 +476,6 @@ mod tests {
         config.save_to_path(&path).expect("save config");
 
         let loaded = Config::load_from_path(&path).expect("load saved config");
-        assert!(loaded.sound_folders.is_empty());
-        assert!(loaded.sounds.is_empty());
-        assert!(loaded.tabs.is_empty());
         assert!(loaded.settings.control_hotkeys.stop_all.is_none());
         let persisted: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("read config")).expect("parse config");

@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use parking_lot::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::commands;
-use crate::config::{Config, LoudnessAnalysisState, Sound};
+use crate::config::{LoudnessAnalysisState, Sound};
 use crate::diagnostics;
+use crate::library_store::{LibraryBatch, LibraryScope, LibraryStore, SoundRecord, MAX_BATCH_ROWS};
 
 pub const ACCEPTANCE_FIRST_PASS_TARGET_200_TRACKS_MS: u128 = 30_000;
 pub const ACCEPTANCE_MEDIAN_ABS_ERROR_TARGET_LU: f64 = 0.7;
@@ -51,21 +51,24 @@ pub fn run_loudness_acceptance_harness(
         ));
     }
 
-    let config = build_harness_config(corpus_paths);
+    let library = build_harness_library(corpus_paths)?;
 
     let rss_start_kb = diagnostics::read_memory_snapshot().and_then(|s| s.vm_rss_kb);
     let rss_sampler = start_rss_peak_sampler(rss_start_kb);
 
     let first_pass_started_at = Instant::now();
-    let analyzed_count =
-        commands::analyze_all_loudness(Arc::clone(&config), commands::LoudnessCoordinators::new())?;
+    let analyzed_count = commands::analyze_all_loudness_with_store(
+        library.clone(),
+        false,
+        commands::LoudnessCoordinators::new(),
+    )?;
     let first_pass_wall_clock_ms = first_pass_started_at.elapsed().as_millis();
 
     let rss_peak_kb = stop_rss_peak_sampler(rss_sampler);
     let rss_end_kb = diagnostics::read_memory_snapshot().and_then(|s| s.vm_rss_kb);
 
     let (comparable_count, median_abs_error_lu, p90_abs_error_lu) =
-        compute_fast_vs_full_error_stats(&config)?;
+        compute_fast_vs_full_error_stats(&library)?;
 
     Ok(LoudnessAcceptanceMetrics {
         track_count: corpus_paths.len(),
@@ -191,71 +194,6 @@ pub fn evaluate_loudness_acceptance(
     issues
 }
 
-fn build_harness_config(corpus_paths: &[String]) -> Arc<Mutex<Config>> {
-    let mut config = Config {
-        persistence_path: Some(std::env::temp_dir().join(format!(
-            "lsb-loudness-acceptance-{}.json",
-            uuid::Uuid::new_v4()
-        ))),
-        ..Config::default()
-    };
-    config.settings.auto_gain = false;
-
-    config.sounds = corpus_paths
-        .iter()
-        .enumerate()
-        .map(|(idx, path)| {
-            let mut sound = Sound::new(format!("Acceptance Sound {}", idx + 1), path.clone());
-            sound.loudness_lufs = None;
-            sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
-            sound.loudness_confidence = None;
-            sound
-        })
-        .collect();
-
-    Arc::new(Mutex::new(config))
-}
-
-fn compute_fast_vs_full_error_stats(
-    config: &Arc<Mutex<Config>>,
-) -> Result<(usize, f64, f64), crate::audio::LoudnessError> {
-    let sounds = config.lock().sounds.clone();
-
-    let mut abs_errors = Vec::new();
-    for sound in sounds {
-        let Some(fast_lufs) = sound.loudness_lufs else {
-            continue;
-        };
-        if !fast_lufs.is_finite() {
-            continue;
-        }
-
-        let path = Path::new(&sound.path);
-        if !path.exists() {
-            continue;
-        }
-
-        let full_lufs = match crate::audio::loudness::analyze_loudness_path(path) {
-            Ok(value) if value.is_finite() => value,
-            Ok(_) => continue,
-            Err(_) => continue,
-        };
-
-        abs_errors.push((fast_lufs - full_lufs).abs());
-    }
-
-    if abs_errors.is_empty() {
-        return Err(crate::audio::LoudnessError::NoResult(
-            "No comparable fast/full LUFS values were produced".to_string(),
-        ));
-    }
-
-    abs_errors.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
-    let median = percentile_sorted(&abs_errors, 0.50);
-    let p90 = percentile_sorted(&abs_errors, 0.90);
-    Ok((abs_errors.len(), median, p90))
-}
-
 fn percentile_sorted(values: &[f64], quantile: f64) -> f64 {
     debug_assert!(!values.is_empty());
     debug_assert!((0.0..=1.0).contains(&quantile));
@@ -283,6 +221,93 @@ struct RssPeakSampler {
     stop: Arc<AtomicBool>,
     peak_kb: Arc<AtomicU64>,
     handle: thread::JoinHandle<()>,
+}
+
+/// Seeds a disposable store with the corpus. The harness measures the fast
+/// first-pass estimate against a full analysis, so every sound starts pending.
+fn build_harness_library(
+    corpus_paths: &[String],
+) -> Result<LibraryStore, crate::audio::LoudnessError> {
+    let path = std::env::temp_dir()
+        .join(format!("lsb-loudness-acceptance-{}", uuid::Uuid::new_v4()))
+        .join("library.sqlite3");
+    let library = LibraryStore::open(path)
+        .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+
+    for (batch_index, chunk) in corpus_paths.chunks(MAX_BATCH_ROWS).enumerate() {
+        let base = batch_index * MAX_BATCH_ROWS;
+        let rows = chunk
+            .iter()
+            .enumerate()
+            .map(|(offset, path)| {
+                let mut sound = Sound::new(
+                    format!("Acceptance Sound {}", base + offset + 1),
+                    path.clone(),
+                );
+                sound.loudness_lufs = None;
+                sound.loudness_analysis_state = LoudnessAnalysisState::Pending;
+                sound.loudness_confidence = None;
+                SoundRecord {
+                    sound,
+                    general_position: base + offset,
+                    locations: Vec::new(),
+                }
+            })
+            .collect();
+        library
+            .apply_batch(LibraryBatch::Sounds(rows))
+            .recv()
+            .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
+    }
+
+    Ok(library)
+}
+
+/// Compares each sound's fast first-pass estimate against a full analysis of
+/// the same file, paging the corpus out of the store rather than holding it.
+fn compute_fast_vs_full_error_stats(
+    library: &LibraryStore,
+) -> Result<(usize, f64, f64), crate::audio::LoudnessError> {
+    let mut abs_errors = Vec::new();
+    let mut page = 0_usize;
+    loop {
+        let sounds = library
+            .page(LibraryScope::General, "", page)
+            .recv()
+            .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?
+            .sounds;
+        if sounds.is_empty() {
+            break;
+        }
+        for sound in &sounds {
+            let Some(fast_lufs) = sound.loudness_lufs else {
+                continue;
+            };
+            if !fast_lufs.is_finite() {
+                continue;
+            }
+            let path = Path::new(&sound.path);
+            if !path.exists() {
+                continue;
+            }
+            let full_lufs = match crate::audio::loudness::analyze_loudness_path(path) {
+                Ok(value) if value.is_finite() => value,
+                Ok(_) => continue,
+                Err(_) => continue,
+            };
+            abs_errors.push((fast_lufs - full_lufs).abs());
+        }
+        page += 1;
+    }
+
+    let comparable_count = abs_errors.len();
+    if abs_errors.is_empty() {
+        return Ok((0, 0.0, 0.0));
+    }
+    abs_errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = percentile_sorted(&abs_errors, 0.50);
+    let p90 = percentile_sorted(&abs_errors, 0.90);
+    Ok((comparable_count, median, p90))
 }
 
 fn start_rss_peak_sampler(initial_kb: Option<u64>) -> RssPeakSampler {

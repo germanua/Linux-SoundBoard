@@ -1777,8 +1777,7 @@ mod tests {
     }
 
     fn write_legacy_config(path: &Path) -> Vec<u8> {
-        let mut config = Config::default();
-        config.schema_version = crate::config::LAST_LEGACY_SCHEMA_VERSION;
+        let mut config = crate::test_support::legacy_config::LegacyConfigFixture::default();
         config.sound_folders.push("/music".to_string());
         config.sounds.push(Sound::new(
             "Tone".to_string(),

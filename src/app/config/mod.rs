@@ -13,19 +13,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitize_for_persistence_drops_non_finite_loudness() {
-        let mut cfg = Config::default();
-        let mut sound = Sound::new("silence".to_string(), "/tmp/silence.wav".to_string());
-        sound.loudness_lufs = Some(f64::NEG_INFINITY);
-        cfg.sounds.push(sound);
-
-        cfg.sanitize_for_persistence();
-
-        assert_eq!(cfg.sounds[0].loudness_lufs, None);
-        assert!(serde_json::to_string(&cfg).is_ok());
-    }
-
-    #[test]
     fn sanitize_for_persistence_clamps_invalid_target_lufs() {
         let mut cfg = Config::default();
         cfg.settings.auto_gain_target_lufs = f64::NAN;
@@ -53,20 +40,6 @@ mod tests {
 
         let json = serde_json::to_string(&sound).unwrap();
 
-        assert!(!json.contains("source_path"));
-    }
-
-    #[test]
-    fn sanitize_for_persistence_removes_redundant_source_path() {
-        let mut cfg = Config::default();
-        let mut sound = Sound::new("silence".to_string(), "/tmp/silence.wav".to_string());
-        sound.source_path = Some(sound.path.clone());
-        cfg.sounds.push(sound);
-
-        cfg.sanitize_for_persistence();
-
-        assert_eq!(cfg.sounds[0].source_path, None);
-        let json = serde_json::to_string(&cfg).unwrap();
         assert!(!json.contains("source_path"));
     }
 
@@ -169,73 +142,5 @@ mod tests {
             assert_eq!(meta.action.id(), meta.id);
             assert_eq!(meta.action.binding_id(), meta.binding_id);
         }
-    }
-
-    #[test]
-    fn remove_sounds_from_tab_batch_removes_present_and_ignores_missing() {
-        let mut cfg = Config::default();
-        let mut tab = SoundTab::new("Custom".to_string(), 1);
-        tab.id = "custom-a".to_string();
-        tab.sound_ids = vec![
-            "sound-1".to_string(),
-            "sound-2".to_string(),
-            "sound-3".to_string(),
-        ];
-        cfg.tabs.push(tab);
-
-        let removed = cfg.remove_sounds_from_tab(
-            "custom-a",
-            &[
-                "sound-2".to_string(),
-                "missing-id".to_string(),
-                "sound-2".to_string(),
-            ],
-        );
-
-        assert!(removed);
-        let tab = cfg.get_tab("custom-a").unwrap();
-        assert_eq!(tab.sound_ids, vec!["sound-1", "sound-3"]);
-    }
-
-    #[test]
-    fn remove_sounds_from_tab_batch_fails_when_tab_missing() {
-        let mut cfg = Config::default();
-        let removed = cfg.remove_sounds_from_tab("missing-tab", &["sound-1".to_string()]);
-        assert!(!removed);
-    }
-
-    #[test]
-    fn remove_sounds_batch_removes_sounds_and_tab_membership() {
-        let mut cfg = Config::default();
-
-        let mut sound_a = Sound::new("A".to_string(), "/tmp/a.wav".to_string());
-        sound_a.id = "sound-a".to_string();
-        let mut sound_b = Sound::new("B".to_string(), "/tmp/b.wav".to_string());
-        sound_b.id = "sound-b".to_string();
-        let mut sound_c = Sound::new("C".to_string(), "/tmp/c.wav".to_string());
-        sound_c.id = "sound-c".to_string();
-        cfg.sounds = vec![sound_a, sound_b, sound_c];
-
-        let mut tab = SoundTab::new("Custom".to_string(), 1);
-        tab.sound_ids = vec![
-            "sound-a".to_string(),
-            "sound-b".to_string(),
-            "sound-c".to_string(),
-        ];
-        cfg.tabs.push(tab);
-
-        cfg.remove_sounds(&[
-            "sound-b".to_string(),
-            "missing-id".to_string(),
-            "sound-c".to_string(),
-        ]);
-
-        let remaining_ids = cfg
-            .sounds
-            .iter()
-            .map(|sound| sound.id.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(remaining_ids, vec!["sound-a"]);
-        assert_eq!(cfg.tabs[0].sound_ids, vec!["sound-a"]);
     }
 }

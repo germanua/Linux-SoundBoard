@@ -13,7 +13,6 @@ use std::{
 
 use super::CommandError;
 use crate::config::{Config, PlayMode, Sound};
-use crate::hotkeys::HotkeyManager;
 
 const SLOW_GTK_CALLBACK_THRESHOLD_MS: u128 = 16;
 const UI_WORKER_THREADS: usize = 4;
@@ -26,7 +25,6 @@ const ANALYSIS_THREAD_CRITICAL: u64 = 48;
 
 pub const ERR_FILE_DOES_NOT_EXIST: &str = "File does not exist";
 pub const ERR_UNSUPPORTED_AUDIO_FILE: &str = "Not a supported audio file";
-pub const ERR_SOUND_ALREADY_EXISTS: &str = "Sound already exists";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdaptiveAnalysisPlan {
@@ -35,13 +33,6 @@ pub struct AdaptiveAnalysisPlan {
     pub rss_kb: Option<u64>,
     pub process_threads: Option<u64>,
     pub throttled: bool,
-}
-
-pub fn with_config<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, CommandError>
-where
-    F: FnOnce(&Config) -> R,
-{
-    Ok(f(&config.lock()))
 }
 
 pub fn with_config_mut<F, R>(config: &Arc<Mutex<Config>>, f: F) -> Result<R, CommandError>
@@ -70,13 +61,6 @@ where
         cfg.save().map_err(CommandError::config_save)?;
         Ok(result)
     })?
-}
-
-pub fn with_saved_config_checked<F>(config: &Arc<Mutex<Config>>, f: F) -> Result<(), CommandError>
-where
-    F: FnOnce(&mut Config) -> Result<(), CommandError>,
-{
-    with_saved_config_result(config, f)
 }
 
 #[cfg(test)]
@@ -216,30 +200,6 @@ pub(crate) fn build_sound_with_metadata(name: String, path: String) -> Sound {
 
 pub(crate) fn probe_duration_ms(path: &str) -> Option<u64> {
     crate::audio::metadata::probe_duration_ms(path)
-}
-
-pub fn default_sound_import_dir(
-    audio_dir: Option<std::path::PathBuf>,
-    home_dir: Option<std::path::PathBuf>,
-) -> std::path::PathBuf {
-    audio_dir
-        .or_else(|| home_dir.map(|h| h.join("Music")))
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("soundboard-imports")
-}
-
-pub fn unregister_hotkeys_best_effort(
-    hotkeys: &Arc<Mutex<HotkeyManager>>,
-    sound_ids: &[String],
-    context: &'static str,
-) {
-    if sound_ids.is_empty() {
-        return;
-    }
-
-    if let Err(err) = hotkeys.lock().unregister_hotkeys_blocking(sound_ids) {
-        log::warn!("Failed to unregister hotkeys during {context}: {err}");
-    }
 }
 
 type PendingCallback = Box<dyn FnOnce(Box<dyn Any + Send>) + 'static>;
