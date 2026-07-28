@@ -886,6 +886,24 @@ step() {
     return 1
 }
 
+# --diagnose exits 0 even when the engine and the application do not match, so
+# the report has to be read. A user who runs the repair, sees every step report
+# ok and still cannot use the app has been told nothing. Returns non-zero when a
+# mismatch was found.
+report_engine_mismatch() {
+    local diagnosis=$1
+
+    grep -q 'INCOMPATIBLE' "$diagnosis" || return 0
+
+    printf '\n'
+    warn "The running engine does not match the installed application."
+    printf '    The engine service starts a different build than the app on your PATH,\n'
+    printf '    so the app will refuse to talk to it. Install once so both come from\n'
+    printf '    the same version:\n\n'
+    printf '      ./install.sh install\n'
+    return 1
+}
+
 fix_setup() {
     local failures=0
 
@@ -903,8 +921,11 @@ fix_setup() {
     print_status || true
 
     if command -v "$APP_BINARY" >/dev/null 2>&1; then
+        local diagnosis="$WORK_DIR/diagnose.log"
         printf '\n'
-        "$APP_BINARY" --diagnose || true
+        "$APP_BINARY" --diagnose >"$diagnosis" 2>&1 || true
+        cat "$diagnosis"
+        report_engine_mismatch "$diagnosis" || failures=$((failures + 1))
     fi
 
     if ((failures > 0)); then
