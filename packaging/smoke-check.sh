@@ -270,13 +270,18 @@ INSTALLER="$REPO_ROOT/packaging/linux/install-user.sh"
 if [[ ! -f "$INSTALLER" ]]; then
     fail "install-user.sh not found: $INSTALLER"
 else
-    for subcmd in "install" "repair" "setup-user" "remove" "status"; do
+    for subcmd in "install" "repair" "setup-user" "remove" "status" "snapshot" "snapshot-diff" "restore-audio"; do
         if grep -qw "$subcmd" "$INSTALLER"; then
             pass "install-user.sh: '$subcmd' subcommand present"
         else
             fail "install-user.sh: '$subcmd' subcommand not found"
         fi
     done
+    if grep -q "capture_audio_snapshot" "$INSTALLER"; then
+        pass "install-user.sh: records an audio snapshot around installs"
+    else
+        fail "install-user.sh: no audio snapshot capture found"
+    fi
     if grep -q "XDG_DATA_HOME\|XDG_CONFIG_HOME" "$INSTALLER"; then
         pass "install-user.sh: uses XDG_DATA_HOME/XDG_CONFIG_HOME (no hard-coded uid paths)"
     else
@@ -293,7 +298,7 @@ WRAPPER="$REPO_ROOT/install.sh"
 if [[ ! -f "$WRAPPER" ]]; then
     fail "install.sh not found: $WRAPPER"
 else
-    for subcmd in "install" "repair" "remove" "uninstall" "status"; do
+    for subcmd in "install" "repair" "remove" "uninstall" "status" "menu" "versions" "report" "fix"; do
         if grep -qw "$subcmd" "$WRAPPER"; then
             pass "install.sh: '$subcmd' subcommand present"
         else
@@ -304,6 +309,18 @@ else
         pass "install.sh: package-preserving remove option present"
     else
         fail "install.sh: --keep-package option missing"
+    fi
+    # The one-liner pipes the script into bash, so prompts must come from the
+    # terminal rather than stdin.
+    if grep -q "ensure_tty" "$WRAPPER" && grep -q "exec </dev/tty" "$WRAPPER"; then
+        pass "install.sh: menu reads prompts from the terminal when piped"
+    else
+        fail "install.sh: no /dev/tty handling; the piped one-liner cannot prompt"
+    fi
+    if grep -q -- "--version" "$WRAPPER"; then
+        pass "install.sh: previous-version install option present"
+    else
+        fail "install.sh: --version option missing"
     fi
 fi
 

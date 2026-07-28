@@ -4,6 +4,18 @@ This guide covers the issues most likely to block installation, startup, audio r
 
 ## Start With These Checks
 
+The installer can run these for you and repair what it finds:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+```
+
+Choose **Fix setup problems** (or run `./install.sh fix`). It repairs the user
+install, the engine service, swhkd on Wayland, and the PipeWire services, printing
+which step failed. If a step fails it offers to write a bug report.
+
+To check by hand:
+
 ```bash
 cat /etc/os-release
 echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"

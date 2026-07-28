@@ -42,7 +42,8 @@
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
 ```
 
-<p align="center">Sets up the runtime audio engine, desktop entry, and icons automatically.</p>
+<p align="center">Opens a menu: install, install a previous version, uninstall, fix setup problems, or generate a bug report.<br>
+Sets up the runtime audio engine, desktop entry, and icons automatically, and records your audio setup first so uninstalling can put it back.</p>
 
 ---
 
@@ -79,7 +80,9 @@ Full gallery → [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md)
 
 The command at the top of this page is all you need.
 
-`install.sh` detects your distro and does the right thing:
+Run from a terminal it opens a menu; piped with no arguments (scripts, CI) it
+installs the newest version directly. **Install the newest version** detects your
+distro and does the right thing:
 
 | Distro                       | What happens                                                    |
 | ---------------------------- | --------------------------------------------------------------- |
@@ -95,6 +98,10 @@ After install, use `install.sh` for full repair/uninstall. The low-level
 files:
 
 ```bash
+install.sh install --version v2.1.2  # install a specific published release
+install.sh versions             # list published releases
+install.sh fix                  # guided repair, reports which step failed
+install.sh report               # write a bug report file to paste into an issue
 install.sh repair               # repair via the smart wrapper
 install.sh uninstall --yes      # remove user files and native package
 install-user.sh repair          # clean old audio configs, restart engine
