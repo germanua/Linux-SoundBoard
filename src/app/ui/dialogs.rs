@@ -634,6 +634,7 @@ impl DialogHost {
     }
 
     fn present(&self, focus_widget: Option<gtk4::Widget>) {
+        self.raise_to_front();
         self.inner.overlay.set_visible(true);
         self.inner.overlay.grab_focus();
         if let Some(widget) = focus_widget {
@@ -641,6 +642,28 @@ impl DialogHost {
                 widget.grab_focus();
             });
         }
+    }
+
+    /// Moves this host to the end of its parent overlay's child list, which is
+    /// the top of the paint order.
+    ///
+    /// The host is attached while the window is built, but panels that open
+    /// dialogs — Settings above all — are built lazily and attached later, so
+    /// they end up above it. Raising here rather than at each panel's
+    /// construction keeps the rule in one place: whoever attaches an overlay
+    /// later cannot bury a dialog. It runs while the host is still hidden, so
+    /// there is nothing on screen to flicker.
+    fn raise_to_front(&self) {
+        let Some(parent) = self
+            .inner
+            .overlay
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk4::Overlay>().ok())
+        else {
+            return;
+        };
+        parent.remove_overlay(&self.inner.overlay);
+        parent.add_overlay(&self.inner.overlay);
     }
 
     fn set_response_handler<F>(&self, handler: F)

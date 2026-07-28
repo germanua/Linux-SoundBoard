@@ -343,15 +343,11 @@ pub fn build_window(
                     Some(Rc::clone(&on_library_changed)),
                     Some(Rc::clone(&on_list_style_changed)),
                 );
+                // This panel is attached after the dialog host, so it sits above
+                // it in the overlay's paint order. `DialogHost::present` raises
+                // itself before showing, which is what keeps dialogs opened from
+                // here on top.
                 drop_overlay.add_overlay(&overlay);
-                // The dialog host is attached while the window is built, and a
-                // GtkOverlay stacks later children above earlier ones, so this
-                // panel would sit on top of it. Re-attach the host so it goes
-                // back to the front: a dialog opened from settings (Set Hotkey,
-                // confirmations) must not render behind the panel that opened
-                // it.
-                drop_overlay.remove_overlay(dialog_host.widget());
-                drop_overlay.add_overlay(dialog_host.widget());
                 overlay
             });
             settings_overlay.set_visible(true);
