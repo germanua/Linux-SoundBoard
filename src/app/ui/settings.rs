@@ -146,6 +146,14 @@ pub fn build_settings_overlay(
     overlay.add_overlay(&panel_clamp);
 
     {
+        // The clamp fills the overlay, so a press beside the panel lands on it
+        // and never reaches the backdrop button underneath.
+        let overlay_dismiss = overlay.clone();
+        super::dialogs::dismiss_on_press_outside(&overlay, &panel, move || {
+            overlay_dismiss.set_visible(false);
+        });
+    }
+    {
         let overlay = overlay.clone();
         backdrop.connect_clicked(move |_| {
             overlay.set_visible(false);

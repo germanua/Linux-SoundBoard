@@ -63,6 +63,41 @@ impl DialogHostWeak {
     }
 }
 
+/// Dismisses an overlay panel when the pointer is pressed anywhere outside it.
+///
+/// The visible panel sits inside an `AdwClamp` that fills the whole overlay, so
+/// the empty area beside the panel belongs to the clamp and a press there never
+/// reaches the backdrop button underneath it. Hit-testing the panel's own bounds
+/// sidesteps that: it does not care which widget the press landed on, only
+/// whether the point is inside the panel.
+///
+/// Runs in the capture phase and claims the press, so a dismissing click cannot
+/// also activate whatever was underneath.
+pub(super) fn dismiss_on_press_outside<F>(
+    overlay: &gtk4::Overlay,
+    panel: &impl IsA<gtk4::Widget>,
+    on_dismiss: F,
+) where
+    F: Fn() + 'static,
+{
+    let gesture = gtk4::GestureClick::new();
+    gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    let overlay_coords = overlay.clone();
+    let panel = panel.clone().upcast::<gtk4::Widget>();
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        // Before the first allocation there is no panel to be outside of.
+        let Some(bounds) = panel.compute_bounds(&overlay_coords) else {
+            return;
+        };
+        if bounds.contains_point(&gtk4::graphene::Point::new(x as f32, y as f32)) {
+            return;
+        }
+        gesture.set_state(gtk4::EventSequenceState::Claimed);
+        on_dismiss();
+    });
+    overlay.add_controller(gesture);
+}
+
 impl DialogHost {
     pub fn new() -> Self {
         let overlay = gtk4::Overlay::builder()
@@ -237,7 +272,7 @@ impl DialogHost {
                 response_handler: RefCell::new(None),
             }),
         };
-        host.connect_once(backdrop, close_btn);
+        host.connect_once(backdrop, close_btn, panel);
         host
     }
 
@@ -548,7 +583,15 @@ impl DialogHost {
         self.present(None);
     }
 
-    fn connect_once(&self, backdrop: gtk4::Button, close_btn: gtk4::Button) {
+    fn connect_once(&self, backdrop: gtk4::Button, close_btn: gtk4::Button, panel: GtkBox) {
+        {
+            let host = self.downgrade();
+            dismiss_on_press_outside(&self.inner.overlay, &panel, move || {
+                if let Some(host) = host.upgrade() {
+                    host.dismiss();
+                }
+            });
+        }
         {
             let host = self.downgrade();
             backdrop.connect_clicked(move |_| {
