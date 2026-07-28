@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Added
 
-- **Installer menu:** The one-line install command now opens a menu to install the newest version, install a previous release, uninstall, fix setup problems, generate a bug report, or show status. Every action is also a command (`install --version`, `versions`, `fix`, `report`), and piping the script with no arguments still installs directly.
+- **Installer menu:** The one-line install command now opens a menu to install the newest version, install a previous release, uninstall, fix setup problems, generate a bug report, or show status. Every action is also a command (`install --version`, `versions`, `fix`, `report`), and piping the script with no arguments still installs directly. Each entry states whether it needs your password, based on the distro, session type, and whether a native package is installed.
 - **Previous releases:** Any published release can be installed from its tarball into `~/.local` without root. A native package that would shadow it is removed first, with confirmation.
 - **Audio snapshots:** Installs and updates record the default microphone and speakers, the engine service state, and checksums of the PipeWire, WirePlumber, and PulseAudio configuration before making changes. Uninstall prints what changed since that snapshot and asks once whether to restore it. Inspect it any time with `install-user.sh snapshot-diff`.
 - **Bug reports:** `install.sh report` writes a single file with a system report, an application report, and a blank for the user to fill in, then explains how to attach screenshots to a GitHub issue. The home path and username are replaced; sound-device names are kept.

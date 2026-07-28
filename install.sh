@@ -25,6 +25,7 @@ INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 WORK_DIR="$(mktemp -d)"
 LATEST_RELEASE_JSON=""
 RELEASE_LIST_JSON=""
+NATIVE_PACKAGE_PRESENT=0
 APT_UPDATED=0
 ZYPPER_REFRESHED=0
 
@@ -158,7 +159,7 @@ detect_session() {
     SESSION_TYPE="${SESSION_TYPE:-unknown}"
 }
 
-is_wayland() { [[ "$SESSION_TYPE" == "wayland" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }
+is_wayland() { [[ "${SESSION_TYPE:-}" == "wayland" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }
 
 # ── Package manager helpers ───────────────────────────────────────────────────
 
@@ -708,6 +709,7 @@ print_menu_header() {
         packages+=("$kind:$pkg")
     done < <(installed_native_packages || true)
 
+    NATIVE_PACKAGE_PRESENT=$( ((${#packages[@]} > 0)) && printf 1 || printf 0)
     version="$(installed_version || true)"
 
     printf '\n'
@@ -720,18 +722,64 @@ print_menu_header() {
     printf '\n'
 }
 
+# Says up front which entries will ask for a password, from what is actually
+# true here: only a native package install or removal and the setuid swhkd
+# binary need root. Everything under ~/.local and ~/.config does not.
+password_note() {
+    case "$1" in
+        install-newest)
+            case "$DISTRO_FAMILY" in
+                arch|debian|fedora|opensuse)
+                    printf ' — asks for your password (system package)'
+                    ;;
+                *)
+                    if is_wayland; then
+                        printf ' — asks for your password (hotkey daemon only)'
+                    else
+                        printf ' — no password needed'
+                    fi
+                    ;;
+            esac
+            ;;
+        install-previous)
+            if ((NATIVE_PACKAGE_PRESENT == 1)); then
+                printf ' — asks for your password only to remove the system package'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        uninstall)
+            if ((NATIVE_PACKAGE_PRESENT == 1)); then
+                printf ' — asks for your password (system package)'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        fix)
+            if is_wayland; then
+                printf ' — may ask for your password (hotkey daemon)'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        *)
+            printf ' — no password needed'
+            ;;
+    esac
+}
+
 interactive_menu() {
     detect_distro
     detect_session
 
     while true; do
         print_menu_header
-        printf '  1) Install the newest version\n'
-        printf '  2) Install a previous version\n'
-        printf '  3) Uninstall\n'
-        printf '  4) Fix setup problems\n'
-        printf '  5) Make a bug report\n'
-        printf '  6) Show status\n'
+        printf '  1) Install the newest version%s\n'  "$(password_note install-newest)"
+        printf '  2) Install a previous version%s\n'  "$(password_note install-previous)"
+        printf '  3) Uninstall%s\n'                   "$(password_note uninstall)"
+        printf '  4) Fix setup problems%s\n'          "$(password_note fix)"
+        printf '  5) Make a bug report%s\n'           "$(password_note report)"
+        printf '  6) Show status%s\n'                 "$(password_note status)"
         printf '  0) Exit\n'
         printf '\n  Choose an option: '
 

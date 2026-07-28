@@ -9,18 +9,31 @@ curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/inst
 Run from a terminal, this opens a menu:
 
 ```
-  1) Install the newest version
-  2) Install a previous version
-  3) Uninstall
-  4) Fix setup problems
-  5) Make a bug report
-  6) Show status
+  1) Install the newest version — asks for your password (system package)
+  2) Install a previous version — asks for your password only to remove the system package
+  3) Uninstall — asks for your password (system package)
+  4) Fix setup problems — may ask for your password (hotkey daemon)
+  5) Make a bug report — no password needed
+  6) Show status — no password needed
   0) Exit
 ```
 
 The header above the menu shows your distro, session type, the installed version,
 and whether a native package is present, so you can see the current state before
 choosing anything.
+
+Each entry states whether it needs your password, based on your actual system, so
+nothing asks for root unexpectedly. Only three things ever need it: installing or
+removing a native package, and the setuid `swhkd` binary for Wayland hotkeys.
+Everything under `~/.local` and `~/.config` — including installing a previous
+version, the bug report, and status — runs entirely as your user. On a distro
+without a native package, the same menu reads:
+
+```
+  1) Install the newest version — no password needed
+  2) Install a previous version — no password needed
+  3) Uninstall — no password needed
+```
 
 **Install the newest version** picks the right method for your system:
 
