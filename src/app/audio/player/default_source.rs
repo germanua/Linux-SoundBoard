@@ -143,6 +143,30 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     claim_default_source_if_enabled(state);
 }
 
+/// Whether the engine can skip claiming because it already holds the default.
+///
+/// Both halves matter. The cached name is only meaningful while it describes a
+/// claim this engine saw confirmed, and the claim flag is only meaningful while
+/// the cached name still says the virtual mic.
+fn already_holds_default(cached_name: Option<&str>, claimed: bool) -> bool {
+    claimed && cached_name == Some(VIRTUAL_SOURCE_NAME)
+}
+
+/// Drop what the engine believes about the system default.
+///
+/// Everything it knows arrived through one metadata object's property events.
+/// When that object is replaced or goes away, the belief describes an object
+/// that no longer exists, and a fresh object replays no properties, so keeping
+/// it would suppress the claim forever.
+pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) {
+    // Both silent failures this behaviour caused were expensive to diagnose
+    // precisely because nothing recorded that the engine had stopped being able
+    // to see the default.
+    info!("Default metadata {reason}; re-evaluating the default source");
+    state.default_audio_source_name = None;
+    state.claimed_default = false;
+}
+
 /// How to take the default source back.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ReclaimStrategy {
@@ -246,10 +270,10 @@ pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
         return;
     };
 
-    // If the current known default is already us, no-op.
-    if state.default_audio_source_name.as_deref() == Some(VIRTUAL_SOURCE_NAME)
-        && state.claimed_default
-    {
+    if already_holds_default(
+        state.default_audio_source_name.as_deref(),
+        state.claimed_default,
+    ) {
         return;
     }
 
@@ -337,6 +361,33 @@ mod tests {
         assert!(!should_reclaim_default(
             DefaultSourceMode::Default,
             Some(VIRTUAL_SOURCE_NAME)
+        ));
+    }
+
+    #[test]
+    fn a_confirmed_claim_is_not_repeated() {
+        assert!(already_holds_default(Some(VIRTUAL_SOURCE_NAME), true));
+    }
+
+    #[test]
+    fn a_forgotten_belief_claims_again() {
+        // PipeWire can replace the whole default metadata object instead of
+        // changing a property on it. No property event fires for a fresh
+        // object, so an engine that still trusted its old belief would sit
+        // silent while the system had no default at all.
+        assert!(!already_holds_default(None, false));
+    }
+
+    #[test]
+    fn a_claim_we_never_saw_confirmed_is_not_trusted() {
+        assert!(!already_holds_default(Some(VIRTUAL_SOURCE_NAME), false));
+    }
+
+    #[test]
+    fn another_device_holding_it_is_not_us() {
+        assert!(!already_holds_default(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            true
         ));
     }
 

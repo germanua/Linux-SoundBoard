@@ -198,6 +198,11 @@ fn create_pipewire_backend(
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
                     if let Some(metadata) = metadata {
+                        // A different object than the one the current belief
+                        // came from, and a fresh one replays no properties, so
+                        // anything remembered about the default is stale and
+                        // would suppress the claim below.
+                        forget_default_source_belief(&mut state, "bound");
                         state.default_metadata = Some(metadata);
                         // The default-metadata listener may have already fired
                         // with the current default name during binding — re-
@@ -283,6 +288,9 @@ fn create_pipewire_backend(
                         .is_some_and(|metadata| metadata.id == id)
                     {
                         state.default_metadata = None;
+                        // Nothing reports the default any more, so the last
+                        // value seen is not evidence about the system now.
+                        forget_default_source_belief(&mut state, "went away");
                     }
                     state.links.remove(&id);
                     // If the feeder or virtual_mic node disappears, drop any
