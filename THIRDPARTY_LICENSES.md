@@ -125,6 +125,7 @@ The following direct dependencies are available under the MIT license or the Apa
 - `rayon` 1.11.0. Copyright (c) 2010 The Rust Project Developers.
 - `serde` 1.0.228. Copyright held by Erick Tryzelaar, David Tolnay, and Serde contributors.
 - `serde_json` 1.0.149. Copyright held by Erick Tryzelaar, David Tolnay, and serde_json contributors.
+- `sha2` 0.10.9. Copyright (c) 2006-2009 Graydon Hoare; Copyright (c) 2009-2013 Mozilla Foundation; Copyright (c) 2016 Artyom Pavlov.
 - `thiserror` 1.0.69. Copyright held by David Tolnay and contributors.
 - `uuid` 1.22.0. Copyright (c) 2014 The Rust Project Developers; Copyright (c) 2018 Ashley Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon.
 

@@ -22,9 +22,9 @@
     <ul>
       <li>Virtual microphone that seamlessly mixes your voice with soundboard audio</li>
       <li>LUFS normalization for consistent volume levels</li>
-      <li>Global hotkeys (works on X11, XWayland, and Wayland with portal support)</li>
+      <li>Global hotkeys (native XInput2 on X11 and XWayland, swhkd on Wayland)</li>
       <li>Modern GTK4/Libadwaita UI with dark mode support</li>
-      <li>Organized sound library with tabs and folder sync</li>
+      <li>Organized sound library with tabs, a browsable folder hierarchy, and folder sync</li>
       <li>Drag and drop support for easy sound import</li>
       <li>Native PipeWire virtual microphone routing</li>
     </ul>

@@ -34,6 +34,18 @@ linux-soundboard --diagnose
 
 If the issue is packaging-related, include the package filename you installed and the exact command used to install it.
 
+If sounds, folders, tabs, or hotkey bindings are missing or wrong, include the
+state of the library database:
+
+```bash
+ls -l ~/.config/linux-soundboard/
+sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA integrity_check;'
+sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA user_version;'
+```
+
+Do not attach `library.sqlite3` or `config.json` themselves. They contain the
+full paths of your audio files, and the output above is enough to start.
+
 If the issue is UI-related inside a VM, mention whether it reproduces with:
 
 ```bash
