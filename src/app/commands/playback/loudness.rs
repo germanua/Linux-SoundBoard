@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::audio::loudness;
@@ -54,11 +55,12 @@ pub(super) fn maybe_trigger_estimated_loudness_refinement(
         return Ok(trigger);
     }
 
+    let cancel = coords.refinement.cancel_token();
     let started = coords
         .refinement
         .try_start(
             "loudness-refinement",
-            move || refine_estimated_loudness(config, force),
+            move || refine_estimated_loudness(config, force, &cancel),
             Some(Box::new(|_| {
                 crate::ui_event_bridge::post_loudness_status_refresh();
             })),
@@ -109,9 +111,10 @@ fn should_mark_unavailable_loudness_error(err: &crate::audio::LoudnessError) -> 
 fn analyze_loudness_for_backfill(
     path: &Path,
     duration_hint_ms: Option<u64>,
+    cancel: &AtomicBool,
 ) -> Result<(f64, LoudnessAnalysisState, Option<f32>, Option<f32>), crate::audio::LoudnessError> {
     if duration_hint_ms.is_some_and(|duration_ms| duration_ms <= FAST_LUFS_FULL_SCAN_THRESHOLD_MS) {
-        return loudness::analyze_loudness_path_full(path).map(|(lufs, tp)| {
+        return loudness::analyze_loudness_path_full(path, cancel).map(|(lufs, tp)| {
             (
                 lufs,
                 LoudnessAnalysisState::Refined,
@@ -126,6 +129,7 @@ fn analyze_loudness_for_backfill(
         path,
         preview_budget_ms,
         duration_hint_ms,
+        cancel,
     ) {
         Ok(metrics) => {
             let confidence = if metrics.confidence.is_finite() {
@@ -147,7 +151,7 @@ fn analyze_loudness_for_backfill(
                 path.display(),
                 err
             );
-            loudness::analyze_loudness_path_full(path).map(|(lufs, tp)| {
+            loudness::analyze_loudness_path_full(path, cancel).map(|(lufs, tp)| {
                 (
                     lufs,
                     LoudnessAnalysisState::Refined,
@@ -298,9 +302,9 @@ pub(super) fn collect_refinement_candidates(
 fn refine_estimated_loudness(
     config: Arc<Mutex<Config>>,
     force: bool,
+    cancel: &AtomicBool,
 ) -> Result<u32, crate::audio::LoudnessError> {
     crate::diagnostics::memory::log_memory_snapshot("refine_estimated_loudness:start");
-    loudness::reset_loudness_analysis_cancelled();
 
     let candidates = with_config(&config, |cfg| collect_refinement_candidates(cfg, force))
         .map_err(|e| crate::audio::LoudnessError::Io(e.to_string()))?;
@@ -319,14 +323,14 @@ fn refine_estimated_loudness(
     for candidate in candidates {
         let id = candidate.id;
         let path = candidate.path;
-        if loudness::is_loudness_analysis_cancelled() {
+        if cancel.load(Ordering::SeqCst) {
             break;
         }
 
         let outcome = if !Path::new(&path).exists() {
             RefinementOutcome::Unavailable { id }
         } else {
-            match loudness::analyze_loudness_path_full(Path::new(&path)) {
+            match loudness::analyze_loudness_path_full(Path::new(&path), cancel) {
                 Ok((lufs, true_peak_dbtp)) if lufs.is_finite() => RefinementOutcome::Refined {
                     id,
                     lufs,
@@ -398,17 +402,17 @@ pub fn analyze_all_loudness(
 
     log::info!("Analyzing loudness for {} sounds", sounds_to_analyze.len());
 
-    loudness::reset_loudness_analysis_cancelled();
+    let cancel = coords.backfill.cancel_token();
 
     let analyze_entry =
         |(id, path, duration_hint_ms): &(String, String, Option<u64>)| -> Option<BackfillOutcome> {
-            if loudness::is_loudness_analysis_cancelled() {
+            if cancel.load(Ordering::SeqCst) {
                 return None;
             }
             if !Path::new(path).exists() {
                 return Some(BackfillOutcome::Unavailable { id: id.clone() });
             }
-            match analyze_loudness_for_backfill(Path::new(path), *duration_hint_ms) {
+            match analyze_loudness_for_backfill(Path::new(path), *duration_hint_ms, &cancel) {
                 Ok((lufs, state, confidence, true_peak_dbtp)) if lufs.is_finite() => {
                     Some(BackfillOutcome::Analyzed {
                         id: id.clone(),
@@ -624,11 +628,12 @@ pub(super) fn maybe_trigger_estimated_loudness_refinement_with_store(
     if trigger != EstimatedLoudnessRefinementTrigger::Started {
         return Ok(trigger);
     }
+    let cancel = coords.refinement.cancel_token();
     let started = coords
         .refinement
         .try_start(
             "loudness-refinement",
-            move || refine_estimated_loudness_with_store(library, force),
+            move || refine_estimated_loudness_with_store(library, force, &cancel),
             Some(Box::new(|_| {
                 crate::ui_event_bridge::post_loudness_status_refresh();
             })),
@@ -654,8 +659,8 @@ fn should_flush_loudness_progress(pending: usize, page_finished: bool) -> bool {
 fn refine_estimated_loudness_with_store(
     library: LibraryStore,
     force: bool,
+    cancel: &AtomicBool,
 ) -> Result<u32, crate::audio::LoudnessError> {
-    loudness::reset_loudness_analysis_cancelled();
     let limit = if force {
         crate::library_store::MAX_BATCH_ROWS
     } else {
@@ -675,7 +680,7 @@ fn refine_estimated_loudness_with_store(
         after = sounds.last().map(|sound| sound.id.clone());
         let mut updates = Vec::with_capacity(sounds.len());
         for sound in sounds {
-            if loudness::is_loudness_analysis_cancelled() {
+            if cancel.load(Ordering::SeqCst) {
                 break;
             }
             let id = sound.id.clone();
@@ -683,7 +688,7 @@ fn refine_estimated_loudness_with_store(
             let outcome = if !Path::new(&path).exists() {
                 RefinementOutcome::Unavailable { id }
             } else {
-                match loudness::analyze_loudness_path_full(Path::new(&path)) {
+                match loudness::analyze_loudness_path_full(Path::new(&path), cancel) {
                     Ok((lufs, true_peak_dbtp)) if lufs.is_finite() => {
                         refined = refined.saturating_add(1);
                         RefinementOutcome::Refined {
@@ -723,7 +728,7 @@ fn refine_estimated_loudness_with_store(
                 .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
             crate::ui_event_bridge::post_loudness_status_refresh();
         }
-        if !force || loudness::is_loudness_analysis_cancelled() {
+        if !force || cancel.load(Ordering::SeqCst) {
             break;
         }
     }
@@ -736,7 +741,7 @@ pub fn analyze_all_loudness_with_store(
     coords: LoudnessCoordinators,
 ) -> Result<u32, crate::audio::LoudnessError> {
     crate::diagnostics::memory::log_memory_snapshot("analyze_all_loudness:start");
-    loudness::reset_loudness_analysis_cancelled();
+    let cancel = coords.backfill.cancel_token();
     let mut after = None::<String>;
     let mut analyzed = 0_u32;
     loop {
@@ -751,7 +756,7 @@ pub fn analyze_all_loudness_with_store(
         after = sounds.last().map(|sound| sound.id.clone());
         let analysis_plan = adaptive_audio_analysis_plan(sounds.len());
         let analyze = |sound: &Sound| -> Option<BackfillOutcome> {
-            if loudness::is_loudness_analysis_cancelled() {
+            if cancel.load(Ordering::SeqCst) {
                 return None;
             }
             if !Path::new(&sound.path).exists() {
@@ -759,7 +764,8 @@ pub fn analyze_all_loudness_with_store(
                     id: sound.id.clone(),
                 });
             }
-            match analyze_loudness_for_backfill(Path::new(&sound.path), sound.duration_ms) {
+            match analyze_loudness_for_backfill(Path::new(&sound.path), sound.duration_ms, &cancel)
+            {
                 Ok((lufs, state, confidence, true_peak_dbtp)) if lufs.is_finite() => {
                     Some(BackfillOutcome::Analyzed {
                         id: sound.id.clone(),
@@ -807,7 +813,7 @@ pub fn analyze_all_loudness_with_store(
                 .map_err(|error| crate::audio::LoudnessError::Io(error.to_string()))?;
             crate::ui_event_bridge::post_loudness_status_refresh();
         }
-        if loudness::is_loudness_analysis_cancelled() {
+        if cancel.load(Ordering::SeqCst) {
             break;
         }
     }

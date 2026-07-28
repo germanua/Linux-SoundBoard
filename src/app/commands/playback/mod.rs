@@ -678,8 +678,11 @@ pub fn analyze_sound_loudness(
             .map(|sound| sound.path.clone())
             .ok_or(CommandError::SoundNotFound)
     })??;
-    let (raw_lufs, true_peak_dbtp) = audio_loudness::analyze_loudness_path_full(Path::new(&path))
-        .map_err(|e| CommandError::Analysis(e.to_string()))?;
+    let (raw_lufs, true_peak_dbtp) = audio_loudness::analyze_loudness_path_full(
+        Path::new(&path),
+        audio_loudness::never_cancelled(),
+    )
+    .map_err(|e| CommandError::Analysis(e.to_string()))?;
     let (lufs, state, confidence, stored_true_peak) = if raw_lufs.is_finite() {
         (
             Some(raw_lufs),
@@ -738,9 +741,11 @@ where
                 .recv()
                 .map_err(|error| CommandError::Library(error.to_string()))?
                 .ok_or(CommandError::SoundNotFound)?;
-            let (raw_lufs, true_peak_dbtp) =
-                audio_loudness::analyze_loudness_path_full(Path::new(&sound.path))
-                    .map_err(|error| CommandError::Analysis(error.to_string()))?;
+            let (raw_lufs, true_peak_dbtp) = audio_loudness::analyze_loudness_path_full(
+                Path::new(&sound.path),
+                audio_loudness::never_cancelled(),
+            )
+            .map_err(|error| CommandError::Analysis(error.to_string()))?;
             let (lufs, state, confidence, true_peak_dbtp) = if raw_lufs.is_finite() {
                 (
                     Some(raw_lufs),
@@ -854,8 +859,12 @@ pub fn get_playback_positions(player: Arc<dyn PlaybackEngine>) -> Vec<PlaybackPo
     player.get_playback_positions()
 }
 
-pub fn cancel_loudness_analysis() {
-    audio_loudness::cancel_loudness_analysis();
+/// Stops whichever loudness run is active. The settings view shows one Stop
+/// control for both kinds, so it cancels both tokens; each run still observes
+/// only its own, and starting one no longer clears the other's request.
+pub fn cancel_loudness_analysis(coords: &LoudnessCoordinators) {
+    coords.backfill.cancel();
+    coords.refinement.cancel();
 }
 
 #[derive(serde::Serialize)]

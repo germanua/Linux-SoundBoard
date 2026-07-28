@@ -800,8 +800,9 @@ fn current_public_formats_decode_analyze_and_report_duration() {
         assert!(
             probe_duration_ms(&path).is_some_and(|duration| { (800..=1_300).contains(&duration) })
         );
-        let (loudness, true_peak) = analyze_loudness_path_full(&audio_path)
-            .unwrap_or_else(|error| panic!("analyze real {extension} fixture: {error}"));
+        let (loudness, true_peak) =
+            analyze_loudness_path_full(&audio_path, crate::audio::loudness::never_cancelled())
+                .unwrap_or_else(|error| panic!("analyze real {extension} fixture: {error}"));
         assert!(
             (-24.0..=-16.0).contains(&loudness),
             "real {extension} LUFS drifted to {loudness}"
@@ -823,8 +824,9 @@ fn assert_container_codec_support(fixture: TestEncodedFixture, extension: &str) 
         .unwrap_or_else(|error| panic!("decode {extension} fixture: {error}"));
     assert!(source.total_duration().is_some());
 
-    let (loudness, true_peak) = analyze_loudness_path_full(&audio_path)
-        .unwrap_or_else(|error| panic!("analyze {extension} fixture: {error}"));
+    let (loudness, true_peak) =
+        analyze_loudness_path_full(&audio_path, crate::audio::loudness::never_cancelled())
+            .unwrap_or_else(|error| panic!("analyze {extension} fixture: {error}"));
     for mode in [AutoGainMode::Static, AutoGainMode::DynamicLookAhead] {
         let mut runtime = test_runtime_config();
         runtime.auto_gain.enabled = true;

@@ -180,7 +180,7 @@ fn test_trigger_estimated_loudness_refinement_recovers_after_cancel() {
     let config = Arc::new(Mutex::new(config));
     let coords = commands::LoudnessCoordinators::new();
 
-    commands::cancel_loudness_analysis();
+    commands::cancel_loudness_analysis(&coords);
     let result =
         commands::trigger_estimated_loudness_refinement(Arc::clone(&config), true, &coords);
     assert!(matches!(

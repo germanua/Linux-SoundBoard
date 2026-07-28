@@ -323,7 +323,7 @@ pub(super) fn build_playback_groups(
                 let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
                     || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
-                    commands::cancel_loudness_analysis();
+                    commands::cancel_loudness_analysis(&state2.loudness_coordinators);
                     crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
@@ -364,7 +364,7 @@ pub(super) fn build_playback_groups(
                 let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
                     || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
-                    commands::cancel_loudness_analysis();
+                    commands::cancel_loudness_analysis(&state2.loudness_coordinators);
                     crate::ui_event_bridge::post_loudness_status_refresh();
                     return;
                 }
