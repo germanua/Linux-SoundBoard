@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 ### Fixed
 
 - **Installer prompts through the one-liner:** Prompts read from the terminal instead of the piped script, so the installer can ask questions when started with `curl ... | bash`. Previously every prompt silently took its non-interactive default.
+- **Uninstall leftovers:** Removing the user installation now also removes the licence and notice files it deployed, so `~/.local/opt/linux-soundboard/` no longer survives an uninstall.
 
 ## [2.2.0] - 2026-07-28
 

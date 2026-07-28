@@ -1005,8 +1005,7 @@ collect_debug_run() {
     RUST_LOG=debug "$APP_BINARY" >"$log" 2>&1 &
     local pid=$!
     printf '\n  Reproduce the problem, then press Enter here.\n'
-    local ignored
-    read -r ignored || true
+    read -r _ || true
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
 

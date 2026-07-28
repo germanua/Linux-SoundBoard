@@ -43,6 +43,16 @@ AUDIO_SNAPSHOT_FILE="$STATE_DIR/preinstall-audio.env"
 SNAPSHOT_DIR="$STATE_DIR/snapshots"
 SNAPSHOT_KEEP=10
 
+# Deployed beside the binary and removed with it, so the two sites cannot drift.
+LEGAL_DOCUMENTS=(
+    LICENSE
+    NOTICE.md
+    THIRDPARTY_LICENSES.md
+    THIRD_PARTY_NOTICES.html
+    COMMERCIAL-LICENSE.md
+    DONATIONS.md
+)
+
 YES=0
 KEEP_DATA=0
 DEFAULT_SOURCE_POLICY="ask"
@@ -540,10 +550,16 @@ capture_audio_snapshot() {
 
 prune_snapshots() {
     local file
+    local oldest
     local keep=$SNAPSHOT_KEEP
 
     [[ -d "$SNAPSHOT_DIR" ]] || return 0
+    # The oldest snapshot is the only record of the audio setup before this app
+    # was ever installed, which is what an uninstall compares against. Age it out
+    # and the diff would quietly start measuring from some later update instead.
+    oldest="$(first_snapshot || true)"
     while IFS= read -r file; do
+        [[ "$file" == "$oldest" ]] && continue
         rm -f "${file%.env}.env" "${file%.env}.files" "${file%.env}.txt"
     done < <(find "$SNAPSHOT_DIR" -maxdepth 1 -name '*.env' 2>/dev/null | sort -r | tail -n "+$((keep + 1))")
 }
@@ -986,7 +1002,7 @@ install_legal_documents() {
     local legal_file
     local source
 
-    for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+    for legal_file in "${LEGAL_DOCUMENTS[@]}"; do
         if source="$(resolve_project_file "$legal_file")"; then
             install_file_from_source "$source" "$INSTALL_DOC_DIR/$legal_file" 644
         else
@@ -1276,6 +1292,7 @@ resolve_restore_policy() {
 
 remove_installation() {
     local keep_state=0
+    local legal_file
 
     ensure_state_dir
     confirm_remove
@@ -1293,6 +1310,10 @@ remove_installation() {
     remove_known_app_file "$INSTALL_HELPER" "helper"
     remove_known_app_file "$INSTALL_BINARY" "binary"
     remove_known_app_file "$INSTALL_VERSION_FILE" "installed version marker"
+    for legal_file in "${LEGAL_DOCUMENTS[@]}"; do
+        remove_known_app_file "$INSTALL_DOC_DIR/$legal_file" "legal document"
+    done
+    rmdir "$INSTALL_DOC_DIR" >/dev/null 2>&1 || true
 
     restart_audio_services
     refresh_desktop_caches

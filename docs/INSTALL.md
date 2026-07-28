@@ -102,8 +102,9 @@ This removes managed per-user files first, then removes the native `linux-soundb
 Before it changes anything, an install records a snapshot of your audio state:
 the default microphone and speakers, the engine service state, and a checksum of
 every PipeWire, WirePlumber, and PulseAudio config file it can see. Snapshots live
-in `~/.local/state/linux-soundboard/install-user/snapshots/` and the newest ten
-are kept.
+in `~/.local/state/linux-soundboard/install-user/snapshots/`. The newest ten are
+kept, plus the very first one — that is the only record of your setup before the
+app was ever installed, and it is what uninstalling compares against.
 
 Uninstalling prints what changed since that snapshot and asks **once** whether to
 put it back:
