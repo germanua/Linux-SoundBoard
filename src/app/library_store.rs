@@ -262,6 +262,11 @@ enum LibraryEdit {
         sibling_position: Option<usize>,
         expanded: bool,
     },
+    ReorderFolder {
+        root_path: String,
+        folder_relative_path: String,
+        target_index: usize,
+    },
     SetFolderExpanded {
         root_path: String,
         folder_relative_path: String,
@@ -1258,6 +1263,22 @@ impl LibraryStore {
             root_path: root_path.to_string(),
             folder_relative_path: folder_relative_path.to_string(),
             direction,
+        })
+    }
+
+    /// Places a folder at `target_index` among its siblings. Unlike
+    /// `set_folder_preferences` this writes only the ordering, so a drag cannot
+    /// disturb a folder's display name or its expanded state.
+    pub fn reorder_folder(
+        &self,
+        root_path: &str,
+        folder_relative_path: &str,
+        target_index: usize,
+    ) -> LibraryResponse<bool> {
+        self.edit(LibraryEdit::ReorderFolder {
+            root_path: root_path.to_string(),
+            folder_relative_path: folder_relative_path.to_string(),
+            target_index,
         })
     }
 
@@ -2600,6 +2621,11 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
              ON CONFLICT(folder_id) DO UPDATE SET display_name = excluded.display_name",
             params![root_path, folder_relative_path, display_name],
         )?,
+        LibraryEdit::ReorderFolder {
+            root_path,
+            folder_relative_path,
+            target_index,
+        } => return reorder_folder(connection, &root_path, &folder_relative_path, target_index),
         LibraryEdit::MoveFolder {
             root_path,
             folder_relative_path,
@@ -2607,6 +2633,81 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
         } => return move_folder(connection, &root_path, &folder_relative_path, direction),
     };
     Ok(changed != 0)
+}
+
+/// Places a folder at `target_index` among its siblings, renumbering the whole
+/// sibling run so the result is a dense 0..n ordering.
+///
+/// Only `sibling_position` is written. A drag must not disturb a folder's
+/// display name or its expanded flag, which is why this does not go through
+/// `set_folder_preferences`.
+fn reorder_folder(
+    connection: &mut Connection,
+    root_path: &str,
+    folder_relative_path: &str,
+    target_index: usize,
+) -> Result<bool, LibraryError> {
+    let transaction = connection.transaction()?;
+    let target_id = transaction
+        .query_row(
+            "SELECT folder.id
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                 AND presence.generation = root.active_generation
+             WHERE root.path = ?1 AND folder.relative_path = ?2",
+            params![root_path, folder_relative_path],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let Some(target_id) = target_id else {
+        return Ok(false);
+    };
+
+    let mut statement = transaction.prepare(
+        "WITH target AS (
+             SELECT folder.id, folder.root_id, folder.parent_id, root.active_generation
+             FROM folders AS folder
+             JOIN roots AS root ON root.id = folder.root_id
+             WHERE folder.id = ?1
+         )
+         SELECT folder.id
+         FROM folders AS folder
+         JOIN target ON target.root_id = folder.root_id
+             AND folder.parent_id IS target.parent_id
+         JOIN folder_presence AS presence ON presence.folder_id = folder.id
+             AND presence.generation = target.active_generation
+         LEFT JOIN folder_prefs AS pref ON pref.folder_id = folder.id
+         ORDER BY COALESCE(pref.sibling_position, folder.position), folder.id",
+    )?;
+    let mut siblings = Vec::new();
+    for row in statement.query_map(params![target_id], |row| row.get::<_, i64>(0))? {
+        siblings.push(row?);
+    }
+    drop(statement);
+
+    let Some(current_index) = siblings.iter().position(|id| *id == target_id) else {
+        return Ok(false);
+    };
+    let target_index = target_index.min(siblings.len().saturating_sub(1));
+    if current_index == target_index {
+        return Ok(false);
+    }
+    let moved = siblings.remove(current_index);
+    siblings.insert(target_index, moved);
+
+    {
+        let mut upsert = transaction.prepare(
+            "INSERT INTO folder_prefs(folder_id, sibling_position)
+             VALUES(?1, ?2)
+             ON CONFLICT(folder_id) DO UPDATE SET sibling_position = excluded.sibling_position",
+        )?;
+        for (position, id) in siblings.iter().enumerate() {
+            upsert.execute(params![id, i64::try_from(position).unwrap_or(i64::MAX)])?;
+        }
+    }
+    transaction.commit()?;
+    Ok(true)
 }
 
 fn move_folder(

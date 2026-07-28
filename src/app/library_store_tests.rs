@@ -1783,3 +1783,61 @@ fn benchmark_20k_wide_folder_tree_store() {
         std::fs::copy(&db_path, output).expect("copy retained benchmark database");
     }
 }
+
+#[test]
+fn a_folder_can_be_reordered_to_an_arbitrary_slot_without_touching_other_preferences() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Roots(vec![RootRecord {
+        path: "/music".to_string(),
+        position: 0,
+    }])));
+    wait(
+        store.apply_batch(LibraryBatch::Folders(
+            ["a", "b", "c", "d"]
+                .into_iter()
+                .enumerate()
+                .map(|(position, name)| FolderRecord {
+                    root_path: "/music".to_string(),
+                    relative_path: name.to_string(),
+                    parent_relative_path: None,
+                    name: name.to_string(),
+                    position,
+                })
+                .collect(),
+        )),
+    );
+    // Give "d" a display name and an expanded state, so the reorder can be
+    // shown not to disturb them. Dragging a folder must move it, nothing else.
+    assert!(wait(store.set_folder_preferences(
+        "/music",
+        "d",
+        Some("Renamed D"),
+        None,
+        true
+    )));
+
+    // Drag "d" into the gap before "b": a b c d -> a d b c
+    assert!(wait(store.reorder_folder("/music", "d", 1)));
+
+    let order = |store: &LibraryStore| {
+        wait(store.folder_children("/music", None, 0))
+            .folders
+            .iter()
+            .map(|folder| folder.relative_path.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(&store), ["a", "d", "b", "c"]);
+
+    let moved = wait(store.folder_children("/music", None, 0))
+        .folders
+        .into_iter()
+        .find(|folder| folder.relative_path == "d")
+        .expect("moved folder still present");
+    assert_eq!(moved.name, "Renamed D");
+    assert!(moved.expanded, "reordering must not collapse the folder");
+
+    drop(store);
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("reopen store");
+    assert_eq!(order(&store), ["a", "d", "b", "c"]);
+}
