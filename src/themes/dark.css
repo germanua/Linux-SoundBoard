@@ -1066,3 +1066,12 @@ entry.volume-input:focus,
   box-shadow: inset 0 0 0 1px rgba(148, 137, 121, 0.4);
   outline: none;
 }
+
+/* A focused control inside a row would otherwise draw its own ring on top of
+   the row's, nesting one bezel inside another. The row already shows focus, so
+   the inner control does not repeat it. Standalone entries keep their ring. */
+.lsb-settings-dialog row spinbutton:focus-within,
+.lsb-settings-dialog row entry:focus {
+  box-shadow: none;
+}
+
