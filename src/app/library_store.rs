@@ -578,6 +578,18 @@ impl RequestQueue {
         }
     }
 
+    /// Takes the next request without blocking. `None` means every queue is
+    /// drained, which is the worker's cue to run idle maintenance before it
+    /// parks in `pop`.
+    fn try_pop(&self) -> Option<Request> {
+        let mut state = self.state.lock().ok()?;
+        state
+            .control
+            .pop_front()
+            .or_else(|| state.visible.pop_front())
+            .or_else(|| state.maintenance.pop_front())
+    }
+
     fn close(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.closed = true;
@@ -848,7 +860,26 @@ impl LibraryStore {
                         return;
                     }
                 };
-                while let Some(request) = worker_queue.pop() {
+                let mut counts_dirty = false;
+                let mut counts_published_at: Option<std::time::Instant> = None;
+                loop {
+                    let request = match worker_queue.try_pop() {
+                        Some(request) => request,
+                        None => {
+                            // Queues are drained. Republish the counts a
+                            // mutation invalidated, then park for more work.
+                            publish_library_counts_if_dirty(
+                                &connection,
+                                &mut counts_dirty,
+                                &mut counts_published_at,
+                            );
+                            match worker_queue.pop() {
+                                Some(request) => request,
+                                None => break,
+                            }
+                        }
+                    };
+                    counts_dirty |= request.changes_library_counts();
                     handle_request(&mut connection, request);
                 }
             })
@@ -1424,6 +1455,95 @@ impl LibraryStore {
         match self.0.queue.push(request) {
             Ok(()) => LibraryResponse(response),
             Err(error) => LibraryResponse::ready(Err(error)),
+        }
+    }
+}
+
+/// Shortest gap between two diagnostics recounts on the store worker.
+const COUNTS_REPUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Request {
+    /// Whether handling this request can change the counts published to
+    /// diagnostics: live sounds, roots, manual tabs, or active hotkey bindings.
+    ///
+    /// Bulk row writes are deliberately excluded, because a caller that waits on
+    /// each batch drains the queue every time and would recount the whole table
+    /// once per batch — measured at over 30 s for a 156k import that otherwise
+    /// takes about 3 s.
+    ///
+    /// `RootScanBatch` rows are staged under a new generation and are not live
+    /// until `FinishRootScan` flips it, so a batch cannot change a count anyway.
+    /// `ApplyBatch` only builds a database offline — legacy migration and
+    /// seeding — and startup publishes the counts once that database is opened.
+    fn changes_library_counts(&self) -> bool {
+        match self {
+            Request::FinishRootScan { .. }
+            | Request::CancelRootScan { .. }
+            | Request::RemoveRoot { .. }
+            | Request::Edit { .. }
+            | Request::UpdateSound { .. }
+            | Request::DeleteSound { .. }
+            | Request::SetHotkeyBinding { .. }
+            | Request::DeleteHotkeyBinding { .. } => true,
+            Request::Count { .. }
+            | Request::Page { .. }
+            | Request::SoundById { .. }
+            | Request::SoundByPath { .. }
+            | Request::SoundForBinding { .. }
+            | Request::Adjacent { .. }
+            | Request::HotkeyPage { .. }
+            | Request::HotkeyBindingsAfter { .. }
+            | Request::HotkeyBinding { .. }
+            | Request::HotkeyConflict { .. }
+            | Request::LoudnessStats { .. }
+            | Request::LibraryStats { .. }
+            | Request::LoudnessBackfillAfter { .. }
+            | Request::LoudnessRefinementCandidates { .. }
+            | Request::ApplyLoudnessUpdates { .. }
+            | Request::BeginRootScan { .. }
+            | Request::RootScanBatch { .. }
+            | Request::ApplyBatch { .. }
+            | Request::Roots { .. }
+            | Request::FolderChildren { .. }
+            | Request::ManualTabs { .. } => false,
+        }
+    }
+}
+
+/// Recomputes and publishes the library counts diagnostics reports, but only
+/// when a mutation has landed since the last publication. Called from the store
+/// worker once its queues drain, so a busy import pays nothing and a burst of
+/// edits collapses into a single recount.
+fn publish_library_counts_if_dirty(
+    connection: &Connection,
+    dirty: &mut bool,
+    published_at: &mut Option<std::time::Instant>,
+) -> Option<LibraryStats> {
+    if !*dirty {
+        return None;
+    }
+    // A bulk caller that waits on each write drains the queue between every
+    // batch. Recounting each time made a 156k import take over 30 s instead of
+    // about 3 s, so republishing is rate limited. The flag stays set, and the
+    // next drain after the interval publishes the settled numbers.
+    if published_at.is_some_and(|at| at.elapsed() < COUNTS_REPUBLISH_INTERVAL) {
+        return None;
+    }
+    *dirty = false;
+    *published_at = Some(std::time::Instant::now());
+    match load_library_stats(connection) {
+        Ok(stats) => {
+            crate::diagnostics::set_library_counts(
+                stats.sounds,
+                stats.manual_tabs,
+                stats.roots,
+                stats.active_hotkeys,
+            );
+            Some(stats)
+        }
+        Err(error) => {
+            log::warn!("Failed to refresh library diagnostics counts: {error}");
+            None
         }
     }
 }
@@ -4174,5 +4294,126 @@ mod tests {
 
         drop(connection);
         let _ = std::fs::remove_file(path);
+    }
+}
+
+#[cfg(test)]
+mod idle_count_publication_tests {
+    use super::*;
+
+    fn reply<T>() -> mpsc::SyncSender<Result<T, LibraryError>> {
+        mpsc::sync_channel(1).0
+    }
+
+    #[test]
+    fn staged_scan_batches_do_not_dirty_the_counts() {
+        // Scanned rows are staged under a new generation and are not live until
+        // the scan finishes, so a batch cannot change any published count.
+        let batch = Request::RootScanBatch {
+            root_path: "/music".to_string(),
+            generation: 1,
+            folders: Vec::new(),
+            sounds: Vec::new(),
+            reply: reply(),
+        };
+        assert!(!batch.changes_library_counts());
+
+        let finish = Request::FinishRootScan {
+            root_path: "/music".to_string(),
+            generation: 1,
+            reply: reply(),
+        };
+        assert!(finish.changes_library_counts());
+    }
+
+    #[test]
+    fn reads_and_loudness_writes_do_not_dirty_the_counts() {
+        let page = Request::Page {
+            scope: LibraryScope::General,
+            search: String::new(),
+            page: 0,
+            query_generation: None,
+            priority: PagePriority::Visible,
+            reply: reply(),
+        };
+        assert!(!page.changes_library_counts());
+
+        // Loudness values change, but not the number of sounds, tabs, roots or
+        // active bindings, so a backfill must not trigger a recount per batch.
+        let loudness = Request::ApplyLoudnessUpdates {
+            updates: Vec::new(),
+            reply: reply(),
+        };
+        assert!(!loudness.changes_library_counts());
+    }
+
+    #[test]
+    fn deleting_a_sound_dirties_the_counts() {
+        let delete = Request::DeleteSound {
+            id: "sound-1".to_string(),
+            reply: reply(),
+        };
+        assert!(delete.changes_library_counts());
+    }
+
+    #[test]
+    fn bulk_row_writes_do_not_dirty_the_counts() {
+        // A caller that waits on each batch drains the queue every time. Marking
+        // these dirty recounts the whole table once per batch, which took a 156k
+        // import from about 3 s to over 30 s.
+        let batch = Request::ApplyBatch {
+            batch: LibraryBatch::Roots(Vec::new()),
+            reply: reply(),
+        };
+        assert!(!batch.changes_library_counts());
+    }
+
+    #[test]
+    fn a_burst_of_mutations_does_not_recount_per_drain() {
+        let dir = std::env::temp_dir().join(format!("lsb-idle-burst-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let connection = open_connection(&dir.join("library.sqlite3")).expect("open connection");
+
+        let mut dirty = true;
+        let mut published_at = None;
+        assert!(
+            publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at).is_some()
+        );
+
+        // Another mutation lands immediately: the recount must wait out the
+        // interval rather than run again on the very next drain.
+        dirty = true;
+        assert!(
+            publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at).is_none(),
+            "recount must be rate limited"
+        );
+        assert!(
+            dirty,
+            "a rate-limited recount must stay pending, not be dropped"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn counts_are_published_once_per_idle_period_and_only_when_dirty() {
+        let dir = std::env::temp_dir().join(format!("lsb-idle-counts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let connection = open_connection(&dir.join("library.sqlite3")).expect("open connection");
+
+        let mut dirty = true;
+        let mut published_at = None;
+        let published = publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at)
+            .expect("counts published");
+        assert_eq!(published.sounds, 0);
+        assert!(!dirty, "publishing must clear the dirty flag");
+        assert!(published_at.is_some());
+
+        assert!(
+            publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at).is_none(),
+            "a clean idle period must not re-query the database"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

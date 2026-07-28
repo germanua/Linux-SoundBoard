@@ -882,6 +882,7 @@ impl PagedSoundModel {
         self.imp().lru.borrow_mut().clear();
         self.imp().page_payload_bytes.borrow_mut().clear();
         self.imp().cached_payload_bytes.set(0);
+        self.publish_cache_diagnostics();
         if old_total > 0 {
             self.items_changed(0, old_total, 0);
         }

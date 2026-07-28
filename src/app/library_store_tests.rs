@@ -1663,6 +1663,19 @@ fn benchmark_156k_bounded_store() {
         "manual tab counts took {elapsed:?}"
     );
 
+    // The worker recomputes these counts for diagnostics once its queues drain
+    // after a mutation. It shares the worker with visible page loads, so the
+    // recount has to stay inside the same per-query budget.
+    let stats_started = std::time::Instant::now();
+    let stats = wait(store.stats());
+    let stats_elapsed = stats_started.elapsed();
+    slowest_query = slowest_query.max(stats_elapsed);
+    assert_eq!(stats.sounds, 156_000);
+    assert!(
+        stats_elapsed < std::time::Duration::from_millis(100),
+        "library stats recount took {stats_elapsed:?}"
+    );
+
     let smaps = std::fs::read_to_string("/proc/self/smaps_rollup").expect("read smaps_rollup");
     let pss_kib = smaps
         .lines()
@@ -1671,7 +1684,7 @@ fn benchmark_156k_bounded_store() {
         .and_then(|value| value.parse::<usize>().ok())
         .expect("parse PSS");
     eprintln!(
-        "156k SQLite gate: import={import_elapsed:?}, slowest_query={slowest_query:?}, pss={pss_kib} KiB"
+        "156k SQLite gate: import={import_elapsed:?}, slowest_query={slowest_query:?}, stats_recount={stats_elapsed:?}, pss={pss_kib} KiB"
     );
     assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
     if let Some(output) = std::env::var_os("LSB_BENCHMARK_LIBRARY_OUT") {
