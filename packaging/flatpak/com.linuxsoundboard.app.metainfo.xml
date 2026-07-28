@@ -32,8 +32,20 @@
   
   <screenshots>
     <screenshot type="default">
-      <caption>Main window with sound library</caption>
-      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/screenshots/main.png</image>
+      <caption>Main window with sound library and folder sidebar</caption>
+      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/assets/screenshots/Main_dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Main window in the light theme</caption>
+      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/assets/screenshots/Main_light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Settings, including sound folders and loudness normalization</caption>
+      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/assets/screenshots/Settings_dark1.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Global control hotkeys</caption>
+      <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/assets/screenshots/Settings_hotkeys_dark.png</image>
     </screenshot>
   </screenshots>
   
