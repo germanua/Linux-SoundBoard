@@ -231,3 +231,38 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
     cleanup_test_audio_path(&first);
     cleanup_test_audio_path(&second);
 }
+
+#[test]
+fn store_refresh_imports_folders_larger_than_one_scan_batch() {
+    // A scan batch is capped at MAX_BATCH_ROWS rows, where a sound costs two
+    // rows and a folder costs one per path component. A folder holding more
+    // sounds than fit in one batch has to be split across several, and every
+    // batch that follows a flush must re-send the folder row.
+    let root = std::env::temp_dir().join(format!("lsb-big-folder-{}", uuid::Uuid::new_v4()));
+    let disc = root.join("disc");
+    fs::create_dir_all(&disc).expect("create scan folder");
+    let file_count = 600;
+    for index in 0..file_count {
+        fs::write(disc.join(format!("track-{index:04}.wav")), []).expect("write placeholder");
+    }
+
+    let library = create_test_library_with(&[root.to_string_lossy().into_owned()], &[]);
+    let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(
+        library.clone(),
+        create_mock_hotkey_manager(),
+    );
+
+    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
+        .expect("a folder larger than one batch must still import");
+
+    assert_eq!(summary.added, file_count);
+    assert_eq!(
+        library
+            .count(crate::library_store::LibraryScope::General, "")
+            .recv()
+            .expect("count imported sounds"),
+        file_count
+    );
+
+    fs::remove_dir_all(&root).ok();
+}

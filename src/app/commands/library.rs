@@ -103,17 +103,30 @@ impl StoreScanBatch {
             .parent()
             .filter(|path| path.components().next().is_some())
             .map(|path| path.to_string_lossy().into_owned());
-        let new_folder_rows = parent
+        // The store charges a folder one row per path component, so mirror that
+        // here rather than guessing. `max(1)` matches its counting exactly.
+        let folder_rows = parent
             .as_ref()
-            .filter(|path| !self.folder_paths.contains(*path))
-            .map(|path| Path::new(path).components().count())
+            .map(|path| Path::new(path).components().count().max(1))
             .unwrap_or(0);
-        let required_rows = 2_usize.saturating_add(new_folder_rows);
-        if required_rows > MAX_BATCH_ROWS {
+        let already_in_batch = parent
+            .as_ref()
+            .is_some_and(|path| self.folder_paths.contains(path));
+
+        // A flush empties `folder_paths`, so the folder is always re-sent in the
+        // batch that follows one. Reserve for that case, or the next batch is
+        // short by exactly this folder and the store rejects it one row over.
+        let rows_after_flush = 2_usize.saturating_add(folder_rows);
+        if rows_after_flush > MAX_BATCH_ROWS {
             return Err(CommandError::Library(format!(
                 "folder nesting exceeds the {MAX_BATCH_ROWS}-row scan transaction limit"
             )));
         }
+        let required_rows = if already_in_batch {
+            2
+        } else {
+            rows_after_flush
+        };
         if self.rows.saturating_add(required_rows) > MAX_BATCH_ROWS {
             self.flush(library)?;
         }
@@ -134,7 +147,7 @@ impl StoreScanBatch {
                         .unwrap_or_else(|| relative_path.clone()),
                     position: 0,
                 });
-                self.rows = self.rows.saturating_add(new_folder_rows);
+                self.rows = self.rows.saturating_add(folder_rows);
             }
         }
 
