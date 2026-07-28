@@ -17,7 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 - **Installer prompts through the one-liner:** Prompts read from the terminal instead of the piped script, so the installer can ask questions when started with `curl ... | bash`. Previously every prompt silently took its non-interactive default.
 - **Uninstall leftovers:** Removing the user installation now also removes the licence and notice files it deployed, so `~/.local/opt/linux-soundboard/` no longer survives an uninstall.
-- **Default microphone after an engine restart:** In Default routing mode the engine reclaims the virtual microphone when the system default is cleared, not only when another device is selected. Restarting the engine — which every update does — replaces the virtual microphone node and clears the default, so the soundboard could silently stop being the default input until something else set one.
+- **Default microphone after an engine restart:** In Default routing mode the engine reclaims the virtual microphone when the system default is cleared, not only when another device is selected. Restarting the engine — which every update does — replaces the virtual microphone node and clears the default, so the soundboard could silently stop being the default input until something else set one. Reclaiming a cleared default now writes the default source directly instead of asking WirePlumber to switch to the device it already had configured, which changed nothing and left the system on a fallback microphone.
 
 ## [2.2.0] - 2026-07-28
 

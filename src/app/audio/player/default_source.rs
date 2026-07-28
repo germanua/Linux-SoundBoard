@@ -33,14 +33,17 @@ use super::EngineError;
 use super::LoopState;
 
 const DEFAULT_AUDIO_SOURCE_KEY: &str = "default.audio.source";
+/// PipeWire carries the system-wide defaults on subject 0.
+const DEFAULT_METADATA_SUBJECT: u32 = 0;
+const DEFAULT_AUDIO_SOURCE_TYPE: &str = "Spa:String:JSON";
 
 /// Owning handle for the PipeWire "default" metadata proxy + its listener.
 /// Dropping this disconnects everything cleanly.
 pub(super) struct DefaultMetadataHandle {
     pub(super) id: u32,
-    // The PipeWire metadata proxy. Held here so the listener stays alive for
-    // its lifetime.
-    _metadata: pw::metadata::Metadata,
+    // The PipeWire metadata proxy. Keeps the listener alive for its lifetime,
+    // and lets the engine write the runtime default key itself.
+    metadata: pw::metadata::Metadata,
     _listener: Pin<Box<pw::metadata::MetadataListener>>,
 }
 
@@ -93,7 +96,7 @@ pub(super) fn bind_default_metadata_from_global(
 
     Some(DefaultMetadataHandle {
         id: global_id,
-        _metadata: metadata,
+        metadata,
         _listener: listener,
     })
 }
@@ -132,7 +135,38 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
         }
     }
 
+    if reclaim_strategy(new_name.as_deref()) == ReclaimStrategy::RuntimeKey {
+        write_runtime_default_source(state);
+    }
+    // Keep the configured key pointing at us as well, so a later re-derive by
+    // WirePlumber lands on the virtual mic rather than a priority pick.
     claim_default_source_if_enabled(state);
+}
+
+/// How to take the default source back.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ReclaimStrategy {
+    /// Another device holds it. `wpctl`/`pactl` write
+    /// `default.configured.audio.source`, and changing that value makes
+    /// WirePlumber re-derive the runtime key, which is what we want.
+    ConfiguredClaim,
+    /// Nothing holds it: the runtime key is gone while the configured key can
+    /// still name us. Rewriting the configured key with the value it already
+    /// has changes nothing, so the runtime key has to be written directly.
+    RuntimeKey,
+}
+
+fn reclaim_strategy(new_name: Option<&str>) -> ReclaimStrategy {
+    match new_name {
+        Some(_) => ReclaimStrategy::ConfiguredClaim,
+        None => ReclaimStrategy::RuntimeKey,
+    }
+}
+
+/// The JSON shape PipeWire carries in `default.audio.source`, matching what
+/// [`parse_default_source_name`] reads back.
+fn default_source_metadata_value(name: &str) -> String {
+    format!(r#"{{"name":"{name}"}}"#)
 }
 
 /// Whether the engine should claim the default source, given the mode and the
@@ -146,6 +180,27 @@ fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bo
         return false;
     }
     new_name != Some(VIRTUAL_SOURCE_NAME)
+}
+
+/// Set `default.audio.source` through the metadata proxy the engine already
+/// holds.
+///
+/// Runs on the PipeWire loop thread, from the property callback: the write is
+/// queued to the server rather than re-entering the callback, and the resulting
+/// property event reports the virtual mic, which ends the reclaim.
+fn write_runtime_default_source(state: &LoopState) {
+    let Some(handle) = state.default_metadata.as_ref() else {
+        // No metadata bound yet; the claim below still sets the configured key,
+        // and binding re-runs the claim.
+        return;
+    };
+    let value = default_source_metadata_value(VIRTUAL_SOURCE_NAME);
+    handle.metadata.set_property(
+        DEFAULT_METADATA_SUBJECT,
+        DEFAULT_AUDIO_SOURCE_KEY,
+        Some(DEFAULT_AUDIO_SOURCE_TYPE),
+        Some(&value),
+    );
 }
 
 /// Parse the JSON-shaped metadata value into the source's node name.
@@ -283,6 +338,32 @@ mod tests {
             DefaultSourceMode::Default,
             Some(VIRTUAL_SOURCE_NAME)
         ));
+    }
+
+    #[test]
+    fn a_cleared_default_writes_the_runtime_key() {
+        // wpctl and pactl both write default.configured.audio.source. When that
+        // key already names us and only the runtime key is missing, writing it
+        // again changes nothing, so WirePlumber never re-derives the runtime
+        // key and the system stays on its fallback device.
+        assert_eq!(reclaim_strategy(None), ReclaimStrategy::RuntimeKey);
+    }
+
+    #[test]
+    fn a_foreign_default_uses_the_configured_claim() {
+        assert_eq!(
+            reclaim_strategy(Some("alsa_input.pci-0000_12_00.6.analog-stereo")),
+            ReclaimStrategy::ConfiguredClaim
+        );
+    }
+
+    #[test]
+    fn the_runtime_key_we_write_is_the_shape_we_read() {
+        let written = default_source_metadata_value(VIRTUAL_SOURCE_NAME);
+        assert_eq!(
+            parse_default_source_name(&written).as_deref(),
+            Some(VIRTUAL_SOURCE_NAME)
+        );
     }
 
     #[test]
