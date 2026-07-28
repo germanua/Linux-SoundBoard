@@ -285,6 +285,11 @@ fn build_general_page(
 
     let folder_rows: FolderRowRefs = Rc::new(RefCell::new(Vec::new()));
     let rebuild_pending: RebuildPending = Rc::new(Cell::new(false));
+    // Handle for the scan that follows adding a folder. Held while the scan
+    // runs so activating the row again cancels it instead of opening a second
+    // file dialog on top of a scan the user cannot stop.
+    let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
+        Rc::new(RefCell::new(None));
 
     {
         let state2 = Arc::clone(&state);
@@ -294,7 +299,17 @@ fn build_general_page(
         let folder_rows2 = Rc::clone(&folder_rows);
         let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
-        add_folder_row.connect_activated(move |_| {
+        let add_folder_cancel2 = Rc::clone(&add_folder_cancel);
+        add_folder_row.connect_activated(move |row| {
+            // Release the borrow before touching widgets: GTK can re-enter this
+            // handler, and a live borrow would abort rather than fail.
+            let pending = add_folder_cancel2.borrow().as_ref().map(Arc::clone);
+            if let Some(cancelled) = pending {
+                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                row.set_subtitle("Cancelling scan…");
+                row.set_sensitive(false);
+                return;
+            }
             let dialog = gtk4::FileDialog::builder()
                 .title("Select Sound Folder")
                 .build();
@@ -305,6 +320,7 @@ fn build_general_page(
             let folder_rows3 = Rc::clone(&folder_rows2);
             let rebuild_pending3 = Rc::clone(&rebuild_pending2);
             let on_library_changed3 = on_library_changed2.clone();
+            let add_folder_cancel3 = Rc::clone(&add_folder_cancel2);
             dialog.select_folder(
                 Some(&parent_for_dialog),
                 gtk4::gio::Cancellable::NONE,
@@ -326,17 +342,27 @@ fn build_general_page(
                                     Ok(()) => {
                                         log::info!("Add folder command succeeded");
                                         let add_folder_row_refresh = add_folder_row_done.clone();
-                                        if let Err(e) = commands::refresh_sounds_with_store_async(
+                                        let cancel_done = Rc::clone(&add_folder_cancel3);
+                                        match commands::refresh_sounds_with_store_async(
                                             state3.library.clone(),
                                             state3.hotkey_projection.clone(),
                                             move |result| {
+                                                cancel_done.borrow_mut().take();
                                                 add_folder_row_refresh.set_sensitive(true);
-                                                if let Err(e) = result {
-                                                    log::warn!(
+                                                add_folder_row_refresh.set_subtitle("");
+                                                match result {
+                                                    Err(e)
+                                                        if e.to_string().contains("cancelled") =>
+                                                    {
+                                                        log::info!(
+                                                            "Scan after adding folder cancelled"
+                                                        );
+                                                    }
+                                                    Err(e) => log::warn!(
                                                         "Refresh after adding folder failed: {e}"
-                                                    );
+                                                    ),
+                                                    Ok(_) => log::info!("Refresh sounds completed"),
                                                 }
-                                                log::info!("Refresh sounds completed");
                                                 let Some(folders_group3) =
                                                     folders_group_weak2.upgrade()
                                                 else {
@@ -358,10 +384,21 @@ fn build_general_page(
                                                 }
                                             },
                                         ) {
-                                            add_folder_row_done.set_sensitive(true);
-                                            log::warn!(
+                                            Ok(cancelled) => {
+                                                // The scan is the slow part, so
+                                                // hand the row back as a cancel
+                                                // control while it runs.
+                                                *add_folder_cancel3.borrow_mut() = Some(cancelled);
+                                                add_folder_row_done
+                                                    .set_subtitle("Scanning… activate to cancel");
+                                                add_folder_row_done.set_sensitive(true);
+                                            }
+                                            Err(e) => {
+                                                add_folder_row_done.set_sensitive(true);
+                                                log::warn!(
                                                 "Failed to dispatch refresh after adding folder: {e}"
                                             );
+                                            }
                                         }
                                     }
                                     Err(e) => {

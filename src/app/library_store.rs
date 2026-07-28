@@ -862,6 +862,8 @@ impl LibraryStore {
                 };
                 let mut counts_dirty = false;
                 let mut counts_published_at: Option<std::time::Instant> = None;
+                // open_connection has just optimized, so start the clock here.
+                let mut optimized_at = Some(std::time::Instant::now());
                 loop {
                     let request = match worker_queue.try_pop() {
                         Some(request) => request,
@@ -873,6 +875,7 @@ impl LibraryStore {
                                 &mut counts_dirty,
                                 &mut counts_published_at,
                             );
+                            run_idle_optimize_if_due(&connection, &mut optimized_at);
                             match worker_queue.pop() {
                                 Some(request) => request,
                                 None => break,
@@ -1457,6 +1460,28 @@ impl LibraryStore {
             Err(error) => LibraryResponse::ready(Err(error)),
         }
     }
+}
+
+/// How often the worker re-runs `PRAGMA optimize` while idle. SQLite advises
+/// running it on open and periodically thereafter for a long-lived connection;
+/// `open_connection` covers the open, this covers the rest of the session.
+const OPTIMIZE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Runs `PRAGMA optimize` if the interval has passed. Called from the store
+/// worker once its queues drain, so it never runs while requests are waiting
+/// and never runs on the GTK thread. Returns whether it ran.
+fn run_idle_optimize_if_due(
+    connection: &Connection,
+    optimized_at: &mut Option<std::time::Instant>,
+) -> bool {
+    if optimized_at.is_some_and(|at| at.elapsed() < OPTIMIZE_INTERVAL) {
+        return false;
+    }
+    *optimized_at = Some(std::time::Instant::now());
+    if let Err(error) = connection.execute_batch("PRAGMA optimize;") {
+        log::warn!("Idle PRAGMA optimize failed: {error}");
+    }
+    true
 }
 
 /// Shortest gap between two diagnostics recounts on the store worker.
@@ -4366,6 +4391,33 @@ mod idle_count_publication_tests {
             reply: reply(),
         };
         assert!(!batch.changes_library_counts());
+    }
+
+    #[test]
+    fn idle_optimize_runs_once_per_interval() {
+        let dir = std::env::temp_dir().join(format!("lsb-idle-optimize-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create test dir");
+        let connection = open_connection(&dir.join("library.sqlite3")).expect("open connection");
+
+        // open_connection already optimized on open, so the worker starts with a
+        // timestamp and must not immediately run it again.
+        let mut optimized_at = Some(std::time::Instant::now());
+        assert!(
+            !run_idle_optimize_if_due(&connection, &mut optimized_at),
+            "optimize must not run again right after the connection opened"
+        );
+
+        optimized_at = std::time::Instant::now().checked_sub(OPTIMIZE_INTERVAL);
+        assert!(
+            run_idle_optimize_if_due(&connection, &mut optimized_at),
+            "optimize must run once the interval has passed"
+        );
+        assert!(
+            !run_idle_optimize_if_due(&connection, &mut optimized_at),
+            "running it must restart the interval"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
