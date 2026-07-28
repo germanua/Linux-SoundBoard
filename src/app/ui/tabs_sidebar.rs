@@ -380,6 +380,18 @@ fn drag_action_for_intent(intent: SidebarDropIntent) -> gtk4::gdk::DragAction {
 }
 
 type FolderChangedCallback = Rc<RefCell<Option<Box<dyn Fn() + 'static>>>>;
+type FolderMergeCallback = Rc<RefCell<Option<Box<dyn Fn(FolderMergeRequest) + 'static>>>>;
+
+/// What a folder row's drop target reports back to the sidebar.
+#[derive(Clone)]
+struct FolderDropCallbacks {
+    /// Sounds moved into this folder, so tab membership changed.
+    changed: FolderChangedCallback,
+    /// Sibling order changed, so the tree needs rebuilding.
+    reordered: FolderChangedCallback,
+    /// A folder was dropped onto this one; the sidebar asks the user first.
+    merged: FolderMergeCallback,
+}
 
 fn folder_drop_overrides(
     payload: &tab_dnd::SoundTabDragPayload,
@@ -444,6 +456,69 @@ fn install_folder_drag_source(
     source
 }
 
+/// A request to move every sound in one folder into another.
+#[derive(Debug, Clone)]
+struct FolderMergeRequest {
+    root_path: String,
+    source_relative_path: String,
+    destination_relative_path: String,
+}
+
+/// Validates a folder-onto-folder drop.
+///
+/// Combining is allowed across parents, unlike reordering, because the user
+/// aimed at a specific row rather than a gap. It is never allowed into the
+/// dragged folder's own subtree: those sounds are already there physically, so
+/// the move would include and exclude the same sound.
+fn folder_merge_request(
+    payload: &tab_dnd::FolderDragPayload,
+    target_root_path: &str,
+    target_relative_path: &str,
+) -> Option<FolderMergeRequest> {
+    if payload.root_path != target_root_path || payload.relative_path == target_relative_path {
+        return None;
+    }
+    let inside_source = target_relative_path
+        .strip_prefix(payload.relative_path.as_str())
+        .is_some_and(|rest| rest.starts_with('/'));
+    if inside_source {
+        return None;
+    }
+    Some(FolderMergeRequest {
+        root_path: payload.root_path.clone(),
+        source_relative_path: payload.relative_path.clone(),
+        destination_relative_path: target_relative_path.to_string(),
+    })
+}
+
+/// Last path component, which is what the sidebar shows for a folder.
+fn folder_display_label(relative_path: &str) -> &str {
+    relative_path
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(relative_path)
+}
+
+/// Every sound a folder currently resolves to, paged so one oversized folder
+/// cannot build an unbounded query.
+fn collect_folder_sound_ids(
+    library: &crate::library_store::LibraryStore,
+    scope: crate::library_store::LibraryScope,
+) -> Result<Vec<String>, crate::library_store::LibraryError> {
+    let mut sound_ids = Vec::new();
+    let mut page = 0;
+    loop {
+        let sounds = library.page(scope.clone(), "", page).recv()?.sounds;
+        let is_last = sounds.len() < crate::library_store::PAGE_SIZE;
+        sound_ids.extend(sounds.into_iter().map(|sound| sound.id));
+        if is_last {
+            return Ok(sound_ids);
+        }
+        page += 1;
+    }
+}
+
 /// The row a folder was dropped against.
 struct FolderDropTargetRow<'a> {
     root_path: &'a str,
@@ -456,13 +531,13 @@ struct FolderDropTargetRow<'a> {
 /// Only reordering among a folder's own siblings is accepted: a drop into a gap
 /// that belongs to another parent would be a reparent, which is a different
 /// operation and far too easy to trigger by mis-aiming on a deep tree.
-fn handle_folder_reorder_drop(
+fn handle_folder_drop(
     bytes: &glib::Bytes,
     library: &crate::library_store::LibraryStore,
     row: FolderDropTargetRow<'_>,
     zone: tab_dnd::FolderDropZone,
     drop: &gtk4::gdk::Drop,
-    on_changed: &FolderChangedCallback,
+    callbacks: &FolderDropCallbacks,
 ) {
     // Refusals are a normal outcome of a mis-aimed drag, so they are logged at
     // debug rather than warn, but never silently.
@@ -477,10 +552,19 @@ fn handle_folder_reorder_drop(
     let after = match zone {
         tab_dnd::FolderDropZone::Before => false,
         tab_dnd::FolderDropZone::After => true,
-        // Merging folders is not wired yet; rejecting is honest, and it keeps a
-        // centre-aimed drop from silently reordering instead.
         tab_dnd::FolderDropZone::Into => {
-            reject("merging folders is not wired yet");
+            let Some(request) = folder_merge_request(&payload, row.root_path, row.relative_path)
+            else {
+                reject("a folder cannot be combined into itself or its own subtree");
+                return;
+            };
+            // The confirmation is modal, so the drag is completed here rather
+            // than held open behind a dialog. Nothing is written until the user
+            // confirms.
+            drop.finish(gtk4::gdk::DragAction::COPY);
+            if let Some(callback) = &*callbacks.merged.borrow() {
+                callback(request);
+            }
             return;
         }
     };
@@ -502,7 +586,7 @@ fn handle_folder_reorder_drop(
 
     let response = library.reorder_folder(&payload.root_path, &payload.relative_path, destination);
     let drop_for_complete = drop.clone();
-    let on_changed = Rc::clone(on_changed);
+    let on_changed = Rc::clone(&callbacks.reordered);
     if let Err(error) = commands::dispatch_async_result(
         "reorder_sidebar_folder",
         move || response.recv(),
@@ -544,14 +628,52 @@ fn dragged_sibling_index(
         .position(|folder| folder.relative_path == payload.relative_path)
 }
 
+/// CSS classes that show where a folder drag will land.
+const DROP_FEEDBACK_CLASSES: [&str; 3] = ["lsb-drop-before", "lsb-drop-into", "lsb-drop-after"];
+
+/// Marks a folder row with the drop it would receive right now: a line in the
+/// gap above or below it for a reorder, a filled row for a drop into it.
+/// `None` clears the row.
+fn set_folder_drop_feedback(widget: Option<gtk4::Widget>, zone: Option<tab_dnd::FolderDropZone>) {
+    let Some(widget) = widget else {
+        return;
+    };
+    let active = zone.map(|zone| match zone {
+        tab_dnd::FolderDropZone::Before => "lsb-drop-before",
+        tab_dnd::FolderDropZone::Into => "lsb-drop-into",
+        tab_dnd::FolderDropZone::After => "lsb-drop-after",
+    });
+    for class in DROP_FEEDBACK_CLASSES {
+        if Some(class) == active {
+            widget.add_css_class(class);
+        } else {
+            widget.remove_css_class(class);
+        }
+    }
+}
+
+/// The zone a drag currently hovering a folder row would drop into. Only a
+/// folder drag can reorder, so a sound drag always reads as a drop into the
+/// folder regardless of where in the row it hovers.
+fn hovered_drop_zone(
+    target: &gtk4::DropTargetAsync,
+    drop: &gtk4::gdk::Drop,
+    y: f64,
+) -> tab_dnd::FolderDropZone {
+    if !drop.formats().contain_mime_type(tab_dnd::FOLDER_DND_MIME) {
+        return tab_dnd::FolderDropZone::Into;
+    }
+    let row_height = f64::from(target.widget().map(|widget| widget.height()).unwrap_or(0));
+    tab_dnd::folder_drop_zone(y, row_height)
+}
+
 fn install_folder_drop_target(
     widget: &GtkBox,
     library: crate::library_store::LibraryStore,
     root_path: String,
     relative_path: String,
     sibling_index: usize,
-    on_changed: FolderChangedCallback,
-    on_reordered: FolderChangedCallback,
+    callbacks: FolderDropCallbacks,
 ) -> gtk4::DropTargetAsync {
     let formats = gtk4::gdk::ContentFormats::builder()
         .add_type(glib::Bytes::static_type())
@@ -559,7 +681,15 @@ fn install_folder_drop_target(
         .add_mime_type(tab_dnd::FOLDER_DND_MIME)
         .build();
     let target = gtk4::DropTargetAsync::new(Some(formats), gtk4::gdk::DragAction::COPY);
+    target.connect_drag_motion(|target, drop, _, y| {
+        set_folder_drop_feedback(target.widget(), Some(hovered_drop_zone(target, drop, y)));
+        gtk4::gdk::DragAction::COPY
+    });
+    target.connect_drag_leave(|target, _| {
+        set_folder_drop_feedback(target.widget(), None);
+    });
     target.connect_drop(move |target, drop, _, y| {
+        set_folder_drop_feedback(target.widget(), None);
         // A folder drop reorders; a sound drop changes membership. The zone
         // only matters for folders, so it is resolved before reading the data.
         let row_height = f64::from(target.widget().map(|w| w.height()).unwrap_or(0));
@@ -570,8 +700,7 @@ fn install_folder_drop_target(
         let library = library.clone();
         let root_path = root_path.clone();
         let relative_path = relative_path.clone();
-        let on_changed = Rc::clone(&on_changed);
-        let on_reordered = Rc::clone(&on_reordered);
+        let callbacks = callbacks.clone();
         drop_for_read.read_value_async(
             glib::Bytes::static_type(),
             glib::Priority::DEFAULT,
@@ -590,7 +719,7 @@ fn install_folder_drop_target(
                     return;
                 };
                 if is_folder_drag {
-                    handle_folder_reorder_drop(
+                    handle_folder_drop(
                         &bytes,
                         &library,
                         FolderDropTargetRow {
@@ -600,7 +729,7 @@ fn install_folder_drop_target(
                         },
                         zone,
                         &drop_for_finish,
-                        &on_reordered,
+                        &callbacks,
                     );
                     return;
                 }
@@ -618,6 +747,7 @@ fn install_folder_drop_target(
                     return;
                 }
                 let drop_for_complete = drop_for_finish.clone();
+                let on_changed = Rc::clone(&callbacks.changed);
                 if let Err(error) = commands::dispatch_async_result(
                     "apply_folder_sound_drop",
                     move || {
@@ -732,6 +862,7 @@ impl TabsSidebar {
         let folder_rebuilding = Rc::new(Cell::new(false));
         let folder_changed: FolderChangedCallback = Rc::new(RefCell::new(None));
         let folder_reordered: FolderChangedCallback = Rc::new(RefCell::new(None));
+        let folder_merged: FolderMergeCallback = Rc::new(RefCell::new(None));
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
@@ -775,6 +906,7 @@ impl TabsSidebar {
             expander.set_hide_expander(true);
             expander.set_child(Some(&label));
             let row_box = GtkBox::new(Orientation::Horizontal, 2);
+            row_box.add_css_class("lsb-folder-row");
             row_box.append(&disclosure);
             row_box.append(&expander);
             item.set_child(Some(&row_box));
@@ -786,8 +918,11 @@ impl TabsSidebar {
         let folder_generation_for_actions = Rc::clone(&folder_generation);
         let folder_rebuilding_for_expansion = Rc::clone(&folder_rebuilding);
         let folder_rebuilding_for_actions = Rc::clone(&folder_rebuilding);
-        let folder_changed_for_drop = Rc::clone(&folder_changed);
-        let folder_reordered_for_drop = Rc::clone(&folder_reordered);
+        let folder_drop_callbacks = FolderDropCallbacks {
+            changed: Rc::clone(&folder_changed),
+            reordered: Rc::clone(&folder_reordered),
+            merged: Rc::clone(&folder_merged),
+        };
         folder_factory.connect_bind(move |_, item| {
             let Some(item) = item.downcast_ref::<gtk4::ListItem>() else {
                 return;
@@ -1085,8 +1220,7 @@ impl TabsSidebar {
                     root_path.clone(),
                     relative_path.clone(),
                     sibling_index,
-                    Rc::clone(&folder_changed_for_drop),
-                    Rc::clone(&folder_reordered_for_drop),
+                    folder_drop_callbacks.clone(),
                 );
                 if let Ok(node) = boxed.try_borrow::<FolderNode>() {
                     node.drop_target.replace(Some(target));
@@ -1122,7 +1256,7 @@ impl TabsSidebar {
             let Some(boxed) = row.item().and_downcast::<BoxedAnyObject>() else {
                 return;
             };
-            let (disclosure_handlers, expanded_handler, gesture, drop_target) = {
+            let (disclosure_handlers, expanded_handler, gesture, drop_target, drag_source) = {
                 let Ok(node) = boxed.try_borrow::<FolderNode>() else {
                     // Placeholder rows install no handlers, so there is
                     // nothing to disconnect.
@@ -1132,7 +1266,14 @@ impl TabsSidebar {
                 let expanded_handler = node.expanded_handler.borrow_mut().take();
                 let gesture = node.context_gesture.borrow_mut().take();
                 let drop_target = node.drop_target.borrow_mut().take();
-                (disclosure_handlers, expanded_handler, gesture, drop_target)
+                let drag_source = node.drag_source.borrow_mut().take();
+                (
+                    disclosure_handlers,
+                    expanded_handler,
+                    gesture,
+                    drop_target,
+                    drag_source,
+                )
             };
             if let Some((image, click_gesture, row, expansion_handler)) = disclosure_handlers {
                 image.remove_controller(&click_gesture);
@@ -1146,6 +1287,12 @@ impl TabsSidebar {
             }
             if let Some(target) = drop_target {
                 row_box.remove_controller(&target);
+            }
+            // Row widgets are recycled. A drag source left behind still reports
+            // the folder it was bound to, so the next drag from this row can
+            // carry a stale identity and the drop is refused as a non-sibling.
+            if let Some(source) = drag_source {
+                row_box.remove_controller(&source);
             }
         });
         let folder_view = ListView::new(Some(folder_selection.clone()), Some(folder_factory));
@@ -1189,6 +1336,14 @@ impl TabsSidebar {
             folder_reordered.borrow_mut().replace(Box::new(move || {
                 if let Some(inner) = inner_weak.upgrade() {
                     inner.reload_folder_roots();
+                }
+            }));
+        }
+        {
+            let inner_weak = Arc::downgrade(&inner);
+            folder_merged.borrow_mut().replace(Box::new(move |request| {
+                if let Some(inner) = inner_weak.upgrade() {
+                    inner.request_folder_merge(request);
                 }
             }));
         }
@@ -2156,6 +2311,118 @@ impl TabsInner {
         }
     }
 
+    /// Asks whether to move every sound in one folder into another, then does
+    /// it. Only the folder membership changes; the files stay where they are.
+    fn request_folder_merge(self: &Arc<Self>, request: FolderMergeRequest) {
+        let library = self.state.library.clone();
+        let scope = crate::library_store::LibraryScope::Folder {
+            root_path: request.root_path.clone(),
+            relative_path: request.source_relative_path.clone(),
+        };
+        let inner_weak = Arc::downgrade(self);
+        // The sounds are collected before asking so the prompt can state a real
+        // count, and so the move applies exactly what was counted.
+        if let Err(error) = commands::dispatch_async_result(
+            "collect_folder_merge_sounds",
+            move || collect_folder_sound_ids(&library, scope),
+            move |result| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                let sound_ids = match result {
+                    Ok(sound_ids) => sound_ids,
+                    Err(error) => {
+                        log::warn!("Failed to read folder contents for combine: {error}");
+                        inner
+                            .dialog_host
+                            .show_error("Failed to Combine Folders", &error.to_string());
+                        return;
+                    }
+                };
+                inner.confirm_folder_merge(request, sound_ids);
+            },
+        ) {
+            log::warn!("Failed to dispatch folder combine: {error}");
+        }
+    }
+
+    fn confirm_folder_merge(self: &Arc<Self>, request: FolderMergeRequest, sound_ids: Vec<String>) {
+        let source_name = folder_display_label(&request.source_relative_path);
+        let destination_name = folder_display_label(&request.destination_relative_path);
+        if sound_ids.is_empty() {
+            self.dialog_host.show_error(
+                "Nothing to Combine",
+                &format!("'{source_name}' has no sounds to move."),
+            );
+            return;
+        }
+        let count = sound_ids.len();
+        let plural = if count == 1 { "sound" } else { "sounds" };
+        let message = format!(
+            "Move {count} {plural} from '{source_name}' into '{destination_name}'? \
+             Files are not moved on disk."
+        );
+        let inner_weak = Arc::downgrade(self);
+        let sound_ids = Rc::new(sound_ids);
+        self.dialog_host
+            .show_confirm("Combine Folders", &message, "Move", move || {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                inner.apply_folder_merge(request.clone(), sound_ids.as_ref().clone());
+            });
+    }
+
+    fn apply_folder_merge(self: &Arc<Self>, request: FolderMergeRequest, sound_ids: Vec<String>) {
+        let payload = tab_dnd::SoundTabDragPayload {
+            source_tab_id: String::new(),
+            source_folder: Some(tab_dnd::FolderDragContext {
+                root_path: request.root_path.clone(),
+                relative_path: request.source_relative_path.clone(),
+            }),
+            sound_ids,
+        };
+        let target = tab_dnd::FolderDragContext {
+            root_path: request.root_path.clone(),
+            relative_path: request.destination_relative_path.clone(),
+        };
+        let overrides = folder_drop_overrides(&payload, &target);
+        if overrides.is_empty() {
+            return;
+        }
+        let library = self.state.library.clone();
+        let inner_weak = Arc::downgrade(self);
+        if let Err(error) = commands::dispatch_async_result(
+            "apply_folder_merge",
+            move || {
+                for batch in overrides.chunks(crate::library_store::MAX_BATCH_ROWS) {
+                    library
+                        .apply_batch(crate::library_store::LibraryBatch::FolderOverrides(
+                            batch.to_vec(),
+                        ))
+                        .recv()?;
+                }
+                Ok::<(), crate::library_store::LibraryError>(())
+            },
+            move |result| {
+                let Some(inner) = inner_weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(()) => inner.emit_tab_membership_changed(),
+                    Err(error) => {
+                        log::warn!("Failed to combine folders: {error}");
+                        inner
+                            .dialog_host
+                            .show_error("Failed to Combine Folders", &error.to_string());
+                    }
+                }
+            },
+        ) {
+            log::warn!("Failed to dispatch folder combine: {error}");
+        }
+    }
+
     fn request_tab_deletion(self: &Arc<Self>, tab_id: String, tab_name: String) {
         if self.tab_deletion_pending.get() {
             return;
@@ -2649,6 +2916,53 @@ mod tests {
             Some("albumA")
         );
         assert_eq!(folder_parent_relative_path("a/b/c").as_deref(), Some("a/b"));
+    }
+
+    fn merge_payload(root: &str, relative: &str) -> tab_dnd::FolderDragPayload {
+        tab_dnd::FolderDragPayload {
+            root_path: root.to_string(),
+            relative_path: relative.to_string(),
+            parent_relative_path: folder_parent_relative_path(relative),
+        }
+    }
+
+    #[test]
+    fn folders_can_be_combined_across_different_parents() {
+        let request =
+            folder_merge_request(&merge_payload("/music", "albumA/disc1"), "/music", "albumB")
+                .expect("a folder should combine into an unrelated folder");
+        assert_eq!(request.source_relative_path, "albumA/disc1");
+        assert_eq!(request.destination_relative_path, "albumB");
+    }
+
+    #[test]
+    fn a_folder_can_be_combined_into_its_own_ancestor() {
+        assert!(
+            folder_merge_request(&merge_payload("/music", "albumA/disc1"), "/music", "albumA")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_folder_cannot_be_combined_into_itself_or_its_own_subtree() {
+        assert!(
+            folder_merge_request(&merge_payload("/music", "albumA"), "/music", "albumA").is_none()
+        );
+        assert!(
+            folder_merge_request(&merge_payload("/music", "albumA"), "/music", "albumA/disc1")
+                .is_none()
+        );
+        // A prefix match that is not a path boundary is a different folder.
+        assert!(
+            folder_merge_request(&merge_payload("/music", "album"), "/music", "albumA").is_some()
+        );
+    }
+
+    #[test]
+    fn folders_from_different_roots_cannot_be_combined() {
+        assert!(
+            folder_merge_request(&merge_payload("/music", "albumA"), "/other", "albumB").is_none()
+        );
     }
 
     #[test]

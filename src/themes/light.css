@@ -306,6 +306,30 @@ row.appearance-choice-row {
   background-color: rgba(168, 141, 82, 0.1);
 }
 
+/* Adwaita outlines any widget under an active drag. That square outline sits
+   inside the row's own rounded highlight and reads as a second selection, so it
+   is replaced below with feedback that says where the drop will actually go. */
+.lsb-folder-row:drop(active) {
+  box-shadow: none;
+  outline: none;
+}
+
+/* A line in the gap means "drop here to reorder". */
+.lsb-folder-row.lsb-drop-before {
+  box-shadow: inset 0 3px 0 0 #a88d52;
+}
+
+.lsb-folder-row.lsb-drop-after {
+  box-shadow: inset 0 -3px 0 0 #a88d52;
+}
+
+/* A filled row means "put what you are dragging inside this folder". */
+.lsb-folder-row.lsb-drop-into {
+  background-color: rgba(168, 141, 82, 0.3);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px #a88d52;
+}
+
 .folder-tree treeexpander > expander {
   color: #332b1f;
   opacity: 1;
