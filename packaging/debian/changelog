@@ -6,7 +6,7 @@ linux-soundboard (2.2.0-1) unstable; urgency=medium
   * Cancel the folder scan started by Add Folder
   * Cut startup and wide-library latency and memory
 
- -- germanua <114772595+germanua@users.noreply.github.com>  Tue, 28 Jul 2026 12:00:00 +0000
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 29 Jul 2026 12:00:00 +0000
 
 linux-soundboard (2.1.2-1) unstable; urgency=medium
 

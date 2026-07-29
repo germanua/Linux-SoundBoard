@@ -2,7 +2,7 @@
 
 Name:           linux-soundboard
 Version:        2.2.0
-Release:        1%{?dist}
+Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
 License:        PolyForm-Noncommercial-1.0.0
@@ -151,7 +151,7 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
-* Tue Jul 28 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.2.0-1
+* Wed Jul 29 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.2.0-1
 - Store the sound library in SQLite and migrate existing configurations
 - Show the complete folder hierarchy in the sidebar
 - Remove, restore, reorder, and combine sidebar folders
