@@ -67,6 +67,14 @@
   </keywords>
   
   <releases>
+    <release version="2.2.1" date="2026-07-29">
+      <description>
+        <p>Playback loudness hotfix:</p>
+        <ul>
+          <li>Applies newly analyzed loudness values immediately in Static and Dynamic modes</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.0" date="2026-07-29">
       <description>
         <p>Sound library and folder navigation update:</p>

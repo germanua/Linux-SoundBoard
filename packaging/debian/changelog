@@ -1,3 +1,9 @@
+linux-soundboard (2.2.1-1) unstable; urgency=medium
+
+  * Apply newly analyzed loudness values immediately during playback
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Wed, 29 Jul 2026 12:54:18 +0300
+
 linux-soundboard (2.2.0-1) unstable; urgency=medium
 
   * Store the sound library in SQLite and migrate existing configurations

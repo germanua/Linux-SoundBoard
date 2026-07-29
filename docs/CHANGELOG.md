@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-07-29
+
+### Fixed
+
+- **Auto-gain immediately after analysis:** Static and Dynamic normalization now resolve the current sound row from SQLite before playback, so loudness values written by a completed analysis take effect without restarting or refreshing the application.
+
 ## [2.2.0] - 2026-07-29
 
 ### Added
