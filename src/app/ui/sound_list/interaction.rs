@@ -59,18 +59,11 @@ impl SoundListInner {
                         }
                     }
                 };
-                let dispatch = match sound.sound {
-                    Some(sound) => commands::play_loaded_sound_async(
-                        sound,
-                        Arc::clone(&inner.state),
-                        on_complete,
-                    ),
-                    None => commands::play_sound_async(
-                        sound_id_for_dispatch,
-                        Arc::clone(&inner.state),
-                        on_complete,
-                    ),
-                };
+                let dispatch = commands::play_sound_async(
+                    sound_id_for_dispatch,
+                    Arc::clone(&inner.state),
+                    on_complete,
+                );
                 if let Err(e) = dispatch {
                     crate::ui_event_bridge::clear_explicit_play_pending();
                     log::warn!(

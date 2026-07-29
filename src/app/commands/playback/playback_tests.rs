@@ -94,7 +94,8 @@ mod dispatch {
 
     use crate::audio::PlaybackEngine;
     use crate::commands::CommandError;
-    use crate::config::Sound;
+    use crate::config::{LoudnessAnalysisState, Sound};
+    use crate::library_store::{LibraryBatch, LibraryStore, LoudnessUpdate, SoundRecord};
     use crate::test_support::audio_mock::FakeAudioPlayer;
 
     struct ClipOnDisk(std::path::PathBuf);
@@ -137,6 +138,46 @@ mod dispatch {
         assert_eq!(calls[0].base_volume, 0.5);
         assert!(play_id.starts_with("fake-play-"));
         assert_eq!(fake.stop_all_calls(), 1);
+    }
+
+    #[test]
+    fn library_playback_uses_loudness_written_after_the_row_was_loaded() {
+        let (sound, dir, _path) = sound_on_disk("Analyzed later");
+        let sound_id = sound.id.clone();
+        let stale_loaded_sound = sound.clone();
+        let store = LibraryStore::open(dir.0.join("library.sqlite3")).expect("open library");
+        store
+            .apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+                sound,
+                general_position: 0,
+                locations: Vec::new(),
+            }]))
+            .recv()
+            .expect("seed sound");
+        store
+            .apply_loudness_updates(vec![LoudnessUpdate {
+                sound_id: sound_id.clone(),
+                lufs: Some(-20.0),
+                state: LoudnessAnalysisState::Refined,
+                confidence: Some(1.0),
+                true_peak_dbtp: Some(-1.5),
+            }])
+            .recv()
+            .expect("store loudness");
+        assert_eq!(stale_loaded_sound.loudness_lufs, None);
+
+        let fake = Arc::new(FakeAudioPlayer::new());
+        super::super::play_sound_from_library(
+            &sound_id,
+            false,
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("play current library row");
+
+        let calls = fake.play_calls();
+        assert_eq!(calls[0].sound_lufs, Some(-20.0));
+        assert_eq!(calls[0].sound_true_peak_dbtp, Some(-1.5));
     }
 
     #[test]
