@@ -189,7 +189,7 @@ impl TransportBar {
 
 impl TransportInner {
     pub(super) fn has_navigation_sounds(&self) -> bool {
-        let guard = self.has_sounds_checker.lock();
+        let guard = self.has_sounds_checker.borrow();
         match guard.as_ref() {
             Some(checker) => checker(),
             None => false,
@@ -198,46 +198,26 @@ impl TransportInner {
 
     pub(super) fn play_adjacent_sound(&self, offset: i32) {
         self.clear_continue_suppression();
-        let sounds = match self.sound_list_provider.lock().as_ref() {
+        let provider = self.sound_list_provider.borrow();
+        let context = match provider.as_ref() {
             Some(provider) => provider(),
             None => return,
         };
-        if sounds.is_empty() {
-            return;
-        }
-
-        let current_id = self
-            .active_track
-            .borrow()
-            .as_ref()
-            .map(|track| track.sound_id.clone())
-            .or_else(|| self.last_track_sound_id.borrow().clone());
-
-        let current_idx = current_id
-            .and_then(|id| sounds.iter().position(|sound| sound.id == id))
-            .map(|idx| idx as i32)
-            .unwrap_or_else(|| if offset >= 0 { -1 } else { 0 });
-
-        let len = sounds.len() as i32;
-        let next_idx = ((current_idx + offset) % len + len) % len;
-        let next_sound = &sounds[next_idx as usize];
 
         commands::stop_all(self.state.player.clone());
-        let sound_name = next_sound.name.clone();
-        if let Err(e) = commands::play_sound_async(
-            next_sound.id.clone(),
+        if let Err(error) = commands::play_adjacent_sound_async(
+            context.scope,
+            context.search,
+            context.position,
+            offset,
             Arc::clone(&self.state),
             move |result| {
-                if let Err(e) = result {
-                    log::warn!("Play adjacent failed for '{}': {}", sound_name, e);
+                if let Err(error) = result {
+                    log::warn!("Play adjacent failed: {error}");
                 }
             },
         ) {
-            log::warn!(
-                "Failed to dispatch adjacent playback for '{}': {}",
-                next_sound.name,
-                e
-            );
+            log::warn!("Failed to dispatch adjacent playback: {error}");
         }
     }
 

@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use glib::BoxedAnyObject;
@@ -12,18 +13,18 @@ fn format_duration(ms: u64) -> String {
 }
 
 impl SoundListInner {
-    pub(super) fn configure_columns(self: &Arc<Self>) {
+    pub(super) fn configure_columns(self: &Rc<Self>) {
         self.col_view.append_column(&self.build_index_column());
         self.col_view.append_column(&self.build_name_column());
         self.col_view.append_column(&self.build_duration_column());
         self.col_view.append_column(&self.build_hotkey_column());
     }
 
-    fn build_index_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_index_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -49,12 +50,14 @@ impl SoundListInner {
         }
 
         {
+            let store = self.store.clone();
             let playing_ids = Arc::clone(&self.playing_ids);
             let active_sound_id = Arc::clone(&self.active_sound_id);
             factory.connect_bind(move |_, item| {
                 let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
                     return;
                 };
+                store.load_position(list_item.position());
                 let Some(obj) = list_item
                     .item()
                     .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
@@ -82,11 +85,11 @@ impl SoundListInner {
         column
     }
 
-    fn build_name_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_name_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -171,15 +174,17 @@ impl SoundListInner {
         }
 
         let column = ColumnViewColumn::new(Some("NAME"), Some(factory));
+        // Avoid GTK's automatic width scan requesting every row from a large lazy model.
+        column.set_fixed_width(240);
         column.set_expand(true);
         column
     }
 
-    fn build_duration_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_duration_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;
@@ -242,11 +247,11 @@ impl SoundListInner {
         column
     }
 
-    fn build_hotkey_column(self: &Arc<Self>) -> ColumnViewColumn {
+    fn build_hotkey_column(self: &Rc<Self>) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
-            let inner_weak = Arc::downgrade(self);
+            let inner_weak = Rc::downgrade(self);
             factory.connect_setup(move |_, item| {
                 let Some(inner) = inner_weak.upgrade() else {
                     return;

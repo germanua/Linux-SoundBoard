@@ -1,0 +1,70 @@
+{
+  "schema_version": 7,
+  "sound_folders": ["/home/test/Music"],
+  "sounds": [
+    {
+      "id": "schema7-sound",
+      "name": "Schema 7 fixture",
+      "path": "/home/test/Music/Album/tone.flac",
+      "source_path": null,
+      "hotkey": "Ctrl+Alt+7",
+      "duration_ms": 7000,
+      "volume": 72,
+      "enabled": true,
+      "loudness_lufs": -14.5,
+      "loudness_analysis_state": "refined",
+      "loudness_confidence": 0.95,
+      "loudness_source_fingerprint": "schema7-fixture",
+      "loudness_true_peak_dbtp": -0.8
+    }
+  ],
+  "tabs": [
+    {
+      "id": "schema7-manual",
+      "name": "Manual",
+      "sound_ids": ["schema7-sound"],
+      "order": 0
+    },
+    {
+      "id": "schema7-generated",
+      "name": "Album",
+      "sound_ids": ["schema7-sound"],
+      "order": 1,
+      "folder_binding": {
+        "root_folder": "/home/test/Music",
+        "relative_subfolder": "Album"
+      }
+    }
+  ],
+  "settings": {
+    "theme": "dark",
+    "local_volume": 72,
+    "local_mute": false,
+    "mic_volume": 88,
+    "allow_multiple_playbacks": false,
+    "mic_passthrough": true,
+    "mic_source": null,
+    "default_source_mode": "default",
+    "mic_latency_profile": "balanced",
+    "excluded_apps": [],
+    "skip_delete_confirm": false,
+    "auto_gain": true,
+    "auto_gain_mode": "static",
+    "auto_gain_target_lufs": -14.0,
+    "auto_gain_apply_to": "both",
+    "auto_gain_lookahead_ms": 30,
+    "auto_gain_attack_ms": 10,
+    "auto_gain_release_ms": 250,
+    "control_hotkeys": {
+      "stop_all": "Ctrl+Shift+S",
+      "play_pause": null,
+      "previous_sound": null,
+      "next_sound": null,
+      "mute_headphones": null,
+      "mute_real_mic": null,
+      "cycle_play_mode": null
+    },
+    "play_mode": "default",
+    "list_style": "compact"
+  }
+}

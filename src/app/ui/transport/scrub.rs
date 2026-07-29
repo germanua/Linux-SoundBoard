@@ -8,7 +8,8 @@ use super::helpers::{
     begin_scrub_interaction_state, clear_scrub_interaction_state, displayed_scrub_position_ms,
     format_duration, pending_seek_deadline_ms_from_now, record_scrub_preview_state,
     resolve_scrub_duration_ms, scrub_progress_value, settle_pending_seek_state,
-    should_continue_playback, should_sync_scrub_from_playback, take_scrub_commit_position,
+    should_apply_resolved_track_name, should_continue_playback, should_sync_scrub_from_playback,
+    take_scrub_commit_position,
 };
 use super::playback::update_play_pause_button;
 use super::{ScrubInput, TransportInner};
@@ -79,7 +80,7 @@ impl TransportInner {
         }
     }
 
-    pub(crate) fn handle_snapshot(&self, snapshot: PlayerSnapshot) {
+    pub(crate) fn handle_snapshot(self: &std::rc::Rc<Self>, snapshot: PlayerSnapshot) {
         let positions = snapshot.playback_positions;
         let now_ms = glib::monotonic_time() as u64 / 1_000;
 
@@ -146,12 +147,9 @@ impl TransportInner {
                 let t = cached.as_ref().unwrap();
                 (t.sound_name.clone(), t.sound_duration_ms)
             } else {
-                let cfg = self.state.config.lock();
-                let entry = cfg.get_sound(&position.sound_id);
-                (
-                    entry.map(|s| s.name.clone()),
-                    entry.and_then(|s| s.duration_ms),
-                )
+                // Schema-8 keeps no sounds in the config, so the name comes
+                // from SQLite below. The engine already reports duration.
+                (None, None)
             };
 
             let duration_ms = resolve_scrub_duration_ms(position.duration_ms, track_duration_ms);
@@ -180,7 +178,10 @@ impl TransportInner {
                         self.track_name_label.set_label(name);
                         self.track_name_label.set_visible(true);
                     }
-                    None => self.track_name_label.set_visible(false),
+                    None => {
+                        self.track_name_label.set_visible(false);
+                        self.resolve_track_name_async(&position.sound_id, &position.play_id);
+                    }
                 }
                 *self.last_track_sound_id.borrow_mut() = Some(position.sound_id.clone());
                 *self.active_track.borrow_mut() = Some(super::ActiveTrack {
@@ -208,6 +209,40 @@ impl TransportInner {
                 self.clear_continue_suppression();
                 self.reset_idle_playback_ui();
             }
+        }
+    }
+
+    /// Looks the playing sound's name up in the library and shows it when the
+    /// answer arrives. One bounded row lookup per newly started sound, never
+    /// on the position-update path.
+    fn resolve_track_name_async(self: &std::rc::Rc<Self>, sound_id: &str, play_id: &str) {
+        let response = self.state.library.sound_by_id(sound_id);
+        let weak = std::rc::Rc::downgrade(self);
+        let play_id = play_id.to_string();
+        if let Err(error) = commands::dispatch_async_result(
+            "resolve_transport_track_name",
+            move || response.recv(),
+            move |result| {
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                let Ok(Some(sound)) = result else {
+                    return;
+                };
+                let mut active = inner.active_track.borrow_mut();
+                let current = active.as_ref().map(|track| track.play_id.as_str());
+                if !should_apply_resolved_track_name(current, &play_id) {
+                    return;
+                }
+                if let Some(track) = active.as_mut() {
+                    track.sound_name = Some(sound.name.clone());
+                }
+                drop(active);
+                inner.track_name_label.set_label(&sound.name);
+                inner.track_name_label.set_visible(true);
+            },
+        ) {
+            log::warn!("Could not resolve the playing sound's name: {error}");
         }
     }
 }

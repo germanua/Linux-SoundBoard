@@ -2,6 +2,7 @@ use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gtk4::prelude::*;
 use gtk4::{Adjustment, Align, Box as GtkBox, Entry, Label, Orientation, Scale, SearchEntry};
@@ -22,6 +23,7 @@ fn apply_transport_button_size(button: &impl IsA<gtk4::Widget>) {
 
 impl TransportBar {
     pub fn new(state: Arc<AppState>) -> Self {
+        let build_started = Instant::now();
         let hbox = GtkBox::new(Orientation::Horizontal, 5);
         hbox.add_css_class("transport-row");
         hbox.add_css_class("transport-row-primary");
@@ -68,6 +70,10 @@ impl TransportBar {
         playback_group.append(&prev_btn);
         playback_group.append(&next_btn);
         hbox.append(&playback_group);
+        log::debug!(
+            "Transport build latency: phase=playback elapsed_us={}",
+            build_started.elapsed().as_micros()
+        );
 
         let timeline_group = GtkBox::new(Orientation::Horizontal, 5);
         timeline_group.add_css_class("transport-cluster");
@@ -111,6 +117,10 @@ impl TransportBar {
         timeline_group.append(&dur_label);
         timeline_group.append(&track_name_label);
         hbox.append(&timeline_group);
+        log::debug!(
+            "Transport build latency: phase=timeline elapsed_us={}",
+            build_started.elapsed().as_micros()
+        );
 
         let (local_vol_value, mic_vol_value, local_mute, mic_passthrough, play_mode) = {
             let cfg = state.config.lock();
@@ -254,6 +264,10 @@ impl TransportBar {
         }
         audio_group.append(&mic_btn);
         hbox.append(&audio_group);
+        log::debug!(
+            "Transport build latency: phase=audio elapsed_us={}",
+            build_started.elapsed().as_micros()
+        );
 
         let utility_group = GtkBox::new(Orientation::Horizontal, 4);
         utility_group.add_css_class("transport-cluster");
@@ -289,6 +303,10 @@ impl TransportBar {
         utility_group.append(&settings_btn);
 
         hbox.append(&utility_group);
+        log::debug!(
+            "Transport build latency: phase=utility elapsed_us={}",
+            build_started.elapsed().as_micros()
+        );
 
         // Secondary row used only by the compact layout; the audio and utility clusters
         // move here when the window is too narrow for a single row.
@@ -339,10 +357,11 @@ impl TransportBar {
             suppress_mic_toggle: Cell::new(false),
             continue_suppressed_play_id: RefCell::new(None),
             last_track_sound_id: RefCell::new(None),
+            refresh_cancel: RefCell::new(None),
             state,
             has_sound_list_provider: Cell::new(false),
-            sound_list_provider: Mutex::new(None),
-            has_sounds_checker: Mutex::new(None),
+            sound_list_provider: RefCell::new(None),
+            has_sounds_checker: RefCell::new(None),
             toast_sender: Mutex::new(None),
             on_library_changed: RefCell::new(None),
             on_list_style_changed: RefCell::new(None),
@@ -351,6 +370,10 @@ impl TransportBar {
 
         let tb = Self { inner };
         tb.connect_signals();
+        log::debug!(
+            "Transport build latency: phase=complete elapsed_us={}",
+            build_started.elapsed().as_micros()
+        );
         tb
     }
 }

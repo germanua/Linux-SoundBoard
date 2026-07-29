@@ -16,9 +16,16 @@ APP_BINARY="linux-soundboard"
 APP_AUR_PACKAGE="linux-soundboard"
 APP_AUR_LEGACY_PACKAGE="linux-soundboard-git"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
+ISSUE_URL="https://github.com/$APP_REPO/issues/new"
+
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/$APP_BINARY}"
+INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 
 WORK_DIR="$(mktemp -d)"
 LATEST_RELEASE_JSON=""
+RELEASE_LIST_JSON=""
+NATIVE_PACKAGE_PRESENT=0
 APT_UPDATED=0
 ZYPPER_REFRESHED=0
 
@@ -34,17 +41,28 @@ usage() {
 Linux Soundboard installer
 
 Usage:
-  ./install.sh [install]
+  ./install.sh                 open the menu (needs a terminal)
+  ./install.sh menu
+  ./install.sh install
+  ./install.sh install --version vX.Y.Z
+  ./install.sh versions
   ./install.sh repair [binary]
+  ./install.sh fix
+  ./install.sh report [--output PATH]
   ./install.sh status
   ./install.sh remove [--yes] [--keep-data] [--keep-package] [--restore-default-source|--keep-current-default-source]
   ./install.sh uninstall [--yes] [--keep-data] [--keep-package] [--restore-default-source|--keep-current-default-source]
   ./install.sh --help
 
-The default install command detects your distro and installs via a native
-package when available. The remove/uninstall command removes per-user files and
-also removes the native Linux Soundboard package when one is installed. Pass
---keep-package to leave the native package installed.
+With no arguments and a terminal available, the menu opens; piped with no
+arguments it installs the newest version, which keeps scripted use working.
+
+install            detects your distro and installs via a native package when available
+install --version  installs that published release from its tarball into ~/.local
+fix                repairs the install step by step and prints what failed
+report             writes a bug report file with system state, app state, and a blank to fill in
+remove/uninstall   removes per-user files and the native package unless --keep-package,
+                   showing what changed in your audio setup before offering to restore it
 EOF
 }
 
@@ -70,11 +88,42 @@ get_release_json() {
     printf '%s' "$LATEST_RELEASE_JSON"
 }
 
-find_asset_url() {
-    get_release_json \
-        | grep -oE '"browser_download_url":[[:space:]]*"[^"]+"' \
+# The API is unauthenticated here, so it allows 60 requests an hour. Each list
+# and each tag lookup is cached for the run.
+get_release_list_json() {
+    if [[ -z "$RELEASE_LIST_JSON" ]]; then
+        RELEASE_LIST_JSON="$(fetch_stdout "https://api.github.com/repos/$APP_REPO/releases?per_page=30")" \
+            || fail "Could not reach GitHub API. If this repeats, you may have hit the hourly rate limit; see https://github.com/$APP_REPO/releases"
+    fi
+    printf '%s' "$RELEASE_LIST_JSON"
+}
+
+release_json_for_tag() {
+    fetch_stdout "https://api.github.com/repos/$APP_REPO/releases/tags/$1" \
+        || fail "No release found for $1. See https://github.com/$APP_REPO/releases"
+}
+
+list_release_tags() {
+    get_release_list_json \
+        | grep -oE '"tag_name":[[:space:]]*"[^"]+"' \
+        | sed -E 's/.*"([^"]+)"/\1/'
+}
+
+# Reads asset URLs out of release JSON on stdin so the same matcher serves the
+# latest release and a pinned tag.
+find_asset_url_in() {
+    grep -oE '"browser_download_url":[[:space:]]*"[^"]+"' \
         | sed -E 's/.*"([^"]+)"/\1/' \
         | grep -E "$1" | head -1
+}
+
+find_asset_url() {
+    get_release_json | find_asset_url_in "$1"
+}
+
+installed_version() {
+    [[ -r "$INSTALL_VERSION_FILE" ]] || return 1
+    head -n 1 "$INSTALL_VERSION_FILE"
 }
 
 # ── Distro detection ──────────────────────────────────────────────────────────
@@ -110,7 +159,7 @@ detect_session() {
     SESSION_TYPE="${SESSION_TYPE:-unknown}"
 }
 
-is_wayland() { [[ "$SESSION_TYPE" == "wayland" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }
+is_wayland() { [[ "${SESSION_TYPE:-}" == "wayland" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }
 
 # ── Package manager helpers ───────────────────────────────────────────────────
 
@@ -141,9 +190,16 @@ pick_pkg() {
 
 # Download the release tarball into WORK_DIR and return the extracted bundle path.
 download_and_extract_tarball() {
+    local tag=${1:-}
     local arch; arch="$(uname -m)"
-    local url; url="$(find_asset_url "${arch}\\.tar\\.gz")"
-    [[ -n "$url" ]] || fail "No release tarball for $arch. See https://github.com/$APP_REPO/releases"
+    local url
+
+    if [[ -n "$tag" ]]; then
+        url="$(release_json_for_tag "$tag" | find_asset_url_in "${arch}\\.tar\\.gz")"
+    else
+        url="$(find_asset_url "${arch}\\.tar\\.gz")"
+    fi
+    [[ -n "$url" ]] || fail "No release tarball for $arch${tag:+ at $tag}. See https://github.com/$APP_REPO/releases"
 
     local tarball="$WORK_DIR/linux-soundboard.tar.gz"
     info "Downloading $url ..." >&2
@@ -613,8 +669,468 @@ repair_main() {
     ensure_pipewire_services
 }
 
+# ── Interactive front end ─────────────────────────────────────────────────────
+
+# The one-liner pipes this script into bash, which makes stdin the script
+# itself. Every prompt here and in install-user.sh reads stdin, so point it at
+# the terminal once, up front. Returns non-zero when there is no terminal at
+# all, which is what keeps piped noninteractive use working.
+ensure_tty() {
+    [[ -t 0 ]] && return 0
+    # /dev/tty exists even with no controlling terminal, where opening it fails
+    # with ENXIO. Probe in a subshell so the failure is silent and stdin here is
+    # left alone; testing the redirection inline would either print the shell's
+    # own error or permanently redirect stderr to hide it.
+    ( exec </dev/tty ) 2>/dev/null || return 1
+    exec </dev/tty
+    [[ -t 0 ]]
+}
+
+confirm() {
+    local prompt=$1
+    local answer
+
+    printf '%s [y/N] ' "$prompt"
+    read -r answer || answer=""
+    case "${answer,,}" in
+        y|yes) return 0 ;;
+        *)     return 1 ;;
+    esac
+}
+
+print_menu_header() {
+    local version
+    local packages=()
+    local kind
+    local pkg
+
+    while IFS=$'\t' read -r kind pkg; do
+        [[ -n "${kind:-}" && -n "${pkg:-}" ]] || continue
+        packages+=("$kind:$pkg")
+    done < <(installed_native_packages || true)
+
+    NATIVE_PACKAGE_PRESENT=$( ((${#packages[@]} > 0)) && printf 1 || printf 0)
+    version="$(installed_version || true)"
+
+    printf '\n'
+    printf '  Linux Soundboard installer\n'
+    printf '  ──────────────────────────\n'
+    printf '  Distro:    %s\n' "${DISTRO_NAME:-unknown}"
+    printf '  Session:   %s\n' "${SESSION_TYPE:-unknown}"
+    printf '  Installed: %s\n' "${version:-not installed}"
+    printf '  Package:   %s\n' "$( ((${#packages[@]} == 0)) && printf 'none' || printf '%s' "${packages[*]}")"
+    printf '\n'
+}
+
+# Says up front which entries will ask for a password, from what is actually
+# true here: only a native package install or removal and the setuid swhkd
+# binary need root. Everything under ~/.local and ~/.config does not.
+password_note() {
+    case "$1" in
+        install-newest)
+            case "$DISTRO_FAMILY" in
+                arch|debian|fedora|opensuse)
+                    printf ' — asks for your password (system package)'
+                    ;;
+                *)
+                    if is_wayland; then
+                        printf ' — asks for your password (hotkey daemon only)'
+                    else
+                        printf ' — no password needed'
+                    fi
+                    ;;
+            esac
+            ;;
+        install-previous)
+            if ((NATIVE_PACKAGE_PRESENT == 1)); then
+                printf ' — asks for your password only to remove the system package'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        uninstall)
+            if ((NATIVE_PACKAGE_PRESENT == 1)); then
+                printf ' — asks for your password (system package)'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        fix)
+            if is_wayland; then
+                printf ' — may ask for your password (hotkey daemon)'
+            else
+                printf ' — no password needed'
+            fi
+            ;;
+        *)
+            printf ' — no password needed'
+            ;;
+    esac
+}
+
+interactive_menu() {
+    detect_distro
+    detect_session
+
+    while true; do
+        print_menu_header
+        printf '  1) Install the newest version%s\n'  "$(password_note install-newest)"
+        printf '  2) Install a previous version%s\n'  "$(password_note install-previous)"
+        printf '  3) Uninstall%s\n'                   "$(password_note uninstall)"
+        printf '  4) Fix setup problems%s\n'          "$(password_note fix)"
+        printf '  5) Make a bug report%s\n'           "$(password_note report)"
+        printf '  6) Show status%s\n'                 "$(password_note status)"
+        printf '  0) Exit\n'
+        printf '\n  Choose an option: '
+
+        local choice
+        read -r choice || return 0
+
+        case "$choice" in
+            1) install_main ;;
+            2) choose_and_install_version ;;
+            3) remove_installation ;;
+            4) fix_setup ;;
+            5) make_bug_report ;;
+            6) print_status ;;
+            0) return 0 ;;
+            "") ;;
+            *) warn "Unknown option: $choice" ;;
+        esac
+    done
+}
+
+# ── Previous versions ─────────────────────────────────────────────────────────
+
+choose_and_install_version() {
+    local tags=()
+    local current
+    local tag
+    local index
+
+    info "Reading published releases..."
+    mapfile -t tags < <(list_release_tags | head -n 10)
+    ((${#tags[@]} > 0)) || fail "No releases found for $APP_REPO."
+
+    current="$(installed_version || true)"
+
+    printf '\n  Published versions:\n'
+    for index in "${!tags[@]}"; do
+        tag="${tags[$index]}"
+        printf '  %2d) %s%s\n' "$((index + 1))" "$tag" \
+            "$([[ "$tag" == "$current" ]] && printf ' (installed)' || printf '')"
+    done
+    printf '   0) Back\n'
+    printf '\n  Choose a version: '
+
+    local choice
+    read -r choice || return 0
+    [[ "$choice" == "0" || -z "$choice" ]] && return 0
+    [[ "$choice" =~ ^[0-9]+$ ]] || { warn "Not a number: $choice"; return 0; }
+    ((choice >= 1 && choice <= ${#tags[@]})) || { warn "Out of range: $choice"; return 0; }
+
+    install_version "${tags[$((choice - 1))]}"
+}
+
+# An older version always installs from its release tarball into ~/.local. The
+# AUR only ever carries the newest version, and apt/dnf downgrades need flags
+# that differ per distro, so the tarball is the one path that behaves the same
+# everywhere and needs no root.
+install_version() {
+    local tag=$1
+    local bundle_dir
+
+    detect_distro
+    detect_session
+
+    if installed_native_packages >/dev/null 2>&1; then
+        warn "A native $APP_PACKAGE package is installed; it would shadow a user install of $tag."
+        if confirm "Remove the native package first?"; then
+            remove_native_packages
+        else
+            info "Leaving the native package in place. Nothing was installed."
+            return 0
+        fi
+    fi
+
+    bundle_dir="$(download_and_extract_tarball "$tag")"
+    export LSB_INSTALL_VERSION="$tag"
+    run_user_installer install "$bundle_dir"
+    unset LSB_INSTALL_VERSION
+
+    if is_wayland; then
+        repair_swhkd_if_needed
+    fi
+    ensure_pipewire_services
+
+    printf '\n'
+    info "Installed $tag. Launch with: $APP_BINARY"
+}
+
+# ── Fix setup problems ────────────────────────────────────────────────────────
+
+step() {
+    local label=$1
+    shift
+
+    printf '  %-34s' "$label"
+    # In a subshell: these steps call fail() on error, which exits. Without the
+    # subshell the first failing step would abort the repair instead of being
+    # reported and counted.
+    if ( "$@" ) >"$WORK_DIR/step.log" 2>&1; then
+        printf 'ok\n'
+        return 0
+    fi
+    printf 'FAILED\n'
+    sed 's/^/      /' "$WORK_DIR/step.log" | tail -n 5
+    return 1
+}
+
+# --diagnose exits 0 even when the engine and the application do not match, so
+# the report has to be read. A user who runs the repair, sees every step report
+# ok and still cannot use the app has been told nothing. Returns non-zero when a
+# mismatch was found.
+report_engine_mismatch() {
+    local diagnosis=$1
+
+    grep -q 'INCOMPATIBLE' "$diagnosis" || return 0
+
+    printf '\n'
+    warn "The running engine does not match the installed application."
+    printf '    The engine service starts a different build than the app on your PATH,\n'
+    printf '    so the app will refuse to talk to it. Install once so both come from\n'
+    printf '    the same version:\n\n'
+    printf '      ./install.sh install\n'
+    return 1
+}
+
+fix_setup() {
+    local failures=0
+
+    detect_distro
+    detect_session
+
+    printf '\n  Repairing installation\n\n'
+    step "user install and engine service" repair_main || failures=$((failures + 1))
+    if is_wayland; then
+        step "swhkd (Wayland hotkeys)" repair_swhkd_if_needed || failures=$((failures + 1))
+    fi
+    step "PipeWire services" ensure_pipewire_services || failures=$((failures + 1))
+
+    printf '\n'
+    print_status || true
+
+    if command -v "$APP_BINARY" >/dev/null 2>&1; then
+        local diagnosis="$WORK_DIR/diagnose.log"
+        printf '\n'
+        "$APP_BINARY" --diagnose >"$diagnosis" 2>&1 || true
+        cat "$diagnosis"
+        report_engine_mismatch "$diagnosis" || failures=$((failures + 1))
+    fi
+
+    if ((failures > 0)); then
+        printf '\n'
+        warn "$failures step(s) failed."
+        if confirm "Make a bug report with this state?"; then
+            make_bug_report
+        fi
+    fi
+}
+
+# ── Bug report ────────────────────────────────────────────────────────────────
+
+# Keeps device names, which contributors need for routing bugs, but takes the
+# home path and username out so the file can be pasted into a public issue.
+redact() {
+    sed -e "s#$HOME#~#g" -e "s#\\b$(id -un)\\b#<user>#g"
+}
+
+section() {
+    printf '\n================================================================\n'
+    printf '%s\n' "$1"
+    printf '================================================================\n\n'
+}
+
+run_or_note() {
+    local label=$1
+    shift
+
+    printf -- '--- %s\n' "$label"
+    if command -v "$1" >/dev/null 2>&1; then
+        "$@" 2>&1 || printf '(command failed: %s)\n' "$*"
+    else
+        printf '(not installed: %s)\n' "$1"
+    fi
+    printf '\n'
+}
+
+collect_system_report() {
+    section "SYSTEM REPORT"
+    run_or_note "os-release" cat /etc/os-release
+    run_or_note "kernel" uname -a
+    printf -- '--- session\n'
+    printf 'XDG_SESSION_TYPE=%s\nWAYLAND_DISPLAY=%s\nDISPLAY=%s\n\n' \
+        "${XDG_SESSION_TYPE:-}" "${WAYLAND_DISPLAY:-}" "${DISPLAY:-}"
+    run_or_note "audio devices" wpctl status -n
+    run_or_note "audio services" systemctl --user --no-pager --lines=0 status pipewire wireplumber
+    printf -- '--- swhkd\n'
+    command -v swhkd >/dev/null 2>&1 && swhkd --version 2>&1 || printf 'not installed\n'
+    printf '\n'
+}
+
+collect_app_report() {
+    local library="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_BINARY/library.sqlite3"
+
+    section "APP REPORT"
+    printf -- '--- install\n'
+    printf 'installed version: %s\n' "$(installed_version || printf 'not installed')"
+    printf 'binary: %s\n' "$(command -v "$APP_BINARY" || printf 'not on PATH')"
+    print_native_package_status
+    printf '\n'
+    run_or_note "diagnose" "$APP_BINARY" --diagnose
+    run_or_note "engine service" systemctl --user --no-pager --lines=0 status "$APP_BINARY-engine.service"
+    run_or_note "engine log" journalctl --user -u "$APP_BINARY-engine.service" -n 200 --no-pager
+    printf -- '--- library\n'
+    if [[ -f "$library" ]]; then
+        printf 'file: %s (%s bytes)\n' "$library" "$(stat -c %s "$library")"
+        if command -v sqlite3 >/dev/null 2>&1; then
+            printf 'integrity: %s\n' "$(sqlite3 "$library" 'PRAGMA integrity_check;' 2>&1 | head -n 1)"
+            printf 'schema: %s\n' "$(sqlite3 "$library" 'PRAGMA user_version;' 2>&1 | head -n 1)"
+        else
+            printf '(sqlite3 not installed; integrity not checked)\n'
+        fi
+    else
+        printf 'no library database at %s\n' "$library"
+    fi
+    printf '\n'
+    printf -- '--- audio changes since install\n'
+    local installer
+    if installer="$(local_user_installer)"; then
+        bash "$installer" snapshot-diff 2>&1 || printf '(no snapshot recorded)\n'
+    else
+        printf '(install-user.sh not available here; run it from the app directory for the audio diff)\n'
+    fi
+    printf '\n'
+}
+
+collect_debug_run() {
+    local log="$WORK_DIR/debug-run.log"
+
+    command -v "$APP_BINARY" >/dev/null 2>&1 || return 0
+    printf '\n'
+    printf 'A debug run starts Linux Soundboard and its audio engine, which changes\n'
+    printf 'your default microphone while it runs, and records what the app logs.\n'
+    confirm "Reproduce the problem now with debug logging?" || return 0
+
+    info "Starting $APP_BINARY with RUST_LOG=debug ..."
+    RUST_LOG=debug "$APP_BINARY" >"$log" 2>&1 &
+    local pid=$!
+    printf '\n  Reproduce the problem, then press Enter here.\n'
+    read -r _ || true
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    section "DEBUG RUN LOG (last 300 lines)"
+    tail -n 300 "$log"
+}
+
+bug_report_blank() {
+    cat <<'EOF'
+
+================================================================
+BUG REPORT — FILL THIS IN
+================================================================
+
+Write in your own words. Anything you can add helps.
+
+What I was doing:
+
+
+What I expected to happen:
+
+
+What actually happened:
+
+
+Does it happen every time? (always / sometimes / once):
+
+
+Anything else worth knowing (recent updates, other audio apps running):
+
+
+SCREENSHOTS — IMPORTANT
+  Take screenshots of what you saw: the window, the error, the settings page.
+  Screenshots cannot go in this text file. Attach them to the GitHub issue by
+  dragging the image files into the issue description box.
+EOF
+}
+
+make_bug_report() {
+    local output=""
+    local raw="$WORK_DIR/report.raw"
+
+    while (($# > 0)); do
+        case "$1" in
+            --output) shift; output="${1:-}" ;;
+            --output=*) output="${1#--output=}" ;;
+            *) warn "Unknown report option: $1" ;;
+        esac
+        shift || true
+    done
+    [[ -n "$output" ]] || output="$HOME/linux-soundboard-bug-report-$(date -u +%Y%m%dT%H%M%SZ).txt"
+
+    detect_distro
+    detect_session
+
+    info "Collecting system and application state..."
+    {
+        printf 'Linux Soundboard bug report\n'
+        printf 'Generated: %s\n\n' "$(date -Is)"
+        printf 'HOW TO USE THIS FILE\n'
+        printf '  1. Read it before sharing. It lists your sound devices and services.\n'
+        printf '     Your home path and username have already been replaced.\n'
+        printf '  2. Fill in the BUG REPORT section at the bottom.\n'
+        printf '  3. Open %s\n' "$ISSUE_URL"
+        printf '  4. Paste this whole file into the issue, and attach your screenshots.\n'
+        collect_system_report
+        collect_app_report
+    } >"$raw" 2>&1
+
+    if [[ -t 0 ]]; then
+        collect_debug_run >>"$raw" 2>&1 || true
+    fi
+
+    bug_report_blank >>"$raw"
+
+    redact <"$raw" >"$output"
+    chmod 600 "$output"
+
+    printf '\n'
+    info "Bug report written to: $output"
+    printf '\n'
+    printf '  Next steps:\n'
+    printf '    1. Open the file and fill in the BUG REPORT section at the bottom.\n'
+    printf '    2. Take screenshots of the problem.\n'
+    printf '    3. Open %s and paste the file, then attach the screenshots.\n' "$ISSUE_URL"
+    printf '\n'
+
+    if [[ -t 0 ]] && command -v xdg-open >/dev/null 2>&1; then
+        confirm "Open the new-issue page in your browser now?" \
+            && (xdg-open "$ISSUE_URL" >/dev/null 2>&1 &)
+    fi
+}
+
 main() {
-    local command="${1:-install}"
+    local command="${1:-}"
+
+    if [[ -z "$command" ]]; then
+        if ensure_tty; then
+            [[ ${EUID:-$(id -u)} -eq 0 ]] && fail "Run as your regular user, not root."
+            interactive_menu
+            return
+        fi
+        command="install"
+    fi
 
     case "$command" in
         --help|-h|help)
@@ -626,13 +1142,39 @@ main() {
     [[ ${EUID:-$(id -u)} -eq 0 ]] && fail "Run as your regular user, not root."
 
     case "$command" in
+        menu)
+            ensure_tty || fail "No terminal available for the menu. Pass a command instead; see --help."
+            interactive_menu
+            ;;
         install)
             [[ $# -gt 0 ]] && shift
-            install_main "$@"
+            case "${1:-}" in
+                --version)
+                    [[ -n "${2:-}" ]] || fail "--version needs a tag, for example v2.1.2."
+                    install_version "$2"
+                    ;;
+                --version=*)
+                    install_version "${1#--version=}"
+                    ;;
+                *)
+                    install_main "$@"
+                    ;;
+            esac
             ;;
-        repair)
+        versions)
+            list_release_tags
+            ;;
+        repair|fix)
             [[ $# -gt 0 ]] && shift
-            repair_main "$@"
+            if [[ "$command" == "fix" ]]; then
+                fix_setup
+            else
+                repair_main "$@"
+            fi
+            ;;
+        report)
+            [[ $# -gt 0 ]] && shift
+            make_bug_report "$@"
             ;;
         status)
             [[ $# -gt 0 ]] && shift
@@ -640,6 +1182,7 @@ main() {
             ;;
         remove|uninstall)
             [[ $# -gt 0 ]] && shift
+            ensure_tty || true
             remove_installation "$@"
             ;;
         *)

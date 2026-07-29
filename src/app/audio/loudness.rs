@@ -31,7 +31,17 @@ const PREVIEW_TARGET_WINDOW_MS: u64 = 2_500;
 const PREVIEW_ANCHORS_MEDIUM_PCT: [u64; 4] = [8, 35, 65, 90];
 const PREVIEW_ANCHORS_LONG_PCT: [u64; 5] = [5, 25, 50, 75, 92];
 
-static ANALYSIS_CANCELLED: AtomicBool = AtomicBool::new(false);
+/// Cancellation is owned per run: each `MissingLoudnessAnalysisCoordinator`
+/// holds its own token and passes it into the analysis below. That keeps
+/// cancelling a backfill from aborting a refinement, and keeps starting one
+/// from clearing a cancellation the other is still acting on.
+static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Token for analyses with no run to cancel: single-sound playback gain and the
+/// acceptance harness. It is never set, so those decodes always run to the end.
+pub fn never_cancelled() -> &'static AtomicBool {
+    &NEVER_CANCELLED
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoudnessError {
@@ -47,18 +57,6 @@ pub enum LoudnessError {
     /// Analysis was interrupted by a cancel request.
     #[error("Analysis cancelled")]
     Cancelled,
-}
-
-pub fn cancel_loudness_analysis() {
-    ANALYSIS_CANCELLED.store(true, Ordering::SeqCst);
-}
-
-pub fn is_loudness_analysis_cancelled() -> bool {
-    ANALYSIS_CANCELLED.load(Ordering::SeqCst)
-}
-
-pub fn reset_loudness_analysis_cancelled() {
-    ANALYSIS_CANCELLED.store(false, Ordering::SeqCst);
 }
 
 struct AnalysisDecoderContext {
@@ -150,6 +148,7 @@ fn analyze_context_with_stats(
     mut context: AnalysisDecoderContext,
     source_path: Option<&Path>,
     max_frames: Option<u64>,
+    cancel: &AtomicBool,
 ) -> Result<AnalysisResult, LoudnessError> {
     let mut ebur128 = EbuR128::new(context.channels, context.rate, Mode::I | Mode::TRUE_PEAK)
         .map_err(|e| LoudnessError::Decode(format!("Failed to create EBU R128 analyzer: {e:?}")))?;
@@ -168,7 +167,7 @@ fn analyze_context_with_stats(
             }
         }
 
-        if is_loudness_analysis_cancelled() {
+        if cancel.load(Ordering::SeqCst) {
             return Err(LoudnessError::Cancelled);
         }
 
@@ -282,7 +281,8 @@ fn analyze_context(
     source_path: Option<&Path>,
     max_frames: Option<u64>,
 ) -> Result<f64, LoudnessError> {
-    analyze_context_with_stats(context, source_path, max_frames).map(|result| result.loudness)
+    analyze_context_with_stats(context, source_path, max_frames, never_cancelled())
+        .map(|result| result.loudness)
 }
 
 #[cfg(test)]
@@ -294,9 +294,12 @@ pub fn analyze_loudness_path(path: &Path) -> Result<f64, LoudnessError> {
 /// Same as `analyze_loudness_path` but also returns the file's true-peak in
 /// dBTP (BS.1770). Callers that want to store the value on `Sound` so the
 /// playback gain can stay below clipping should use this variant.
-pub fn analyze_loudness_path_full(path: &Path) -> Result<(f64, Option<f32>), LoudnessError> {
+pub fn analyze_loudness_path_full(
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<(f64, Option<f32>), LoudnessError> {
     let context = build_decoder_context_for_path(path, "analysis")?;
-    let result = analyze_context_with_stats(context, Some(path), None)?;
+    let result = analyze_context_with_stats(context, Some(path), None, cancel)?;
     Ok((result.loudness, result.true_peak_dbtp))
 }
 
@@ -475,6 +478,7 @@ pub fn analyze_loudness_path_preview_smart_with_metrics(
     path: &Path,
     total_preview_ms: u32,
     duration_hint_ms: Option<u64>,
+    cancel: &AtomicBool,
 ) -> Result<SmartPreviewMetrics, LoudnessError> {
     let total_preview_ms = (total_preview_ms as u64).max(1);
     let windows = build_smart_preview_windows(total_preview_ms, duration_hint_ms);
@@ -483,7 +487,7 @@ pub fn analyze_loudness_path_preview_smart_with_metrics(
         let context = build_decoder_context_for_path(path, "smart preview")?;
         let preview_frames =
             ((context.rate as u64).saturating_mul(windows[0].window_ms) / 1000).max(1);
-        let result = analyze_context_with_stats(context, Some(path), Some(preview_frames))?;
+        let result = analyze_context_with_stats(context, Some(path), Some(preview_frames), cancel)?;
         return Ok(SmartPreviewMetrics {
             lufs: result.loudness,
             confidence: 1.0,
@@ -523,7 +527,7 @@ pub fn analyze_loudness_path_preview_smart_with_metrics(
         let preview_frames = ((context.rate as u64).saturating_mul(window.window_ms) / 1000).max(1);
         requested_total_frames = requested_total_frames.saturating_add(preview_frames);
 
-        match analyze_context_with_stats(context, Some(path), Some(preview_frames)) {
+        match analyze_context_with_stats(context, Some(path), Some(preview_frames), cancel) {
             Ok(result) => {
                 decoded_total_frames =
                     decoded_total_frames.saturating_add(result.decoded_frames.min(preview_frames));

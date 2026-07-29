@@ -1,9 +1,10 @@
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use glib;
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation};
+use gtk4::{Application, ApplicationWindow, Box as GtkBox, Orientation, Paned};
 use libadwaita as adw;
 use libadwaita::prelude::BreakpointBinExt;
 
@@ -20,15 +21,28 @@ use super::tabs_sidebar::TabsSidebar;
 use super::theme::apply_theme;
 use super::transport::TransportBar;
 
+const MAX_SIDEBAR_WIDTH: i32 = 600;
+
+fn cap_sidebar_width(width: i32) -> i32 {
+    width.min(MAX_SIDEBAR_WIDTH)
+}
+
 pub fn build_window(
     app: &Application,
     state: Arc<AppState>,
     _timers: &TimerRegistry,
+    initial_sound_count: usize,
+    initial_sound_page: crate::library_store::SoundPage,
 ) -> (ApplicationWindow, TransportBar) {
+    let build_started = Instant::now();
     {
         let cfg = state.config.lock();
         apply_theme(cfg.settings.theme);
     }
+    log::debug!(
+        "Window build latency: phase=theme elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -40,6 +54,10 @@ pub fn build_window(
         .height_request(400)
         .build();
     window.add_css_class("main-window");
+    log::debug!(
+        "Window build latency: phase=window elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let dialog_host = DialogHost::new();
     let root_box = GtkBox::new(Orientation::Vertical, 0);
@@ -70,13 +88,13 @@ pub fn build_window(
             banner.set_revealed(true);
             if can_install {
                 let dialog_host = dialog_host.clone();
-                let config = Arc::clone(&state.config);
                 let hotkeys = Arc::clone(&state.hotkeys);
+                let projection = state.hotkey_projection.clone();
                 let reason_text = reason.clone();
                 banner.connect_button_clicked(move |b| {
                     dialog_host.prompt_swhkd_install(
-                        Arc::clone(&config),
                         Arc::clone(&hotkeys),
+                        projection.clone(),
                         &reason_text,
                     );
                     b.set_revealed(false);
@@ -87,19 +105,48 @@ pub fn build_window(
             root_box.append(&banner);
         }
     }
+    log::debug!(
+        "Window build latency: phase=banners elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
 
     let transport = TransportBar::new(Arc::clone(&state));
+    log::debug!(
+        "Window build latency: phase=transport elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
     root_box.append(transport.widget());
 
-    let split_view = adw::OverlaySplitView::new();
-    split_view.set_vexpand(true);
-    split_view.set_min_sidebar_width(180.0);
-    split_view.set_max_sidebar_width(220.0);
-
     let tabs = TabsSidebar::new(Arc::clone(&state), dialog_host.clone());
-    split_view.set_sidebar(Some(tabs.widget()));
-
-    let sound_list = SoundList::new(Arc::clone(&state), dialog_host.clone());
+    log::debug!(
+        "Window build latency: phase=tabs elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
+    let sound_list = SoundList::new(
+        Arc::clone(&state),
+        dialog_host.clone(),
+        initial_sound_count,
+        initial_sound_page,
+    );
+    log::debug!(
+        "Window build latency: phase=sound_list elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
+    let sidebar_paned = Paned::new(Orientation::Horizontal);
+    sidebar_paned.set_vexpand(true);
+    sidebar_paned.set_wide_handle(true);
+    sidebar_paned.set_resize_start_child(false);
+    sidebar_paned.set_resize_end_child(true);
+    sidebar_paned.set_shrink_start_child(false);
+    sidebar_paned.set_start_child(Some(tabs.widget()));
+    sidebar_paned.set_end_child(Some(sound_list.widget()));
+    sidebar_paned.set_position(220);
+    sidebar_paned.connect_position_notify(|paned| {
+        let position = cap_sidebar_width(paned.position());
+        if position != paned.position() {
+            paned.set_position(position);
+        }
+    });
 
     {
         let transport_snapshot = transport.clone();
@@ -135,8 +182,8 @@ pub fn build_window(
 
     {
         let sl = sound_list.clone();
-        tabs.connect_tab_selected(move |tab_id| {
-            sl.set_active_tab(tab_id);
+        tabs.connect_tab_selected(move |selection| {
+            sl.set_active_scope(selection.identity, selection.scope);
         });
     }
 
@@ -156,7 +203,7 @@ pub fn build_window(
 
     {
         let sl_nav = sound_list.clone();
-        transport.set_sound_list_provider(move || sl_nav.get_navigation_sounds());
+        transport.set_sound_list_provider(move || sl_nav.navigation_context());
     }
 
     {
@@ -187,8 +234,7 @@ pub fn build_window(
         });
     }
 
-    split_view.set_content(Some(sound_list.widget()));
-    root_box.append(&split_view);
+    root_box.append(&sidebar_paned);
 
     let toast_overlay = adw::ToastOverlay::new();
     toast_overlay.set_child(Some(&root_box));
@@ -218,10 +264,10 @@ pub fn build_window(
 
     let drop_overlay =
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
+    drop_overlay.add_overlay(dialog_host.widget());
 
-    // Responsive layout: below a narrow width the sidebar collapses into an overlay and
-    // the transport bar reflows onto a second row. A `BreakpointBin` lets us drive adw
-    // breakpoints without switching the window away from `gtk4::ApplicationWindow`.
+    // Below a narrow width the sidebar hides and the transport bar reflows.
+    // The same GtkPaned keeps ownership at every size, avoiding reparenting during resize.
     let breakpoint_bin = adw::BreakpointBin::new();
     breakpoint_bin.set_size_request(520, 400);
     breakpoint_bin.set_child(Some(&drop_overlay));
@@ -231,42 +277,35 @@ pub fn build_window(
         960.0,
         adw::LengthUnit::Px,
     ));
+    let sidebar_toggle = transport.sidebar_toggle_button().clone();
+    sidebar_toggle.set_visible(false);
     {
-        let split_view = split_view.clone();
+        let tabs_widget = tabs.widget().clone();
+        sidebar_toggle.connect_clicked(move |_| {
+            tabs_widget.set_visible(!tabs_widget.is_visible());
+        });
+    }
+    {
+        let tabs_widget = tabs.widget().clone();
+        let toggle = sidebar_toggle.clone();
         let transport = transport.clone();
         breakpoint.connect_apply(move |_| {
-            split_view.set_collapsed(true);
+            tabs_widget.set_visible(false);
+            toggle.set_visible(true);
             transport.set_compact(true);
         });
     }
     {
-        let split_view = split_view.clone();
+        let tabs_widget = tabs.widget().clone();
+        let toggle = sidebar_toggle;
         let transport = transport.clone();
         breakpoint.connect_unapply(move |_| {
-            split_view.set_collapsed(false);
+            tabs_widget.set_visible(true);
+            toggle.set_visible(false);
             transport.set_compact(false);
         });
     }
     breakpoint_bin.add_breakpoint(breakpoint);
-
-    // Hide the overlay sidebar while collapsed; show it inline once expanded again.
-    split_view.connect_collapsed_notify(|split_view| {
-        split_view.set_show_sidebar(!split_view.is_collapsed());
-    });
-
-    // The sidebar reveal button only appears while the sidebar is collapsed.
-    {
-        let toggle = transport.sidebar_toggle_button().clone();
-        split_view
-            .bind_property("collapsed", &toggle, "visible")
-            .sync_create()
-            .build();
-        let split_view = split_view.clone();
-        toggle.connect_clicked(move |_| {
-            let shown = split_view.property::<bool>("show-sidebar");
-            split_view.set_show_sidebar(!shown);
-        });
-    }
 
     window.set_child(Some(&breakpoint_bin));
 
@@ -289,17 +328,28 @@ pub fn build_window(
             })
         };
 
-        let settings_overlay = settings::build_settings_overlay(
-            window.upcast_ref::<gtk4::Window>(),
-            Arc::clone(&state),
-            dialog_host.clone(),
-            Some(on_library_changed),
-            Some(on_list_style_changed),
-        );
-        drop_overlay.add_overlay(&settings_overlay);
-        drop_overlay.add_overlay(dialog_host.widget());
-
+        let settings_overlay = Rc::new(std::cell::RefCell::new(None));
+        let window = window.clone();
+        let state = Arc::clone(&state);
+        let dialog_host = dialog_host.clone();
+        let drop_overlay = drop_overlay.clone();
         transport.connect_settings_requested(move || {
+            let mut settings_overlay = settings_overlay.borrow_mut();
+            let settings_overlay = settings_overlay.get_or_insert_with(|| {
+                let overlay = settings::build_settings_overlay(
+                    window.upcast_ref::<gtk4::Window>(),
+                    Arc::clone(&state),
+                    dialog_host.clone(),
+                    Some(Rc::clone(&on_library_changed)),
+                    Some(Rc::clone(&on_list_style_changed)),
+                );
+                // This panel is attached after the dialog host, so it sits above
+                // it in the overlay's paint order. `DialogHost::present` raises
+                // itself before showing, which is what keeps dialogs opened from
+                // here on top.
+                drop_overlay.add_overlay(&overlay);
+                overlay
+            });
             settings_overlay.set_visible(true);
             settings_overlay.grab_focus();
         });
@@ -315,6 +365,10 @@ pub fn build_window(
         glib::Propagation::Proceed
     });
 
+    log::debug!(
+        "Window build latency: phase=complete elapsed_us={}",
+        build_started.elapsed().as_micros()
+    );
     (window, transport)
 }
 
@@ -330,12 +384,14 @@ pub fn handle_hotkey(
         let sound_id = id.to_string();
         let sound_id_for_log = sound_id.clone();
         crate::ui_event_bridge::mark_explicit_play_pending();
-        if let Err(e) = commands::play_sound_async(sound_id, Arc::clone(state), move |result| {
-            if let Err(err) = result {
-                crate::ui_event_bridge::clear_explicit_play_pending();
-                log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
-            }
-        }) {
+        if let Err(e) =
+            commands::play_hotkey_sound_async(sound_id, Arc::clone(state), move |result| {
+                if let Err(err) = result {
+                    crate::ui_event_bridge::clear_explicit_play_pending();
+                    log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
+                }
+            })
+        {
             crate::ui_event_bridge::clear_explicit_play_pending();
             log::warn!("Failed to dispatch hotkey playback '{}': {}", id, e);
         }
@@ -379,4 +435,15 @@ pub fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
     let toast = adw::Toast::new(message);
     toast.set_timeout(2);
     overlay.add_toast(toast);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_sidebar_resize_is_capped() {
+        assert_eq!(cap_sidebar_width(220), 220);
+        assert_eq!(cap_sidebar_width(700), 600);
+    }
 }

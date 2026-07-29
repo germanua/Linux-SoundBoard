@@ -3,6 +3,8 @@ pub mod audio;
 pub mod bootstrap;
 pub mod commands;
 pub mod config;
+pub mod legacy_migration;
+pub mod library_store;
 
 // Implementation-only modules — accessible within this crate but not
 // part of the public API.
@@ -16,3 +18,6 @@ pub(crate) mod ui_event_bridge;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+mod library_store_tests;

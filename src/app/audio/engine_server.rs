@@ -26,7 +26,7 @@ pub fn run() -> i32 {
                 warn!("Failed to set audio engine socket nonblocking mode: {err}");
             }
 
-            let config = match Config::load() {
+            let config = match Config::load_runtime_settings() {
                 Ok(config) => config,
                 Err(err) => {
                     error!(
@@ -267,11 +267,53 @@ fn handle_request(
         EngineRequest::SetMicLatencyProfile { profile } => {
             result_to_response(player.set_mic_latency_profile(profile))
         }
-        EngineRequest::Shutdown => {
-            stop.store(true, Ordering::Relaxed);
-            EngineResponse::Ok
+        EngineRequest::Shutdown {
+            requester_version,
+            expected_engine_version,
+            expected_protocol_version,
+            expected_config_schema_version,
+        } => {
+            if shutdown_request_is_authorized(
+                requester_version.as_deref(),
+                expected_engine_version.as_deref(),
+                expected_protocol_version,
+                expected_config_schema_version,
+            ) {
+                stop.store(true, Ordering::Relaxed);
+                EngineResponse::Ok
+            } else {
+                EngineResponse::Error {
+                    message: "Rejected an unscoped or stale engine shutdown request".to_string(),
+                }
+            }
         }
     }
+}
+
+fn shutdown_request_is_authorized(
+    requester_version: Option<&str>,
+    expected_engine_version: Option<&str>,
+    expected_protocol_version: Option<u32>,
+    expected_config_schema_version: Option<u32>,
+) -> bool {
+    requester_version.is_some_and(|requester| version_at_least(requester, APP_VERSION))
+        && expected_engine_version == Some(APP_VERSION)
+        && expected_protocol_version == Some(engine_ipc::ENGINE_PROTOCOL_VERSION)
+        && expected_config_schema_version == Some(CURRENT_SCHEMA_VERSION)
+}
+
+fn version_at_least(candidate: &str, minimum: &str) -> bool {
+    fn core(version: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = version.split('-').next()?.split('.');
+        let parsed = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        parts.next().is_none().then_some(parsed)
+    }
+
+    matches!((core(candidate), core(minimum)), (Some(candidate), Some(minimum)) if candidate >= minimum)
 }
 
 fn result_to_response(result: Result<(), EngineError>) -> EngineResponse {
@@ -280,5 +322,52 @@ fn result_to_response(result: Result<(), EngineError>) -> EngineResponse {
         Err(e) => EngineResponse::Error {
             message: e.to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_unscoped_shutdown_cannot_stop_a_newer_engine() {
+        let player = AudioPlayer::new_test_noop();
+        let stop = AtomicBool::new(false);
+
+        let response = handle_request(
+            EngineRequest::Shutdown {
+                requester_version: None,
+                expected_engine_version: None,
+                expected_protocol_version: None,
+                expected_config_schema_version: None,
+            },
+            &player,
+            &stop,
+        );
+
+        assert!(matches!(response, EngineResponse::Error { .. }));
+        assert!(!stop.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn exact_scoped_shutdown_from_current_or_newer_version_is_accepted() {
+        assert!(shutdown_request_is_authorized(
+            Some(APP_VERSION),
+            Some(APP_VERSION),
+            Some(engine_ipc::ENGINE_PROTOCOL_VERSION),
+            Some(CURRENT_SCHEMA_VERSION),
+        ));
+        assert!(shutdown_request_is_authorized(
+            Some("99.0.0"),
+            Some(APP_VERSION),
+            Some(engine_ipc::ENGINE_PROTOCOL_VERSION),
+            Some(CURRENT_SCHEMA_VERSION),
+        ));
+        assert!(!shutdown_request_is_authorized(
+            Some("2.1.1"),
+            Some(APP_VERSION),
+            Some(engine_ipc::ENGINE_PROTOCOL_VERSION),
+            Some(CURRENT_SCHEMA_VERSION),
+        ));
     }
 }

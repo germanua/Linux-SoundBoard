@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::path::PathBuf;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -749,10 +750,8 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: default_schema_version(),
-            sound_folders: vec![],
-            sounds: vec![],
-            tabs: vec![],
             settings: Settings::default(),
+            persistence_path: None,
         }
     }
 }
@@ -761,11 +760,9 @@ impl Default for Config {
 pub struct Config {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
-    pub sound_folders: Vec<String>,
-    pub sounds: Vec<Sound>,
-    #[serde(default)]
-    pub tabs: Vec<SoundTab>,
     pub settings: Settings,
+    #[serde(skip)]
+    pub(crate) persistence_path: Option<PathBuf>,
 }
 
 #[cfg(test)]

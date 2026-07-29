@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{Config, Sound, SoundTab};
+use crate::config::Config;
 
 #[test]
 fn test_parse_proc_status() {
@@ -99,39 +99,69 @@ fn test_is_smaps_mapping_header() {
 }
 
 #[test]
-fn test_app_inventory_byte_estimation() {
+fn inventory_counts_the_library_not_the_config_arrays() {
+    // Production shape since the SQLite cutover: the config arrays are empty
+    // and every library count comes from the store.
+    let runtime = RuntimeInventory {
+        library_sound_count: 156_000,
+        library_tab_count: 8,
+        library_folder_count: 3,
+        library_hotkey_count: 12,
+        ..Default::default()
+    };
+
+    let inventory = assemble_app_inventory(&runtime, &Config::default(), 7);
+
+    assert_eq!(inventory.sound_count, 156_000);
+    assert_eq!(inventory.tab_count, 8);
+    assert_eq!(inventory.folder_count, 3);
+    assert_eq!(inventory.thread_count, 7);
+}
+
+#[test]
+fn inventory_reports_the_resident_row_cache_not_a_whole_library_estimate() {
+    let runtime = RuntimeInventory {
+        library_sound_count: 156_000,
+        ui_cached_pages: 3,
+        ui_cached_payload_bytes: 700 * 1024,
+        ui_cached_row_count: 768,
+        ..Default::default()
+    };
+
+    let inventory = assemble_app_inventory(&runtime, &Config::default(), 0);
+
+    // 156k sounds are in SQLite; only the paged model's rows are resident.
+    assert_eq!(inventory.ui_cached_pages, 3);
+    assert_eq!(inventory.ui_cached_payload_bytes, 700 * 1024);
+    assert_eq!(inventory.ui_cached_row_count, 768);
+}
+
+#[test]
+fn inventory_does_not_double_count_control_hotkeys() {
+    // library_hotkey_count already includes control bindings: the store counts
+    // rows where control_action IS NOT NULL alongside live sound bindings.
+    let runtime = RuntimeInventory {
+        library_hotkey_count: 5,
+        ..Default::default()
+    };
     let mut config = Config::default();
-
-    let mut sound1 = Sound::new("TestSound1".to_string(), "/path/to/sound1.wav".to_string());
-    sound1.hotkey = Some("Ctrl+1".to_string());
-
-    let mut sound2 = Sound::new("TestSound2".to_string(), "/path/to/sound2.wav".to_string());
-    sound2.hotkey = Some("Ctrl+2".to_string());
-
-    config.sounds.push(sound1);
-    config.sounds.push(sound2);
-
-    let mut tab1 = SoundTab::new("Tab1".to_string(), 0);
-    tab1.sound_ids.push("sound-id-1".to_string());
-    tab1.sound_ids.push("sound-id-2".to_string());
-
-    config.tabs.push(tab1);
-    config.sound_folders.push("/home/user/sounds".to_string());
-
-    config.settings.mic_source = Some("alsa_input.usb".to_string());
     config.settings.control_hotkeys.play_pause = Some("Ctrl+Space".to_string());
     config.settings.control_hotkeys.stop_all = Some("Ctrl+S".to_string());
 
-    let inventory = build_app_inventory(&config);
+    let inventory = assemble_app_inventory(&runtime, &config, 0);
 
-    assert_eq!(inventory.sound_count, 2);
-    assert_eq!(inventory.tab_count, 1);
-    assert_eq!(inventory.folder_count, 1);
-    assert!(inventory.sound_string_bytes > 0);
-    assert!(inventory.tab_string_bytes > 0);
+    assert_eq!(inventory.hotkey_binding_count, 5);
+}
+
+#[test]
+fn inventory_still_measures_resident_settings_strings() {
+    let mut config = Config::default();
+    config.settings.mic_source = Some("alsa_input.usb".to_string());
+    config.settings.control_hotkeys.play_pause = Some("Ctrl+Space".to_string());
+
+    let inventory = assemble_app_inventory(&RuntimeInventory::default(), &config, 0);
+
     assert!(inventory.settings_string_bytes > 0);
-    assert_eq!(inventory.hotkey_binding_count, 4);
-    assert_eq!(inventory.ui_row_count_estimate, 3);
 }
 
 #[test]

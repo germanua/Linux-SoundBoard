@@ -15,6 +15,7 @@ pub type MissingLoudnessAnalysisCompletion =
 
 pub struct MissingLoudnessAnalysisCoordinator {
     in_flight: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
     #[cfg(test)]
     start_count: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -23,6 +24,7 @@ impl MissingLoudnessAnalysisCoordinator {
     pub fn new() -> Self {
         Self {
             in_flight: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             start_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
@@ -30,6 +32,23 @@ impl MissingLoudnessAnalysisCoordinator {
 
     pub fn is_in_flight(&self) -> bool {
         self.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Requests cancellation of this coordinator's run only. Each coordinator
+    /// owns its token, so cancelling one analysis kind never aborts another.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Token handed to the running analysis so it can poll for cancellation
+    /// without reaching for process-global state.
+    pub fn cancel_token(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
     }
 
     pub fn try_start<F>(
@@ -48,6 +67,10 @@ impl MissingLoudnessAnalysisCoordinator {
         {
             return Ok(false);
         }
+
+        // Clear only this coordinator's token. A run must never reset the
+        // cancellation another kind of run is still acting on.
+        self.cancelled.store(false, Ordering::SeqCst);
 
         let in_flight = Arc::clone(&self.in_flight);
         let spawn_result = thread::Builder::new()
@@ -71,11 +94,6 @@ impl MissingLoudnessAnalysisCoordinator {
         self.start_count.fetch_add(1, Ordering::AcqRel);
 
         Ok(true)
-    }
-
-    #[cfg(test)]
-    pub fn start_count(&self) -> usize {
-        self.start_count.load(Ordering::Acquire)
     }
 
     #[cfg(test)]
@@ -158,7 +176,7 @@ fn analysis_thread_main(command_rx: Receiver<AnalysisCommand>, event_tx: Sender<
     while let Ok(cmd) = command_rx.recv() {
         match cmd {
             AnalysisCommand::AnalyzeFile { path } => {
-                match analyze_loudness_path_for_test_worker(std::path::Path::new(&path)) {
+                match loudness::analyze_loudness_path(std::path::Path::new(&path)) {
                     Ok(lufs) if lufs.is_finite() => {
                         let _ = event_tx.send(AnalysisEvent::Complete { analyzed_count: 1 });
                     }
@@ -177,29 +195,51 @@ fn analysis_thread_main(command_rx: Receiver<AnalysisCommand>, event_tx: Sender<
 }
 
 #[cfg(test)]
-fn analyze_loudness_path_for_test_worker(
-    path: &std::path::Path,
-) -> Result<f64, loudness::LoudnessError> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        loudness::reset_loudness_analysis_cancelled();
-        match loudness::analyze_loudness_path(path) {
-            Err(loudness::LoudnessError::Cancelled) if std::time::Instant::now() < deadline => {
-                std::thread::yield_now();
-            }
-            result => return result,
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::{AnalysisEvent, AnalysisWorker};
+    use super::{AnalysisEvent, AnalysisWorker, MissingLoudnessAnalysisCoordinator};
     use crate::test_support::audio_fixtures::{
         cleanup_test_audio_path, create_test_audio_file_with_duration,
     };
     use std::sync::mpsc::TryRecvError;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn cancelling_one_coordinator_does_not_cancel_the_other() {
+        let backfill = MissingLoudnessAnalysisCoordinator::new();
+        let refinement = MissingLoudnessAnalysisCoordinator::new();
+
+        refinement.cancel();
+
+        assert!(
+            refinement.is_cancelled(),
+            "the cancelled run must observe its own cancellation"
+        );
+        assert!(
+            !backfill.is_cancelled(),
+            "cancelling refinement must not cancel a concurrent backfill"
+        );
+    }
+
+    #[test]
+    fn starting_a_run_does_not_clear_another_runs_cancellation() {
+        let backfill = MissingLoudnessAnalysisCoordinator::new();
+        let refinement = MissingLoudnessAnalysisCoordinator::new();
+
+        refinement.cancel();
+        let started = backfill
+            .try_start("test-backfill", || Ok(0), None)
+            .expect("spawning the backfill task should succeed");
+        assert!(started, "an idle coordinator must start its task");
+        assert!(
+            backfill.wait_for_idle(Duration::from_secs(5)),
+            "the backfill task should finish"
+        );
+
+        assert!(
+            refinement.is_cancelled(),
+            "starting a backfill must not clear a cancellation requested for refinement"
+        );
+    }
 
     fn recv_event_with_timeout(
         worker: &AnalysisWorker,

@@ -37,15 +37,14 @@ pub struct AppMemoryInventory {
     pub sound_count: usize,
     pub tab_count: usize,
     pub folder_count: usize,
-    pub sound_string_bytes: usize,
-    pub tab_string_bytes: usize,
-    pub folder_string_bytes: usize,
+    /// Strings still held in the settings struct. The library itself lives in
+    /// SQLite, so there is no resident per-sound string cost to report.
     pub settings_string_bytes: usize,
-    pub config_string_bytes: usize,
-    pub estimated_sound_row_payload_bytes: usize,
-    pub estimated_navigation_payload_bytes: usize,
-    pub estimated_ui_store_bytes: usize,
-    pub ui_row_count_estimate: usize,
+    /// Rows the paged sound model is actually holding. Bounded by its four-page
+    /// / 2 MiB cache, and the only sound-row payload resident in this process.
+    pub ui_cached_pages: usize,
+    pub ui_cached_payload_bytes: usize,
+    pub ui_cached_row_count: usize,
     pub hotkey_binding_count: usize,
     pub validation_batch_size: usize,
     pub validation_mode: String,
@@ -93,6 +92,13 @@ struct RuntimeInventory {
     live_timer_count: usize,
     hotkey_status: String,
     playback_registry_count: usize,
+    library_sound_count: usize,
+    library_tab_count: usize,
+    library_folder_count: usize,
+    library_hotkey_count: usize,
+    ui_cached_pages: usize,
+    ui_cached_payload_bytes: usize,
+    ui_cached_row_count: usize,
 }
 
 fn parse_kb_value(line: &str) -> Option<u64> {
@@ -317,140 +323,57 @@ pub fn log_memory_snapshot(tag: &str) {
 }
 
 pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory {
-    let sound_count = config.sounds.len();
-    let tab_count = config.tabs.len();
-    let folder_count = config.sound_folders.len();
+    let runtime = RUNTIME_INVENTORY.lock().clone();
+    let thread_count = read_memory_snapshot().and_then(|s| s.threads).unwrap_or(0);
+    assemble_app_inventory(&runtime, config, thread_count)
+}
 
-    let mut sound_string_bytes = 0;
-    for sound in &config.sounds {
-        sound_string_bytes += sound.id.len();
-        sound_string_bytes += sound.name.len();
-        sound_string_bytes += sound.path.len();
-        if let Some(ref source_path) = sound.source_path {
-            sound_string_bytes += source_path.len();
-        }
-        if let Some(ref hotkey) = sound.hotkey {
-            sound_string_bytes += hotkey.len();
-        }
-    }
-
-    let mut tab_string_bytes = 0;
-    for tab in &config.tabs {
-        tab_string_bytes += tab.id.len();
-        tab_string_bytes += tab.name.len();
-        for sound_id in &tab.sound_ids {
-            tab_string_bytes += sound_id.len();
-        }
-    }
-
-    let folder_string_bytes = config
-        .sound_folders
-        .iter()
-        .map(|folder| folder.len())
-        .sum::<usize>();
-
+/// Assembles the inventory from already-collected numbers. Kept free of global
+/// state so it can be tested without one test's counts leaking into another.
+fn assemble_app_inventory(
+    runtime: &RuntimeInventory,
+    config: &crate::config::Config,
+    thread_count: u64,
+) -> AppMemoryInventory {
     let mut settings_string_bytes = 0;
     if let Some(ref mic_source) = config.settings.mic_source {
         settings_string_bytes += mic_source.len();
     }
     let hotkeys = &config.settings.control_hotkeys;
-    if let Some(ref hk) = hotkeys.play_pause {
-        settings_string_bytes += hk.len();
+    for accelerator in [
+        &hotkeys.play_pause,
+        &hotkeys.stop_all,
+        &hotkeys.previous_sound,
+        &hotkeys.next_sound,
+        &hotkeys.mute_headphones,
+        &hotkeys.mute_real_mic,
+        &hotkeys.cycle_play_mode,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        settings_string_bytes += accelerator.len();
     }
-    if let Some(ref hk) = hotkeys.stop_all {
-        settings_string_bytes += hk.len();
-    }
-    if let Some(ref hk) = hotkeys.previous_sound {
-        settings_string_bytes += hk.len();
-    }
-    if let Some(ref hk) = hotkeys.next_sound {
-        settings_string_bytes += hk.len();
-    }
-    if let Some(ref hk) = hotkeys.mute_headphones {
-        settings_string_bytes += hk.len();
-    }
-    if let Some(ref hk) = hotkeys.mute_real_mic {
-        settings_string_bytes += hk.len();
-    }
-    if let Some(ref hk) = hotkeys.cycle_play_mode {
-        settings_string_bytes += hk.len();
-    }
-
-    let config_string_bytes =
-        sound_string_bytes + tab_string_bytes + folder_string_bytes + settings_string_bytes;
-
-    let estimated_sound_row_payload_bytes = config.sounds.iter().fold(0usize, |total, sound| {
-        total
-            + std::mem::size_of::<String>() * 2
-            + std::mem::size_of::<Option<u64>>()
-            + std::mem::size_of::<Option<String>>()
-            + sound.id.len()
-            + sound.name.len()
-            + sound.hotkey.as_ref().map_or(0, String::len)
-    });
-
-    let estimated_navigation_payload_bytes = config.sounds.iter().fold(0usize, |total, sound| {
-        total + std::mem::size_of::<String>() * 2 + sound.id.len() + sound.name.len()
-    });
-
-    let estimated_ui_store_bytes =
-        estimated_sound_row_payload_bytes + estimated_navigation_payload_bytes + (tab_count * 128);
-
-    let ui_row_count_estimate = sound_count + tab_count;
-
-    let mut hotkey_binding_count = 0;
-    for sound in &config.sounds {
-        if sound.hotkey.is_some() {
-            hotkey_binding_count += 1;
-        }
-    }
-    if hotkeys.play_pause.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.stop_all.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.previous_sound.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.next_sound.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.mute_headphones.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.mute_real_mic.is_some() {
-        hotkey_binding_count += 1;
-    }
-    if hotkeys.cycle_play_mode.is_some() {
-        hotkey_binding_count += 1;
-    }
-
-    let thread_count = read_memory_snapshot().and_then(|s| s.threads).unwrap_or(0);
-    let runtime = RUNTIME_INVENTORY.lock().clone();
 
     AppMemoryInventory {
-        sound_count,
-        tab_count,
-        folder_count,
-        sound_string_bytes,
-        tab_string_bytes,
-        folder_string_bytes,
+        sound_count: runtime.library_sound_count,
+        tab_count: runtime.library_tab_count,
+        folder_count: runtime.library_folder_count,
         settings_string_bytes,
-        config_string_bytes,
-        estimated_sound_row_payload_bytes,
-        estimated_navigation_payload_bytes,
-        estimated_ui_store_bytes,
-        ui_row_count_estimate,
-        hotkey_binding_count,
+        ui_cached_pages: runtime.ui_cached_pages,
+        ui_cached_payload_bytes: runtime.ui_cached_payload_bytes,
+        ui_cached_row_count: runtime.ui_cached_row_count,
+        // The store counts control bindings alongside live sound bindings, so
+        // the settings copies must not be added on top.
+        hotkey_binding_count: runtime.library_hotkey_count,
         validation_batch_size: runtime.validation_batch_size,
-        validation_mode: runtime.validation_mode,
+        validation_mode: runtime.validation_mode.clone(),
         validation_worker_threads: runtime.validation_worker_threads,
-        work_kind: runtime.work_kind,
+        work_kind: runtime.work_kind.clone(),
         work_item_count: runtime.work_item_count,
         pool_thread_count: runtime.pool_thread_count,
         live_timer_count: runtime.live_timer_count,
-        hotkey_status: runtime.hotkey_status,
+        hotkey_status: runtime.hotkey_status.clone(),
         playback_registry_count: runtime.playback_registry_count,
         thread_count,
     }
@@ -484,6 +407,24 @@ pub fn set_hotkey_status(status: &str) {
 
 pub fn set_playback_registry_count(count: usize) {
     RUNTIME_INVENTORY.lock().playback_registry_count = count;
+}
+
+pub fn set_library_counts(sounds: usize, tabs: usize, folders: usize, hotkeys: usize) {
+    let mut runtime = RUNTIME_INVENTORY.lock();
+    runtime.library_sound_count = sounds;
+    runtime.library_tab_count = tabs;
+    runtime.library_folder_count = folders;
+    runtime.library_hotkey_count = hotkeys;
+}
+
+/// Published by the paged sound model whenever its cache changes. The model is
+/// a GTK object on the main thread, but phases are recorded from workers too,
+/// so the numbers are copied here rather than read back off the widget.
+pub fn set_ui_row_cache(pages: usize, payload_bytes: usize, row_count: usize) {
+    let mut runtime = RUNTIME_INVENTORY.lock();
+    runtime.ui_cached_pages = pages;
+    runtime.ui_cached_payload_bytes = payload_bytes;
+    runtime.ui_cached_row_count = row_count;
 }
 
 pub fn record_phase_with_config(name: &str, config: &crate::config::Config) {
@@ -614,36 +555,12 @@ pub fn write_memory_report() -> Result<(), Box<dyn std::error::Error>> {
             text.push_str(&format!("    Tabs: {}\n", inv.tab_count));
             text.push_str(&format!("    Folders: {}\n", inv.folder_count));
             text.push_str(&format!(
-                "    Sound strings: {} bytes\n",
-                inv.sound_string_bytes
-            ));
-            text.push_str(&format!(
-                "    Tab strings: {} bytes\n",
-                inv.tab_string_bytes
-            ));
-            text.push_str(&format!(
-                "    Folder strings: {} bytes\n",
-                inv.folder_string_bytes
-            ));
-            text.push_str(&format!(
                 "    Settings strings: {} bytes\n",
                 inv.settings_string_bytes
             ));
             text.push_str(&format!(
-                "    Config strings total: {} bytes\n",
-                inv.config_string_bytes
-            ));
-            text.push_str(&format!(
-                "    Estimated sound row payload: {} bytes\n",
-                inv.estimated_sound_row_payload_bytes
-            ));
-            text.push_str(&format!(
-                "    Estimated navigation payload: {} bytes\n",
-                inv.estimated_navigation_payload_bytes
-            ));
-            text.push_str(&format!(
-                "    Estimated UI store total: {} bytes\n",
-                inv.estimated_ui_store_bytes
+                "    Resident row cache: {} rows in {} pages, {} bytes\n",
+                inv.ui_cached_row_count, inv.ui_cached_pages, inv.ui_cached_payload_bytes
             ));
             text.push_str(&format!(
                 "    Hotkey bindings: {}\n",

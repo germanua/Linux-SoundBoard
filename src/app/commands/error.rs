@@ -48,6 +48,10 @@ pub enum CommandError {
     #[error("{0}")]
     Io(String),
 
+    /// A bounded SQLite library operation failed.
+    #[error("Library operation failed: {0}")]
+    Library(String),
+
     /// An error surfaced by the audio engine / IPC layer (still string-typed;
     /// that layer is migrated separately).
     #[error("{0}")]
@@ -56,6 +60,11 @@ pub enum CommandError {
     /// An error surfaced by the hotkey subsystem.
     #[error("{0}")]
     Hotkey(String),
+
+    /// SQLite saved the desired hotkey, but the active desktop backend could
+    /// not apply it. The UI must keep showing the durable choice as pending.
+    #[error("Shortcut was saved but could not be activated: {0}")]
+    HotkeyProjection(String),
 
     /// An error surfaced by loudness analysis.
     #[error("{0}")]

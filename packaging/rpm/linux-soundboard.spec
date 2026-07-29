@@ -1,8 +1,8 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.1.2
-Release:        1%{?dist}
+Version:        2.2.0
+Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
 License:        PolyForm-Noncommercial-1.0.0
@@ -87,6 +87,8 @@ install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
 # Install user service for boot-ready audio engine
 install -Dm644 packaging/linux/linux-soundboard-engine.service \
     %{buildroot}%{_userunitdir}/linux-soundboard-engine.service
+install -Dm644 packaging/linux/linux-soundboard-engine.target \
+    %{buildroot}%{_userunitdir}/linux-soundboard-engine.target
 
 %files
 %license LICENSE
@@ -103,12 +105,14 @@ install -Dm644 packaging/linux/linux-soundboard-engine.service \
 %{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
 %{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 %{_userunitdir}/linux-soundboard-engine.service
+%{_userunitdir}/linux-soundboard-engine.target
 
 %post
 echo "Configuring LinuxSoundBoard..."
 rm -f %{_datadir}/pipewire/pipewire.conf.d/99-linuxsoundboard.conf
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --global enable linux-soundboard-engine.service >/dev/null 2>&1 || true
+    systemctl --global disable linux-soundboard-engine.service >/dev/null 2>&1 || true
+    systemctl --global enable linux-soundboard-engine.target >/dev/null 2>&1 || true
 fi
 
 # Set setuid bit on swhkd if it exists
@@ -147,6 +151,13 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Wed Jul 29 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.2.0-1
+- Store the sound library in SQLite and migrate existing configurations
+- Show the complete folder hierarchy in the sidebar
+- Remove, restore, reorder, and combine sidebar folders
+- Cancel the folder scan started by Add Folder
+- Cut startup and wide-library latency and memory
+
 * Sun Jul 19 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.1.2-1
 - Add correct mono and stereo Ogg Opus support
 - Default new configurations to Dynamic auto-gain

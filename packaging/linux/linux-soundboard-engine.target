@@ -1,0 +1,8 @@
+[Unit]
+Description=Linux Soundboard persistent audio engine
+Documentation=https://github.com/germanua/Linux-SoundBoard
+Wants=linux-soundboard-engine.service
+X-LinuxSoundBoard-Managed=true
+
+[Install]
+WantedBy=default.target

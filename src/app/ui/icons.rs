@@ -64,6 +64,10 @@ pub const PLAYMODE_CONTINUE: IconPair =
     IconPair::with_fallbacks("lsb-list-end-symbolic", &["go-last-symbolic"]);
 pub const REFRESH: IconPair =
     IconPair::with_fallbacks("lsb-refresh-symbolic", &["view-refresh-symbolic"]);
+pub const DISCLOSURE_CLOSED: IconPair =
+    IconPair::with_fallbacks("lsb-chevron-right-symbolic", &["pan-end-symbolic"]);
+pub const DISCLOSURE_OPEN: IconPair =
+    IconPair::with_fallbacks("lsb-chevron-down-symbolic", &["pan-down-symbolic"]);
 pub const SETTINGS: IconPair =
     IconPair::with_fallbacks("lsb-settings-symbolic", &["preferences-system-symbolic"]);
 pub const KEYBOARD: IconPair =
@@ -95,6 +99,8 @@ const ALL_ICONS: &[IconPair] = &[
     PLAYMODE_LOOP,
     PLAYMODE_CONTINUE,
     REFRESH,
+    DISCLOSURE_CLOSED,
+    DISCLOSURE_OPEN,
     SETTINGS,
     KEYBOARD,
     DROP_ZONE,
@@ -149,6 +155,13 @@ pub fn apply_button_icon(button: &impl IsA<gtk4::Button>, icon: IconPair) {
     }
 }
 
+pub fn apply_image_icon(image: &Image, icon: IconPair) {
+    let resolved = resolved_name(icon);
+    if image.icon_name().as_deref() != Some(resolved) {
+        image.set_icon_name(Some(resolved));
+    }
+}
+
 pub fn button(icon: IconPair, tooltip: &str) -> Button {
     let button = Button::builder().tooltip_text(tooltip).build();
     apply_button_icon(&button, icon);
@@ -165,6 +178,7 @@ pub fn toggle_button(icon: IconPair, tooltip: &str) -> ToggleButton {
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+    use std::time::Instant;
 
     fn collect_svg_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(dir).expect("read icon directory") {
@@ -230,5 +244,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    #[ignore = "manual measurement: needs a display, run under xvfb-run"]
+    #[allow(clippy::print_stdout)]
+    fn measure_icon_theme_init_latency() {
+        if gtk4::init().is_err() {
+            println!("icon theme init: skipped, gtk4::init() failed (no display available)");
+            return;
+        }
+
+        let resources_started = Instant::now();
+        ensure_app_resources();
+        println!(
+            "icon theme init: phase=resources elapsed_us={}",
+            resources_started.elapsed().as_micros()
+        );
+
+        let first_probe_started = Instant::now();
+        let first_name = resolved_name(PLAY);
+        println!(
+            "icon theme init: phase=first_probe icon={} elapsed_us={}",
+            PLAY.name,
+            first_probe_started.elapsed().as_micros()
+        );
+        assert!(!first_name.is_empty());
+
+        let cached_started = Instant::now();
+        let cached_name = resolved_name(PLAY);
+        println!(
+            "icon theme init: phase=cached_probe icon={} elapsed_us={}",
+            PLAY.name,
+            cached_started.elapsed().as_micros()
+        );
+        assert_eq!(cached_name, first_name);
+
+        let warm_probe_started = Instant::now();
+        let warm_name = resolved_name(STOP);
+        println!(
+            "icon theme init: phase=warm_probe icon={} elapsed_us={}",
+            STOP.name,
+            warm_probe_started.elapsed().as_micros()
+        );
+        assert!(!warm_name.is_empty());
     }
 }

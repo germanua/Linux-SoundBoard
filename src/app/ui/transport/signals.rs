@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use gtk4::EventControllerKey;
 
 use crate::commands;
 use crate::timer_registry::remove_source_id_safe;
+use crate::ui::icons;
 
 use super::helpers::{format_duration, install_volume_editor, is_seek_key};
 use super::playback::{
@@ -38,17 +40,17 @@ impl TransportBar {
     }
 
     pub fn set_sound_list_provider<
-        F: Fn() -> Vec<crate::ui::sound_list::NavigationSound> + Send + Sync + 'static,
+        F: Fn() -> crate::ui::sound_list::NavigationContext + 'static,
     >(
         &self,
         f: F,
     ) {
-        *self.inner.sound_list_provider.lock() = Some(Box::new(f));
+        *self.inner.sound_list_provider.borrow_mut() = Some(Box::new(f));
         self.inner.has_sound_list_provider.set(true);
     }
 
-    pub fn set_has_sounds_checker<F: Fn() -> bool + Send + Sync + 'static>(&self, f: F) {
-        *self.inner.has_sounds_checker.lock() = Some(Box::new(f));
+    pub fn set_has_sounds_checker<F: Fn() -> bool + 'static>(&self, f: F) {
+        *self.inner.has_sounds_checker.borrow_mut() = Some(Box::new(f));
     }
 
     pub fn set_toast_sender(&self, sender: std::sync::mpsc::Sender<String>) {
@@ -101,8 +103,8 @@ impl TransportBar {
             }
         }
         self.inner.has_sound_list_provider.set(false);
-        *self.inner.sound_list_provider.lock() = None;
-        *self.inner.has_sounds_checker.lock() = None;
+        *self.inner.sound_list_provider.borrow_mut() = None;
+        *self.inner.has_sounds_checker.borrow_mut() = None;
         *self.inner.toast_sender.lock() = None;
         *self.inner.on_library_changed.borrow_mut() = None;
         *self.inner.on_list_style_changed.borrow_mut() = None;
@@ -393,15 +395,21 @@ impl TransportBar {
                 let Some(inner_refresh) = inner_weak.upgrade() else {
                     return;
                 };
+                if let Some(cancelled) = inner_refresh.refresh_cancel.borrow().as_ref() {
+                    cancelled.store(true, Ordering::Relaxed);
+                    btn.set_sensitive(false);
+                    btn.set_tooltip_text(Some("Cancelling refresh…"));
+                    return;
+                }
                 btn.add_css_class("spinning");
+                icons::apply_button_icon(btn, icons::STOP);
+                btn.set_tooltip_text(Some("Cancel refresh"));
                 let state_refresh = Arc::clone(&inner_refresh.state);
                 let inner_weak_done = Rc::downgrade(&inner_refresh);
                 let btn_done = btn.clone();
-                btn.set_sensitive(false);
-                if let Err(e) = commands::refresh_sounds_async(
-                    Arc::clone(&state_refresh.config),
-                    Arc::clone(&state_refresh.hotkeys),
-                    state_refresh.loudness_coordinators.clone(),
+                match commands::refresh_sounds_with_store_async(
+                    state_refresh.library.clone(),
+                    state_refresh.hotkey_projection.clone(),
                     move |result| {
                         match result {
                             Ok(_) => {
@@ -416,15 +424,30 @@ impl TransportBar {
                                     }
                                 }
                             }
+                            Err(e) if e.to_string().contains("cancelled") => {
+                                log::info!("Refresh cancelled");
+                            }
                             Err(e) => log::warn!("Refresh failed: {e}"),
                         }
+                        if let Some(inner_refresh_done) = inner_weak_done.upgrade() {
+                            inner_refresh_done.refresh_cancel.borrow_mut().take();
+                        }
                         btn_done.remove_css_class("spinning");
+                        icons::apply_button_icon(&btn_done, icons::REFRESH);
+                        btn_done.set_tooltip_text(Some("Refresh Sounds"));
                         btn_done.set_sensitive(true);
                     },
                 ) {
-                    log::warn!("Failed to dispatch refresh: {e}");
-                    btn.remove_css_class("spinning");
-                    btn.set_sensitive(true);
+                    Ok(cancelled) => {
+                        *inner_refresh.refresh_cancel.borrow_mut() = Some(cancelled);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to dispatch refresh: {e}");
+                        btn.remove_css_class("spinning");
+                        icons::apply_button_icon(btn, icons::REFRESH);
+                        btn.set_tooltip_text(Some("Refresh Sounds"));
+                        btn.set_sensitive(true);
+                    }
                 }
             });
         }

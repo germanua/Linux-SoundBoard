@@ -6,7 +6,36 @@
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
 ```
 
-`install.sh` detects your distro and installs the right way for your system:
+Run from a terminal, this opens a menu:
+
+```
+  1) Install the newest version — asks for your password (system package)
+  2) Install a previous version — asks for your password only to remove the system package
+  3) Uninstall — asks for your password (system package)
+  4) Fix setup problems — may ask for your password (hotkey daemon)
+  5) Make a bug report — no password needed
+  6) Show status — no password needed
+  0) Exit
+```
+
+The header above the menu shows your distro, session type, the installed version,
+and whether a native package is present, so you can see the current state before
+choosing anything.
+
+Each entry states whether it needs your password, based on your actual system, so
+nothing asks for root unexpectedly. Only three things ever need it: installing or
+removing a native package, and the setuid `swhkd` binary for Wayland hotkeys.
+Everything under `~/.local` and `~/.config` — including installing a previous
+version, the bug report, and status — runs entirely as your user. On a distro
+without a native package, the same menu reads:
+
+```
+  1) Install the newest version — no password needed
+  2) Install a previous version — no password needed
+  3) Uninstall — no password needed
+```
+
+**Install the newest version** picks the right method for your system:
 
 | Distro                       | What happens                                                     |
 | ---------------------------- | ---------------------------------------------------------------- |
@@ -19,14 +48,44 @@ On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automa
 If `swhkd` is already present, the installer still repairs its root ownership
 and setuid bit so Linux Soundboard can launch it directly.
 
+**Install a previous version** lists the published releases and installs the one
+you pick from its release tarball into `~/.local`, without root. The AUR only
+ever carries the newest version and package-manager downgrades differ per distro,
+so the tarball is used for every older version. A native package would shadow it,
+so the installer offers to remove the package first.
+
+**Fix setup problems** re-runs the install steps one at a time, prints which one
+failed, then shows `install.sh status` and `linux-soundboard --diagnose`.
+
+**Make a bug report** is described in [BUG_REPORTS.md](BUG_REPORTS.md).
+
+---
+
+## Without a terminal, or in a script
+
+Every menu action has a command, so nothing here needs an interactive shell:
+
+```bash
+./install.sh install                    # newest version
+./install.sh install --version v2.1.2   # a specific published release
+./install.sh versions                   # list published releases
+./install.sh fix                        # guided repair
+./install.sh report --output report.txt # bug report file
+./install.sh status
+./install.sh uninstall --yes
+```
+
+Piped with no arguments (`curl ... | bash` from a script or CI, where no terminal
+is attached), `install.sh` installs the newest version instead of opening the menu.
+
 ---
 
 ## Two scripts, different jobs
 
 | Script            | Who runs it                                                               | What it does                                                                        |
 | ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `install.sh`      | You, via the one-liner above                                              | Detects distro, installs via package manager or tarball, handles swhkd on Wayland, and can repair/status/uninstall |
-| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, and legacy audio cleanup |
+| `install.sh`      | You, via the one-liner above                                              | The menu: install, install an older release, uninstall, guided repair, bug report, status. Handles the package manager and swhkd |
+| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, legacy audio cleanup, and the audio snapshots |
 
 `install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
 
@@ -38,6 +97,36 @@ curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/inst
 
 This removes managed per-user files first, then removes the native `linux-soundboard` package when one is installed. Add `--keep-package` to remove only the per-user setup.
 
+### What uninstall does to your audio setup
+
+Before it changes anything, an install records a snapshot of your audio state:
+the default microphone and speakers, the engine service state, and a checksum of
+every PipeWire, WirePlumber, and PulseAudio config file it can see. Snapshots live
+in `~/.local/state/linux-soundboard/install-user/snapshots/`. The newest ten are
+kept, plus the very first one — that is the only record of your setup before the
+app was ever installed, and it is what uninstalling compares against.
+
+Uninstalling prints what changed since that snapshot and asks **once** whether to
+put it back:
+
+```
+Changes since install (2026-07-28T20:15:40+03:00):
+  default_source_name: linuxsoundboard.virtual_mic -> alsa_input.pci-0000_12_00.6.analog-stereo
+  engine_unit:         active/enabled -> inactive/disabled
+
+Restore the audio setup recorded before Linux Soundboard was installed? [y/N]
+```
+
+Answering `n` leaves your current setup untouched. A non-interactive uninstall
+(`--yes`, or no terminal) never changes your default device on its own; pass
+`--restore-default-source` to opt in or `--keep-current-default-source` to be explicit.
+
+You can inspect this at any time without uninstalling:
+
+```bash
+./packaging/linux/install-user.sh snapshot-diff
+```
+
 ---
 
 ## Manual install (tarball)
@@ -48,11 +137,11 @@ For source builds or when you want to manage the download yourself:
 
 ```bash
 # 1. Download the latest release tarball from the Releases page
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.1.2-linux-x86_64.tar.gz
+wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.2.0-linux-x86_64.tar.gz
 
 # 2. Extract it
-tar -xzf linux-soundboard-2.1.2-linux-x86_64.tar.gz
-cd linux-soundboard-2.1.2-linux-x86_64
+tar -xzf linux-soundboard-2.2.0-linux-x86_64.tar.gz
+cd linux-soundboard-2.2.0-linux-x86_64
 
 # 3. Run the installer — an interactive menu guides you through the install
 ./install-user.sh
@@ -74,6 +163,8 @@ Or install non-interactively, skipping the menu:
 | Engine service      | `~/.config/systemd/user/linux-soundboard-engine.service`      | Starts the audio engine at login                    |
 | Legacy cleanup      | Old PipeWire/PulseAudio/WirePlumber soundboard routing files  | Disables obsolete persistent virtual mic setup      |
 | Microphone routing  | App setting in `~/.config/linux-soundboard/config.json`       | Routes recording apps while leaving system defaults alone by default |
+| Settings            | `~/.config/linux-soundboard/config.json`                      | Application settings only                           |
+| Sound library       | `~/.config/linux-soundboard/library.sqlite3`                  | Scanned folders, sounds, tabs, and hotkey bindings   |
 
 The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It uses low PipeWire priority, unmutes the virtual mic on registration, and claims the system default mic so recording apps use it automatically. Switch to **Manual** routing if you prefer to manage the default mic yourself.
 
@@ -130,7 +221,7 @@ The stable AUR package follows tagged releases and installs the app, icons, help
 Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
 
 ```bash
-sudo apt install ./linux-soundboard_2.1.2-1_amd64.deb
+sudo apt install ./linux-soundboard_2.2.0-1_amd64.deb
 ```
 
 Required runtime packages (usually already present on modern Ubuntu/Debian):
@@ -156,7 +247,7 @@ for global hotkeys.
 ### Fedora
 
 ```bash
-sudo dnf install ./linux-soundboard-2.1.2-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.2.0-1.x86_64.rpm
 ```
 
 Required runtime packages:

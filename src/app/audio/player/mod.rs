@@ -53,7 +53,7 @@ pub(crate) use decode::{
 };
 use default_source::{
     apply_default_source_mode, bind_default_metadata_from_global, claim_default_source_if_enabled,
-    DefaultMetadataHandle,
+    forget_default_source_belief, DefaultMetadataHandle,
 };
 pub use error::EngineError;
 use explicit_links::{drop_feeder_links, try_link_feeder_to_virtual_mic, AudioChannel, FeederLink};

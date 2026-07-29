@@ -145,7 +145,7 @@ jobs:
           # The metadata-only job does not build the application. Provide an
           # ephemeral executable so systemd-analyze can validate ExecStart.
           sudo install -Dm755 /bin/true /usr/local/bin/linux-soundboard
-          systemd-analyze verify packaging/linux/linux-soundboard-engine.service
+          systemd-analyze verify packaging/linux/linux-soundboard-engine.service packaging/linux/linux-soundboard-engine.target
 
       - name: Check desktop Icon= matches installed icon name
         run: |

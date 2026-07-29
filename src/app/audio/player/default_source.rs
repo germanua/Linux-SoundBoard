@@ -33,14 +33,17 @@ use super::EngineError;
 use super::LoopState;
 
 const DEFAULT_AUDIO_SOURCE_KEY: &str = "default.audio.source";
+/// PipeWire carries the system-wide defaults on subject 0.
+const DEFAULT_METADATA_SUBJECT: u32 = 0;
+const DEFAULT_AUDIO_SOURCE_TYPE: &str = "Spa:String:JSON";
 
 /// Owning handle for the PipeWire "default" metadata proxy + its listener.
 /// Dropping this disconnects everything cleanly.
 pub(super) struct DefaultMetadataHandle {
     pub(super) id: u32,
-    // The PipeWire metadata proxy. Held here so the listener stays alive for
-    // its lifetime.
-    _metadata: pw::metadata::Metadata,
+    // The PipeWire metadata proxy. Keeps the listener alive for its lifetime,
+    // and lets the engine write the runtime default key itself.
+    metadata: pw::metadata::Metadata,
     _listener: Pin<Box<pw::metadata::MetadataListener>>,
 }
 
@@ -93,7 +96,7 @@ pub(super) fn bind_default_metadata_from_global(
 
     Some(DefaultMetadataHandle {
         id: global_id,
-        _metadata: metadata,
+        metadata,
         _listener: listener,
     })
 }
@@ -107,29 +110,121 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     let new_name = value.and_then(parse_default_source_name);
     state.default_audio_source_name = new_name.clone();
 
-    // If the user has chosen `Manual`, respect their pick and don't fight.
-    if state.runtime.default_source_mode == DefaultSourceMode::Manual {
+    if !should_reclaim_default(state.runtime.default_source_mode, new_name.as_deref()) {
         return;
     }
 
-    let Some(name) = new_name.as_deref() else {
+    match new_name.as_deref() {
+        Some(name) => {
+            info!(
+                "Default source changed externally to '{}'; re-asserting '{}'",
+                name, VIRTUAL_SOURCE_NAME
+            );
+            // Remember whatever was here BEFORE us — for uninstall restore.
+            if state.previous_default_source_name.is_none() {
+                state.previous_default_source_name = Some(name.to_string());
+            }
+        }
+        None => {
+            // Nothing to remember for a restore: the system is not pointing at
+            // a device the user picked, it is pointing at nothing.
+            info!(
+                "Default source was cleared; re-asserting '{}'",
+                VIRTUAL_SOURCE_NAME
+            );
+        }
+    }
+
+    if reclaim_strategy(new_name.as_deref()) == ReclaimStrategy::RuntimeKey {
+        write_runtime_default_source(state);
+    }
+    // Keep the configured key pointing at us as well, so a later re-derive by
+    // WirePlumber lands on the virtual mic rather than a priority pick.
+    claim_default_source_if_enabled(state);
+}
+
+/// Whether the engine can skip claiming because it already holds the default.
+///
+/// Both halves matter. The cached name is only meaningful while it describes a
+/// claim this engine saw confirmed, and the claim flag is only meaningful while
+/// the cached name still says the virtual mic.
+fn already_holds_default(cached_name: Option<&str>, claimed: bool) -> bool {
+    claimed && cached_name == Some(VIRTUAL_SOURCE_NAME)
+}
+
+/// Drop what the engine believes about the system default.
+///
+/// Everything it knows arrived through one metadata object's property events.
+/// When that object is replaced or goes away, the belief describes an object
+/// that no longer exists, and a fresh object replays no properties, so keeping
+/// it would suppress the claim forever.
+pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) {
+    // Both silent failures this behaviour caused were expensive to diagnose
+    // precisely because nothing recorded that the engine had stopped being able
+    // to see the default.
+    info!("Default metadata {reason}; re-evaluating the default source");
+    state.default_audio_source_name = None;
+    state.claimed_default = false;
+}
+
+/// How to take the default source back.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ReclaimStrategy {
+    /// Another device holds it. `wpctl`/`pactl` write
+    /// `default.configured.audio.source`, and changing that value makes
+    /// WirePlumber re-derive the runtime key, which is what we want.
+    ConfiguredClaim,
+    /// Nothing holds it: the runtime key is gone while the configured key can
+    /// still name us. Rewriting the configured key with the value it already
+    /// has changes nothing, so the runtime key has to be written directly.
+    RuntimeKey,
+}
+
+fn reclaim_strategy(new_name: Option<&str>) -> ReclaimStrategy {
+    match new_name {
+        Some(_) => ReclaimStrategy::ConfiguredClaim,
+        None => ReclaimStrategy::RuntimeKey,
+    }
+}
+
+/// The JSON shape PipeWire carries in `default.audio.source`, matching what
+/// [`parse_default_source_name`] reads back.
+fn default_source_metadata_value(name: &str) -> String {
+    format!(r#"{{"name":"{name}"}}"#)
+}
+
+/// Whether the engine should claim the default source, given the mode and the
+/// default the system now reports.
+///
+/// `None` means the property was deleted, not that the system is happy: with no
+/// default set, PipeWire falls back to whatever it ranks highest, which is not
+/// us. That has to be reclaimed exactly like a foreign device.
+fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bool {
+    if mode == DefaultSourceMode::Manual {
+        return false;
+    }
+    new_name != Some(VIRTUAL_SOURCE_NAME)
+}
+
+/// Set `default.audio.source` through the metadata proxy the engine already
+/// holds.
+///
+/// Runs on the PipeWire loop thread, from the property callback: the write is
+/// queued to the server rather than re-entering the callback, and the resulting
+/// property event reports the virtual mic, which ends the reclaim.
+fn write_runtime_default_source(state: &LoopState) {
+    let Some(handle) = state.default_metadata.as_ref() else {
+        // No metadata bound yet; the claim below still sets the configured key,
+        // and binding re-runs the claim.
         return;
     };
-    // If virtual_mic is already the default, nothing to do.
-    if name == VIRTUAL_SOURCE_NAME {
-        return;
-    }
-
-    // Something else became the default. Re-assert.
-    info!(
-        "Default source changed externally to '{}'; re-asserting '{}'",
-        name, VIRTUAL_SOURCE_NAME
+    let value = default_source_metadata_value(VIRTUAL_SOURCE_NAME);
+    handle.metadata.set_property(
+        DEFAULT_METADATA_SUBJECT,
+        DEFAULT_AUDIO_SOURCE_KEY,
+        Some(DEFAULT_AUDIO_SOURCE_TYPE),
+        Some(&value),
     );
-    // Remember whatever was here BEFORE us — for uninstall restore.
-    if state.previous_default_source_name.is_none() {
-        state.previous_default_source_name = Some(name.to_string());
-    }
-    claim_default_source_if_enabled(state);
 }
 
 /// Parse the JSON-shaped metadata value into the source's node name.
@@ -175,10 +270,10 @@ pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
         return;
     };
 
-    // If the current known default is already us, no-op.
-    if state.default_audio_source_name.as_deref() == Some(VIRTUAL_SOURCE_NAME)
-        && state.claimed_default
-    {
+    if already_holds_default(
+        state.default_audio_source_name.as_deref(),
+        state.claimed_default,
+    ) {
         return;
     }
 
@@ -242,5 +337,92 @@ mod tests {
         assert_eq!(parse_default_source_name("not json"), None);
         assert_eq!(parse_default_source_name("{}"), None);
         assert_eq!(parse_default_source_name(r#"{"name":"#), None);
+    }
+
+    #[test]
+    fn a_cleared_default_is_reclaimed() {
+        // PipeWire deletes the property rather than reassigning it when the
+        // node a default pointed at goes away, which happens on every engine
+        // restart because the virtual mic is recreated. Treating "no default"
+        // as nothing to do left the soundboard silently not the default.
+        assert!(should_reclaim_default(DefaultSourceMode::Default, None));
+    }
+
+    #[test]
+    fn a_foreign_default_is_reclaimed() {
+        assert!(should_reclaim_default(
+            DefaultSourceMode::Default,
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo")
+        ));
+    }
+
+    #[test]
+    fn our_own_default_is_left_alone() {
+        assert!(!should_reclaim_default(
+            DefaultSourceMode::Default,
+            Some(VIRTUAL_SOURCE_NAME)
+        ));
+    }
+
+    #[test]
+    fn a_confirmed_claim_is_not_repeated() {
+        assert!(already_holds_default(Some(VIRTUAL_SOURCE_NAME), true));
+    }
+
+    #[test]
+    fn a_forgotten_belief_claims_again() {
+        // PipeWire can replace the whole default metadata object instead of
+        // changing a property on it. No property event fires for a fresh
+        // object, so an engine that still trusted its old belief would sit
+        // silent while the system had no default at all.
+        assert!(!already_holds_default(None, false));
+    }
+
+    #[test]
+    fn a_claim_we_never_saw_confirmed_is_not_trusted() {
+        assert!(!already_holds_default(Some(VIRTUAL_SOURCE_NAME), false));
+    }
+
+    #[test]
+    fn another_device_holding_it_is_not_us() {
+        assert!(!already_holds_default(
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo"),
+            true
+        ));
+    }
+
+    #[test]
+    fn a_cleared_default_writes_the_runtime_key() {
+        // wpctl and pactl both write default.configured.audio.source. When that
+        // key already names us and only the runtime key is missing, writing it
+        // again changes nothing, so WirePlumber never re-derives the runtime
+        // key and the system stays on its fallback device.
+        assert_eq!(reclaim_strategy(None), ReclaimStrategy::RuntimeKey);
+    }
+
+    #[test]
+    fn a_foreign_default_uses_the_configured_claim() {
+        assert_eq!(
+            reclaim_strategy(Some("alsa_input.pci-0000_12_00.6.analog-stereo")),
+            ReclaimStrategy::ConfiguredClaim
+        );
+    }
+
+    #[test]
+    fn the_runtime_key_we_write_is_the_shape_we_read() {
+        let written = default_source_metadata_value(VIRTUAL_SOURCE_NAME);
+        assert_eq!(
+            parse_default_source_name(&written).as_deref(),
+            Some(VIRTUAL_SOURCE_NAME)
+        );
+    }
+
+    #[test]
+    fn manual_mode_never_reclaims() {
+        assert!(!should_reclaim_default(DefaultSourceMode::Manual, None));
+        assert!(!should_reclaim_default(
+            DefaultSourceMode::Manual,
+            Some("alsa_input.pci-0000_12_00.6.analog-stereo")
+        ));
     }
 }

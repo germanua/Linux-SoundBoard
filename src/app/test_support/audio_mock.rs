@@ -8,7 +8,7 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
-use linux_soundboard::audio::{EngineError, PlaybackEngine, PlaybackPosition};
+use crate::audio::{EngineError, PlaybackEngine, PlaybackPosition};
 
 /// One `play` dispatch, captured verbatim so tests can assert the engine was
 /// told to play the right sound with the right volume/loudness metadata.
@@ -69,22 +69,6 @@ impl FakeAudioPlayer {
 
     pub fn stop_all_calls(&self) -> usize {
         self.recorder.lock().stop_all_calls
-    }
-
-    pub fn stopped_sounds(&self) -> Vec<String> {
-        self.recorder.lock().stopped_sounds.clone()
-    }
-
-    pub fn seeks(&self) -> Vec<(String, u64)> {
-        self.recorder.lock().seeks.clone()
-    }
-
-    pub fn is_paused(&self, sound_id: &str) -> bool {
-        self.recorder
-            .lock()
-            .positions
-            .values()
-            .any(|position| position.sound_id == sound_id && position.paused)
     }
 }
 

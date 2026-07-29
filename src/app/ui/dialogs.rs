@@ -63,6 +63,41 @@ impl DialogHostWeak {
     }
 }
 
+/// Dismisses an overlay panel when the pointer is pressed anywhere outside it.
+///
+/// The visible panel sits inside an `AdwClamp` that fills the whole overlay, so
+/// the empty area beside the panel belongs to the clamp and a press there never
+/// reaches the backdrop button underneath it. Hit-testing the panel's own bounds
+/// sidesteps that: it does not care which widget the press landed on, only
+/// whether the point is inside the panel.
+///
+/// Runs in the capture phase and claims the press, so a dismissing click cannot
+/// also activate whatever was underneath.
+pub(super) fn dismiss_on_press_outside<F>(
+    overlay: &gtk4::Overlay,
+    panel: &impl IsA<gtk4::Widget>,
+    on_dismiss: F,
+) where
+    F: Fn() + 'static,
+{
+    let gesture = gtk4::GestureClick::new();
+    gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    let overlay_coords = overlay.clone();
+    let panel = panel.clone().upcast::<gtk4::Widget>();
+    gesture.connect_pressed(move |gesture, _, x, y| {
+        // Before the first allocation there is no panel to be outside of.
+        let Some(bounds) = panel.compute_bounds(&overlay_coords) else {
+            return;
+        };
+        if bounds.contains_point(&gtk4::graphene::Point::new(x as f32, y as f32)) {
+            return;
+        }
+        gesture.set_state(gtk4::EventSequenceState::Claimed);
+        on_dismiss();
+    });
+    overlay.add_controller(gesture);
+}
+
 impl DialogHost {
     pub fn new() -> Self {
         let overlay = gtk4::Overlay::builder()
@@ -237,7 +272,7 @@ impl DialogHost {
                 response_handler: RefCell::new(None),
             }),
         };
-        host.connect_once(backdrop, close_btn);
+        host.connect_once(backdrop, close_btn, panel);
         host
     }
 
@@ -290,8 +325,8 @@ impl DialogHost {
         &self,
         title: &str,
         message: &str,
-        config: Arc<Mutex<crate::config::Config>>,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
     ) {
         self.prepare("message", title, message);
         self.configure_actions(
@@ -306,8 +341,8 @@ impl DialogHost {
             if response == "install" {
                 if let Some(host) = host.upgrade() {
                     host.prompt_swhkd_install(
-                        Arc::clone(&config),
                         Arc::clone(&hotkeys),
+                        projection.clone(),
                         &message_text,
                     );
                 }
@@ -318,8 +353,8 @@ impl DialogHost {
 
     pub fn prompt_swhkd_install(
         &self,
-        config: Arc<Mutex<crate::config::Config>>,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
         reason: &str,
     ) {
         let prompt = format!(
@@ -348,8 +383,8 @@ impl DialogHost {
 
             let result_host = host.clone();
             if let Err(err) = crate::commands::install_swhkd_async(
-                Arc::clone(&config),
                 Arc::clone(&hotkeys),
+                projection.clone(),
                 move |result| {
                     if let Some(host) = result_host.upgrade() {
                         match result {
@@ -548,7 +583,15 @@ impl DialogHost {
         self.present(None);
     }
 
-    fn connect_once(&self, backdrop: gtk4::Button, close_btn: gtk4::Button) {
+    fn connect_once(&self, backdrop: gtk4::Button, close_btn: gtk4::Button, panel: GtkBox) {
+        {
+            let host = self.downgrade();
+            dismiss_on_press_outside(&self.inner.overlay, &panel, move || {
+                if let Some(host) = host.upgrade() {
+                    host.dismiss();
+                }
+            });
+        }
         {
             let host = self.downgrade();
             backdrop.connect_clicked(move |_| {
@@ -634,6 +677,7 @@ impl DialogHost {
     }
 
     fn present(&self, focus_widget: Option<gtk4::Widget>) {
+        self.raise_to_front();
         self.inner.overlay.set_visible(true);
         self.inner.overlay.grab_focus();
         if let Some(widget) = focus_widget {
@@ -641,6 +685,28 @@ impl DialogHost {
                 widget.grab_focus();
             });
         }
+    }
+
+    /// Moves this host to the end of its parent overlay's child list, which is
+    /// the top of the paint order.
+    ///
+    /// The host is attached while the window is built, but panels that open
+    /// dialogs — Settings above all — are built lazily and attached later, so
+    /// they end up above it. Raising here rather than at each panel's
+    /// construction keeps the rule in one place: whoever attaches an overlay
+    /// later cannot bury a dialog. It runs while the host is still hidden, so
+    /// there is nothing on screen to flicker.
+    fn raise_to_front(&self) {
+        let Some(parent) = self
+            .inner
+            .overlay
+            .parent()
+            .and_then(|parent| parent.downcast::<gtk4::Overlay>().ok())
+        else {
+            return;
+        };
+        parent.remove_overlay(&self.inner.overlay);
+        parent.add_overlay(&self.inner.overlay);
     }
 
     fn set_response_handler<F>(&self, handler: F)

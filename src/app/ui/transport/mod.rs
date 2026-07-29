@@ -1,6 +1,7 @@
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
@@ -8,7 +9,7 @@ use gtk4::{Box as GtkBox, Button, Entry, Label, Scale, SearchEntry, ToggleButton
 
 use crate::app_state::AppState;
 
-use super::sound_list::NavigationSound;
+use super::sound_list::NavigationContext;
 
 mod build;
 mod helpers;
@@ -16,8 +17,8 @@ mod playback;
 mod scrub;
 mod signals;
 
-type SoundListProvider = Box<dyn Fn() -> Vec<NavigationSound> + Send + Sync>;
-type HasSoundsChecker = Box<dyn Fn() -> bool + Send + Sync>;
+type SoundListProvider = Box<dyn Fn() -> NavigationContext + 'static>;
+type HasSoundsChecker = Box<dyn Fn() -> bool + 'static>;
 type LibraryChangedCallback = Rc<dyn Fn() + 'static>;
 type ListStyleChangedCallback = Rc<dyn Fn(String) + 'static>;
 type SettingsRequestedCallback = Rc<dyn Fn() + 'static>;
@@ -95,10 +96,11 @@ struct TransportInner {
     suppress_mic_toggle: Cell<bool>,
     continue_suppressed_play_id: RefCell<Option<String>>,
     last_track_sound_id: RefCell<Option<String>>,
+    refresh_cancel: RefCell<Option<Arc<AtomicBool>>>,
     state: Arc<AppState>,
     has_sound_list_provider: Cell<bool>,
-    sound_list_provider: Mutex<Option<SoundListProvider>>,
-    has_sounds_checker: Mutex<Option<HasSoundsChecker>>,
+    sound_list_provider: RefCell<Option<SoundListProvider>>,
+    has_sounds_checker: RefCell<Option<HasSoundsChecker>>,
     toast_sender: Mutex<Option<std::sync::mpsc::Sender<String>>>,
     on_library_changed: RefCell<Option<LibraryChangedCallback>>,
     on_list_style_changed: RefCell<Option<ListStyleChangedCallback>>,

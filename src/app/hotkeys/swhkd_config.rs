@@ -1,20 +1,107 @@
 use chrono::Local;
 use log::{debug, info};
-use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{BufWriter, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::error::HotkeyError;
 use super::parse_hotkey_spec;
 
 pub struct SwhkdConfig {
-    pub(crate) hotkeys: HashMap<String, String>,
     pub(crate) config_path: PathBuf,
     pub(crate) pipe_path: PathBuf,
+    candidate: Option<ProjectionCandidate>,
+}
+
+struct ProjectionCandidate {
+    path: PathBuf,
+    writer: BufWriter<fs::File>,
+    count: usize,
+}
+
+static CONFIG_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn valid_binding_id(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 impl SwhkdConfig {
+    fn last_good_path(&self) -> PathBuf {
+        self.config_path.with_file_name("swhkdrc.last-good")
+    }
+
+    fn sync_parent(&self) -> Result<(), HotkeyError> {
+        if let Some(parent) = self.config_path.parent() {
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn preserve_last_good(&self) -> Result<(), HotkeyError> {
+        if !self.config_path.exists() {
+            return Ok(());
+        }
+        let backup = self.last_good_path();
+        let candidate = backup.with_file_name(format!(
+            ".swhkdrc.last-good.tmp.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<(), HotkeyError> {
+            if fs::hard_link(&self.config_path, &candidate).is_err() {
+                fs::copy(&self.config_path, &candidate)
+                    .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            }
+            fs::File::open(&candidate)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::rename(&candidate, backup).map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.sync_parent()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(candidate);
+        }
+        result
+    }
+
+    pub(crate) fn restore_last_good(&self) -> Result<(), HotkeyError> {
+        let backup = self.last_good_path();
+        if !backup.exists() {
+            return Err(HotkeyError::Io(
+                "No last-known-good swhkd config is available".to_string(),
+            ));
+        }
+        let candidate = self.config_path.with_file_name(format!(
+            ".swhkdrc.restore.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = (|| -> Result<(), HotkeyError> {
+            fs::copy(&backup, &candidate).map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::File::open(&candidate)
+                .and_then(|file| file.sync_all())
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            fs::rename(&candidate, &self.config_path)
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.sync_parent()
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(candidate);
+        }
+        result
+    }
+
     pub fn new(pipe_path: PathBuf) -> Result<Self, HotkeyError> {
         let config_path = Self::get_config_path()?;
 
@@ -25,10 +112,19 @@ impl SwhkdConfig {
         }
 
         Ok(Self {
-            hotkeys: HashMap::new(),
             config_path,
             pipe_path,
+            candidate: None,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_paths(config_path: PathBuf, pipe_path: PathBuf) -> Self {
+        Self {
+            config_path,
+            pipe_path,
+            candidate: None,
+        }
     }
 
     fn get_config_path() -> Result<PathBuf, HotkeyError> {
@@ -43,25 +139,89 @@ impl SwhkdConfig {
         Ok(config_dir.join("linux-soundboard").join("swhkdrc"))
     }
 
-    pub fn add_hotkey(&mut self, sound_id: &str, hotkey: &str) -> Result<(), HotkeyError> {
+    pub fn begin_projection(&mut self) -> Result<(), HotkeyError> {
+        self.abort_projection();
+        info!("Streaming swhkd config to: {}", self.config_path.display());
+        let path = self.config_path.with_file_name(format!(
+            ".swhkdrc.tmp.{}.{}",
+            std::process::id(),
+            CONFIG_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|error| {
+                HotkeyError::Io(format!("Failed to create swhkd candidate: {error}"))
+            })?;
+        let mut writer = BufWriter::new(file);
+        if let Err(error) = writeln!(writer, "# LinuxSoundBoard swhkd config")
+            .and_then(|_| {
+                writeln!(
+                    writer,
+                    "# Do not edit manually; changes will be overwritten"
+                )
+            })
+            .and_then(|_| {
+                writeln!(
+                    writer,
+                    "# Last updated: {}\n",
+                    Local::now().format("%Y-%m-%d %H:%M:%S")
+                )
+            })
+        {
+            let _ = fs::remove_file(&path);
+            return Err(HotkeyError::Io(error.to_string()));
+        }
+        self.candidate = Some(ProjectionCandidate {
+            path,
+            writer,
+            count: 0,
+        });
+        Ok(())
+    }
+
+    pub fn projection_started(&self) -> bool {
+        self.candidate.is_some()
+    }
+
+    pub fn stage_hotkey(&mut self, sound_id: &str, hotkey: &str) -> Result<(), HotkeyError> {
+        if !valid_binding_id(sound_id) {
+            return Err(HotkeyError::Io(
+                "Hotkey binding ID contains unsupported characters".to_string(),
+            ));
+        }
         let swhkd_hotkey = Self::convert_to_swhkd_format(hotkey)?;
         debug!(
             "Adding hotkey: {} -> {} (swhkd format: {})",
             sound_id, hotkey, swhkd_hotkey
         );
-        self.hotkeys.insert(sound_id.to_string(), swhkd_hotkey);
+        let pipe = shell_quote(&self.pipe_path.to_string_lossy());
+        let candidate = self
+            .candidate
+            .as_mut()
+            .ok_or_else(|| HotkeyError::Io("swhkd projection was not started".to_string()))?;
+        let kind = if sound_id.starts_with("control:") {
+            "Control"
+        } else {
+            "Sound"
+        };
+        writeln!(
+            candidate.writer,
+            "# {kind}: {sound_id}\n{swhkd_hotkey}\n    printf '%s\\n' {} > {pipe}\n",
+            shell_quote(sound_id)
+        )
+        .map_err(|error| HotkeyError::Io(error.to_string()))?;
+        candidate.count = candidate.count.saturating_add(1);
         Ok(())
     }
 
-    pub fn remove_hotkeys(&mut self, sound_ids: &[String]) -> usize {
-        let mut removed = 0;
-        for sound_id in sound_ids {
-            debug!("Removing hotkey: {}", sound_id);
-            if self.hotkeys.remove(sound_id).is_some() {
-                removed += 1;
-            }
+    pub fn abort_projection(&mut self) {
+        if let Some(candidate) = self.candidate.take() {
+            drop(candidate.writer);
+            let _ = fs::remove_file(candidate.path);
         }
-        removed
     }
 
     /// Convert a canonical hotkey to `swhkd` syntax.
@@ -79,45 +239,34 @@ impl SwhkdConfig {
         }
     }
 
-    pub fn write_to_file(&self) -> Result<(), HotkeyError> {
-        info!("Writing swhkd config to: {}", self.config_path.display());
-
-        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-        let mut content = format!(
-            "# LinuxSoundBoard swhkd config\n\
-             # Do not edit manually; changes will be overwritten\n\
-             # Last updated: {}\n\
-             \n",
-            timestamp
-        );
-
-        let mut sorted_hotkeys: Vec<_> = self.hotkeys.iter().collect();
-        sorted_hotkeys.sort_by_key(|(id, _)| *id);
-
-        for (sound_id, hotkey) in sorted_hotkeys {
-            let comment = if let Some(control_id) = sound_id.strip_prefix("control:") {
-                format!("# Control: {}", control_id)
-            } else {
-                format!("# Sound: {}", sound_id)
-            };
-
-            content.push_str(&format!(
-                "{}\n{}\n    echo \"{}\" > {}\n\n",
-                comment,
-                hotkey,
-                sound_id,
-                self.pipe_path.display()
-            ));
+    pub fn commit_projection(&mut self) -> Result<usize, HotkeyError> {
+        let mut candidate = self
+            .candidate
+            .take()
+            .ok_or_else(|| HotkeyError::Io("swhkd projection was not started".to_string()))?;
+        let result = (|| -> Result<usize, HotkeyError> {
+            candidate
+                .writer
+                .flush()
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            candidate
+                .writer
+                .get_ref()
+                .sync_all()
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.preserve_last_good()?;
+            fs::rename(&candidate.path, &self.config_path)
+                .map_err(|error| HotkeyError::Io(error.to_string()))?;
+            self.sync_parent()?;
+            Ok(candidate.count)
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&candidate.path);
         }
-
-        let mut file = fs::File::create(&self.config_path)
-            .map_err(|e| HotkeyError::Io(format!("Failed to create config file: {}", e)))?;
-
-        file.write_all(content.as_bytes())
-            .map_err(|e| HotkeyError::Io(format!("Failed to write config file: {}", e)))?;
-
-        debug!("Config file written with {} hotkeys", self.hotkeys.len());
-        Ok(())
+        if let Ok(count) = result {
+            debug!("Config file written with {count} hotkeys");
+        }
+        result
     }
 
     /// Send `SIGHUP` to reload `swhkd`.
@@ -138,6 +287,29 @@ impl SwhkdConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projection_is_streamed_directly_to_the_candidate_file() {
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-stream-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        let mut config = SwhkdConfig::for_paths(dir.join("swhkdrc"), dir.join("hotkey.pipe"));
+
+        config.begin_projection().expect("begin projection");
+        config
+            .stage_hotkey("sound-1", "Ctrl+KeyA")
+            .expect("stage first hotkey");
+        config
+            .stage_hotkey("control:stop_all", "Alt+KeyB")
+            .expect("stage second hotkey");
+        assert_eq!(config.commit_projection().expect("commit projection"), 2);
+
+        let rendered = fs::read_to_string(&config.config_path).expect("read projection");
+        assert!(rendered.contains("ctrl + ~a"));
+        assert!(rendered.contains("alt + ~b"));
+        assert!(rendered.contains("'sound-1'"));
+        assert!(rendered.contains("'control:stop_all'"));
+        fs::remove_dir_all(dir).expect("remove test directory");
+    }
 
     #[test]
     fn test_convert_to_swhkd_format() {
@@ -196,40 +368,77 @@ mod tests {
     }
 
     #[test]
-    fn test_add_remove_hotkey() {
-        let pipe_path = PathBuf::from("/tmp/test.pipe");
-        let mut config = SwhkdConfig {
-            hotkeys: HashMap::new(),
-            config_path: PathBuf::from("/tmp/test_swhkdrc"),
-            pipe_path,
-        };
-
-        config.add_hotkey("sound1", "Ctrl+KeyA").unwrap();
-        assert_eq!(config.hotkeys.len(), 1);
-
-        config.add_hotkey("sound2", "Alt+KeyB").unwrap();
-        assert_eq!(config.hotkeys.len(), 2);
-
-        assert_eq!(config.remove_hotkeys(&["sound1".to_string()]), 1);
-        assert_eq!(config.hotkeys.len(), 1);
+    fn abort_projection_removes_the_candidate() {
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-abort-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        let mut config = SwhkdConfig::for_paths(dir.join("swhkdrc"), dir.join("hotkey.pipe"));
+        config.begin_projection().expect("begin projection");
+        config.stage_hotkey("sound1", "Ctrl+KeyA").unwrap();
+        config.abort_projection();
+        assert!(!config.projection_started());
+        assert_eq!(fs::read_dir(&dir).expect("read test directory").count(), 0);
+        fs::remove_dir_all(dir).expect("remove test directory");
     }
 
     #[test]
     fn test_rejects_unsupported_hotkey() {
-        let pipe_path = PathBuf::from("/tmp/test.pipe");
-        let mut config = SwhkdConfig {
-            hotkeys: HashMap::new(),
-            config_path: PathBuf::from("/tmp/test_swhkdrc"),
-            pipe_path,
-        };
+        let mut config = SwhkdConfig::for_paths(
+            PathBuf::from("/tmp/test_swhkdrc"),
+            PathBuf::from("/tmp/test.pipe"),
+        );
+        config.begin_projection().unwrap();
 
         let err = config
-            .add_hotkey("sound1", "Ctrl+NumpadDivide")
+            .stage_hotkey("sound1", "Ctrl+NumpadDivide")
             .unwrap_err();
         assert_eq!(
             err.to_string(),
             "Ctrl+NumpadDivide cannot be represented by swhkd."
         );
-        assert!(config.hotkeys.is_empty());
+        config.abort_projection();
+    }
+
+    #[test]
+    fn rejects_binding_ids_that_could_modify_the_generated_shell_command() {
+        let mut config = SwhkdConfig::for_paths(
+            PathBuf::from("/tmp/test_swhkdrc"),
+            PathBuf::from("/tmp/test.pipe"),
+        );
+        config.begin_projection().unwrap();
+
+        assert!(config
+            .stage_hotkey("../sound;touch /tmp/x", "Ctrl+KeyA")
+            .is_err());
+        config.abort_projection();
+    }
+
+    #[test]
+    fn failed_projection_can_restore_the_last_good_config() {
+        let dir = std::env::temp_dir().join(format!("lsb-swhkd-config-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        let mut config = SwhkdConfig::for_paths(dir.join("swhkdrc"), dir.join("hotkey.pipe"));
+        config.begin_projection().expect("begin first projection");
+        config
+            .stage_hotkey("first", "Ctrl+KeyA")
+            .expect("add first binding");
+        config.commit_projection().expect("write first config");
+        config.begin_projection().expect("begin second projection");
+        config
+            .stage_hotkey("first", "Ctrl+KeyA")
+            .expect("retain first binding");
+        config
+            .stage_hotkey("second", "Alt+KeyB")
+            .expect("add second binding");
+        config.commit_projection().expect("write candidate config");
+        assert!(fs::read_to_string(&config.config_path)
+            .expect("read candidate")
+            .contains("second"));
+
+        config.restore_last_good().expect("restore previous config");
+        let restored = fs::read_to_string(&config.config_path).expect("read restored config");
+        assert!(restored.contains("first"));
+        assert!(!restored.contains("second"));
+
+        fs::remove_dir_all(dir).expect("remove test directory");
     }
 }

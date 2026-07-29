@@ -146,6 +146,14 @@ pub fn build_settings_overlay(
     overlay.add_overlay(&panel_clamp);
 
     {
+        // The clamp fills the overlay, so a press beside the panel lands on it
+        // and never reaches the backdrop button underneath.
+        let overlay_dismiss = overlay.clone();
+        super::dialogs::dismiss_on_press_outside(&overlay, &panel, move || {
+            overlay_dismiss.set_visible(false);
+        });
+    }
+    {
         let overlay = overlay.clone();
         backdrop.connect_clicked(move |_| {
             overlay.set_visible(false);
@@ -277,6 +285,25 @@ fn build_general_page(
         .description("Folders scanned for audio files on startup")
         .build();
 
+    let (hidden_folders_group, refresh_hidden_folders) =
+        super::settings_folders::build_hidden_folders_group(
+            Arc::clone(&state),
+            on_library_changed.clone(),
+        );
+    // Removing a root deletes the folders under it, so anything hidden there is
+    // gone too. Refreshing from the shared callback keeps the list honest
+    // without threading it through the folder rebuild.
+    let on_library_changed = {
+        let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
+        let inner = on_library_changed.clone();
+        Some(Rc::new(move || {
+            refresh_hidden_folders();
+            if let Some(callback) = inner.as_ref() {
+                callback();
+            }
+        }) as Rc<dyn Fn() + 'static>)
+    };
+
     let add_folder_row = adw::ActionRow::builder()
         .title("Add Folder…")
         .activatable(true)
@@ -285,6 +312,41 @@ fn build_general_page(
 
     let folder_rows: FolderRowRefs = Rc::new(RefCell::new(Vec::new()));
     let rebuild_pending: RebuildPending = Rc::new(Cell::new(false));
+    // Handle for the scan that follows adding a folder, so the Stop button
+    // below can cancel it. The row itself keeps adding folders throughout.
+    let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
+        Rc::new(RefCell::new(None));
+    // The row keeps adding folders while a scan runs, so a second scan can
+    // start before the first finishes. Only the newest one owns the Stop
+    // button; an older run finishing must not hide it out from under the
+    // newer one.
+    let scan_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
+    let scan_stop_btn = gtk4::Button::builder()
+        .label("Stop")
+        .css_classes(vec!["settings-primary-btn"])
+        .valign(gtk4::Align::Center)
+        .visible(false)
+        .tooltip_text("Cancel the folder scan")
+        .build();
+    add_folder_row.add_suffix(&scan_stop_btn);
+
+    {
+        let add_folder_cancel_stop = Rc::clone(&add_folder_cancel);
+        let add_folder_row_stop = add_folder_row.downgrade();
+        scan_stop_btn.connect_clicked(move |btn| {
+            // Copy the handle out before touching widgets: GTK can re-enter a
+            // handler, and a borrow held across a widget call aborts.
+            let pending = add_folder_cancel_stop.borrow().as_ref().map(Arc::clone);
+            let Some(cancelled) = pending else {
+                return;
+            };
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            btn.set_sensitive(false);
+            if let Some(row) = add_folder_row_stop.upgrade() {
+                row.set_subtitle("Cancelling scan…");
+            }
+        });
+    }
 
     {
         let state2 = Arc::clone(&state);
@@ -294,6 +356,9 @@ fn build_general_page(
         let folder_rows2 = Rc::clone(&folder_rows);
         let rebuild_pending2 = Rc::clone(&rebuild_pending);
         let on_library_changed2 = on_library_changed.clone();
+        let add_folder_cancel2 = Rc::clone(&add_folder_cancel);
+        let scan_generation2 = Rc::clone(&scan_generation);
+        let scan_stop_btn2 = scan_stop_btn.clone();
         add_folder_row.connect_activated(move |_| {
             let dialog = gtk4::FileDialog::builder()
                 .title("Select Sound Folder")
@@ -305,6 +370,9 @@ fn build_general_page(
             let folder_rows3 = Rc::clone(&folder_rows2);
             let rebuild_pending3 = Rc::clone(&rebuild_pending2);
             let on_library_changed3 = on_library_changed2.clone();
+            let add_folder_cancel3 = Rc::clone(&add_folder_cancel2);
+            let scan_generation3 = Rc::clone(&scan_generation2);
+            let scan_stop_btn3 = scan_stop_btn2.clone();
             dialog.select_folder(
                 Some(&parent_for_dialog),
                 gtk4::gio::Cancellable::NONE,
@@ -319,25 +387,47 @@ fn build_general_page(
                             };
                             add_folder_row3.set_sensitive(false);
                             let add_folder_row_done = add_folder_row3.clone();
-                            if let Err(e) = commands::add_sound_folder_async(
+                            if let Err(e) = commands::add_sound_folder_with_store_async(
                                 path_str,
-                                Arc::clone(&state3.config),
+                                state3.library.clone(),
                                 move |result| match result {
                                     Ok(()) => {
                                         log::info!("Add folder command succeeded");
                                         let add_folder_row_refresh = add_folder_row_done.clone();
-                                        if let Err(e) = commands::refresh_sounds_async(
-                                            Arc::clone(&state3.config),
-                                            Arc::clone(&state3.hotkeys),
-                                            state3.loudness_coordinators.clone(),
+                                        let cancel_done = Rc::clone(&add_folder_cancel3);
+                                        let stop_btn_done = scan_stop_btn3.clone();
+                                        // Claim the generation before
+                                        // dispatching: the completion runs on
+                                        // this same main loop, so it cannot
+                                        // fire before this returns.
+                                        let scan_id =
+                                            scan_generation3.get().wrapping_add(1);
+                                        scan_generation3.set(scan_id);
+                                        let generation_done = Rc::clone(&scan_generation3);
+                                        match commands::refresh_sounds_with_store_async(
+                                            state3.library.clone(),
+                                            state3.hotkey_projection.clone(),
                                             move |result| {
-                                                add_folder_row_refresh.set_sensitive(true);
-                                                if let Err(e) = result {
-                                                    log::warn!(
-                                                        "Refresh after adding folder failed: {e}"
-                                                    );
+                                                if generation_done.get() == scan_id {
+                                                    cancel_done.borrow_mut().take();
+                                                    stop_btn_done.set_visible(false);
+                                                    stop_btn_done.set_sensitive(true);
+                                                    add_folder_row_refresh.set_sensitive(true);
+                                                    add_folder_row_refresh.set_subtitle("");
                                                 }
-                                                log::info!("Refresh sounds completed");
+                                                match result {
+                                                    Err(e)
+                                                        if e.to_string().contains("cancelled") =>
+                                                    {
+                                                        log::info!(
+                                                            "Scan after adding folder cancelled"
+                                                        );
+                                                    }
+                                                    Err(e) => log::warn!(
+                                                        "Refresh after adding folder failed: {e}"
+                                                    ),
+                                                    Ok(_) => log::info!("Refresh sounds completed"),
+                                                }
                                                 let Some(folders_group3) =
                                                     folders_group_weak2.upgrade()
                                                 else {
@@ -359,10 +449,24 @@ fn build_general_page(
                                                 }
                                             },
                                         ) {
-                                            add_folder_row_done.set_sensitive(true);
-                                            log::warn!(
+                                            Ok(cancelled) => {
+                                                // The scan is the slow part. Show
+                                                // Stop beside the row and leave
+                                                // the row itself free to add
+                                                // another folder.
+                                                *add_folder_cancel3.borrow_mut() = Some(cancelled);
+                                                add_folder_row_done
+                                                    .set_subtitle("Scanning for audio files…");
+                                                add_folder_row_done.set_sensitive(true);
+                                                scan_stop_btn3.set_sensitive(true);
+                                                scan_stop_btn3.set_visible(true);
+                                            }
+                                            Err(e) => {
+                                                add_folder_row_done.set_sensitive(true);
+                                                log::warn!(
                                                 "Failed to dispatch refresh after adding folder: {e}"
                                             );
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -389,6 +493,14 @@ fn build_general_page(
         on_library_changed.clone(),
     );
     page.add(&folders_group);
+    // The overlay is built once and only shown and hidden afterwards, so the
+    // list has to reload every time the page appears; folders removed from the
+    // sidebar in between would otherwise be missing from it.
+    {
+        let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
+        page.connect_map(move |_| refresh_hidden_folders());
+    }
+    page.add(&hidden_folders_group);
 
     let (playback_group, auto_gain_group) =
         super::settings_playback::build_playback_groups(Arc::clone(&state), visibility_weak);
@@ -624,7 +736,7 @@ mod tests {
     fn about_uses_the_supported_audio_format_list() {
         assert_eq!(
             crate::ui::dnd_import::supported_audio_formats(),
-            "MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
+            "WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
         );
     }
 }

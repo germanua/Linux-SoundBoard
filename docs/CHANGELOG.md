@@ -6,6 +6,48 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-07-29
+
+### Added
+
+- **SQLite sound library:** Sounds, the folder tree, tab membership, and hotkey bindings are stored in `~/.config/linux-soundboard/library.sqlite3`. `config.json` keeps settings only. An existing configuration is migrated on first launch and the original is preserved as `config.json.pre-v8-backup`. If the library cannot be opened, startup offers to restore that backup and archives the current files rather than deleting them.
+- **Nested folder navigation:** The sidebar shows the complete folder hierarchy instead of only immediate subfolders. Child folders load on demand as folders are expanded, and a parent folder lists the sounds of everything beneath it.
+- **Remove a folder from the sidebar:** Right-click a folder → `Remove Folder` hides that folder and its subtree. The confirmation states how many sounds stop appearing. Nothing is deleted on disk and a rescan does not bring it back.
+- **Restore removed folders:** `Settings` → `General` → `Removed Folders` lists hidden folders with a `Restore` button. The group appears only while something is hidden.
+- **Reorder folders:** Dragging a folder into the gap above or below a sibling changes the order, which is saved per folder.
+- **Combine folders:** Dropping a folder onto another folder's row offers to move every sound it resolves to into that folder. Files are not moved or renamed, and a folder cannot be combined into its own subtree.
+- **Folder membership overrides:** Sounds can be dragged onto a folder to include them, excluded with `Exclude from Folder`, and reset with `Restore Natural Membership`.
+- **Cancellable folder scans:** The scan that follows `Add Folder…` can be stopped from the folder row or the `Stop` button beside it.
+- **Installer menu:** The one-line install command now opens a menu to install the newest version, install a previous release, uninstall, fix setup problems, generate a bug report, or show status. Every action is also a command (`install --version`, `versions`, `fix`, `report`), and piping the script with no arguments still installs directly. Each entry states whether it needs your password, based on the distro, session type, and whether a native package is installed.
+- **Previous releases:** Any published release can be installed from its tarball into `~/.local` without root. A native package that would shadow it is removed first, with confirmation.
+- **Audio snapshots:** Installs and updates record the default microphone and speakers, the engine service state, and checksums of the PipeWire, WirePlumber, and PulseAudio configuration before making changes. Uninstall prints what changed since that snapshot and asks once whether to restore it. Inspect it any time with `install-user.sh snapshot-diff`.
+- **Bug reports:** `install.sh report` writes a single file with a system report, an application report, and a blank for the user to fill in, then explains how to attach screenshots to a GitHub issue. The home path and username are replaced; sound-device names are kept.
+
+### Changed
+
+- **Library size limits:** Queries, scans, imports, and tab updates run in bounded pages on a background worker, so window size and memory no longer track the size of the library.
+- **Settings and dialogs:** Pressing outside the settings panel or a dialog closes it, and dialogs stay above the settings panel. The settings panel is built on first use.
+- **Loudness status:** Refinement publishes progress while a run is going, counts refresh after a scan, and Analyze and Refine no longer cancel each other.
+- **Memory diagnostics:** Library figures are read from the store and refreshed as the library changes instead of being estimated from configuration arrays.
+
+### Fixed
+
+- **Folder scanning coverage:** Folders holding only WAV files, folders with more sounds than a single scan batch, and deeper subfolder levels are imported completely.
+- **Sidebar stability under scrolling:** Scrolling back to a released folder page no longer crashes, folder pages requested during fast scrolling no longer stay blank, and expansion state survives a folder-tree rebuild.
+- **Auto-gain backfill:** Enabling Auto-Gain Normalization starts the missing-loudness analysis again instead of finding nothing to do.
+- **Transport track name:** The playing sound's name is shown again.
+- **Engine shutdown:** A stale engine's shutdown request can no longer stop the current persistent engine.
+- **Settings appearance:** Settings rows no longer draw a focus ring inside a focus ring, and sidebar resize no longer renders incorrectly.
+- **Default microphone after an engine restart:** In Default routing mode the engine reclaims the virtual microphone when the system default is cleared, not only when another device is selected. Restarting the engine — which every update does — replaces the virtual microphone node and clears the default, so the soundboard could silently stop being the default input until something else set one. Reclaiming a cleared default now writes the default source directly instead of asking WirePlumber to switch to the device it already had configured, which changed nothing and left the system on a fallback microphone.
+- **Default microphone after a PipeWire or WirePlumber restart:** The engine forgets what it believed about the system default whenever the metadata object carrying it is replaced or goes away, and re-evaluates. A replaced object reports no properties, so an engine that kept its previous belief would skip the reclaim and go silent while the system had no default at all. The change is also logged, because the failure it caused left no trace.
+- **Installer prompts through the one-liner:** Prompts read from the terminal instead of the piped script, so the installer can ask questions when started with `curl ... | bash`. Previously every prompt silently took its non-interactive default.
+- **Uninstall leftovers:** Removing the user installation now also removes the licence and notice files it deployed, so `~/.local/opt/linux-soundboard/` no longer survives an uninstall.
+
+### Performance
+
+- **Startup:** Configuration load, library open, the first sound page, player setup, and the PipeWire probe run off the GTK thread. On a 156,000-sound library the first rows appear in 31-35 ms instead of 105-109 ms.
+- **Wide folder trees:** Sidebar rows are virtualized, the folder list keeps a fixed number of pages materialized, and retained child rows are capped. On a 20,000-folder library a deep folder page loads in 11.9 ms instead of 17.3 s and idle memory is lower.
+
 ## [2.1.2] - 2026-07-19
 
 ### Added
