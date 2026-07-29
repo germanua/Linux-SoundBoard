@@ -35,7 +35,7 @@ conflicts=('linux-soundboard-git')
 source=(
   "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
 )
-sha256sums=('SKIP')
+sha256sums=('1be97cdd863bd22925ea10aac01f8d36e855c1e9b315d9cc1c66ad55a5086c42')
 install="${pkgname}.install"
 
 prepare() {
