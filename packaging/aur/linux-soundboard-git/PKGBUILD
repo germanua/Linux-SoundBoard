@@ -15,8 +15,6 @@ depends=(
   'opus'
   'libx11'
   'libxi'
-  'libxtst'
-  'libxkbcommon'
   'hicolor-icon-theme'
   'polkit'
   'pipewire'
