@@ -1014,6 +1014,7 @@ collect_app_report() {
 }
 
 collect_debug_run() {
+    local raw_out=$1
     local log="$WORK_DIR/debug-run.log"
 
     command -v "$APP_BINARY" >/dev/null 2>&1 || return 0
@@ -1030,8 +1031,7 @@ collect_debug_run() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
 
-    section "DEBUG RUN LOG (last 300 lines)"
-    tail -n 300 "$log"
+    { section "DEBUG RUN LOG (last 300 lines)"; tail -n 300 "$log"; } >>"$raw_out"
 }
 
 bug_report_blank() {
@@ -1097,7 +1097,7 @@ make_bug_report() {
     } >"$raw" 2>&1
 
     if [[ -t 0 ]]; then
-        collect_debug_run >>"$raw" 2>&1 || true
+        collect_debug_run "$raw" || true
     fi
 
     bug_report_blank >>"$raw"
