@@ -419,6 +419,7 @@ SHELL_SCRIPTS=(
     "$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
     "$REPO_ROOT/packaging/linux/generate-icons.sh"
     "$REPO_ROOT/packaging/linux/package-appimage.sh"
+    "$REPO_ROOT/packaging/linux/package-tarball.sh"
     "$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
     "$REPO_ROOT/packaging/debian/package-deb.sh"
     "$REPO_ROOT/packaging/rpm/package-rpm.sh"

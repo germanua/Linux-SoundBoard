@@ -278,7 +278,7 @@ install_arch() {
 }
 
 install_debian() {
-    local url; url="$(find_asset_url '\\.deb$' || true)"
+    local url; url="$(find_asset_url "\\.deb\$" || true)"
     if [[ -z "$url" ]]; then
         warn "No .deb in latest release; falling back to tarball install."
         install_tarball; return
@@ -300,7 +300,7 @@ install_debian() {
 }
 
 install_fedora() {
-    local url; url="$(find_asset_url '\\.rpm$' || true)"
+    local url; url="$(find_asset_url "\\.rpm\$" || true)"
     if [[ -z "$url" ]]; then
         warn "No .rpm in latest release; falling back to tarball install."
         install_tarball; return
