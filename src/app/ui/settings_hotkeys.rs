@@ -8,7 +8,7 @@ use libadwaita::prelude::*;
 
 use crate::app_state::AppState;
 use crate::commands;
-use crate::config::ControlHotkeyAction;
+use crate::config::{ControlHotkeyAction, GroupMode};
 
 use super::dialogs::DialogHost;
 use super::icons;
@@ -77,12 +77,122 @@ pub(super) fn build_hotkeys_page(
     }
 
     for meta in ControlHotkeyAction::all() {
+        // Lives with the setting it cycles rather than in this list.
+        if meta.action == ControlHotkeyAction::CycleGroupMode {
+            continue;
+        }
         let row = build_hotkey_row(Arc::clone(&state), dialog_host.clone(), meta.action);
         group.add(&row);
     }
 
     page.add(&group);
+    page.add(&build_behaviour_group(state, dialog_host));
     page
+}
+
+/// How hotkeys resolve, as opposed to which hotkey does what. Both toggles are
+/// off by default and independent of each other.
+fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Hotkey Behaviour")
+        .description("How a shortcut is resolved when tabs or several sounds are involved")
+        .build();
+
+    let (tab_hotkeys, multi_sound, group_mode) = {
+        let config = state.config.lock();
+        (
+            config.settings.tab_hotkeys,
+            config.settings.multi_sound_hotkeys,
+            config.settings.group_mode,
+        )
+    };
+
+    let tab_row = adw::SwitchRow::builder()
+        .title("Tab Hotkeys")
+        .subtitle("Give each tab its own shortcut, and answer only that tab's sound shortcuts while it is open")
+        .active(tab_hotkeys)
+        .build();
+    {
+        let state_tabs = Arc::clone(&state);
+        tab_row.connect_active_notify(move |row| {
+            if let Err(error) =
+                commands::set_tab_hotkeys(row.is_active(), Arc::clone(&state_tabs.config))
+            {
+                log::warn!("Could not save the tab hotkeys setting: {error}");
+            }
+        });
+    }
+    group.add(&tab_row);
+
+    let multi_row = adw::SwitchRow::builder()
+        .title("Multiple Sounds Per Hotkey")
+        .subtitle("Let several sounds share one shortcut")
+        .active(multi_sound)
+        .build();
+    group.add(&multi_row);
+
+    let mode_row = adw::ComboRow::builder()
+        .title("Shared Hotkey Mode")
+        .subtitle("Which sound a shared shortcut plays")
+        .visible(multi_sound)
+        .build();
+    let mode_model = gtk4::StringList::new(&[
+        "Play the same sound",
+        "Play the next sound",
+        "Play a random sound",
+    ]);
+    mode_row.set_model(Some(&mode_model));
+    mode_row.set_selected(match group_mode {
+        GroupMode::Same => 0,
+        GroupMode::Next => 1,
+        GroupMode::Random => 2,
+    });
+    {
+        let state_mode = Arc::clone(&state);
+        mode_row.connect_selected_notify(move |row| {
+            let mode = match row.selected() {
+                1 => GroupMode::Next,
+                2 => GroupMode::Random,
+                _ => GroupMode::Same,
+            };
+            if let Err(error) =
+                commands::set_group_mode(mode.as_str().to_string(), Arc::clone(&state_mode.config))
+            {
+                log::warn!("Could not save the shared hotkey mode: {error}");
+            }
+        });
+    }
+
+    let cycle_row = build_hotkey_row(
+        Arc::clone(&state),
+        dialog_host,
+        ControlHotkeyAction::CycleGroupMode,
+    );
+    cycle_row.set_visible(multi_sound);
+
+    {
+        let state_multi = Arc::clone(&state);
+        let mode_weak = mode_row.downgrade();
+        let cycle_weak = cycle_row.downgrade();
+        multi_row.connect_active_notify(move |row| {
+            if let Err(error) =
+                commands::set_multi_sound_hotkeys(row.is_active(), Arc::clone(&state_multi.config))
+            {
+                log::warn!("Could not save the multiple sounds setting: {error}");
+            }
+            // The mode only means something once a shortcut can be shared.
+            if let Some(mode_row) = mode_weak.upgrade() {
+                mode_row.set_visible(row.is_active());
+            }
+            if let Some(cycle_row) = cycle_weak.upgrade() {
+                cycle_row.set_visible(row.is_active());
+            }
+        });
+    }
+
+    group.add(&mode_row);
+    group.add(&cycle_row);
+    group
 }
 
 fn build_hotkey_row(

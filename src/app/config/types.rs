@@ -399,6 +399,7 @@ pub enum ControlHotkeyAction {
     MuteHeadphones,
     MuteRealMic,
     CyclePlayMode,
+    CycleGroupMode,
 }
 
 pub const CONTROL_BINDING_PREFIX: &str = "control:";
@@ -466,6 +467,13 @@ pub const CONTROL_HOTKEY_ACTIONS: &[ControlHotkeyActionMeta] = &[
         title: "Cycle Play Mode",
         subtitle: "Cycle between default / loop / continue",
     },
+    ControlHotkeyActionMeta {
+        action: ControlHotkeyAction::CycleGroupMode,
+        id: "cycle_group_mode",
+        binding_id: "control:cycle_group_mode",
+        title: "Cycle Shared Hotkey Mode",
+        subtitle: "Cycle between same / next / random for hotkeys with several sounds",
+    },
 ];
 
 impl ControlHotkeyAction {
@@ -527,6 +535,8 @@ pub struct ControlHotkeys {
     pub mute_real_mic: Option<String>,
     #[serde(default)]
     pub cycle_play_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_group_mode: Option<String>,
 }
 
 impl ControlHotkeys {
@@ -539,6 +549,7 @@ impl ControlHotkeys {
             ControlHotkeyAction::MuteHeadphones => self.mute_headphones.clone(),
             ControlHotkeyAction::MuteRealMic => self.mute_real_mic.clone(),
             ControlHotkeyAction::CyclePlayMode => self.cycle_play_mode.clone(),
+            ControlHotkeyAction::CycleGroupMode => self.cycle_group_mode.clone(),
         }
     }
 
@@ -551,6 +562,7 @@ impl ControlHotkeys {
             ControlHotkeyAction::MuteHeadphones => self.mute_headphones = hotkey,
             ControlHotkeyAction::MuteRealMic => self.mute_real_mic = hotkey,
             ControlHotkeyAction::CyclePlayMode => self.cycle_play_mode = hotkey,
+            ControlHotkeyAction::CycleGroupMode => self.cycle_group_mode = hotkey,
         }
     }
 }

@@ -452,7 +452,7 @@ pub fn handle_hotkey(
 }
 
 fn handle_control_hotkey(
-    _state: &Arc<AppState>,
+    state: &Arc<AppState>,
     transport: &TransportBar,
     action: crate::config::ControlHotkeyAction,
 ) {
@@ -476,6 +476,19 @@ fn handle_control_hotkey(
         crate::config::ControlHotkeyAction::MuteRealMic => {
             transport.toggle_mic_mute();
             transport.refresh_controls_from_state();
+        }
+        crate::config::ControlHotkeyAction::CycleGroupMode => {
+            match commands::cycle_group_mode(Arc::clone(&state.config)) {
+                Ok(mode) => crate::ui_event_bridge::post_toast(format!(
+                    "Shared hotkeys: {}",
+                    match mode {
+                        crate::config::GroupMode::Same => "play the same sound",
+                        crate::config::GroupMode::Next => "play the next sound",
+                        crate::config::GroupMode::Random => "play a random sound",
+                    }
+                )),
+                Err(error) => log::warn!("Could not cycle the shared hotkey mode: {error}"),
+            }
         }
         crate::config::ControlHotkeyAction::CyclePlayMode => {
             transport.cycle_play_mode();

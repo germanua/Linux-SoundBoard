@@ -1,6 +1,8 @@
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+use std::str::FromStr;
+
 use crate::config::{ControlHotkeyAction, TAB_BINDING_PREFIX};
 use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
 use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
@@ -175,6 +177,49 @@ where
         move || set_control_hotkey(action, hotkey, library, projection),
         on_complete,
     )
+}
+
+/// Answer only the active tab's sound hotkeys while it is showing.
+pub fn set_tab_hotkeys(
+    enabled: bool,
+    config: Arc<Mutex<crate::config::Config>>,
+) -> Result<(), CommandError> {
+    super::shared::with_saved_config(&config, |cfg| {
+        cfg.settings.tab_hotkeys = enabled;
+    })
+}
+
+/// Allow several sounds to answer to one hotkey.
+pub fn set_multi_sound_hotkeys(
+    enabled: bool,
+    config: Arc<Mutex<crate::config::Config>>,
+) -> Result<(), CommandError> {
+    super::shared::with_saved_config(&config, |cfg| {
+        cfg.settings.multi_sound_hotkeys = enabled;
+    })
+}
+
+/// Which member a press plays when several sounds share a hotkey.
+pub fn set_group_mode(
+    mode: String,
+    config: Arc<Mutex<crate::config::Config>>,
+) -> Result<(), CommandError> {
+    let mode = crate::config::GroupMode::from_str(&mode)
+        .map_err(|()| CommandError::Invalid(format!("Unknown shared hotkey mode: {mode}")))?;
+    super::shared::with_saved_config(&config, |cfg| {
+        cfg.settings.group_mode = mode;
+    })
+}
+
+/// Advance the shared-hotkey mode, and report where it landed.
+pub fn cycle_group_mode(
+    config: Arc<Mutex<crate::config::Config>>,
+) -> Result<crate::config::GroupMode, CommandError> {
+    super::shared::with_saved_config_result(&config, |cfg| {
+        let next = cfg.settings.group_mode.next_mode();
+        cfg.settings.group_mode = next;
+        Ok(next)
+    })
 }
 
 /// The binding id a tab's hotkey is stored and projected under.

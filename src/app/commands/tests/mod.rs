@@ -859,3 +859,38 @@ fn a_tab_binding_id_is_not_mistaken_for_a_sound() {
         None
     );
 }
+
+#[test]
+fn cycling_the_shared_hotkey_mode_walks_all_three_and_wraps() {
+    let config = create_test_config_state();
+
+    let modes: Vec<crate::config::GroupMode> = (0..4)
+        .map(|_| commands::cycle_group_mode(Arc::clone(&config)).expect("cycle"))
+        .collect();
+
+    assert_eq!(
+        modes,
+        [
+            crate::config::GroupMode::Next,
+            crate::config::GroupMode::Random,
+            crate::config::GroupMode::Same,
+            crate::config::GroupMode::Next,
+        ]
+    );
+    assert_eq!(
+        config.lock().settings.group_mode,
+        crate::config::GroupMode::Next
+    );
+}
+
+#[test]
+fn an_unknown_shared_hotkey_mode_is_rejected() {
+    let config = create_test_config_state();
+
+    commands::set_group_mode("sideways".to_string(), Arc::clone(&config))
+        .expect_err("only same, next and random exist");
+    assert_eq!(
+        config.lock().settings.group_mode,
+        crate::config::GroupMode::Same
+    );
+}
