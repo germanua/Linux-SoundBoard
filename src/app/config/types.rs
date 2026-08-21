@@ -176,6 +176,53 @@ impl FromStr for PlayMode {
 }
 impl_string_serde_enum!(PlayMode);
 
+/// How a hotkey shared by several sounds picks which one to play.
+///
+/// Deliberately separate from [`PlayMode`]: that one decides what happens when
+/// a sound *finishes*, this one decides what a *press* selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum GroupMode {
+    /// Replay whichever member was played last.
+    #[default]
+    Same,
+    /// Advance through the members in order, one per press.
+    Next,
+    /// Pick a member at random.
+    Random,
+}
+
+impl GroupMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Next => "next",
+            Self::Random => "random",
+        }
+    }
+
+    pub const fn next_mode(self) -> Self {
+        match self {
+            Self::Same => Self::Next,
+            Self::Next => Self::Random,
+            Self::Random => Self::Same,
+        }
+    }
+}
+
+impl FromStr for GroupMode {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "same" => Ok(Self::Same),
+            "next" => Ok(Self::Next),
+            "random" => Ok(Self::Random),
+            _ => Err(()),
+        }
+    }
+}
+impl_string_serde_enum!(GroupMode);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ListStyle {
     #[default]

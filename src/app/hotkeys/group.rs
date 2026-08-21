@@ -1,0 +1,344 @@
+//! Which sound a hotkey press plays when several sounds share one chord.
+//!
+//! Kept free of GTK, SQLite and I/O so the rules are testable on their own.
+//! One chord is projected to the backends once (see `projection.rs`); the press
+//! then arrives here with every binding that shares that chord, and this module
+//! decides what — if anything — to play.
+
+// Wired into the press path in a later phase; the rules land first.
+#![allow(dead_code)]
+
+use crate::config::GroupMode;
+
+/// One binding that shares the pressed chord.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupMember {
+    pub binding_id: String,
+    pub sound_id: String,
+    /// `None` means the binding is live in every tab, which is how every
+    /// binding that predates tab scoping is stored.
+    pub tab_scope: Option<String>,
+}
+
+/// The two independent Settings toggles that govern resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct HotkeyToggles {
+    pub tab_hotkeys: bool,
+    pub multi_sound: bool,
+}
+
+/// Why a press produced no sound. Each variant maps to a distinct user-facing
+/// explanation, so "nothing happened" is never silent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InertReason {
+    /// The chord has no active bindings at all.
+    NoMembers,
+    /// Every binding for this chord belongs to some other tab.
+    OutOfScope,
+    /// The chord resolves to bindings from more than one scope, so there is no
+    /// single right answer. Deliberately does nothing rather than guessing.
+    Ambiguous,
+    /// Several sounds share the chord but "Multiple sounds per hotkey" is off.
+    MultiSoundDisabled,
+}
+
+/// The index into the `members` slice that was passed in, or the reason none
+/// was chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Selection {
+    Play(usize),
+    Inert(InertReason),
+}
+
+/// Resolve a pressed chord to one member.
+///
+/// `active_scope` is the tab key currently showing. `last_played` is the sound
+/// id this chord played last, tracked by the caller; it is matched by id rather
+/// than by index so that adding or removing a member cannot silently change
+/// what "Same" replays. `entropy` supplies `GroupMode::Random`.
+pub(crate) fn select_from_group(
+    members: &[GroupMember],
+    active_scope: &str,
+    toggles: HotkeyToggles,
+    mode: GroupMode,
+    last_played: Option<&str>,
+    entropy: u64,
+) -> Selection {
+    if members.is_empty() {
+        return Selection::Inert(InertReason::NoMembers);
+    }
+
+    // Indices into `members`, so the answer addresses the caller's slice.
+    let candidates: Vec<usize> = if toggles.tab_hotkeys {
+        members
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| {
+                member.tab_scope.is_none() || member.tab_scope.as_deref() == Some(active_scope)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    } else {
+        (0..members.len()).collect()
+    };
+
+    let Some(&first) = candidates.first() else {
+        return Selection::Inert(InertReason::OutOfScope);
+    };
+
+    // Members from different scopes cannot be ranked against each other, and
+    // guessing a winner would make the same key mean different things on
+    // different days. General is the common case: it holds every sound, so a
+    // chord reused in two tabs lands here.
+    let scope = members[first].tab_scope.as_deref();
+    if candidates
+        .iter()
+        .any(|&index| members[index].tab_scope.as_deref() != scope)
+    {
+        return Selection::Inert(InertReason::Ambiguous);
+    }
+
+    if candidates.len() == 1 {
+        return Selection::Play(first);
+    }
+    if !toggles.multi_sound {
+        return Selection::Inert(InertReason::MultiSoundDisabled);
+    }
+
+    let previous =
+        last_played.and_then(|id| candidates.iter().position(|&i| members[i].sound_id == id));
+    let position = match mode {
+        GroupMode::Same => previous.unwrap_or(0),
+        GroupMode::Next => previous.map_or(0, |p| (p + 1) % candidates.len()),
+        GroupMode::Random => (entropy % candidates.len() as u64) as usize,
+    };
+
+    Selection::Play(candidates[position])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn member(sound: &str, scope: Option<&str>) -> GroupMember {
+        GroupMember {
+            binding_id: format!("binding-{sound}"),
+            sound_id: sound.to_string(),
+            tab_scope: scope.map(str::to_string),
+        }
+    }
+
+    const OFF: HotkeyToggles = HotkeyToggles {
+        tab_hotkeys: false,
+        multi_sound: false,
+    };
+    const TABS: HotkeyToggles = HotkeyToggles {
+        tab_hotkeys: true,
+        multi_sound: false,
+    };
+    const MULTI: HotkeyToggles = HotkeyToggles {
+        tab_hotkeys: false,
+        multi_sound: true,
+    };
+    const BOTH: HotkeyToggles = HotkeyToggles {
+        tab_hotkeys: true,
+        multi_sound: true,
+    };
+
+    fn select(
+        members: &[GroupMember],
+        scope: &str,
+        toggles: HotkeyToggles,
+        mode: GroupMode,
+        last: Option<&str>,
+    ) -> Selection {
+        select_from_group(members, scope, toggles, mode, last, 0)
+    }
+
+    // ── Today's behavior must survive unchanged ─────────────────────────────
+
+    #[test]
+    fn single_unscoped_binding_plays_with_every_toggle_off() {
+        let members = [member("a", None)];
+        assert_eq!(
+            select(&members, "general", OFF, GroupMode::Same, None),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn unscoped_binding_still_plays_in_general_with_tab_scoping_on() {
+        let members = [member("a", None)];
+        assert_eq!(
+            select(&members, "general", TABS, GroupMode::Same, None),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn empty_group_is_inert() {
+        assert_eq!(
+            select(&[], "general", BOTH, GroupMode::Same, None),
+            Selection::Inert(InertReason::NoMembers)
+        );
+    }
+
+    // ── Toggle A: tab scoping ───────────────────────────────────────────────
+
+    #[test]
+    fn binding_from_another_tab_does_not_fire() {
+        let members = [member("a", Some("tab-a"))];
+        assert_eq!(
+            select(&members, "tab-b", TABS, GroupMode::Same, None),
+            Selection::Inert(InertReason::OutOfScope)
+        );
+    }
+
+    #[test]
+    fn binding_from_the_active_tab_fires() {
+        let members = [member("a", Some("tab-a"))];
+        assert_eq!(
+            select(&members, "tab-a", TABS, GroupMode::Same, None),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn chord_reused_across_tabs_is_inert_in_general() {
+        let members = [member("a", Some("tab-a")), member("b", Some("tab-b"))];
+        assert_eq!(
+            select(&members, "general", TABS, GroupMode::Same, None),
+            Selection::Inert(InertReason::OutOfScope)
+        );
+    }
+
+    #[test]
+    fn chord_reused_across_tabs_resolves_inside_one_of_them() {
+        let members = [member("a", Some("tab-a")), member("b", Some("tab-b"))];
+        assert_eq!(
+            select(&members, "tab-b", TABS, GroupMode::Same, None),
+            Selection::Play(1)
+        );
+    }
+
+    #[test]
+    fn unscoped_and_scoped_binding_on_one_chord_is_ambiguous() {
+        let members = [member("a", None), member("b", Some("tab-a"))];
+        assert_eq!(
+            select(&members, "tab-a", TABS, GroupMode::Same, None),
+            Selection::Inert(InertReason::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn scopes_left_over_from_tab_scoping_stay_inert_once_it_is_off() {
+        let members = [member("a", Some("tab-a")), member("b", Some("tab-b"))];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Same, None),
+            Selection::Inert(InertReason::Ambiguous)
+        );
+    }
+
+    // ── Toggle B: several sounds on one chord ───────────────────────────────
+
+    #[test]
+    fn group_needs_the_multi_sound_toggle() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select(&members, "general", OFF, GroupMode::Same, None),
+            Selection::Inert(InertReason::MultiSoundDisabled)
+        );
+    }
+
+    #[test]
+    fn same_replays_the_last_member() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Same, Some("c")),
+            Selection::Play(2)
+        );
+    }
+
+    #[test]
+    fn same_falls_back_to_the_first_member() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Same, None),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn same_falls_back_when_the_last_member_left_the_group() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Same, Some("gone")),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn next_starts_at_the_first_member() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Next, None),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn next_advances_one_member_per_press() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Next, Some("a")),
+            Selection::Play(1)
+        );
+    }
+
+    #[test]
+    fn next_wraps_at_the_end() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select(&members, "general", MULTI, GroupMode::Next, Some("b")),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn random_picks_within_the_group() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select_from_group(&members, "general", MULTI, GroupMode::Random, None, 7),
+            Selection::Play(1)
+        );
+        assert_eq!(
+            select_from_group(&members, "general", MULTI, GroupMode::Random, None, 9),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn group_mode_is_ignored_for_a_single_member() {
+        let members = [member("a", None)];
+        for mode in [GroupMode::Same, GroupMode::Next, GroupMode::Random] {
+            assert_eq!(
+                select(&members, "general", MULTI, mode, Some("a")),
+                Selection::Play(0)
+            );
+        }
+    }
+
+    // ── Indices refer to the caller's slice, not a filtered copy ────────────
+
+    #[test]
+    fn returned_index_addresses_the_original_slice() {
+        let members = [
+            member("other", Some("tab-a")),
+            member("wanted", Some("tab-b")),
+        ];
+        assert_eq!(
+            select(&members, "tab-b", TABS, GroupMode::Same, None),
+            Selection::Play(1)
+        );
+    }
+}

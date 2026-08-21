@@ -1,5 +1,6 @@
 mod backend_runtime;
 mod error;
+mod group;
 mod manager_runtime;
 mod parsing;
 mod projection;
