@@ -576,10 +576,13 @@ impl SoundListInner {
                         updated_sound.hotkey = hotkey.clone();
                         let multi_sound_hotkeys =
                             state_confirm.config.lock().settings.multi_sound_hotkeys;
+                        // No scope: the assign dialog does not offer one yet,
+                        // so bindings stay live in every tab.
                         let dispatch = commands::set_hotkey_async(
                             sound.id.clone(),
                             hotkey,
                             multi_sound_hotkeys,
+                            None,
                             state_confirm.library.clone(),
                             state_confirm.hotkey_projection.clone(),
                             move |result| match result {

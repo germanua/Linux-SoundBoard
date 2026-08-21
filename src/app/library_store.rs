@@ -121,6 +121,9 @@ pub struct ManualTabPage {
 pub enum HotkeyBindingOwner {
     Sound(String),
     Control(String),
+    /// A hotkey that makes a tab active instead of playing anything. Always
+    /// live, whichever tab is showing, or there would be no way back.
+    Tab(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +133,24 @@ pub struct HotkeyBindingRecord {
     pub accelerator: String,
     pub normalized: Option<String>,
     pub issue: Option<String>,
+    /// The tab this binding answers in; `None` means every tab. Ignored for
+    /// control actions and tab hotkeys, which are always live.
+    pub tab_scope: Option<String>,
+}
+
+/// The key a hotkey binding is scoped by. Covers all three kinds of tab: the
+/// General tab, a manual tab, and a folder tab, which has no id of its own.
+/// The unit separator cannot appear in a path, so the two halves of a folder
+/// key stay unambiguous.
+pub fn scope_key(scope: &LibraryScope) -> String {
+    match scope {
+        LibraryScope::General => crate::app_meta::GENERAL_TAB_ID.to_string(),
+        LibraryScope::ManualTab(public_id) => format!("tab:{public_id}"),
+        LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } => format!("folder:{root_path}\u{1f}{relative_path}"),
+    }
 }
 
 /// One sound that answers to a chord, as seen from a press.
@@ -411,6 +432,7 @@ enum Request {
         binding_id: String,
         normalized: String,
         sounds_may_share: bool,
+        tab_scope: Option<String>,
         reply: mpsc::SyncSender<Result<Option<String>, LibraryError>>,
     },
     LoudnessStats {
@@ -675,6 +697,7 @@ pub(crate) fn legacy_hotkey_binding(
             accelerator: canonical,
             normalized: None,
             issue: Some("valid legacy candidate".to_string()),
+            tab_scope: None,
         },
         Err(error) => HotkeyBindingRecord {
             binding_id,
@@ -682,6 +705,7 @@ pub(crate) fn legacy_hotkey_binding(
             accelerator: raw.to_string(),
             normalized: None,
             issue: Some(format!("invalid legacy binding: {error}")),
+            tab_scope: None,
         },
     }
 }
@@ -1010,6 +1034,7 @@ impl LibraryStore {
         binding_id: &str,
         normalized: &str,
         sounds_may_share: bool,
+        tab_scope: Option<&str>,
     ) -> LibraryResponse<Option<String>> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
@@ -1017,6 +1042,7 @@ impl LibraryStore {
                 binding_id: binding_id.to_string(),
                 normalized: normalized.to_string(),
                 sounds_may_share,
+                tab_scope: tab_scope.map(str::to_string),
                 reply,
             },
             response,
@@ -1574,6 +1600,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
             binding_id,
             normalized,
             sounds_may_share,
+            tab_scope,
             reply,
         } => {
             let _ = reply.send(load_hotkey_conflict(
@@ -1581,6 +1608,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
                 &binding_id,
                 &normalized,
                 sounds_may_share,
+                tab_scope.as_deref(),
             ));
         }
         Request::LoudnessStats { reply } => {
@@ -3275,11 +3303,12 @@ fn insert_hotkey_bindings(
 ) -> Result<(), LibraryError> {
     let mut insert = transaction.prepare(
         "INSERT INTO hotkey_bindings(
-             binding_id, sound_id, control_action, accelerator, normalized, state, issue
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             binding_id, sound_id, control_action, target_tab, tab_scope,
+             accelerator, normalized, state, issue
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?;
     for binding in rows {
-        let (sound_id, control_action) = match &binding.owner {
+        let (sound_id, control_action, target_tab) = match &binding.owner {
             HotkeyBindingOwner::Sound(public_id) => (
                 Some(
                     transaction
@@ -3296,8 +3325,10 @@ fn insert_hotkey_bindings(
                         })?,
                 ),
                 None,
+                None,
             ),
-            HotkeyBindingOwner::Control(action) => (None, Some(action.as_str())),
+            HotkeyBindingOwner::Control(action) => (None, Some(action.as_str()), None),
+            HotkeyBindingOwner::Tab(tab) => (None, None, Some(tab.as_str())),
         };
         let state = if binding.normalized.is_some() {
             "active"
@@ -3308,6 +3339,8 @@ fn insert_hotkey_bindings(
             binding.binding_id,
             sound_id,
             control_action,
+            target_tab,
+            binding.tab_scope,
             binding.accelerator,
             binding.normalized,
             state,
@@ -3397,7 +3430,9 @@ fn load_library_stats(connection: &Connection) -> Result<LibraryStats, LibraryEr
         "SELECT COUNT(*) FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active'
-           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})"
+           AND (binding.control_action IS NOT NULL
+                OR binding.target_tab IS NOT NULL
+                OR {LIVE_SOUND_FILTER})"
     );
     let active_hotkeys: i64 = connection.query_row(&hotkey_sql, [], |row| row.get(0))?;
     let convert = |value: i64| {
@@ -4015,11 +4050,14 @@ fn load_hotkey_bindings_after(
 ) -> Result<HotkeyBindingPage, LibraryError> {
     let sql = format!(
         "SELECT binding.binding_id, sound.public_id, binding.control_action,
-                binding.accelerator, binding.normalized, binding.issue
+                binding.accelerator, binding.normalized, binding.issue,
+                binding.target_tab, binding.tab_scope
          FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active' AND (?1 IS NULL OR binding.binding_id > ?1)
-           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+           AND (binding.control_action IS NOT NULL
+                OR binding.target_tab IS NOT NULL
+                OR {LIVE_SOUND_FILTER})
            AND binding.binding_id = (
                SELECT representative.binding_id
                FROM hotkey_bindings AS representative
@@ -4038,19 +4076,13 @@ fn load_hotkey_bindings_after(
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map(params![after, usize_to_i64(PAGE_SIZE)?], |row| {
-        let sound_id: Option<String> = row.get(1)?;
-        let control_action: Option<String> = row.get(2)?;
-        let owner = match (sound_id, control_action) {
-            (Some(id), None) => HotkeyBindingOwner::Sound(id),
-            (None, Some(action)) => HotkeyBindingOwner::Control(action),
-            _ => return Err(rusqlite::Error::InvalidQuery),
-        };
         Ok(HotkeyBindingRecord {
             binding_id: row.get(0)?,
-            owner,
+            owner: binding_owner(row.get(1)?, row.get(2)?, row.get(6)?)?,
             accelerator: row.get(3)?,
             normalized: row.get(4)?,
             issue: row.get(5)?,
+            tab_scope: row.get(7)?,
         })
     })?;
     let mut bindings = Vec::with_capacity(PAGE_SIZE);
@@ -4058,6 +4090,20 @@ fn load_hotkey_bindings_after(
         bindings.push(binding?);
     }
     Ok(HotkeyBindingPage { bindings })
+}
+
+/// Exactly one of the three is set; the table's CHECK guarantees it.
+fn binding_owner(
+    sound_id: Option<String>,
+    control_action: Option<String>,
+    target_tab: Option<String>,
+) -> Result<HotkeyBindingOwner, rusqlite::Error> {
+    match (sound_id, control_action, target_tab) {
+        (Some(id), None, None) => Ok(HotkeyBindingOwner::Sound(id)),
+        (None, Some(action), None) => Ok(HotkeyBindingOwner::Control(action)),
+        (None, None, Some(tab)) => Ok(HotkeyBindingOwner::Tab(tab)),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
 }
 
 fn load_hotkey_group(
@@ -4101,27 +4147,24 @@ fn load_hotkey_binding(
 ) -> Result<Option<HotkeyBindingRecord>, LibraryError> {
     let sql = format!(
         "SELECT binding.binding_id, sound.public_id, binding.control_action,
-                binding.accelerator, binding.normalized, binding.issue
+                binding.accelerator, binding.normalized, binding.issue,
+                binding.target_tab, binding.tab_scope
          FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.binding_id = ?1
-           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})"
+           AND (binding.control_action IS NOT NULL
+                OR binding.target_tab IS NOT NULL
+                OR {LIVE_SOUND_FILTER})"
     );
     connection
         .query_row(&sql, [binding_id], |row| {
-            let sound_id: Option<String> = row.get(1)?;
-            let control_action: Option<String> = row.get(2)?;
-            let owner = match (sound_id, control_action) {
-                (Some(id), None) => HotkeyBindingOwner::Sound(id),
-                (None, Some(action)) => HotkeyBindingOwner::Control(action),
-                _ => return Err(rusqlite::Error::InvalidQuery),
-            };
             Ok(HotkeyBindingRecord {
                 binding_id: row.get(0)?,
-                owner,
+                owner: binding_owner(row.get(1)?, row.get(2)?, row.get(6)?)?,
                 accelerator: row.get(3)?,
                 normalized: row.get(4)?,
                 issue: row.get(5)?,
+                tab_scope: row.get(7)?,
             })
         })
         .optional()
@@ -4133,33 +4176,40 @@ fn load_hotkey_conflict(
     binding_id: &str,
     normalized: &str,
     sounds_may_share: bool,
+    tab_scope: Option<&str>,
 ) -> Result<Option<String>, LibraryError> {
     let sql = format!(
-        "SELECT sound.name, binding.control_action
+        "SELECT sound.name, binding.control_action, binding.target_tab
          FROM hotkey_bindings AS binding
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active'
            AND binding.normalized = ?1
            AND binding.binding_id <> ?2
-           AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+           AND (binding.control_action IS NOT NULL
+                OR binding.target_tab IS NOT NULL
+                OR {LIVE_SOUND_FILTER})
            AND (?3 = 0 OR binding.sound_id IS NULL)
+           AND (binding.tab_scope IS NULL OR ?4 IS NULL OR binding.tab_scope = ?4)
          LIMIT 1"
     );
     let conflict = connection
         .query_row(
             &sql,
-            params![normalized, binding_id, sounds_may_share],
+            params![normalized, binding_id, sounds_may_share, tab_scope],
             |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
                 ))
             },
         )
         .optional()?;
-    Ok(conflict.map(|(sound_name, control_action)| {
+    Ok(conflict.map(|(sound_name, control_action, target_tab)| {
         if let Some(sound_name) = sound_name {
             format!("sound \"{sound_name}\"")
+        } else if target_tab.is_some() {
+            "a tab hotkey".to_string()
         } else if let Some(action) = control_action
             .as_deref()
             .and_then(ControlHotkeyAction::from_id)
@@ -4204,8 +4254,14 @@ fn set_hotkey_binding(
         ));
     }
 
+    if matches!(binding.owner, HotkeyBindingOwner::Tab(_)) && binding.tab_scope.is_some() {
+        return Err(LibraryError::InvalidData(
+            "a tab hotkey cannot itself be scoped to a tab".to_string(),
+        ));
+    }
+
     let transaction = connection.transaction()?;
-    let (sound_id, control_action) = match &binding.owner {
+    let (sound_id, control_action, target_tab) = match &binding.owner {
         HotkeyBindingOwner::Sound(public_id) => {
             let sound_id = transaction
                 .query_row(
@@ -4221,7 +4277,7 @@ fn set_hotkey_binding(
                 "DELETE FROM hotkey_bindings WHERE binding_id = ?1 OR sound_id = ?2",
                 params![&binding.binding_id, sound_id],
             )?;
-            (Some(sound_id), None)
+            (Some(sound_id), None, None)
         }
         HotkeyBindingOwner::Control(action) => {
             if action.trim().is_empty() {
@@ -4233,7 +4289,19 @@ fn set_hotkey_binding(
                 "DELETE FROM hotkey_bindings WHERE binding_id = ?1 OR control_action = ?2",
                 params![&binding.binding_id, action],
             )?;
-            (None, Some(action.as_str()))
+            (None, Some(action.as_str()), None)
+        }
+        HotkeyBindingOwner::Tab(tab) => {
+            if tab.trim().is_empty() {
+                return Err(LibraryError::InvalidData(
+                    "tab hotkey target cannot be empty".to_string(),
+                ));
+            }
+            transaction.execute(
+                "DELETE FROM hotkey_bindings WHERE binding_id = ?1 OR target_tab = ?2",
+                params![&binding.binding_id, tab],
+            )?;
+            (None, None, Some(tab.as_str()))
         }
     };
     let state = if binding.normalized.is_some() {
@@ -4248,12 +4316,15 @@ fn set_hotkey_binding(
     };
     let changed = transaction.execute(
         "INSERT INTO hotkey_bindings(
-             binding_id, sound_id, control_action, accelerator, normalized, state, issue
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             binding_id, sound_id, control_action, target_tab, tab_scope,
+             accelerator, normalized, state, issue
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             binding.binding_id,
             sound_id,
             control_action,
+            target_tab,
+            binding.tab_scope,
             binding.accelerator,
             binding.normalized,
             state,

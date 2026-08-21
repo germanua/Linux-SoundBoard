@@ -49,6 +49,7 @@ fn seed_hotkey_binding(
     let binding_id = match &owner {
         HotkeyBindingOwner::Sound(id) => id.clone(),
         HotkeyBindingOwner::Control(action) => action.clone(),
+        HotkeyBindingOwner::Tab(tab) => tab.clone(),
     };
     library
         .apply_batch(LibraryBatch::HotkeyBindings(vec![HotkeyBindingRecord {
@@ -57,6 +58,7 @@ fn seed_hotkey_binding(
             accelerator: accelerator.to_string(),
             normalized: Some(accelerator.to_string()),
             issue: None,
+            tab_scope: None,
         }]))
         .recv()
         .expect("seed hotkey binding");
@@ -489,6 +491,7 @@ fn test_set_hotkey_valid() {
         sound_id.clone(),
         Some("Ctrl+1".to_string()),
         false,
+        None,
         library.clone(),
         projection,
     );
@@ -517,7 +520,14 @@ fn test_set_hotkey_clear() {
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
-    let result = commands::set_hotkey(sound_id.clone(), None, false, library.clone(), projection);
+    let result = commands::set_hotkey(
+        sound_id.clone(),
+        None,
+        false,
+        None,
+        library.clone(),
+        projection,
+    );
     match result {
         Ok(_) => {
             assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
@@ -646,6 +656,7 @@ fn a_sound_may_join_a_chord_another_sound_already_answers_to() {
         second_id.clone(),
         Some("Ctrl+Alt+KeyG".to_string()),
         true,
+        None,
         library.clone(),
         projection,
     )
@@ -678,6 +689,7 @@ fn a_sound_may_not_join_a_chord_while_multiple_sounds_are_off() {
         second_id,
         Some("Ctrl+Alt+KeyG".to_string()),
         false,
+        None,
         library,
         projection,
     )
@@ -708,6 +720,7 @@ fn a_sound_may_never_take_a_control_actions_chord() {
         sound_id,
         Some("Ctrl+Alt+KeyH".to_string()),
         true,
+        None,
         library,
         projection,
     )
@@ -716,4 +729,113 @@ fn a_sound_may_never_take_a_control_actions_chord() {
         crate::hotkeys::format_hotkey_error(&error.to_string()),
         "That shortcut is already assigned to control action \"Stop All\"."
     );
+}
+
+#[test]
+fn a_tab_can_be_given_its_own_hotkey() {
+    let hotkeys = create_projection_hotkey_manager();
+    let library = create_test_library_with(&[], &[]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    commands::set_tab_hotkey(
+        "tab:party".to_string(),
+        Some("Ctrl+Alt+Digit1".to_string()),
+        library.clone(),
+        projection,
+    )
+    .expect("bind a tab");
+
+    let binding = library
+        .hotkey_binding(&commands::tab_binding_id("tab:party"))
+        .recv()
+        .expect("read the binding")
+        .expect("the tab hotkey is stored");
+    assert_eq!(
+        binding.owner,
+        crate::library_store::HotkeyBindingOwner::Tab("tab:party".to_string())
+    );
+    // Always live, or there would be no way to switch back to this tab.
+    assert_eq!(binding.tab_scope, None);
+}
+
+#[test]
+fn a_tab_hotkey_may_not_take_a_chord_a_sound_answers_to() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(sound.id.clone()),
+        "Ctrl+Alt+Digit2",
+    );
+
+    commands::set_tab_hotkey(
+        "tab:party".to_string(),
+        Some("Ctrl+Alt+Digit2".to_string()),
+        library,
+        projection,
+    )
+    .expect_err("a tab hotkey is live everywhere, so it cannot share a chord");
+}
+
+#[test]
+fn two_tabs_may_use_the_same_chord_for_different_sounds() {
+    let hotkeys = create_projection_hotkey_manager();
+    let first = Sound::new("First".to_string(), "/tmp/first.mp3".to_string());
+    let second = Sound::new("Second".to_string(), "/tmp/second.mp3".to_string());
+    let second_id = second.id.clone();
+    let library = create_test_library_with(&[], &[first.clone(), second]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    commands::set_hotkey(
+        first.id.clone(),
+        Some("Ctrl+Alt+Digit3".to_string()),
+        false,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection.clone(),
+    )
+    .expect("bind the chord in the first tab");
+
+    // Different tabs never answer at the same time, so this is not a clash
+    // even with multiple sounds per hotkey off.
+    commands::set_hotkey(
+        second_id,
+        Some("Ctrl+Alt+Digit3".to_string()),
+        false,
+        Some("tab:two".to_string()),
+        library,
+        projection,
+    )
+    .expect("the same chord may mean something else in another tab");
+}
+
+#[test]
+fn a_scoped_binding_still_clashes_with_one_that_is_live_everywhere() {
+    let hotkeys = create_projection_hotkey_manager();
+    let first = Sound::new("First".to_string(), "/tmp/first.mp3".to_string());
+    let second = Sound::new("Second".to_string(), "/tmp/second.mp3".to_string());
+    let second_id = second.id.clone();
+    let library = create_test_library_with(&[], &[first.clone(), second]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(first.id.clone()),
+        "Ctrl+Alt+Digit4",
+    );
+
+    commands::set_hotkey(
+        second_id,
+        Some("Ctrl+Alt+Digit4".to_string()),
+        false,
+        Some("tab:one".to_string()),
+        library,
+        projection,
+    )
+    .expect_err("an unscoped binding answers in this tab too");
 }

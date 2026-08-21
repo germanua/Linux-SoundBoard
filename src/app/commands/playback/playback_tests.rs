@@ -148,6 +148,7 @@ mod dispatch {
                     accelerator: chord.to_string(),
                     normalized: Some(chord.to_string()),
                     issue: None,
+                    tab_scope: None,
                 })
                 .recv()
                 .expect("bind the chord");

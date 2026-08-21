@@ -466,6 +466,7 @@ fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
         accelerator: "Ctrl+KeyS".to_string(),
         normalized: Some("Ctrl+KeyS".to_string()),
         issue: None,
+        tab_scope: None,
     })));
     let page = wait(store.hotkey_bindings_after(None));
     assert_eq!(page.bindings.len(), 1);
@@ -478,6 +479,7 @@ fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
         accelerator: "Alt+KeyS".to_string(),
         normalized: Some("Alt+KeyS".to_string()),
         issue: None,
+        tab_scope: None,
     })));
     let replaced = wait(store.hotkey_bindings_after(None));
     assert_eq!(replaced.bindings.len(), 1);
@@ -490,6 +492,7 @@ fn hotkey_binding_api_pages_and_replaces_control_bindings_atomically() {
             accelerator: "Ctrl+KeyA".to_string(),
             normalized: Some("Alt+KeyB".to_string()),
             issue: None,
+            tab_scope: None,
         })
         .recv()
         .expect_err("normalized binding must match its accelerator");
@@ -514,6 +517,7 @@ fn hotkey_projection_excludes_stale_scan_sounds_but_keeps_controls() {
         accelerator: "Alt+KeyS".to_string(),
         normalized: Some("Alt+KeyS".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 
     let staged_generation = wait(store.begin_root_scan("/music", 0));
@@ -539,6 +543,7 @@ fn hotkey_projection_excludes_stale_scan_sounds_but_keeps_controls() {
         accelerator: "Ctrl+KeyP".to_string(),
         normalized: Some("Ctrl+KeyP".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 
     let bindings = wait(store.hotkey_bindings_after(None));
@@ -572,19 +577,21 @@ fn completed_scan_releases_stale_sound_hotkey_for_reassignment() {
         accelerator: "Ctrl+KeyP".to_string(),
         normalized: Some("Ctrl+KeyP".to_string()),
         issue: None,
+        tab_scope: None,
     })));
     assert!(wait(store.finish_root_scan("/music", first_generation)));
 
     let empty_generation = wait(store.begin_root_scan("/music", 0));
     assert!(wait(store.finish_root_scan("/music", empty_generation)));
 
-    assert!(wait(store.hotkey_conflict("control:stop", "Ctrl+KeyP", false)).is_none());
+    assert!(wait(store.hotkey_conflict("control:stop", "Ctrl+KeyP", false, None)).is_none());
     assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
         binding_id: "control:stop".to_string(),
         owner: HotkeyBindingOwner::Control("stop".to_string()),
         accelerator: "Ctrl+KeyP".to_string(),
         normalized: Some("Ctrl+KeyP".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 }
 
@@ -611,6 +618,7 @@ fn moving_a_sound_between_staged_roots_preserves_its_hotkey() {
         accelerator: "Ctrl+KeyP".to_string(),
         normalized: Some("Ctrl+KeyP".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 
     let second_generation = wait(store.begin_root_scan("/second", 1));
@@ -658,6 +666,7 @@ fn playback_lookup_resolves_only_active_sound_bindings() {
         accelerator: "not valid".to_string(),
         normalized: None,
         issue: Some("invalid legacy binding".to_string()),
+        tab_scope: None,
     })));
     assert!(wait(store.sound_for_binding("first")).is_none());
 }
@@ -2312,6 +2321,7 @@ fn several_sounds_on_one_chord_project_one_entry() {
             accelerator: "Ctrl+KeyA".to_string(),
             normalized: Some("Ctrl+KeyA".to_string()),
             issue: None,
+            tab_scope: None,
         })));
     }
 
@@ -2345,6 +2355,7 @@ fn a_hotkey_group_lists_every_sound_on_the_chord() {
             accelerator: "Ctrl+KeyA".to_string(),
             normalized: Some("Ctrl+KeyA".to_string()),
             issue: None,
+            tab_scope: None,
         })));
     }
 
@@ -2373,6 +2384,7 @@ fn an_unshared_chord_is_a_group_of_one() {
         accelerator: "Ctrl+KeyA".to_string(),
         normalized: Some("Ctrl+KeyA".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 
     let members = wait(store.hotkey_group("first"));
@@ -2395,6 +2407,7 @@ fn a_control_binding_represents_a_chord_it_shares() {
         accelerator: "Ctrl+KeyA".to_string(),
         normalized: Some("Ctrl+KeyA".to_string()),
         issue: None,
+        tab_scope: None,
     })));
     assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
         binding_id: "control:stop_all".to_string(),
@@ -2402,6 +2415,7 @@ fn a_control_binding_represents_a_chord_it_shares() {
         accelerator: "Ctrl+KeyA".to_string(),
         normalized: Some("Ctrl+KeyA".to_string()),
         issue: None,
+        tab_scope: None,
     })));
 
     // A control action and a sound cannot normally share a chord, but if they
@@ -2410,4 +2424,28 @@ fn a_control_binding_represents_a_chord_it_shares() {
     let page = wait(store.hotkey_bindings_after(None));
     assert_eq!(page.bindings.len(), 1);
     assert_eq!(page.bindings[0].binding_id, "control:stop_all");
+}
+
+#[test]
+fn every_kind_of_tab_has_a_scope_key() {
+    use crate::library_store::scope_key;
+
+    assert_eq!(scope_key(&LibraryScope::General), "general");
+    assert_eq!(
+        scope_key(&LibraryScope::ManualTab("party".to_string())),
+        "tab:party"
+    );
+    // A folder tab has no id of its own, so the key carries both halves. The
+    // separator cannot occur in a path, so "/a" + "b/c" can never collide with
+    // "/a/b" + "c".
+    let nested = scope_key(&LibraryScope::Folder {
+        root_path: "/music".to_string(),
+        relative_path: "memes/loud".to_string(),
+    });
+    let ambiguous = scope_key(&LibraryScope::Folder {
+        root_path: "/music/memes".to_string(),
+        relative_path: "loud".to_string(),
+    });
+    assert_ne!(nested, ambiguous);
+    assert!(nested.starts_with("folder:"));
 }

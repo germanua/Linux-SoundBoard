@@ -403,6 +403,10 @@ pub enum ControlHotkeyAction {
 
 pub const CONTROL_BINDING_PREFIX: &str = "control:";
 
+/// Binding id prefix for a hotkey that activates a tab. Keeps tab bindings
+/// apart from sound bindings, whose id is the sound's own public id.
+pub const TAB_BINDING_PREFIX: &str = "tab-hotkey:";
+
 #[derive(Debug, Clone, Copy)]
 pub struct ControlHotkeyActionMeta {
     pub action: ControlHotkeyAction,
@@ -664,6 +668,11 @@ pub struct Settings {
     pub control_hotkeys: ControlHotkeys,
     #[serde(default)]
     pub play_mode: PlayMode,
+    /// Give each tab its own hotkey, and answer only the active tab's sound
+    /// hotkeys while it is showing. Off leaves every binding live everywhere,
+    /// which is how hotkeys behaved before tabs could be bound.
+    #[serde(default)]
+    pub tab_hotkeys: bool,
     /// Allow several sounds to answer to one hotkey. Off keeps every chord
     /// unique, which is how hotkeys behaved before groups existed.
     #[serde(default)]
@@ -791,6 +800,7 @@ impl Default for Settings {
             auto_gain_attack_ms: default_auto_gain_attack_ms(),
             auto_gain_release_ms: default_auto_gain_release_ms(),
             control_hotkeys: ControlHotkeys::default(),
+            tab_hotkeys: false,
             multi_sound_hotkeys: false,
             group_mode: GroupMode::default(),
             play_mode: PlayMode::Default,
