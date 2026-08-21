@@ -393,6 +393,17 @@ struct FolderDropCallbacks {
     merged: FolderMergeCallback,
 }
 
+/// The hotkey scope key for a sidebar row, built the one way the library
+/// builds them, so the sidebar and the store never disagree about what a tab
+/// is called.
+fn tab_scope_key(tab_id: &str) -> String {
+    crate::library_store::scope_key(&if tab_id == GENERAL_TAB_ID {
+        crate::library_store::LibraryScope::General
+    } else {
+        crate::library_store::LibraryScope::ManualTab(tab_id.to_string())
+    })
+}
+
 fn folder_drop_overrides(
     payload: &tab_dnd::SoundTabDragPayload,
     target: &tab_dnd::FolderDragContext,
@@ -2095,9 +2106,7 @@ impl TabsInner {
         row.set_widget_name(id);
         row.add_css_class("tab-row");
 
-        if editable {
-            self.attach_tab_context_menu(&row, id.to_string(), name.to_string());
-        }
+        self.attach_tab_context_menu(&row, id.to_string(), name.to_string(), editable);
 
         row
     }
@@ -2107,6 +2116,7 @@ impl TabsInner {
         row: &ListBoxRow,
         tab_id: String,
         tab_name: String,
+        editable: bool,
     ) {
         let gesture = GestureClick::new();
         gesture.set_button(3);
@@ -2124,7 +2134,7 @@ impl TabsInner {
             let Some(widget) = gesture.widget() else {
                 return;
             };
-            inner.show_tab_context_menu(&widget, x, y, &tab_id, &tab_name);
+            inner.show_tab_context_menu(&widget, x, y, &tab_id, &tab_name, editable);
         });
 
         row.add_controller(gesture);
@@ -2605,6 +2615,73 @@ impl TabsInner {
             });
     }
 
+    /// Ask for a tab's hotkey, opening on whatever is already bound.
+    fn prompt_tab_hotkey(self: &Arc<Self>, scope_key: String, tab_name: String) {
+        let inner_weak = Arc::downgrade(self);
+        let dialog_weak = self.dialog_host.downgrade();
+        let binding_id = commands::tab_binding_id(&scope_key);
+
+        let read =
+            commands::hotkey_binding_async(binding_id, self.state.library.clone(), move |result| {
+                let current = match result {
+                    Ok(binding) => binding.map(|binding| binding.accelerator),
+                    Err(error) => {
+                        log::warn!("Could not read the tab's hotkey: {error}");
+                        None
+                    }
+                };
+                let (Some(inner), Some(dialog_host)) =
+                    (inner_weak.upgrade(), dialog_weak.upgrade())
+                else {
+                    return;
+                };
+                let dialog_report = dialog_weak.clone();
+                dialog_host.show_hotkey_capture(
+                    current.as_deref(),
+                    // A tab's own hotkey is live in every tab by definition.
+                    None,
+                    move |hotkey| {
+                        crate::hotkeys::canonicalize_hotkey_string(hotkey)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    },
+                    move |hotkey, _scoped| {
+                        let tab_name = tab_name.clone();
+                        let dialog_done = dialog_report.clone();
+                        let dispatch = commands::set_tab_hotkey_async(
+                            scope_key.clone(),
+                            hotkey.clone(),
+                            inner.state.library.clone(),
+                            inner.state.hotkey_projection.clone(),
+                            move |result| match result {
+                                Ok(()) => crate::ui_event_bridge::post_toast(match hotkey {
+                                    Some(hotkey) => format!("{tab_name} opens with {hotkey}"),
+                                    None => format!("{tab_name} has no hotkey"),
+                                }),
+                                Err(error) => {
+                                    log::warn!("Set tab hotkey failed: {error}");
+                                    if let Some(dialog_host) = dialog_done.upgrade() {
+                                        dialog_host.show_error(
+                                            "Failed to Set Tab Hotkey",
+                                            &crate::hotkeys::format_hotkey_error(
+                                                &error.to_string(),
+                                            ),
+                                        );
+                                    }
+                                }
+                            },
+                        );
+                        if let Err(error) = dispatch {
+                            log::warn!("Failed to dispatch the tab hotkey update: {error}");
+                        }
+                    },
+                );
+            });
+        if let Err(error) = read {
+            log::warn!("Failed to read the tab's hotkey: {error}");
+        }
+    }
+
     fn show_tab_context_menu(
         self: &Arc<Self>,
         widget: &Widget,
@@ -2612,14 +2689,41 @@ impl TabsInner {
         y: f64,
         tab_id: &str,
         tab_name: &str,
+        editable: bool,
     ) {
+        let tab_hotkeys = self.state.config.lock().settings.tab_hotkeys;
+
         let menu_model = gio::Menu::new();
-        menu_model.append(Some("Rename Tab"), Some("tab-ctx.rename"));
-        menu_model.append(Some("Delete Tab"), Some("tab-ctx.delete"));
+        if editable {
+            menu_model.append(Some("Rename Tab"), Some("tab-ctx.rename"));
+            menu_model.append(Some("Delete Tab"), Some("tab-ctx.delete"));
+        }
+        if tab_hotkeys {
+            menu_model.append(Some("Set Tab Hotkey"), Some("tab-ctx.hotkey"));
+        }
+        // General cannot be renamed or deleted, so with tab hotkeys off it has
+        // nothing to offer and no menu should appear at all.
+        if menu_model.n_items() == 0 {
+            return;
+        }
 
         let action_group = gio::SimpleActionGroup::new();
 
-        {
+        if tab_hotkeys {
+            let inner_weak = Arc::downgrade(self);
+            let scope = tab_scope_key(tab_id);
+            let tab_name = tab_name.to_string();
+            let action = gio::SimpleAction::new("hotkey", None);
+            action.connect_activate(move |_, _| {
+                let Some(inner_menu) = inner_weak.upgrade() else {
+                    return;
+                };
+                inner_menu.prompt_tab_hotkey(scope.clone(), tab_name.clone());
+            });
+            action_group.add_action(&action);
+        }
+
+        if editable {
             let inner_weak = Arc::downgrade(self);
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
@@ -2669,7 +2773,7 @@ impl TabsInner {
             action_group.add_action(&action);
         }
 
-        {
+        if editable {
             let inner_weak = Arc::downgrade(self);
             let tab_id = tab_id.to_string();
             let tab_name = tab_name.to_string();
@@ -3467,5 +3571,21 @@ mod tests {
                 "retained folder child row cost: n={count} delta_kib={delta_kib} bytes_per_row={bytes_per_row:.1}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tab_hotkey_tests {
+    use super::tab_scope_key;
+    use crate::app_meta::GENERAL_TAB_ID;
+
+    #[test]
+    fn general_and_manual_tabs_use_separate_scope_namespaces() {
+        // Manual tabs carry a uuid, so the two can never produce the same key.
+        assert_eq!(tab_scope_key(GENERAL_TAB_ID), "general");
+        assert_eq!(
+            tab_scope_key("41d0f0a4-6a1e-4a0e-9d2e-0b0f8a1d2c3e"),
+            "tab:41d0f0a4-6a1e-4a0e-9d2e-0b0f8a1d2c3e"
+        );
     }
 }

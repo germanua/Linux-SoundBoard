@@ -735,14 +735,15 @@ impl SoundListInner {
                     open(None);
                     return;
                 }
-                let read = commands::hotkey_scope_async(
+                let read = commands::hotkey_binding_async(
                     sound_id_for_scope.clone(),
                     state_for_scope.library.clone(),
                     move |result| {
-                        open(result.unwrap_or_else(|error| {
+                        let stored = result.unwrap_or_else(|error| {
                             log::warn!("Could not read the shortcut's tab: {error}");
                             None
-                        }));
+                        });
+                        open(stored.and_then(|binding| binding.tab_scope));
                     },
                 );
                 if let Err(error) = read {

@@ -179,24 +179,24 @@ where
     )
 }
 
-/// The tab a sound's hotkey is limited to, or `None` when it answers in every
-/// tab. Read before offering the choice again, so reopening the dialog shows
-/// what is stored rather than silently widening the binding on save.
-pub fn hotkey_scope_async<F>(
+/// The binding as stored, so a dialog can open showing what is actually there
+/// rather than a default. Reopening the sound hotkey dialog reads the tab it
+/// is limited to this way, which is what stops a re-save from silently
+/// widening the binding back to every tab.
+pub fn hotkey_binding_async<F>(
     binding_id: String,
     library: LibraryStore,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
-    F: FnOnce(Result<Option<String>, CommandError>) + 'static,
+    F: FnOnce(Result<Option<HotkeyBindingRecord>, CommandError>) + 'static,
 {
     dispatch_async_result(
-        "hotkey_scope",
+        "hotkey_binding",
         move || {
             library
                 .hotkey_binding(&binding_id)
                 .recv()
-                .map(|binding| binding.and_then(|binding| binding.tab_scope))
                 .map_err(|error| CommandError::Library(error.to_string()))
         },
         on_complete,
