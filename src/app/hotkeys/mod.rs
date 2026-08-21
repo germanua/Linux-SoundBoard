@@ -28,6 +28,7 @@ pub use parsing::{
 pub use projection::HotkeyProjectionCoordinator;
 pub use swhkd_install::{
     install_swhkd_native_detailed, manual_swhkd_install_commands, should_offer_swhkd_install,
+    uinput_unavailable,
     SwhkdInstallError, SwhkdInstallErrorKind, SwhkdInstallReport, SwhkdInstallState,
     SWHKD_UPSTREAM_INSTALL_URL,
 };

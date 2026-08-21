@@ -163,12 +163,14 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
     };
 
     format!(
-        "# 1) Install pkexec (polkit)\n{}\n\n# 2) Install build dependencies\n{}\n\n# 3) Build and install swhkd\nrm -rf /tmp/swhkd-build && git clone --depth 1 https://github.com/waycrate/swhkd.git /tmp/swhkd-build\ncd /tmp/swhkd-build\nmake clean || true\nmake\nsudo install -Dm755 target/release/swhkd /usr/bin/swhkd\nsudo install -Dm755 target/release/swhks /usr/bin/swhks\nsudo install -Dm644 /dev/null /etc/swhkd/swhkdrc\nsudo chown root:root /usr/bin/swhkd\nsudo chmod u+s /usr/bin/swhkd\nsudo chmod +x /usr/bin/swhks\n",
+        "# 1) Install pkexec (polkit)\n{}\n\n# 2) Install build dependencies\n{}\n\n# 3) Build and install swhkd\nrm -rf /tmp/swhkd-build && git clone --depth 1 https://github.com/waycrate/swhkd.git /tmp/swhkd-build\ncd /tmp/swhkd-build\nmake clean || true\nmake\nsudo install -Dm755 target/release/swhkd /usr/bin/swhkd\nsudo install -Dm755 target/release/swhks /usr/bin/swhks\nsudo install -Dm644 /dev/null /etc/swhkd/swhkdrc\nsudo chown root:root /usr/bin/swhkd\nsudo chmod u+s /usr/bin/swhkd\nsudo chmod +x /usr/bin/swhks\n\n# 4) Load the uinput module swhkd needs, now and at every boot\nsudo modprobe uinput\necho uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
         polkit_install, build_deps_install
     )
 }
 
-pub fn install_swhkd_native_detailed() -> Result<SwhkdInstallReport, SwhkdInstallError> {
+pub fn install_swhkd_native_detailed(
+    enable_uinput: bool,
+) -> Result<SwhkdInstallReport, SwhkdInstallError> {
     let distro = detect_distro_family();
     let mut states = vec![SwhkdInstallState::Idle, SwhkdInstallState::Checking];
 
@@ -224,10 +226,15 @@ pub fn install_swhkd_native_detailed() -> Result<SwhkdInstallReport, SwhkdInstal
         "Running privileged installer helper at '{}'",
         helper_path.display()
     );
-    let output = Command::new("pkexec")
+    let mut command = Command::new("pkexec");
+    command
         .arg(&helper_path)
         .arg("--distro")
-        .arg(distro_id(distro))
+        .arg(distro_id(distro));
+    if enable_uinput {
+        command.arg("--enable-uinput");
+    }
+    let output = command
         .output()
         .map_err(|e| SwhkdInstallError {
             kind: SwhkdInstallErrorKind::CommandFailed,
@@ -372,6 +379,18 @@ fn distro_id(distro: DistroFamily) -> &'static str {
         DistroFamily::Fedora => "fedora",
         DistroFamily::OpenSuse => "opensuse",
         DistroFamily::Other => "other",
+    }
+}
+
+/// True only when we are sure the uinput driver is absent: swhkd needs it to
+/// create its virtual keyboard, and opening the node then fails with ENODEV.
+pub fn uinput_unavailable() -> bool {
+    if std::path::Path::new("/sys/module/uinput").exists() {
+        return false;
+    }
+    match fs::OpenOptions::new().write(true).open("/dev/uinput") {
+        Ok(_) => false,
+        Err(error) => error.raw_os_error() == Some(19),
     }
 }
 

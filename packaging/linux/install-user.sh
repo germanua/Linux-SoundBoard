@@ -310,7 +310,29 @@ X-LinuxSoundboard-Managed=true
 EOF
 }
 
+# A type-2 AppImage is an ELF with the magic bytes AI\x02 at offset 8.
+is_appimage() {
+    local magic
+
+    [[ -f $1 ]] || return 1
+    magic="$(dd if="$1" bs=1 skip=8 count=3 status=none 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    [[ $magic == "414902" ]]
+}
+
 render_engine_service() {
+    local hardening=""
+
+    # All three imply NoNewPrivileges — the seccomp ones implicitly — which blocks
+    # the setuid fusermount an AppImage needs to mount itself.
+    if ! is_appimage "$INSTALL_BINARY"; then
+        hardening="# Hardening options tested compatible with PipeWire/PulseAudio user services.
+# ProtectHome and ProtectSystem are omitted: the engine must access user sound
+# files under \$HOME and does not run with mount namespaces in user sessions.
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes"
+    fi
+
     cat <<EOF
 $MANAGED_MARKER_LINE
 [Unit]
@@ -319,6 +341,8 @@ Documentation=$APP_URL
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
 PartOf=$ENGINE_TARGET_NAME
 RefuseManualStop=yes
+StartLimitIntervalSec=60
+StartLimitBurst=5
 X-LinuxSoundBoard-Managed=true
 
 [Service]
@@ -331,12 +355,7 @@ RestartSec=2s
 # Exit 2 means the saved configuration is unreadable or incompatible.
 RestartPreventExitStatus=2
 
-# Hardening options tested compatible with PipeWire/PulseAudio user services.
-# ProtectHome and ProtectSystem are omitted: the engine must access user sound
-# files under \$HOME and does not run with mount namespaces in user sessions.
-NoNewPrivileges=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
+${hardening}
 EOF
 }
 
@@ -940,6 +959,8 @@ reload_start_engine_service() {
 
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     systemctl --user disable "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
+    # Clears the start-rate limit left by an earlier broken engine.
+    systemctl --user reset-failed "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl --user enable "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
     systemctl --user restart "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
 }

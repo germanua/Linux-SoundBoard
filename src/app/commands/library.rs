@@ -365,15 +365,25 @@ where
 }
 
 pub fn refresh_sounds_with_store(
+    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
+    coords: &LoudnessCoordinators,
 ) -> Result<RefreshSummary, CommandError> {
-    refresh_sounds_with_store_cancellable(library, projection, &AtomicBool::new(false))
+    refresh_sounds_with_store_cancellable(
+        config,
+        library,
+        projection,
+        coords,
+        &AtomicBool::new(false),
+    )
 }
 
 fn refresh_sounds_with_store_cancellable(
+    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
+    coords: &LoudnessCoordinators,
     cancelled: &AtomicBool,
 ) -> Result<RefreshSummary, CommandError> {
     if cancelled.load(Ordering::Relaxed) {
@@ -519,6 +529,7 @@ fn refresh_sounds_with_store_cancellable(
     projection
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)?;
+    maybe_schedule_missing_loudness_backfill_with_store(&config, &library, coords);
     // A refresh changes how many sounds lack loudness data, so any settings
     // view that is already open must re-read its counts.
     crate::ui_event_bridge::post_loudness_status_refresh();
@@ -531,8 +542,10 @@ fn refresh_sounds_with_store_cancellable(
 }
 
 pub fn refresh_sounds_with_store_async<F>(
+    config: Arc<Mutex<Config>>,
     library: LibraryStore,
     projection: crate::hotkeys::HotkeyProjectionCoordinator,
+    coords: LoudnessCoordinators,
     on_complete: F,
 ) -> Result<Arc<AtomicBool>, CommandError>
 where
@@ -542,7 +555,15 @@ where
     let worker_cancelled = Arc::clone(&cancelled);
     dispatch_async_result(
         "refresh_sounds",
-        move || refresh_sounds_with_store_cancellable(library, projection, &worker_cancelled),
+        move || {
+            refresh_sounds_with_store_cancellable(
+                config,
+                library,
+                projection,
+                &coords,
+                &worker_cancelled,
+            )
+        },
         on_complete,
     )?;
     Ok(cancelled)
@@ -551,7 +572,9 @@ where
 pub fn import_files_to_tab_with_store(
     paths: Vec<String>,
     tab_id: Option<String>,
+    config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    coords: &LoudnessCoordinators,
 ) -> Result<usize, CommandError> {
     let mut position = library
         .count(LibraryScope::General, "")
@@ -628,13 +651,16 @@ pub fn import_files_to_tab_with_store(
         }
     }
     flush(&mut sounds, &mut memberships)?;
+    maybe_schedule_missing_loudness_backfill_with_store(&config, &library, coords);
     Ok(imported)
 }
 
 pub fn import_files_to_tab_with_store_async<F>(
     paths: Vec<String>,
     tab_id: Option<String>,
+    config: Arc<Mutex<Config>>,
     library: LibraryStore,
+    coords: LoudnessCoordinators,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -642,7 +668,7 @@ where
 {
     dispatch_async_result(
         "import_files_to_tab",
-        move || import_files_to_tab_with_store(paths, tab_id, library),
+        move || import_files_to_tab_with_store(paths, tab_id, config, library, &coords),
         on_complete,
     )
 }

@@ -270,6 +270,7 @@ enum EngineUpdateNotice {
 }
 
 const ENGINE_UPDATE_HELP_URL: &str = "https://github.com/germanua/Linux-SoundBoard/blob/main/docs/TROUBLESHOOTING.md#engine-update-failed";
+const ENGINE_UNAVAILABLE_HELP_URL: &str = "https://github.com/germanua/Linux-SoundBoard/blob/main/docs/TROUBLESHOOTING.md#persistent-audio-engine-unavailable";
 
 fn incompatible_engine_version() -> Option<String> {
     crate::audio::engine_ipc::engine_info()
@@ -340,6 +341,59 @@ fn show_engine_update_notice(parent: &gtk4::ApplicationWindow, notice: EngineUpd
             });
         }
     }
+}
+
+fn show_engine_unavailable_error(
+    app: &Application,
+    parent: &gtk4::ApplicationWindow,
+    message: &str,
+) {
+    let dialog = adw::AlertDialog::new(Some("Persistent audio engine unavailable"), Some(message));
+    dialog.add_responses(&[
+        ("exit", "Exit"),
+        ("help", "Open troubleshooting"),
+        ("temporary", "Run temporarily"),
+    ]);
+    dialog.set_close_response("exit");
+    dialog.set_default_response(Some("temporary"));
+    dialog.set_response_appearance("temporary", adw::ResponseAppearance::Suggested);
+
+    let callback_app = app.clone();
+    let callback_parent = parent.clone();
+    let callback_message = message.to_string();
+    dialog.choose(
+        parent,
+        None::<&gio::Cancellable>,
+        move |response| match response.as_str() {
+            "temporary" => {
+                callback_parent.close();
+                start_application(&callback_app, StartupMode::Transient, None);
+            }
+            "help" => {
+                gtk4::UriLauncher::new(ENGINE_UNAVAILABLE_HELP_URL).launch(
+                    Some(&callback_parent),
+                    None::<&gio::Cancellable>,
+                    |result| {
+                        if let Err(err) = result {
+                            log::warn!("Could not open engine troubleshooting: {err}");
+                        }
+                    },
+                );
+                // Re-presented after this dialog finishes closing, so the choice stays open.
+                glib::idle_add_local_once(move || {
+                    show_engine_unavailable_error(
+                        &callback_app,
+                        &callback_parent,
+                        &callback_message,
+                    );
+                });
+            }
+            _ => {
+                callback_parent.close();
+                callback_app.quit();
+            }
+        },
+    );
 }
 
 fn prompt_appimage_startup(app: &Application) {
@@ -969,6 +1023,26 @@ struct PreparedApplication {
 struct StartupFailure {
     title: &'static str,
     message: String,
+    /// The in-process engine can serve this session instead of failing outright.
+    transient_fallback: bool,
+}
+
+impl StartupFailure {
+    fn new(title: &'static str, message: String) -> Self {
+        Self {
+            title,
+            message,
+            transient_fallback: false,
+        }
+    }
+
+    fn with_transient_fallback(title: &'static str, message: String) -> Self {
+        Self {
+            title,
+            message,
+            transient_fallback: true,
+        }
+    }
 }
 
 fn start_application_ready(
@@ -986,6 +1060,9 @@ fn start_application_ready(
             Ok(prepared) => {
                 callback_parent.close();
                 finish_application_ready(&callback_app, prepared);
+            }
+            Err(failure) if failure.transient_fallback => {
+                show_engine_unavailable_error(&callback_app, &callback_parent, &failure.message)
             }
             Err(failure) => show_startup_error(
                 &callback_app,
@@ -1012,14 +1089,14 @@ fn prepare_application(
         Ok(config) => config,
         Err(err) => {
             let path = Config::config_path();
-            return Err(StartupFailure {
-                title: "Configuration could not be loaded",
-                message: format!(
+            return Err(StartupFailure::new(
+                "Configuration could not be loaded",
+                format!(
                     "{err}\n\nNo audio engine was started and '{}' was not replaced. Fix the file, or stop all Linux Soundboard processes and restore '{}.pre-v6-backup'.",
                     path.display(),
                     path.display()
                 ),
-            });
+            ));
         }
     };
     crate::diagnostics::memory::log_memory_snapshot("startup:config_loaded");
@@ -1029,10 +1106,10 @@ fn prepare_application(
     let identity = match crate::legacy_migration::database_identity(&library_path) {
         Ok(identity) => identity,
         Err(error) => {
-            return Err(StartupFailure {
-                title: "Sound library could not be opened",
-                message: error.to_string(),
-            });
+            return Err(StartupFailure::new(
+                "Sound library could not be opened",
+                error.to_string(),
+            ));
         }
     };
     let library = match crate::library_store::LibraryStore::open_authoritative(
@@ -1041,10 +1118,10 @@ fn prepare_application(
     ) {
         Ok(library) => library,
         Err(error) => {
-            return Err(StartupFailure {
-                title: "Sound library could not be opened",
-                message: error.to_string(),
-            });
+            return Err(StartupFailure::new(
+                "Sound library could not be opened",
+                error.to_string(),
+            ));
         }
     };
     let initial_sound_count = library.count(crate::library_store::LibraryScope::General, "");
@@ -1057,10 +1134,10 @@ fn prepare_application(
     let (player, connected_remotely) = match initialize_player(&config, startup_mode) {
         Ok(player) => player,
         Err(error) => {
-            return Err(StartupFailure {
-                title: "Persistent audio engine unavailable",
-                message: error,
-            });
+            return Err(StartupFailure::with_transient_fallback(
+                "Persistent audio engine unavailable",
+                error,
+            ));
         }
     };
     let engine_update_notice = engine_update_notice(previous_engine_version, connected_remotely);
@@ -1069,13 +1146,11 @@ fn prepare_application(
     crate::diagnostics::record_phase_with_config("startup:player_initialized", &config);
 
     let pipewire_status = crate::audio::pipewire_detection::check_pipewire();
-    let initial_sound_count = initial_sound_count.recv().map_err(|error| StartupFailure {
-        title: "Sound library could not be opened",
-        message: error.to_string(),
+    let initial_sound_count = initial_sound_count.recv().map_err(|error| {
+        StartupFailure::new("Sound library could not be opened", error.to_string())
     })?;
-    let initial_sound_page = initial_sound_page.recv().map_err(|error| StartupFailure {
-        title: "Sound library could not be opened",
-        message: error.to_string(),
+    let initial_sound_page = initial_sound_page.recv().map_err(|error| {
+        StartupFailure::new("Sound library could not be opened", error.to_string())
     })?;
     Ok(PreparedApplication {
         config,
@@ -1463,7 +1538,7 @@ fn initialize_player(
         }
         if startup_mode == StartupMode::Persistent {
             return Err(
-                "Linux Soundboard could not connect to its persistent audio engine. No temporary engine was started and no replacement virtual microphone was created. Exit, repair or install the user service, then retry."
+                "Linux Soundboard could not connect to its persistent audio engine, so no virtual microphone was created. Run temporarily to start an engine inside this window for the session, or exit and repair the user service."
                     .to_string(),
             );
         }
@@ -1553,6 +1628,13 @@ fn manage_audio_engine_service(action: ServiceAction) -> bool {
         .stderr(std::process::Stdio::null())
         .status();
 
+    // Clears the start-rate limit left by an earlier broken engine.
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "reset-failed", ENGINE_SERVICE_UNIT])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
     let args: &[&str] = match action {
         ServiceAction::Start => &["--user", "enable", "--now", ENGINE_TARGET_UNIT],
         ServiceAction::Restart => &["--user", "restart", ENGINE_TARGET_UNIT],
@@ -1583,8 +1665,11 @@ fn ensure_user_audio_engine_units() {
         return;
     }
 
-    let executable = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
+    // Prefer the install: the AppImage this runs from can be moved or deleted.
+    let executable = dirs::home_dir()
+        .map(|home| stable_user_binary_path(&home))
+        .filter(|path| path.is_file())
+        .or_else(|| std::env::var_os("APPIMAGE").map(PathBuf::from))
         .or_else(|| std::env::current_exe().ok());
     let Some(executable) = executable else {
         return;
@@ -1662,13 +1747,36 @@ fn systemd_user_unit_exists(service: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A type-2 AppImage is an ELF with the magic bytes `AI\x02` at offset 8.
+fn is_appimage(path: &std::path::Path) -> bool {
+    use std::io::Read;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 11];
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    header[0..4] == [0x7f, b'E', b'L', b'F'] && header[8..11] == [b'A', b'I', 0x02]
+}
+
 fn render_audio_engine_service(executable: &std::path::Path) -> String {
+    // All three imply NoNewPrivileges — the seccomp ones implicitly — which blocks
+    // the setuid fusermount an AppImage needs to mount itself.
+    let hardening = if is_appimage(executable) {
+        ""
+    } else {
+        "NoNewPrivileges=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n"
+    };
     format!(
         "[Unit]\n\
 Description=Linux Soundboard audio engine\n\
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service\n\
 PartOf=linux-soundboard-engine.target\n\
 RefuseManualStop=yes\n\
+StartLimitIntervalSec=60\n\
+StartLimitBurst=5\n\
 X-LinuxSoundBoard-Managed=true\n\
 \n\
 [Service]\n\
@@ -1677,10 +1785,7 @@ ExecStart={} --audio-engine\n\
 Restart=on-failure\n\
 RestartSec=2\n\
 RestartPreventExitStatus=2\n\
-NoNewPrivileges=yes\n\
-RestrictSUIDSGID=yes\n\
-LockPersonality=yes\n\
-",
+{hardening}",
         systemd_quote(executable)
     )
 }
@@ -1914,6 +2019,7 @@ mod tests {
     fn audio_engine_service_renders_quoted_exec() {
         let service = render_audio_engine_service(Path::new("/tmp/Linux Soundboard.AppImage"));
         assert!(service.contains("ExecStart=\"/tmp/Linux Soundboard.AppImage\" --audio-engine"));
+        assert!(service.contains("StartLimitBurst=5"));
         assert!(service.contains(
             "After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service"
         ));
@@ -1922,6 +2028,30 @@ mod tests {
         assert!(service.contains("RefuseManualStop=yes"));
         assert!(!service.contains("WantedBy=default.target"));
         assert!(service.contains("RestartPreventExitStatus=2"));
+    }
+
+    #[test]
+    fn appimage_engine_service_drops_no_new_privileges() {
+        let temp = TestDir::new("engine-unit");
+        let native = temp.0.join("linux-soundboard");
+        let appimage = temp.0.join("soundboard.AppImage");
+        let mut header = [0u8; 16];
+        header[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        fs::write(&native, header).expect("write native binary");
+        header[8..11].copy_from_slice(b"AI\x02");
+        fs::write(&appimage, header).expect("write appimage");
+
+        let native_service = render_audio_engine_service(&native);
+        assert!(native_service.contains("NoNewPrivileges=yes"));
+        assert!(native_service.contains("RestrictSUIDSGID=yes"));
+        assert!(native_service.contains("LockPersonality=yes"));
+
+        // Each of these implies NoNewPrivileges, which blocks the AppImage's mount.
+        let service = render_audio_engine_service(&appimage);
+        assert!(!service.contains("NoNewPrivileges"));
+        assert!(!service.contains("RestrictSUIDSGID"));
+        assert!(!service.contains("LockPersonality"));
+        assert!(service.contains("--audio-engine"));
     }
 
     #[test]

@@ -3,6 +3,9 @@ set -euo pipefail
 
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
 
+# Only set by --enable-uinput: the caller asks the user first.
+ENABLE_UINPUT=0
+
 log() {
   printf '[swhkd-helper] %s\n' "$1"
 }
@@ -73,6 +76,31 @@ install_build_deps() {
   esac
 }
 
+# swhkd creates a virtual keyboard through /dev/uinput. The device node exists
+# even when the module is absent, and opening it then fails with ENODEV.
+enable_uinput() {
+  local release
+  release="$(uname -r)"
+
+  # A kernel upgrade removes the running kernel's module tree, so nothing loads
+  # until the new one is booted.
+  if [ ! -d "/usr/lib/modules/$release" ] && [ ! -d "/lib/modules/$release" ]; then
+    log "WARNING: the running kernel ($release) has no modules on disk; reboot, then run this again"
+    return 0
+  fi
+
+  if [ ! -d /sys/module/uinput ] && ! modprobe uinput 2>/dev/null; then
+    log "WARNING: could not load the uinput module; hotkeys will not work until it is available"
+    return 0
+  fi
+
+  if [ ! -f /etc/modules-load.d/uinput.conf ]; then
+    log "Loading uinput at boot via /etc/modules-load.d/uinput.conf"
+    printf 'uinput\n' > /etc/modules-load.d/uinput.conf
+    chmod 644 /etc/modules-load.d/uinput.conf
+  fi
+}
+
 build_and_install_swhkd() {
   local work_dir
   work_dir="$(mktemp -d /tmp/linux-soundboard-swhkd.XXXXXX)"
@@ -104,6 +132,10 @@ build_and_install_swhkd() {
     fail "swhkd setuid bit was not applied."
   fi
 
+  if [ "$ENABLE_UINPUT" -eq 1 ]; then
+    enable_uinput
+  fi
+
   log "Installation completed successfully"
 }
 
@@ -117,6 +149,9 @@ main() {
         shift
         [ "$#" -gt 0 ] || fail "Missing value for --distro"
         distro="$1"
+        ;;
+      --enable-uinput)
+        ENABLE_UINPUT=1
         ;;
       *)
         fail "Unknown argument: $1"

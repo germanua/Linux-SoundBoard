@@ -82,7 +82,11 @@ pub fn build_window(
             hotkeys.availability_message()
         };
         if let Some(reason) = hotkey_message {
-            let banner = adw::Banner::new(&format!("Global hotkeys unavailable — {}", reason));
+            // Banner titles are parsed as markup; remediation commands contain "&&".
+            let banner = adw::Banner::new(&format!(
+                "Global hotkeys unavailable — {}",
+                glib::markup_escape_text(&reason)
+            ));
             let can_install = crate::hotkeys::should_offer_swhkd_install(&reason);
             banner.set_button_label(Some(if can_install { "Install" } else { "Dismiss" }));
             banner.set_revealed(true);

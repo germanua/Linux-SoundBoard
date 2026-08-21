@@ -405,8 +405,10 @@ fn build_general_page(
                                         scan_generation3.set(scan_id);
                                         let generation_done = Rc::clone(&scan_generation3);
                                         match commands::refresh_sounds_with_store_async(
+                                            Arc::clone(&state3.config),
                                             state3.library.clone(),
                                             state3.hotkey_projection.clone(),
+                                            state3.loudness_coordinators.clone(),
                                             move |result| {
                                                 if generation_done.get() == scan_id {
                                                     cancel_done.borrow_mut().take();

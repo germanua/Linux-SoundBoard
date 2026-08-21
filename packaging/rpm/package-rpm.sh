@@ -39,6 +39,8 @@ rpmbuild -ba "$RPMBUILD_DIR/SPECS/linux-soundboard.spec"
 mkdir -p "$DIST_ROOT"
 cp "$RPMBUILD_DIR/RPMS/x86_64/linux-soundboard-$VERSION-"*.rpm "$DIST_ROOT/" 2>/dev/null || true
 
+"$REPO_ROOT/packaging/generate-checksums.sh" "$DIST_ROOT" >/dev/null
+
 echo ""
 echo "✓ RPM package created successfully:"
 ls -lh "$DIST_ROOT"/*.rpm 2>/dev/null || echo "No RPM files found in dist/"

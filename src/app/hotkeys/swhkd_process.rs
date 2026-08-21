@@ -328,10 +328,17 @@ impl SwhkdProcesses {
 
     fn format_startup_exit_message(pid: i32, status: ExitStatus, log_path: &Path) -> String {
         let startup_log = Self::read_startup_log_tail(log_path);
-        let remediation = if startup_log
-            .to_ascii_lowercase()
-            .contains("launch the binary with pkexec")
-        {
+        let lowercase_log = startup_log.to_ascii_lowercase();
+        let remediation = if lowercase_log.contains("uinput") {
+            // The /dev/uinput node exists even when the module is missing, so the
+            // open fails with ENODEV rather than looking like a missing device.
+            "swhkd could not open /dev/uinput, which it needs to read input devices.\n\
+             If your kernel was updated since you last booted, reboot first — the running \
+             kernel can no longer load any module.\n\
+             Otherwise load it now and at every boot:\n\
+             sudo modprobe uinput\n\
+             echo uinput | sudo tee /etc/modules-load.d/uinput.conf"
+        } else if lowercase_log.contains("launch the binary with pkexec") {
             "The installed swhkd build refuses direct launch. Use the Install swhkd button to rebuild the daemon with the Linux Soundboard helper."
         } else {
             "Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\

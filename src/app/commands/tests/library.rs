@@ -37,8 +37,13 @@ fn store_refresh_streams_nested_folders_without_generated_tabs() {
         library.clone(),
         create_mock_hotkey_manager(),
     );
-    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
-        .expect("store refresh succeeds");
+    let summary = commands::refresh_sounds_with_store(
+        create_test_config_state(),
+        library.clone(),
+        projection,
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("store refresh succeeds");
 
     assert_eq!(summary.added, 1);
     // Generated tabs are no longer materialised anywhere: folders come from the
@@ -96,8 +101,13 @@ fn store_refresh_metadata_chunks_keep_deterministic_sound_order() {
         create_mock_hotkey_manager(),
     );
 
-    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
-        .expect("store refresh succeeds");
+    let summary = commands::refresh_sounds_with_store(
+        create_test_config_state(),
+        library.clone(),
+        projection,
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("store refresh succeeds");
     let page = library
         .page(crate::library_store::LibraryScope::General, "", 0)
         .recv()
@@ -184,7 +194,9 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
             second.to_string_lossy().into_owned(),
         ],
         Some(tab.id.clone()),
+        create_test_config_state(),
         library.clone(),
+        &commands::LoudnessCoordinators::new(),
     )
     .expect("import files");
 
@@ -252,8 +264,13 @@ fn store_refresh_imports_folders_larger_than_one_scan_batch() {
         create_mock_hotkey_manager(),
     );
 
-    let summary = commands::refresh_sounds_with_store(library.clone(), projection)
-        .expect("a folder larger than one batch must still import");
+    let summary = commands::refresh_sounds_with_store(
+        create_test_config_state(),
+        library.clone(),
+        projection,
+        &commands::LoudnessCoordinators::new(),
+    )
+    .expect("a folder larger than one batch must still import");
 
     assert_eq!(summary.added, file_count);
     assert_eq!(

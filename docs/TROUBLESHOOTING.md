@@ -238,6 +238,39 @@ If `systemctl --user` reports that no user bus or manager is available, the
 temporary engine is the safe fallback. Fix the user systemd session or continue
 running the GUI while using the virtual microphone.
 
+### Persistent audio engine unavailable
+
+The startup dialog with this title means the GUI could not reach the engine
+socket and no virtual microphone was created. **Run temporarily** starts an
+engine inside the GUI process for the session, which is the fastest way back to
+a working soundboard while the service is repaired.
+
+1. Read the actual failure:
+   ```bash
+   systemctl --user status linux-soundboard-engine.service --no-pager
+   journalctl --user -u linux-soundboard-engine.service -n 50 --no-pager
+   ```
+2. `status=127` together with `open dir error: No such file or directory` means
+   the unit could not mount the AppImage it points at. Check that the unit carries
+   none of `NoNewPrivileges=`, `RestrictSUIDSGID=` or `LockPersonality=` — each one
+   implies `NoNewPrivileges`, which blocks the setuid FUSE helper an AppImage needs
+   — and that `ExecStart` points at an existing file:
+   ```bash
+   systemctl --user cat linux-soundboard-engine.service
+   ```
+   Rerunning the downloaded AppImage and choosing **Install for persistent
+   virtual mic** rewrites both, as does the guided repair:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
+   ```
+3. If the service restarts in a loop, stop it through the target — the service
+   itself sets `RefuseManualStop=yes`:
+   ```bash
+   systemctl --user disable --now linux-soundboard-engine.target
+   systemctl --user reset-failed linux-soundboard-engine.service
+   ```
+   Starting Linux Soundboard again re-enables and rewrites the unit.
+
 ### Recover a schema-6 configuration backup
 
 The first valid schema-6 load by v2.1.1 creates an exact private backup at `~/.config/linux-soundboard/config.json.pre-v6-backup`. If migration cannot proceed, the GUI and engine fail closed and leave the original file unchanged.
@@ -468,6 +501,37 @@ Installation paths:
 Upstream guide:
 
 - https://github.com/waycrate/swhkd/blob/main/INSTALL.md
+
+### swhkd fails with "Failed to create uinput device"
+
+swhkd lists the uinput and evdev kernel modules as runtime dependencies in its
+own [INSTALL.md](https://github.com/waycrate/swhkd/blob/master/INSTALL.md), but
+its installer does not provide them. It grabs your keyboards through evdev and
+re-emits the keys it does not consume through a virtual keyboard, which is what
+`/dev/uinput` creates — so without uinput the daemon exits at startup.
+
+On kernels that ship `uinput` as a module (`CONFIG_INPUT_UINPUT=m`), systemd
+creates the device node even when the module is not loaded, so the node looks
+present while opening it fails with `ENODEV` / `No such device`. Most systems
+never notice: the kernel autoloads the module when something opens the node
+(misc device 10:223), or another tool loaded it first. Evdev is built into most
+distro kernels (`CONFIG_INPUT_EVDEV=y`) and needs nothing.
+
+```bash
+ls /usr/lib/modules/$(uname -r)   # missing means the kernel was upgraded since boot: reboot first
+ls /sys/module/uinput             # missing means the module is not loaded
+sudo modprobe uinput              # load it now
+echo uinput | sudo tee /etc/modules-load.d/uinput.conf   # and at every boot
+```
+
+A kernel upgrade removes the running kernel's module tree, so nothing can be
+loaded until the new kernel is booted and `modprobe` fails outright. Reboot
+before trying anything else.
+
+Restart Linux Soundboard afterwards; the hotkey backend is chosen at startup.
+The in-app **Install** button and `install.sh` run both steps for you, but only
+where the module is actually missing, and only after asking — neither touches a
+system that already provides uinput.
 
 ### X11 hotkeys do not work
 

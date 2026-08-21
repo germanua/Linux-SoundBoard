@@ -351,11 +351,67 @@ impl DialogHost {
         self.present(None);
     }
 
+    /// Asked before installing, and only when the module is genuinely missing, so
+    /// systems that already provide uinput are left untouched.
     pub fn prompt_swhkd_install(
         &self,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
         projection: crate::hotkeys::HotkeyProjectionCoordinator,
         reason: &str,
+    ) {
+        if crate::hotkeys::uinput_unavailable() {
+            self.prompt_uinput_then_install(hotkeys, projection, reason);
+            return;
+        }
+        self.prompt_swhkd_install_with_uinput(hotkeys, projection, reason, false);
+    }
+
+    fn prompt_uinput_then_install(
+        &self,
+        hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
+        reason: &str,
+    ) {
+        self.prepare(
+            "message",
+            "Load the uinput kernel module?",
+            "swhkd reads your keyboards directly, so it has to type the keys it does not \
+             use back to the system through a virtual keyboard. The kernel's uinput module \
+             provides that, and it is not available here — swhkd would exit at startup.\n\n\
+             Loading it makes no other change, and enabling it at boot keeps hotkeys working \
+             after a restart. You can decline and load it yourself later.",
+        );
+        self.configure_actions(
+            Some(ActionSpec::default("cancel", "Cancel")),
+            Some(ActionSpec::default("skip", "Install without it")),
+            Some(ActionSpec::primary("uinput", "Load uinput")),
+        );
+
+        let host = self.downgrade();
+        let reason_text = reason.to_string();
+        self.set_response_handler(move |response| {
+            if response == "cancel" {
+                return;
+            }
+            let enable_uinput = response == "uinput";
+            if let Some(host) = host.upgrade() {
+                host.prompt_swhkd_install_with_uinput(
+                    Arc::clone(&hotkeys),
+                    projection.clone(),
+                    &reason_text,
+                    enable_uinput,
+                );
+            }
+        });
+        self.present(None);
+    }
+
+    fn prompt_swhkd_install_with_uinput(
+        &self,
+        hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
+        reason: &str,
+        enable_uinput: bool,
     ) {
         let prompt = format!(
             "Native Wayland hotkeys require swhkd.\n\nCurrent issue:\n{}\n\nInstall now?",
@@ -385,6 +441,7 @@ impl DialogHost {
             if let Err(err) = crate::commands::install_swhkd_async(
                 Arc::clone(&hotkeys),
                 projection.clone(),
+                enable_uinput,
                 move |result| {
                     if let Some(host) = result_host.upgrade() {
                         match result {

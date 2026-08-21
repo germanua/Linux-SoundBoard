@@ -42,6 +42,8 @@ dpkg-buildpackage -us -uc -b
 mkdir -p "$DIST_ROOT"
 mv ../*.deb "$DIST_ROOT/" 2>/dev/null || true
 
+"$REPO_ROOT/packaging/generate-checksums.sh" "$DIST_ROOT" >/dev/null
+
 echo ""
 echo "✓ Debian package created successfully:"
 ls -lh "$DIST_ROOT"/*.deb

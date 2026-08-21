@@ -4,6 +4,8 @@ Documentation=https://github.com/germanua/Linux-SoundBoard
 After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
 PartOf=linux-soundboard-engine.target
 RefuseManualStop=yes
+StartLimitIntervalSec=60
+StartLimitBurst=5
 X-LinuxSoundBoard-Managed=true
 
 [Service]

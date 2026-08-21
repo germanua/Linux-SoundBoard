@@ -70,5 +70,9 @@ rm -f "$tarball_path"
 tar -czf "$tarball_path" -C "$DIST_ROOT" "$bundle_name"
 rm -rf "$bundle_dir"
 
+# Refreshed over everything in dist/, so the list covers the .deb, .rpm, and
+# AppImage built before it as well.
+"$REPO_ROOT/packaging/generate-checksums.sh" "$DIST_ROOT" >/dev/null
+
 echo "Created tarball artifact:"
 echo "  $tarball_path"

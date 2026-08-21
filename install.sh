@@ -24,6 +24,8 @@ INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 
 WORK_DIR="$(mktemp -d)"
 LATEST_RELEASE_JSON=""
+# Install method for this run: auto | appimage | tarball | native.
+INSTALL_METHOD="auto"
 RELEASE_LIST_JSON=""
 NATIVE_PACKAGE_PRESENT=0
 APT_UPDATED=0
@@ -43,8 +45,8 @@ Linux Soundboard installer
 Usage:
   ./install.sh                 open the menu (needs a terminal)
   ./install.sh menu
-  ./install.sh install
-  ./install.sh install --version vX.Y.Z
+  ./install.sh install [--method auto|appimage|tarball|native]
+  ./install.sh install --version vX.Y.Z [--method auto|appimage|tarball]
   ./install.sh versions
   ./install.sh repair [binary]
   ./install.sh fix
@@ -58,7 +60,10 @@ With no arguments and a terminal available, the menu opens; piped with no
 arguments it installs the newest version, which keeps scripted use working.
 
 install            detects your distro and installs via a native package when available
-install --version  installs that published release from its tarball into ~/.local
+--method           auto (default) keeps that detection; appimage and tarball install into
+                   ~/.local without root; native forces the distro package
+install --version  installs that published release into ~/.local, from its tarball or,
+                   with --method appimage, from its AppImage
 fix                repairs the install step by step and prints what failed
 report             writes a bug report file with system state, app state, and a blank to fill in
 remove/uninstall   removes per-user files and the native package unless --keep-package,
@@ -79,6 +84,58 @@ elif command -v wget >/dev/null 2>&1; then
 else
     fail "curl or wget is required."
 fi
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || fail "$1 is required${2:+ $2}, and it is not installed."
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    else
+        return 1
+    fi
+}
+
+# Releases publish SHA256SUMS.txt covering every asset. A missing list is only a
+# warning so older releases stay installable; a mismatch always stops the install.
+verify_download() {
+    local file=$1
+    local tag=${2:-}
+    local sums="$WORK_DIR/SHA256SUMS.txt"
+    local url expected actual
+
+    if [[ -n "$tag" ]]; then
+        url="$(release_json_for_tag "$tag" | find_asset_url_in "SHA256SUMS\\.txt$")"
+    else
+        url="$(find_asset_url "SHA256SUMS\\.txt$" || true)"
+    fi
+
+    if [[ -z "$url" ]] || ! fetch "$url" "$sums" 2>/dev/null; then
+        warn "This release publishes no checksum list; skipping verification."
+        return 0
+    fi
+
+    expected="$(awk -v name="$(basename "$file")" '$2 == name || $2 == "*" name { print $1; exit }' "$sums")"
+    if [[ -z "$expected" ]]; then
+        warn "$(basename "$file") is not listed in SHA256SUMS.txt; skipping verification."
+        return 0
+    fi
+
+    if ! actual="$(sha256_of "$file")"; then
+        warn "No sha256 tool found; skipping verification."
+        return 0
+    fi
+
+    [[ "$actual" == "$expected" ]] \
+        || fail "Checksum mismatch for $(basename "$file"). Expected $expected, got $actual. Download aborted."
+
+    info "Checksum verified."
+}
 
 get_release_json() {
     if [[ -z "$LATEST_RELEASE_JSON" ]]; then
@@ -164,17 +221,17 @@ is_wayland() { [[ "${SESSION_TYPE:-}" == "wayland" ]] || [[ -n "${WAYLAND_DISPLA
 # ── Package manager helpers ───────────────────────────────────────────────────
 
 apt_install() {
-    if (( APT_UPDATED == 0 )); then sudo apt-get update; APT_UPDATED=1; fi
-    sudo apt-get install -y "$@"
+    if (( APT_UPDATED == 0 )); then as_root apt-get update; APT_UPDATED=1; fi
+    as_root apt-get install -y "$@"
 }
 
-pacman_install()  { sudo pacman -S --needed --noconfirm "$@"; }
-dnf_install()     { sudo dnf install -y "$@"; }
+pacman_install()  { as_root pacman -S --needed --noconfirm "$@"; }
+dnf_install()     { as_root dnf install -y "$@"; }
 
 zypper_refresh() {
-    if (( ZYPPER_REFRESHED == 0 )); then sudo zypper --non-interactive refresh; ZYPPER_REFRESHED=1; fi
+    if (( ZYPPER_REFRESHED == 0 )); then as_root zypper --non-interactive refresh; ZYPPER_REFRESHED=1; fi
 }
-zypper_install() { zypper_refresh; sudo zypper --non-interactive install --no-recommends "$@"; }
+zypper_install() { zypper_refresh; as_root zypper --non-interactive install --no-recommends "$@"; }
 
 pick_pkg() {
     # Pick first available package from a list (checks apt-cache or zypper info)
@@ -201,9 +258,12 @@ download_and_extract_tarball() {
     fi
     [[ -n "$url" ]] || fail "No release tarball for $arch${tag:+ at $tag}. See https://github.com/$APP_REPO/releases"
 
-    local tarball="$WORK_DIR/linux-soundboard.tar.gz"
+    require_cmd tar "to unpack the release tarball"
+
+    local tarball="$WORK_DIR/$(basename "$url")"
     info "Downloading $url ..." >&2
     fetch_progress "$url" "$tarball"
+    verify_download "$tarball" "$tag" >&2
 
     info "Extracting..." >&2
     tar -xzf "$tarball" -C "$WORK_DIR"
@@ -288,6 +348,7 @@ install_debian() {
     file="$WORK_DIR/$(basename "$url")"
     info "Downloading .deb..."
     fetch_progress "$url" "$file"
+    verify_download "$file"
     apt_install "$file"
 
     # The package owns the binary, desktop entry, icons, and the systemd user
@@ -310,6 +371,7 @@ install_fedora() {
     file="$WORK_DIR/$(basename "$url")"
     info "Downloading .rpm..."
     fetch_progress "$url" "$file"
+    verify_download "$file"
     dnf_install "$file"
 
     # The package owns the binary, desktop entry, icons, and the systemd user
@@ -321,9 +383,231 @@ install_fedora() {
         || warn "Could not configure the user service; it will start on next login."
 }
 
+# The tarball ships only the binary, so GTK, libadwaita, PulseAudio, Opus, X11,
+# and the audio stack have to come from the distro — the same set the .deb, .rpm,
+# and AUR packages declare. Checked by soname first: a desktop system normally
+# has all of it, and this path should not ask for a password when it does not
+# have to.
+missing_runtime_libraries() {
+    local cache=""
+    local lib
+    local missing=()
+
+    if command -v ldconfig >/dev/null 2>&1; then
+        cache="$(ldconfig -p 2>/dev/null || true)"
+    elif [[ -x /sbin/ldconfig ]]; then
+        cache="$(/sbin/ldconfig -p 2>/dev/null || true)"
+    fi
+    [[ -n "$cache" ]] || return 0
+
+    # Sonames, so the dots are literal: -F, not a regex.
+    for lib in libgtk-4.so.1 libadwaita-1.so.0 libpulse.so.0 libopus.so.0 libpipewire-0.3.so.0 libX11.so.6 libXi.so.6; do
+        grep -qF "$lib" <<<"$cache" || missing+=("$lib")
+    done
+
+    ((${#missing[@]} > 0)) && printf '%s\n' "${missing[@]}"
+    return 0
+}
+
+runtime_packages() {
+    local polkit
+    case "$DISTRO_FAMILY" in
+        arch)
+            printf '%s\n' gtk4 libadwaita libpulse opus libx11 libxi hicolor-icon-theme polkit pipewire wireplumber
+            ;;
+        debian)
+            # policykit-1 was split up in Debian 12 and Ubuntu 23.04: the tool now
+            # lives in pkexec, so ask apt which of the two this release carries.
+            polkit="$(pick_pkg "apt-cache show" pkexec policykit-1 polkitd || true)"
+            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libx11-6 libxi6 pipewire wireplumber ${polkit:+"$polkit"}
+            ;;
+        fedora)
+            printf '%s\n' gtk4 libadwaita pulseaudio-libs opus libX11 libXi polkit pipewire wireplumber
+            ;;
+        opensuse)
+            polkit="$(pick_pkg "zypper --non-interactive info" polkit polkit-default-privs || true)"
+            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libX11-6 libXi6 pipewire wireplumber ${polkit:+"$polkit"}
+            ;;
+    esac
+}
+
+ensure_runtime_dependencies() {
+    local missing=()
+    local pkgs=()
+
+    mapfile -t missing < <(missing_runtime_libraries)
+    ((${#missing[@]} > 0)) || return 0
+
+    warn "The binary needs libraries this system does not have: ${missing[*]}"
+
+    mapfile -t pkgs < <(runtime_packages)
+    if ((${#pkgs[@]} == 0)); then
+        warn "Install your distro's GTK 4, libadwaita, PulseAudio, Opus, and X11 runtime packages, then run this again."
+        return 0
+    fi
+
+    if [[ ! -t 0 ]]; then
+        warn "Install these packages and run this again: ${pkgs[*]}"
+        return 0
+    fi
+
+    if ! confirm "Install them now (${pkgs[*]})?"; then
+        warn "Continuing without them; the app will not start until they are installed."
+        return 0
+    fi
+
+    case "$DISTRO_FAMILY" in
+        arch)     pacman_install "${pkgs[@]}" ;;
+        debian)   apt_install    "${pkgs[@]}" ;;
+        fedora)   dnf_install    "${pkgs[@]}" ;;
+        opensuse) zypper_install "${pkgs[@]}" ;;
+    esac
+}
+
 install_tarball() {
-    local bundle_dir; bundle_dir="$(download_and_extract_tarball)"
+    local bundle_dir
+
+    ensure_runtime_dependencies
+    bundle_dir="$(download_and_extract_tarball)"
     run_user_installer install "$bundle_dir"
+}
+
+# Download the release AppImage into WORK_DIR and return its path.
+download_appimage() {
+    local tag=${1:-}
+    local arch; arch="$(uname -m)"
+    local url
+
+    if [[ -n "$tag" ]]; then
+        url="$(release_json_for_tag "$tag" | find_asset_url_in "${arch}\\.[aA]pp[iI]mage$")"
+    else
+        url="$(find_asset_url "${arch}\\.[aA]pp[iI]mage$")"
+    fi
+    [[ -n "$url" ]] || fail "No release AppImage for $arch${tag:+ at $tag}. See https://github.com/$APP_REPO/releases"
+
+    local image="$WORK_DIR/$(basename "$url")"
+    info "Downloading $url ..." >&2
+    fetch_progress "$url" "$image"
+    verify_download "$image" "$tag" >&2
+    chmod +x "$image"
+
+    printf '%s\n' "$image"
+}
+
+# The installed AppImage mounts itself on every launch, so FUSE has to be present
+# on the machine afterwards — unpacking it here does not need it.
+ensure_fuse_for_appimage() {
+    command -v fusermount3 >/dev/null 2>&1 && return 0
+    command -v fusermount  >/dev/null 2>&1 && return 0
+
+    local pkgs=()
+    mapfile -t pkgs < <(fuse_packages)
+
+    warn "FUSE is missing; an installed AppImage cannot start without it."
+    if ((${#pkgs[@]} == 0)); then
+        warn "Install your distro's FUSE 2 package, then launch the app again."
+        return 0
+    fi
+
+    if [[ -t 0 ]] && confirm "Install ${pkgs[*]} now?"; then
+        case "$DISTRO_FAMILY" in
+            arch)     pacman_install "${pkgs[@]}" ;;
+            debian)   apt_install    "${pkgs[@]}" ;;
+            fedora)   dnf_install    "${pkgs[@]}" ;;
+            opensuse) zypper_install "${pkgs[@]}" ;;
+        esac
+    else
+        warn "Continuing without FUSE. Install ${pkgs[*]} before launching the app."
+    fi
+}
+
+# A type-2 AppImage mounts itself with FUSE 2: it needs both the library and the
+# fusermount helper, which several distros ship in separate packages. Ubuntu
+# 24.04 also renamed libfuse2 for the 64-bit time_t transition, so ask the
+# package manager which names it actually carries.
+fuse_packages() {
+    case "$DISTRO_FAMILY" in
+        arch)
+            printf '%s\n' fuse2
+            ;;
+        debian)
+            pick_pkg "apt-cache show" libfuse2t64 libfuse2 || true
+            pick_pkg "apt-cache show" fuse || true
+            ;;
+        fedora)
+            printf '%s\n' fuse-libs fuse
+            ;;
+        opensuse)
+            pick_pkg "zypper --non-interactive info" libfuse2 || true
+            pick_pkg "zypper --non-interactive info" fuse || true
+            ;;
+    esac
+}
+
+# The AppImage carries the same install-user.sh that its own "Install for
+# persistent virtual mic" button runs, so unpack it and hand it the image.
+install_appimage() {
+    local tag=${1:-}
+    local image
+    local extract_dir="$WORK_DIR/appimage"
+    local installer
+
+    ensure_fuse_for_appimage
+    image="$(download_appimage "$tag")"
+
+    mkdir -p "$extract_dir"
+    info "Extracting..."
+    ( cd "$extract_dir" && "$image" --appimage-extract >/dev/null ) \
+        || fail "Could not unpack the AppImage. Run it directly and choose 'Install for persistent virtual mic'."
+
+    installer="$extract_dir/squashfs-root/usr/libexec/$APP_BINARY/installer/install-user.sh"
+    [[ -f "$installer" ]] || fail "This AppImage carries no bundled installer."
+    [[ -x "$installer" ]] || chmod +x "$installer"
+
+    "$installer" install "$image"
+}
+
+# Automatic: the distro's native package when the release ships one, and the
+# ~/.local tarball everywhere else. This is what the installer has always done.
+install_auto() {
+    case "$DISTRO_FAMILY" in
+        arch)    install_arch    ;;
+        debian)  install_debian  ;;
+        fedora)  install_fedora  ;;
+        *)       install_tarball ;;
+    esac
+}
+
+# A ~/.local install sits behind the packaged /usr/bin binary on PATH, so the two
+# would disagree about which build the engine service runs.
+warn_if_native_package_shadows() {
+    installed_native_packages >/dev/null 2>&1 || return 0
+
+    warn "A native $APP_PACKAGE package is installed; it would shadow this user install."
+    if [[ -t 0 ]] && confirm "Remove the native package first?"; then
+        remove_native_packages
+        return 0
+    fi
+
+    info "Nothing was installed. Remove that package first, or use --method native to update it."
+    return 1
+}
+
+install_native() {
+    case "$DISTRO_FAMILY" in
+        arch)    install_arch   ;;
+        debian)  install_debian ;;
+        fedora)  install_fedora ;;
+        *) fail "No native package is published for $DISTRO_NAME. Use --method tarball or --method appimage." ;;
+    esac
+}
+
+set_install_method() {
+    case "$1" in
+        auto|appimage|tarball|native) INSTALL_METHOD="$1" ;;
+        binary)                       INSTALL_METHOD="tarball" ;;
+        *) fail "Unknown install method: $1. Choose auto, appimage, tarball, or native." ;;
+    esac
 }
 
 # ── Repair, status, and removal ───────────────────────────────────────────────
@@ -334,7 +618,7 @@ as_root() {
     elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
     else
-        fail "sudo is required to remove the native package."
+        fail "sudo is required for this step, and it is not installed."
     fi
 }
 
@@ -483,16 +767,16 @@ build_swhkd_from_source() {
         make clean 2>/dev/null || true
         make
     )
-    sudo install -Dm755 "$src/target/release/swhkd" /usr/bin/swhkd
-    sudo install -Dm755 "$src/target/release/swhks" /usr/bin/swhks
+    as_root install -Dm755 "$src/target/release/swhkd" /usr/bin/swhkd
+    as_root install -Dm755 "$src/target/release/swhks" /usr/bin/swhks
     for f in "$src"/docs/*.gz; do
         [[ -e "$f" ]] || continue
         case "$(basename "$f")" in
-            *.1.gz) sudo install -Dm644 "$f" "/usr/share/man/man1/$(basename "$f")" ;;
-            *.5.gz) sudo install -Dm644 "$f" "/usr/share/man/man5/$(basename "$f")" ;;
+            *.1.gz) as_root install -Dm644 "$f" "/usr/share/man/man1/$(basename "$f")" ;;
+            *.5.gz) as_root install -Dm644 "$f" "/usr/share/man/man5/$(basename "$f")" ;;
         esac
     done
-    [[ -f /etc/swhkd/swhkdrc ]] || sudo install -Dm644 /dev/null /etc/swhkd/swhkdrc
+    [[ -f /etc/swhkd/swhkdrc ]] || as_root install -Dm644 /dev/null /etc/swhkd/swhkdrc
 }
 
 configure_swhkd_permissions() {
@@ -506,11 +790,75 @@ configure_swhkd_permissions() {
     [[ -n "$swhks_path" ]] || fail "swhks was not found after installation."
 
     info "Configuring swhkd permissions..."
-    sudo chown root:root "$swhkd_path"
-    sudo chmod u+s "$swhkd_path"
-    sudo chmod +x "$swhks_path"
+    as_root chown root:root "$swhkd_path"
+    as_root chmod u+s "$swhkd_path"
+    as_root chmod +x "$swhks_path"
 
     [[ -u "$swhkd_path" ]] || fail "swhkd setuid bit was not applied to $swhkd_path."
+
+    offer_uinput
+}
+
+# The /dev/uinput node exists even when the driver is absent, so opening it is the
+# only honest probe: the kernel autoloads the module on open where it is present,
+# and fails with ENODEV where it is not. Called right after the chown above, so
+# the sudo timestamp is already warm and this asks for no extra password.
+uinput_available() {
+    [[ -d /sys/module/uinput ]] && return 0
+    as_root sh -c 'exec 3>/dev/uinput' >/dev/null 2>&1
+}
+
+uinput_manual_commands() {
+    printf '    sudo modprobe uinput\n'
+    printf '    echo uinput | sudo tee /etc/modules-load.d/uinput.conf\n'
+}
+
+# Systems that already have uinput are left untouched. The rest are asked first:
+# loading a kernel module and making it load at boot is the machine owner's call.
+offer_uinput() {
+    uinput_available && return 0
+
+    local release; release="$(uname -r)"
+
+    # A kernel upgrade removes the running kernel's module tree, so nothing can be
+    # loaded until the new one is booted. Asking to modprobe here would only fail.
+    if [[ ! -d "/usr/lib/modules/$release" && ! -d "/lib/modules/$release" ]]; then
+        warn "The running kernel ($release) has no modules on disk; it was replaced since boot."
+        warn "Reboot, then run this again so uinput can load."
+        return 0
+    fi
+
+    warn "swhkd needs the uinput kernel module, and this system does not provide it."
+    printf '  swhkd reads your keyboards directly, so it has to type every key it does not\n'
+    printf '  claim back to the system through a virtual keyboard. The uinput module is what\n'
+    printf '  creates that keyboard; without it swhkd exits at startup and hotkeys stay dead.\n'
+    printf '  Loading it changes nothing else, and listing it in /etc/modules-load.d keeps\n'
+    printf '  hotkeys working after a restart.\n\n'
+
+    if [[ ! -t 0 ]]; then
+        warn "No terminal to ask on, so nothing was loaded. To do it yourself:"
+        uinput_manual_commands
+        return 0
+    fi
+
+    if ! confirm "  Load uinput now and at every boot?"; then
+        info "Left as it is. To do it later:"
+        uinput_manual_commands
+        return 0
+    fi
+
+    enable_uinput
+}
+
+enable_uinput() {
+    if [[ ! -d /sys/module/uinput ]] && ! as_root modprobe uinput 2>/dev/null; then
+        warn "Could not load the uinput module; Wayland hotkeys stay unavailable until it is."
+        return 0
+    fi
+
+    [[ -f /etc/modules-load.d/uinput.conf ]] && return 0
+    info "Loading uinput at boot via /etc/modules-load.d/uinput.conf"
+    printf 'uinput\n' | as_root tee /etc/modules-load.d/uinput.conf >/dev/null
 }
 
 swhkd_requires_pkexec() {
@@ -635,11 +983,17 @@ install_main() {
     info "Distro:  $DISTRO_NAME"
     info "Session: $SESSION_TYPE"
 
-    case "$DISTRO_FAMILY" in
-        arch)    install_arch    ;;
-        debian)  install_debian  ;;
-        fedora)  install_fedora  ;;
-        *)       install_tarball ;;
+    case "$INSTALL_METHOD" in
+        appimage)
+            warn_if_native_package_shadows || return 0
+            install_appimage
+            ;;
+        tarball)
+            warn_if_native_package_shadows || return 0
+            install_tarball
+            ;;
+        native) install_native ;;
+        *)      install_auto   ;;
     esac
 
     if is_wayland; then
@@ -648,7 +1002,22 @@ install_main() {
 
     ensure_pipewire_services
 
-    printf '\nDone. Launch with: %s\n' "$APP_BINARY"
+    print_launch_hint
+}
+
+# Only the native package lands in /usr/bin. Tarball and AppImage installs go to
+# ~/.local/opt, which is not on PATH, so naming the binary there would mislead.
+print_launch_hint() {
+    local user_binary="$HOME/.local/opt/$APP_BINARY/$APP_BINARY"
+
+    printf '\n'
+    if command -v "$APP_BINARY" >/dev/null 2>&1; then
+        printf 'Done. Launch with: %s\n' "$APP_BINARY"
+    elif [[ -x "$user_binary" ]]; then
+        printf 'Done. Launch it from your applications menu, or run:\n  %s\n' "$user_binary"
+    else
+        printf 'Done.\n'
+    fi
 }
 
 repair_main() {
@@ -728,9 +1097,11 @@ print_menu_header() {
 password_note() {
     case "$1" in
         install-newest)
+            # The method chosen on the next screen decides: only the system
+            # package needs a password, and AppImage and tarball never do.
             case "$DISTRO_FAMILY" in
                 arch|debian|fedora|opensuse)
-                    printf ' — asks for your password (system package)'
+                    printf ' — password only for the system package'
                     ;;
                 *)
                     if is_wayland; then
@@ -787,8 +1158,8 @@ interactive_menu() {
         read -r choice || return 0
 
         case "$choice" in
-            1) install_main ;;
-            2) choose_and_install_version ;;
+            1) prompt_install_method && install_main ;;
+            2) prompt_install_method no-native && choose_and_install_version ;;
             3) remove_installation ;;
             4) fix_setup ;;
             5) make_bug_report ;;
@@ -798,6 +1169,35 @@ interactive_menu() {
             *) warn "Unknown option: $choice" ;;
         esac
     done
+}
+
+# Pressing enter keeps the previous one-keystroke behaviour. Returns non-zero on
+# an unusable answer so the menu redraws instead of installing something else.
+prompt_install_method() {
+    local native=${1:-with-native}
+    local choice
+
+    printf '\n  Installation method:\n'
+    printf '   1) Automatic — native package when available, binary otherwise\n'
+    printf '   2) AppImage — self-contained, installs into ~/.local, no root\n'
+    printf '   3) Binary tarball — installs into ~/.local, no root\n'
+    [[ "$native" == "with-native" ]] && printf '   4) Native package — .deb, .rpm, or AUR\n'
+    printf '\n  Choose a method [1]: '
+
+    read -r choice || choice=""
+    case "$choice" in
+        ""|1) INSTALL_METHOD="auto" ;;
+        2)    INSTALL_METHOD="appimage" ;;
+        3)    INSTALL_METHOD="tarball" ;;
+        4)
+            if [[ "$native" != "with-native" ]]; then
+                warn "Native packages carry the newest version only."
+                return 1
+            fi
+            INSTALL_METHOD="native"
+            ;;
+        *) warn "Unknown option: $choice"; return 1 ;;
+    esac
 }
 
 # ── Previous versions ─────────────────────────────────────────────────────────
@@ -853,9 +1253,21 @@ install_version() {
         fi
     fi
 
-    bundle_dir="$(download_and_extract_tarball "$tag")"
     export LSB_INSTALL_VERSION="$tag"
-    run_user_installer install "$bundle_dir"
+    case "$INSTALL_METHOD" in
+        native)
+            unset LSB_INSTALL_VERSION
+            fail "Native packages are published for the newest release only. Use --method tarball or --method appimage to install $tag."
+            ;;
+        appimage)
+            install_appimage "$tag"
+            ;;
+        *)
+            ensure_runtime_dependencies
+            bundle_dir="$(download_and_extract_tarball "$tag")"
+            run_user_installer install "$bundle_dir"
+            ;;
+    esac
     unset LSB_INSTALL_VERSION
 
     if is_wayland; then
@@ -864,7 +1276,8 @@ install_version() {
     ensure_pipewire_services
 
     printf '\n'
-    info "Installed $tag. Launch with: $APP_BINARY"
+    info "Installed $tag."
+    print_launch_hint
 }
 
 # ── Fix setup problems ────────────────────────────────────────────────────────
@@ -1148,24 +1561,44 @@ main() {
             ;;
         install)
             [[ $# -gt 0 ]] && shift
-            case "${1:-}" in
-                --version)
-                    [[ -n "${2:-}" ]] || fail "--version needs a tag, for example v2.1.2."
-                    install_version "$2"
-                    ;;
-                --version=*)
-                    install_version "${1#--version=}"
-                    ;;
-                *)
-                    install_main "$@"
-                    ;;
-            esac
+            local install_tag=""
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --version)
+                        [[ -n "${2:-}" ]] || fail "--version needs a tag, for example v2.1.2."
+                        install_tag="$2"; shift 2
+                        ;;
+                    --version=*)
+                        install_tag="${1#--version=}"; shift
+                        ;;
+                    --method)
+                        [[ -n "${2:-}" ]] || fail "--method needs a value: auto, appimage, tarball, or native."
+                        set_install_method "$2"; shift 2
+                        ;;
+                    --method=*)
+                        set_install_method "${1#--method=}"; shift
+                        ;;
+                    *)
+                        fail "Unknown install option: $1. See --help."
+                        ;;
+                esac
+            done
+            # Piped through bash, stdin is the script itself, so the questions
+            # this path may ask (runtime libraries, FUSE, uinput) need the
+            # terminal. Where there is none they are skipped, as before.
+            ensure_tty || true
+            if [[ -n "$install_tag" ]]; then
+                install_version "$install_tag"
+            else
+                install_main
+            fi
             ;;
         versions)
             list_release_tags
             ;;
         repair|fix)
             [[ $# -gt 0 ]] && shift
+            ensure_tty || true
             if [[ "$command" == "fix" ]]; then
                 fix_setup
             else

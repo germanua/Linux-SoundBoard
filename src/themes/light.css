@@ -353,15 +353,19 @@ row.appearance-choice-row {
 }
 
 /* GTK CSS Label does not support transform: scale() — use opacity-only pulse */
+/* One selector per keyframe: "0%, 100% {" only parses on GTK 4.20 and newer */
 @keyframes playing-dot-pulse {
-  0%,
-  100% {
+  0% {
     opacity: 1;
     color: #a88d52;
   }
   50% {
     opacity: 0.4;
     color: #332b1f;
+  }
+  100% {
+    opacity: 1;
+    color: #a88d52;
   }
 }
 
@@ -839,12 +843,14 @@ columnview.data-table rubberband {
 }
 
 @keyframes hotkey-recording-pulse {
-  0%,
-  100% {
+  0% {
     opacity: 1;
   }
   50% {
     opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
   }
 }
 

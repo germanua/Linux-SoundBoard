@@ -408,8 +408,10 @@ impl TransportBar {
                 let inner_weak_done = Rc::downgrade(&inner_refresh);
                 let btn_done = btn.clone();
                 match commands::refresh_sounds_with_store_async(
+                    Arc::clone(&state_refresh.config),
                     state_refresh.library.clone(),
                     state_refresh.hotkey_projection.clone(),
+                    state_refresh.loudness_coordinators.clone(),
                     move |result| {
                         match result {
                             Ok(_) => {

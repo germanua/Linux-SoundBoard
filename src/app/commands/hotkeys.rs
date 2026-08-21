@@ -151,6 +151,7 @@ pub fn open_hotkey_settings(_hotkeys: Arc<Mutex<HotkeyManager>>) -> Result<(), C
 pub fn install_swhkd_async<F>(
     hotkeys: Arc<Mutex<HotkeyManager>>,
     projection: HotkeyProjectionCoordinator,
+    enable_uinput: bool,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -160,7 +161,7 @@ where
     dispatch_async_result(
         "install_swhkd",
         move || {
-            let result = crate::hotkeys::install_swhkd_native_detailed();
+            let result = crate::hotkeys::install_swhkd_native_detailed(enable_uinput);
 
             if let Ok(report) = &result {
                 let rebind_result = projection.reconcile_blocking();

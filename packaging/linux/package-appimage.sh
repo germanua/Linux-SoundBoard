@@ -139,6 +139,13 @@ if grep -q 'find /usr/lib\* -name libgiognutls.so' "$GTK_PLUGIN_BIN"; then
     sed -i 's|find /usr/lib\\* -name libgiognutls.so|find /usr/lib -name libgiognutls.so|' "$GTK_PLUGIN_BIN"
 fi
 
+# Distros without GTK4 loadable modules ship no gtk-4.0 directory (Arch, for one).
+# shellcheck disable=SC2016
+if grep -Fq 'copy_tree "$gtk4_libdir" "$APPDIR/"' "$GTK_PLUGIN_BIN"; then
+    # shellcheck disable=SC2016
+    sed -i 's|^\( *\)copy_tree "\$gtk4_libdir" "\$APPDIR/"|\1if [ -d "$gtk4_libdir" ]; then copy_tree "$gtk4_libdir" "$APPDIR/"; fi|' "$GTK_PLUGIN_BIN"
+fi
+
 # Skip VMware shim libraries; they drag host-only dependencies into the AppImage.
 # shellcheck disable=SC2016
 if grep -Fq 'done < <(find "$directory" \( -type l -o -type f \) -name "$library" -print0)' "$GTK_PLUGIN_BIN"; then
@@ -255,6 +262,17 @@ if [[ -f "$gtk_hook" ]]; then
     # Keep $APPDIR literal in the runtime hook.
     # shellcheck disable=SC2016
     sed -i '/^export GIO_EXTRA_MODULES=/,/lib32\/gio\/modules"$/c\export GIO_EXTRA_MODULES="$APPDIR/usr/lib/gio/modules"' "$gtk_hook"
+
+    # GTK_THEME overrides the libadwaita stylesheet, which renders the app in the
+    # stock light theme regardless of its own dark/light setting (issue #18).
+    # shellcheck disable=SC2016
+    if ! grep -q '^export GTK_THEME="\$APPIMAGE_GTK_THEME"' "$gtk_hook"; then
+        echo "Expected GTK_THEME export missing from $gtk_hook; check GTK_PLUGIN_URL" >&2
+        exit 1
+    fi
+    # An `x && y` one-liner would abort the `set -e` AppRun when x is false.
+    # shellcheck disable=SC2016
+    sed -i 's|^export GTK_THEME="\$APPIMAGE_GTK_THEME".*|if [ -n "${LSB_GTK_THEME:-}" ]; then export GTK_THEME="$LSB_GTK_THEME"; fi|' "$gtk_hook"
 fi
 
 # The AppImage uses the host audio server tools for live setup and diagnostics.
@@ -305,6 +323,9 @@ fi
 )
 
 cp "$versioned_path" "$stable_path"
+
+# Every packager refreshes the list, so it stays current whichever runs last.
+"$REPO_ROOT/packaging/generate-checksums.sh" "$DIST_ROOT" >/dev/null
 
 echo "Created AppImage artifacts:"
 echo "  Versioned: $versioned_path"

@@ -57,6 +57,18 @@ so the installer offers to remove the package first.
 **Fix setup problems** re-runs the install steps one at a time, prints which one
 failed, then shows `install.sh status` and `linux-soundboard --diagnose`.
 
+**Install the newest version** and **Install a previous version** ask which method to use:
+
+| Method | What it does | Root needed |
+| --- | --- | --- |
+| Automatic (default) | The distro's native package when the release ships one, the binary tarball otherwise | Only for the native package |
+| AppImage | Downloads the release AppImage and installs it into `~/.local` through its own bundled installer | No |
+| Binary tarball | Downloads the release tarball and installs it into `~/.local` | No |
+| Native package | Forces the `.deb`, `.rpm`, or AUR build; fails where none is published | Yes |
+
+Pressing enter keeps Automatic, so the flow is unchanged for anyone who does not care.
+Native packages carry the newest release only, so it is not offered for previous versions.
+
 **Make a bug report** is described in [BUG_REPORTS.md](BUG_REPORTS.md).
 
 ---
@@ -67,6 +79,9 @@ Every menu action has a command, so nothing here needs an interactive shell:
 
 ```bash
 ./install.sh install                    # newest version
+./install.sh install --method appimage  # newest version, from its AppImage
+./install.sh install --method tarball   # newest version, from its binary tarball
+./install.sh install --method native    # force the .deb, .rpm, or AUR package
 ./install.sh install --version v2.1.2   # a specific published release
 ./install.sh versions                   # list published releases
 ./install.sh fix                        # guided repair
@@ -297,6 +312,15 @@ sudo zypper install fuse
 On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
 
 **In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button. Clicking it runs a PolicyKit-authorized build and install flow entirely within the app. No terminal required.
+
+swhkd grabs your keyboards directly and re-emits the keys it does not claim
+through a virtual keyboard, which the kernel's `uinput` module provides. Almost
+every system already has it — the kernel autoloads the module when `/dev/uinput`
+is opened — and those are left alone. Only where opening the node fails does the
+app offer **Load uinput** alongside **Install without it**, so nothing is loaded
+without you agreeing to it. See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#swhkd-fails-with-failed-to-create-uinput-device)
+for the manual commands.
 
 Requirements for the in-app install:
 

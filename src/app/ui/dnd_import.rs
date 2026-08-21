@@ -244,7 +244,9 @@ fn handle_drop_import(
     if let Err(e) = commands::import_files_to_tab_with_store_async(
         valid_paths,
         tab_id_opt,
+        Arc::clone(&state.config),
         state.library.clone(),
+        state.loudness_coordinators.clone(),
         move |result| {
             match result {
                 Ok(imported_count) => {

@@ -243,7 +243,9 @@ impl SoundListInner {
         match commands::import_files_to_tab_with_store_async(
             paths,
             tab_id_opt,
+            Arc::clone(&self.state.config),
             self.state.library.clone(),
+            self.state.loudness_coordinators.clone(),
             move |result| match result {
                 Ok(imported_count) => {
                     log::info!("Successfully imported {imported_count} sounds");
