@@ -1,8 +1,10 @@
 use std::cell::{Cell, RefCell};
 
 use crate::audio::PlayerSnapshot;
+use crate::config::GroupMode;
 
 type StringHandler = RefCell<Option<Box<dyn FnMut(String)>>>;
+type GroupModeHandler = RefCell<Option<Box<dyn FnMut(GroupMode)>>>;
 type SnapshotHandler = RefCell<Option<Box<dyn FnMut(PlayerSnapshot)>>>;
 
 thread_local! {
@@ -11,6 +13,9 @@ thread_local! {
     static LOUDNESS_STATUS_REFRESH_HANDLER: RefCell<Option<Box<dyn FnMut()>>> =
         RefCell::new(None);
     static SNAPSHOT_HANDLER: SnapshotHandler = RefCell::new(None);
+    /// The settings panel is built once and kept, so a mode changed by hotkey
+    /// would otherwise still read the old value the next time it is opened.
+    static GROUP_MODE_HANDLER: GroupModeHandler = RefCell::new(None);
 
     /// Set to true on the GTK main thread immediately before dispatching a
     /// user-initiated play request. Prevents Continue-mode auto-advance from
@@ -42,6 +47,20 @@ pub fn post_toast(message: String) {
         TOAST_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(message);
+            }
+        });
+    });
+}
+
+pub fn set_group_mode_handler(f: impl FnMut(GroupMode) + 'static) {
+    GROUP_MODE_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_group_mode_changed(mode: GroupMode) {
+    glib::MainContext::default().invoke(move || {
+        GROUP_MODE_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(mode);
             }
         });
     });

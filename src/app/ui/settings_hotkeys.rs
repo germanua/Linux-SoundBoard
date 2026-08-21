@@ -147,9 +147,16 @@ fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::
         GroupMode::Next => 1,
         GroupMode::Random => 2,
     });
+    // The same row is both written by the cycle hotkey and read by the user,
+    // so the hotkey's update must not loop back into a redundant save.
+    let applying_mode = Rc::new(std::cell::Cell::new(false));
     {
         let state_mode = Arc::clone(&state);
+        let applying = Rc::clone(&applying_mode);
         mode_row.connect_selected_notify(move |row| {
+            if applying.get() {
+                return;
+            }
             let mode = match row.selected() {
                 1 => GroupMode::Next,
                 2 => GroupMode::Random,
@@ -160,6 +167,23 @@ fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::
             {
                 log::warn!("Could not save the shared hotkey mode: {error}");
             }
+        });
+    }
+
+    {
+        let mode_weak = mode_row.downgrade();
+        let applying = Rc::clone(&applying_mode);
+        crate::ui_event_bridge::set_group_mode_handler(move |mode| {
+            let Some(mode_row) = mode_weak.upgrade() else {
+                return;
+            };
+            applying.set(true);
+            mode_row.set_selected(match mode {
+                GroupMode::Same => 0,
+                GroupMode::Next => 1,
+                GroupMode::Random => 2,
+            });
+            applying.set(false);
         });
     }
 

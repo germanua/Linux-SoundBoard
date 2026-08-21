@@ -367,6 +367,7 @@ pub fn build_window(
         let transport_hk = transport.clone();
         let tabs_hk = tabs.clone();
         let sound_list_hk = sound_list.clone();
+        let dialog_host_hk = dialog_host.clone();
         crate::ui_event_bridge::set_hotkey_handler(move |binding_id| {
             handle_hotkey(
                 &window_hk,
@@ -374,6 +375,7 @@ pub fn build_window(
                 &transport_hk,
                 &tabs_hk,
                 &sound_list_hk,
+                &dialog_host_hk,
                 &binding_id,
             );
         });
@@ -424,8 +426,16 @@ pub fn handle_hotkey(
     transport: &TransportBar,
     tabs: &TabsSidebar,
     sound_list: &SoundList,
+    dialog_host: &DialogHost,
     id: &str,
 ) {
+    // Recording a shortcut must not also trigger it. The capture dialog reads
+    // keys through its own focus, while the global backend keeps delivering
+    // the same press here.
+    if dialog_host.is_capturing_hotkey() {
+        log::debug!("Ignoring hotkey '{id}' while a shortcut is being recorded");
+        return;
+    }
     if let Some(action) = crate::config::ControlHotkeyAction::from_binding_id(id) {
         handle_control_hotkey(state, transport, action);
     } else if let Some(scope_key) = commands::tab_from_binding_id(id) {
@@ -479,14 +489,17 @@ fn handle_control_hotkey(
         }
         crate::config::ControlHotkeyAction::CycleGroupMode => {
             match commands::cycle_group_mode(Arc::clone(&state.config)) {
-                Ok(mode) => crate::ui_event_bridge::post_toast(format!(
-                    "Shared hotkeys: {}",
-                    match mode {
-                        crate::config::GroupMode::Same => "play the same sound",
-                        crate::config::GroupMode::Next => "play the next sound",
-                        crate::config::GroupMode::Random => "play a random sound",
-                    }
-                )),
+                Ok(mode) => {
+                    crate::ui_event_bridge::post_group_mode_changed(mode);
+                    crate::ui_event_bridge::post_toast(format!(
+                        "Shared hotkeys: {}",
+                        match mode {
+                            crate::config::GroupMode::Same => "play the same sound",
+                            crate::config::GroupMode::Next => "play the next sound",
+                            crate::config::GroupMode::Random => "play a random sound",
+                        }
+                    ));
+                }
                 Err(error) => log::warn!("Could not cycle the shared hotkey mode: {error}"),
             }
         }

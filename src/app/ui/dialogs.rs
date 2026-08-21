@@ -303,6 +303,14 @@ impl DialogHost {
         }
     }
 
+    /// True while the hotkey capture dialog is waiting for a key combination.
+    /// The global backends keep delivering presses to the app throughout, and
+    /// playing a sound while the user is recording that same sound's shortcut
+    /// is never what they meant.
+    pub fn is_capturing_hotkey(&self) -> bool {
+        self.inner.hotkey_validator.borrow().is_some()
+    }
+
     pub fn show_error(&self, title: &str, message: &str) {
         self.show_message(title, message);
     }
