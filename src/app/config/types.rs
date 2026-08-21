@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::config::defaults::{
     default_allow_multiple_playbacks, default_auto_gain_attack_ms, default_auto_gain_lookahead_ms,
-    default_auto_gain_release_ms, default_auto_gain_target,
+    default_auto_gain_release_ms, default_auto_gain_target, default_tray_setting,
 };
 
 macro_rules! impl_string_serde_enum {
@@ -695,6 +695,15 @@ pub struct Settings {
     pub group_mode: GroupMode,
     #[serde(default)]
     pub list_style: ListStyle,
+    /// Put an icon in the system tray. Off removes it; a session whose desktop
+    /// has no tray shows nothing either way.
+    #[serde(default = "default_tray_setting")]
+    pub tray_enabled: bool,
+    /// Let the close button hide the window instead of quitting, so global
+    /// hotkeys keep working. Only ever acted on while a tray icon is really
+    /// showing, so the window is never hidden with no way back.
+    #[serde(default = "default_tray_setting")]
+    pub close_to_tray: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -817,6 +826,8 @@ impl Default for Settings {
             group_mode: GroupMode::default(),
             play_mode: PlayMode::Default,
             list_style: ListStyle::Compact,
+            tray_enabled: default_tray_setting(),
+            close_to_tray: default_tray_setting(),
         }
     }
 }

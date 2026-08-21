@@ -9,6 +9,7 @@ type GroupModeHandler = RefCell<Option<Box<dyn FnMut(GroupMode)>>>;
 type SnapshotHandler = RefCell<Option<Box<dyn FnMut(PlayerSnapshot)>>>;
 type TrayActionHandler = RefCell<Option<Box<dyn FnMut(TrayAction)>>>;
 type TrayMenuHandler = RefCell<Option<Box<dyn FnMut(Vec<MenuItem>)>>>;
+type TrayEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 
 thread_local! {
     static HOTKEY_HANDLER: StringHandler = RefCell::new(None);
@@ -25,6 +26,7 @@ thread_local! {
     /// clicks one way and the rebuilt menu back the other.
     static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
     static TRAY_MENU_HANDLER: TrayMenuHandler = RefCell::new(None);
+    static TRAY_ENABLED_HANDLER: TrayEnabledHandler = RefCell::new(None);
 
     /// Answers "should the close button hide the window instead of quitting?".
     /// Owned by `bootstrap`, which knows both the setting and whether a panel
@@ -109,6 +111,21 @@ pub fn post_tray_menu(items: Vec<MenuItem>) {
         TRAY_MENU_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(items);
+            }
+        });
+    });
+}
+
+pub fn set_tray_enabled_handler(f: impl FnMut(bool) + 'static) {
+    TRAY_ENABLED_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+/// Show or withdraw the tray icon after the setting changed.
+pub fn post_tray_enabled(enabled: bool) {
+    glib::MainContext::default().invoke(move || {
+        TRAY_ENABLED_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(enabled);
             }
         });
     });

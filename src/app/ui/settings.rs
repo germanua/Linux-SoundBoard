@@ -182,6 +182,63 @@ pub fn build_settings_overlay(
     overlay
 }
 
+/// Tray icon and what the close button does.
+///
+/// Closing to the tray only ever happens while an icon is really showing, so
+/// leaving both on costs nothing on a desktop that has no tray.
+fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("System Tray")
+        .build();
+
+    let (tray_enabled, close_to_tray) = {
+        let config = state.config.lock();
+        (config.settings.tray_enabled, config.settings.close_to_tray)
+    };
+
+    let icon_row = adw::SwitchRow::builder()
+        .title("Show Tray Icon")
+        .subtitle("Put Linux Soundboard in the system tray")
+        .active(tray_enabled)
+        .build();
+
+    let close_row = adw::SwitchRow::builder()
+        .title("Close Button Minimises To Tray")
+        .subtitle("Keep running in the background so global shortcuts still work")
+        .active(close_to_tray)
+        .sensitive(tray_enabled)
+        .build();
+
+    {
+        let state = Arc::clone(&state);
+        let close_row = close_row.clone();
+        icon_row.connect_active_notify(move |row| {
+            let enabled = row.is_active();
+            if let Err(error) = commands::set_tray_enabled(enabled, Arc::clone(&state.config)) {
+                log::warn!("Could not save the tray icon setting: {error}");
+                return;
+            }
+            close_row.set_sensitive(enabled);
+            crate::ui_event_bridge::post_tray_enabled(enabled);
+        });
+    }
+
+    {
+        let state = Arc::clone(&state);
+        close_row.connect_active_notify(move |row| {
+            if let Err(error) =
+                commands::set_close_to_tray(row.is_active(), Arc::clone(&state.config))
+            {
+                log::warn!("Could not save the close-to-tray setting: {error}");
+            }
+        });
+    }
+
+    group.add(&icon_row);
+    group.add(&close_row);
+    group
+}
+
 fn build_settings_selector_button(icon: icons::IconPair, label: &str) -> gtk4::ToggleButton {
     let button = gtk4::ToggleButton::builder()
         .tooltip_text(label)
@@ -511,6 +568,8 @@ fn build_general_page(
 
     let mic_group = super::settings_mic::build_mic_group(Arc::clone(&state));
     page.add(&mic_group);
+
+    page.add(&build_tray_group(Arc::clone(&state)));
 
     let theme_group = adw::PreferencesGroup::builder().title("Appearance").build();
 

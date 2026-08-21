@@ -1224,14 +1224,14 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
         warn!("Failed to start hotkey UI bridge: {}", err);
     }
 
-    let tray = start_tray(app, &state);
+    let tray = install_tray(app, &state);
 
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
     window.connect_close_request(move |_| {
         // Only reached when the window is really closing: the window's own
         // handler runs first and stops the emission when it hides to the tray.
-        if let Some(tray) = tray.as_ref() {
+        if let Some(tray) = tray.borrow().as_ref() {
             tray.shutdown();
         }
         shutdown_application(&state_close, &timers_close);
@@ -1313,34 +1313,77 @@ fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
     }
 }
 
-/// Put an icon in the panel, if the session has anywhere to put one.
+/// Where the tray icon lives while it is showing. Empty when the setting is
+/// off, when the session has no bus, or when exporting failed.
+type TraySlot = Rc<RefCell<Option<Rc<crate::tray::TrayService>>>>;
+
+/// Put an icon in the panel and keep it in step with the settings.
 ///
-/// Returns `None` when the tray cannot be exported at all; a session with no
-/// watcher yet is not that case — the item waits and appears when a panel
-/// arrives. The close button consults [`TrayService::is_live`] rather than this
-/// value, so the window is never hidden to a tray nobody can see.
-fn start_tray(app: &Application, state: &Arc<AppState>) -> Option<Rc<crate::tray::TrayService>> {
-    let connection = app.dbus_connection()?;
+/// A session with no watcher is not a failure: the item stays exported and
+/// appears if a panel or extension turns up later. The close button asks
+/// [`crate::tray::TrayService::is_live`] rather than assuming, so the window is
+/// never hidden to a tray nobody can see.
+fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
+    let slot: TraySlot = Rc::new(RefCell::new(None));
+    let Some(connection) = app.dbus_connection() else {
+        warn!("No session bus is available, so there will be no tray icon");
+        return slot;
+    };
+
+    {
+        let slot = Rc::clone(&slot);
+        let state = Arc::clone(state);
+        crate::ui_event_bridge::set_close_to_tray_policy(move || {
+            state.config.lock().settings.close_to_tray
+                && slot.borrow().as_ref().is_some_and(|tray| tray.is_live())
+        });
+    }
+
+    {
+        let slot = Rc::clone(&slot);
+        crate::ui_event_bridge::set_tray_menu_handler(move |items| {
+            if let Some(tray) = slot.borrow().as_ref() {
+                tray.set_menu(items);
+            }
+        });
+    }
+
+    {
+        let slot = Rc::clone(&slot);
+        let state = Arc::clone(state);
+        let connection = connection.clone();
+        crate::ui_event_bridge::set_tray_enabled_handler(move |enabled| {
+            let existing = slot.borrow_mut().take();
+            match (enabled, existing) {
+                (true, None) => *slot.borrow_mut() = start_tray_service(&connection, &state),
+                (false, Some(tray)) => tray.shutdown(),
+                (_, unchanged) => *slot.borrow_mut() = unchanged,
+            }
+        });
+    }
+
+    if state.config.lock().settings.tray_enabled {
+        *slot.borrow_mut() = start_tray_service(&connection, state);
+    }
+    slot
+}
+
+fn start_tray_service(
+    connection: &gio::DBusConnection,
+    state: &Arc<AppState>,
+) -> Option<Rc<crate::tray::TrayService>> {
     let real_mic_muted = !state.config.lock().settings.mic_passthrough;
-    let tray = match crate::tray::TrayService::start(
-        &connection,
+    match crate::tray::TrayService::start(
+        connection,
         crate::tray::menu::build(true, real_mic_muted),
         crate::ui_event_bridge::post_tray_action,
     ) {
-        Ok(tray) => Rc::new(tray),
+        Ok(tray) => Some(Rc::new(tray)),
         Err(error) => {
             warn!("Could not export a tray icon: {error}");
-            return None;
+            None
         }
-    };
-
-    let tray_menu = Rc::clone(&tray);
-    crate::ui_event_bridge::set_tray_menu_handler(move |items| tray_menu.set_menu(items));
-
-    let tray_policy = Rc::clone(&tray);
-    crate::ui_event_bridge::set_close_to_tray_policy(move || tray_policy.is_live());
-
-    Some(tray)
+    }
 }
 
 fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &TimerRegistry) {

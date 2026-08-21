@@ -22,3 +22,29 @@ fn test_config_default_has_empty_collections() {
     // The library lives in SQLite; a default config carries settings only.
     let _ = Config::default();
 }
+
+/// A config written before the tray existed must come back with the tray on,
+/// not off: `#[serde(default)]` would give `false` and silently opt every
+/// existing user out of the feature.
+#[test]
+fn a_config_without_the_tray_keys_still_turns_the_tray_on() {
+    let settings: linux_soundboard::config::Settings =
+        serde_json::from_str(r#"{"local_volume": 80, "mic_volume": 100, "mic_passthrough": true}"#)
+            .expect("an old settings file still parses");
+    assert!(settings.tray_enabled);
+    assert!(settings.close_to_tray);
+}
+
+#[test]
+fn the_tray_settings_survive_a_round_trip() {
+    let settings = linux_soundboard::config::Settings {
+        tray_enabled: false,
+        close_to_tray: false,
+        ..Default::default()
+    };
+    let restored: linux_soundboard::config::Settings =
+        serde_json::from_str(&serde_json::to_string(&settings).expect("settings serialize"))
+            .expect("settings parse");
+    assert!(!restored.tray_enabled);
+    assert!(!restored.close_to_tray);
+}
