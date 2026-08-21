@@ -41,6 +41,10 @@ pub struct AppState {
     /// Per-instance loudness analysis coordinators. Tracks in-flight backfill
     /// and refinement jobs without process-global state.
     pub loudness_coordinators: LoudnessCoordinators,
+    /// Which sound each shared hotkey played last, keyed by the binding a
+    /// press arrives as. Owned here rather than as a process-global so tests
+    /// can give each case an independent cursor.
+    pub hotkey_group_cursor: Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// Set once on the first successful play. Used by `play_sound_async` to
     /// record a one-shot diagnostic phase without process-global state.
     pub first_playback_recorded: Arc<AtomicBool>,

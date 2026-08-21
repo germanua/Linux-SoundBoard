@@ -5,9 +5,6 @@
 //! then arrives here with every binding that shares that chord, and this module
 //! decides what — if anything — to play.
 
-// Wired into the press path in a later phase; the rules land first.
-#![allow(dead_code)]
-
 use crate::config::GroupMode;
 // The store's row type is the input to these rules; a second copy of the same
 // three fields would only need converting back and forth.
@@ -33,6 +30,23 @@ pub(crate) enum InertReason {
     Ambiguous,
     /// Several sounds share the chord but "Multiple sounds per hotkey" is off.
     MultiSoundDisabled,
+}
+
+impl InertReason {
+    /// What the user is told when a press does nothing. Silence with no
+    /// explanation reads as a broken hotkey.
+    pub(crate) const fn message(self) -> &'static str {
+        match self {
+            Self::NoMembers => "That shortcut is not assigned to a sound.",
+            Self::OutOfScope => "That shortcut belongs to another tab.",
+            Self::Ambiguous => {
+                "That shortcut is assigned in more than one tab. Open one of them to use it."
+            }
+            Self::MultiSoundDisabled => {
+                "Several sounds share that shortcut. Turn on \"Multiple sounds per hotkey\" in Settings to use it."
+            }
+        }
+    }
 }
 
 /// The index into the `members` slice that was passed in, or the reason none

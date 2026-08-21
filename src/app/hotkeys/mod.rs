@@ -21,6 +21,7 @@ pub(super) const SWHKD_PIPE_REOPEN_DELAY_MS: u64 = 100;
 
 pub(crate) use error::HotkeyError;
 pub use error::{format_hotkey_error, hotkey_conflict};
+pub(crate) use group::{select_from_group, HotkeyToggles, Selection};
 pub use manager_runtime::HotkeyManager;
 pub use parsing::{
     canonicalize_hotkey_string, normalize_capture_key, parse_hotkey_spec, HotkeyCode,

@@ -1187,6 +1187,7 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     let hotkey_projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
     let state = Arc::new(AppState {
+        hotkey_group_cursor: Arc::new(Mutex::new(std::collections::HashMap::new())),
         config: Arc::new(Mutex::new(config)),
         library,
         player: Arc::new(player),

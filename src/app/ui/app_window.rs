@@ -376,6 +376,28 @@ pub fn build_window(
     (window, transport)
 }
 
+/// The settings a press is resolved against, read on the UI thread and carried
+/// into the worker. Tab scoping is not wired to the visible tab yet, so every
+/// binding is in scope.
+fn hotkey_press_context(state: &Arc<AppState>) -> commands::HotkeyPress {
+    let (multi_sound, mode) = {
+        let config = state.config.lock();
+        (
+            config.settings.multi_sound_hotkeys,
+            config.settings.group_mode,
+        )
+    };
+    commands::HotkeyPress {
+        toggles: crate::hotkeys::HotkeyToggles {
+            tab_hotkeys: false,
+            multi_sound,
+        },
+        mode,
+        active_scope: crate::app_meta::GENERAL_TAB_ID.to_string(),
+        cursor: Arc::clone(&state.hotkey_group_cursor),
+    }
+}
+
 pub fn handle_hotkey(
     _window: &ApplicationWindow,
     state: &Arc<AppState>,
@@ -387,9 +409,10 @@ pub fn handle_hotkey(
     } else {
         let sound_id = id.to_string();
         let sound_id_for_log = sound_id.clone();
+        let press = hotkey_press_context(state);
         crate::ui_event_bridge::mark_explicit_play_pending();
         if let Err(e) =
-            commands::play_hotkey_sound_async(sound_id, Arc::clone(state), move |result| {
+            commands::play_hotkey_sound_async(sound_id, press, Arc::clone(state), move |result| {
                 if let Err(err) = result {
                     crate::ui_event_bridge::clear_explicit_play_pending();
                     log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);

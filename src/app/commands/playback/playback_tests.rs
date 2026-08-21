@@ -119,6 +119,142 @@ mod dispatch {
         )
     }
 
+    /// A library holding `sounds`, each already bound to `chord`.
+    fn library_with_shared_chord(
+        dir: &std::path::Path,
+        sounds: &[Sound],
+        chord: &str,
+    ) -> LibraryStore {
+        let store = LibraryStore::open(dir.join("library.sqlite3")).expect("open library");
+        store
+            .apply_batch(LibraryBatch::Sounds(
+                sounds
+                    .iter()
+                    .enumerate()
+                    .map(|(position, sound)| SoundRecord {
+                        sound: sound.clone(),
+                        general_position: position,
+                        locations: Vec::new(),
+                    })
+                    .collect(),
+            ))
+            .recv()
+            .expect("seed sounds");
+        for sound in sounds {
+            store
+                .set_hotkey_binding(crate::library_store::HotkeyBindingRecord {
+                    binding_id: sound.id.clone(),
+                    owner: crate::library_store::HotkeyBindingOwner::Sound(sound.id.clone()),
+                    accelerator: chord.to_string(),
+                    normalized: Some(chord.to_string()),
+                    issue: None,
+                })
+                .recv()
+                .expect("bind the chord");
+        }
+        store
+    }
+
+    fn press(multi_sound: bool, mode: crate::config::GroupMode) -> super::super::HotkeyPress {
+        super::super::HotkeyPress {
+            toggles: crate::hotkeys::HotkeyToggles {
+                tab_hotkeys: false,
+                multi_sound,
+            },
+            mode,
+            active_scope: crate::app_meta::GENERAL_TAB_ID.to_string(),
+            cursor: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    #[test]
+    fn an_unshared_chord_plays_its_own_sound() {
+        let (sound, dir, _path) = sound_on_disk("Alone");
+        let sound_id = sound.id.clone();
+        let store = library_with_shared_chord(&dir.0, std::slice::from_ref(&sound), "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        super::super::play_sound_from_library(
+            &sound_id,
+            &super::super::SoundLookup::HotkeyBinding(press(false, crate::config::GroupMode::Same)),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("an ordinary binding is a group of one");
+
+        fake.assert_played(&sound_id);
+    }
+
+    #[test]
+    fn a_shared_chord_plays_one_of_its_sounds() {
+        let (first, dir, _path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        super::super::play_sound_from_library(
+            &first_id,
+            &super::super::SoundLookup::HotkeyBinding(press(true, crate::config::GroupMode::Same)),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("a shared chord plays its first member");
+
+        fake.assert_played(&first_id);
+    }
+
+    #[test]
+    fn next_walks_the_shared_chord_one_sound_at_a_time() {
+        let (first, dir, _path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+        // One context across both presses: the cursor is what makes the second
+        // press land on the second sound.
+        let context =
+            super::super::SoundLookup::HotkeyBinding(press(true, crate::config::GroupMode::Next));
+
+        for _ in 0..2 {
+            super::super::play_sound_from_library(
+                &first_id,
+                &context,
+                &store,
+                fake.clone() as Arc<dyn PlaybackEngine>,
+            )
+            .expect("play a member");
+        }
+
+        let played: Vec<String> = fake
+            .play_calls()
+            .into_iter()
+            .map(|call| call.sound_id)
+            .collect();
+        assert_eq!(played, [first_id, second_id]);
+    }
+
+    #[test]
+    fn a_shared_chord_stays_silent_while_multiple_sounds_are_off() {
+        let (first, dir, _path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        let error = super::super::play_sound_from_library(
+            &first_id,
+            &super::super::SoundLookup::HotkeyBinding(press(false, crate::config::GroupMode::Same)),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect_err("guessing between two sounds is worse than doing nothing");
+
+        assert!(error.to_string().contains("Multiple sounds per hotkey"));
+        fake.assert_no_plays();
+    }
+
     #[test]
     fn dispatches_play_with_resolved_volume_after_stopping_everything() {
         let (mut sound, _dir, path) = sound_on_disk("Airhorn");
@@ -169,7 +305,7 @@ mod dispatch {
         let fake = Arc::new(FakeAudioPlayer::new());
         super::super::play_sound_from_library(
             &sound_id,
-            false,
+            &super::super::SoundLookup::ById,
             &store,
             fake.clone() as Arc<dyn PlaybackEngine>,
         )

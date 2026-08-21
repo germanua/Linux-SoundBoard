@@ -237,21 +237,90 @@ fn play_resolved_sound(
     result
 }
 
+/// Everything a hotkey press needs to decide which sound it means. Carried
+/// from the UI thread into the worker so the library is never queried on the
+/// GTK main loop.
+#[derive(Clone)]
+pub(crate) struct HotkeyPress {
+    pub toggles: crate::hotkeys::HotkeyToggles,
+    pub mode: crate::config::GroupMode,
+    /// The tab currently showing, as a scope key.
+    pub active_scope: String,
+    /// Which sound each chord played last, keyed by the binding the press
+    /// arrives as. In memory on purpose: "where was I in this group" is
+    /// session state, and starting over on the next launch is the expected
+    /// behaviour rather than something to persist.
+    pub cursor: Arc<Mutex<HashMap<String, String>>>,
+}
+
+pub(crate) enum SoundLookup {
+    ById,
+    HotkeyBinding(HotkeyPress),
+}
+
 fn play_sound_from_library(
     id: &str,
-    binding_lookup: bool,
+    lookup: &SoundLookup,
     library: &crate::library_store::LibraryStore,
     player: Arc<dyn PlaybackEngine>,
 ) -> Result<String, CommandError> {
-    let sound = if binding_lookup {
-        library.sound_for_binding(id)
-    } else {
-        library.sound_by_id(id)
-    }
-    .recv()
-    .map_err(|error| CommandError::Library(error.to_string()))?
-    .ok_or(CommandError::SoundNotFound)?;
+    let sound = match lookup {
+        SoundLookup::ById => library
+            .sound_by_id(id)
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?
+            .ok_or(CommandError::SoundNotFound)?,
+        SoundLookup::HotkeyBinding(press) => resolve_hotkey_press(id, press, library)?,
+    };
     play_resolved_sound(sound, player)
+}
+
+/// Turn the binding a press arrived as into the one sound it should play.
+///
+/// A chord reaches the backends once, so the press names whichever binding
+/// represents the chord; every sound on that chord is a candidate. Costs one
+/// query more than the old single-binding lookup, which is invisible next to
+/// the press itself — fold the sound rows into the group query if that ever
+/// stops being true.
+fn resolve_hotkey_press(
+    binding_id: &str,
+    press: &HotkeyPress,
+    library: &crate::library_store::LibraryStore,
+) -> Result<crate::config::Sound, CommandError> {
+    let members = library
+        .hotkey_group(binding_id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+
+    let last_played = press.cursor.lock().get(binding_id).cloned();
+    // uuid is already the crate's source of randomness for ids, so Random does
+    // not pull in a second one.
+    let entropy = uuid::Uuid::new_v4().as_u128() as u64;
+    let index = match crate::hotkeys::select_from_group(
+        &members,
+        &press.active_scope,
+        press.toggles,
+        press.mode,
+        last_played.as_deref(),
+        entropy,
+    ) {
+        crate::hotkeys::Selection::Play(index) => index,
+        crate::hotkeys::Selection::Inert(reason) => {
+            log::info!("Hotkey press resolved to nothing: {}", reason.message());
+            return Err(CommandError::Hotkey(reason.message().to_string()));
+        }
+    };
+
+    let member = &members[index];
+    press
+        .cursor
+        .lock()
+        .insert(binding_id.to_string(), member.sound_id.clone());
+    library
+        .sound_by_id(&member.sound_id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .ok_or(CommandError::SoundNotFound)
 }
 
 fn play_adjacent_from_library(
@@ -294,18 +363,24 @@ pub fn play_sound_async<F>(
 where
     F: FnOnce(Result<String, CommandError>) + 'static,
 {
-    dispatch_play_sound_async(id, state, false, on_complete)
+    dispatch_play_sound_async(id, state, SoundLookup::ById, on_complete)
 }
 
-pub fn play_hotkey_sound_async<F>(
+pub(crate) fn play_hotkey_sound_async<F>(
     binding_id: String,
+    press: HotkeyPress,
     state: Arc<AppState>,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
     F: FnOnce(Result<String, CommandError>) + 'static,
 {
-    dispatch_play_sound_async(binding_id, state, true, on_complete)
+    dispatch_play_sound_async(
+        binding_id,
+        state,
+        SoundLookup::HotkeyBinding(press),
+        on_complete,
+    )
 }
 
 pub fn play_adjacent_sound_async<F>(
@@ -331,7 +406,7 @@ where
 fn dispatch_play_sound_async<F>(
     id: String,
     state: Arc<AppState>,
-    binding_lookup: bool,
+    lookup: SoundLookup,
     on_complete: F,
 ) -> Result<(), CommandError>
 where
@@ -362,7 +437,7 @@ where
     let state_diag = Arc::clone(&state);
     dispatch_async_result(
         "play_sound",
-        move || play_sound_from_library(&id, binding_lookup, &library, player),
+        move || play_sound_from_library(&id, &lookup, &library, player),
         move |result: Result<String, CommandError>| {
             if result.is_ok()
                 && first_recorded
