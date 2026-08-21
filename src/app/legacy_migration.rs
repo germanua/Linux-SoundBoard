@@ -2034,8 +2034,32 @@ mod tests {
             .execute_batch(&format!("PRAGMA user_version = {previous};"))
             .expect("downgrade user version");
         connection
-            .execute_batch("ALTER TABLE folder_prefs DROP COLUMN hidden;")
-            .expect("drop the column the current schema adds");
+            .execute_batch(
+                "ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_current;
+                 CREATE TABLE hotkey_bindings(
+                     binding_id TEXT PRIMARY KEY,
+                     sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
+                     control_action TEXT UNIQUE,
+                     accelerator TEXT NOT NULL,
+                     normalized TEXT,
+                     state TEXT NOT NULL CHECK(state IN ('active', 'needs_attention')),
+                     issue TEXT,
+                     CHECK((sound_id IS NOT NULL) <> (control_action IS NOT NULL)),
+                     CHECK((state = 'active' AND normalized IS NOT NULL)
+                           OR (state = 'needs_attention' AND normalized IS NULL))
+                 );
+                 CREATE UNIQUE INDEX hotkey_bindings_active_normalized
+                     ON hotkey_bindings(normalized)
+                     WHERE state = 'active';
+                 INSERT INTO hotkey_bindings(
+                     binding_id, sound_id, control_action, accelerator, normalized, state, issue
+                 )
+                 SELECT binding_id, sound_id, control_action, accelerator, normalized,
+                        state, issue
+                 FROM hotkey_bindings_current;
+                 DROP TABLE hotkey_bindings_current;",
+            )
+            .expect("restore the hotkey table shape the previous schema had");
         drop(connection);
 
         database_identity(&destination).expect("an older library must still be accepted");

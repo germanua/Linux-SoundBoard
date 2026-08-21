@@ -11,10 +11,10 @@ use crate::config::{ControlHotkeyAction, LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
-pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 4;
+pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 5;
 /// Metadata tag written beside the schema version. Migrations keep their own
 /// historical literals; this is only ever the current one.
-pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v4";
+pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v5";
 pub(crate) const DATABASE_APPLICATION_ID: i64 = 0x4c53_4244;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
 const VISIBLE_QUEUE_CAPACITY: usize = 64;
@@ -1668,11 +1668,16 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
         migrate_schema_1_to_2(&connection)?;
         migrate_schema_2_to_3(&connection)?;
         migrate_schema_3_to_4(&connection)?;
+        migrate_schema_4_to_5(&connection)?;
     } else if schema_version == 2 {
         migrate_schema_2_to_3(&connection)?;
         migrate_schema_3_to_4(&connection)?;
+        migrate_schema_4_to_5(&connection)?;
     } else if schema_version == 3 {
         migrate_schema_3_to_4(&connection)?;
+        migrate_schema_4_to_5(&connection)?;
+    } else if schema_version == 4 {
+        migrate_schema_4_to_5(&connection)?;
     } else {
         let meta_version: String = connection.query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -1697,9 +1702,48 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     Ok(connection)
 }
 
+/// Created verbatim by both `create_schema` and `migrate_schema_4_to_5`, so a
+/// migrated library and a fresh one are the same database.
+///
+/// A binding owns exactly one of: a sound, a control action, or a tab it
+/// activates. `tab_scope` names the tab a binding is live in, and NULL means
+/// every tab — which is how every binding written before tab scoping is
+/// stored, and why enabling the toggle changes nothing on its own. Scope keys
+/// are `general`, `tab:<public id>`, or `folder:<root>\u{1f}<relative path>`;
+/// the unit separator cannot occur in a path, so the two halves stay
+/// unambiguous.
+///
+/// There is deliberately no unique index on `normalized`: several sounds may
+/// share one chord. Rejecting a duplicate is a policy decision that depends on
+/// the Settings toggles, so it lives in the command layer, which is also where
+/// the message the user reads comes from.
+const HOTKEY_BINDINGS_SCHEMA: &str = "\
+         CREATE TABLE hotkey_bindings(
+             binding_id TEXT PRIMARY KEY,
+             sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
+             control_action TEXT UNIQUE,
+             target_tab TEXT,
+             tab_scope TEXT,
+             accelerator TEXT NOT NULL,
+             normalized TEXT,
+             state TEXT NOT NULL CHECK(state IN ('active', 'needs_attention')),
+             issue TEXT,
+             CHECK((sound_id IS NOT NULL) + (control_action IS NOT NULL)
+                   + (target_tab IS NOT NULL) = 1),
+             CHECK((state = 'active' AND normalized IS NOT NULL)
+                   OR (state = 'needs_attention' AND normalized IS NULL)),
+             CHECK(target_tab IS NULL OR tab_scope IS NULL)
+         );
+         CREATE INDEX hotkey_bindings_active_lookup
+             ON hotkey_bindings(normalized, tab_scope)
+             WHERE state = 'active';
+         CREATE UNIQUE INDEX hotkey_bindings_target_tab
+             ON hotkey_bindings(target_tab)
+             WHERE target_tab IS NOT NULL;";
+
 fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
     connection.pragma_update(None, "application_id", DATABASE_APPLICATION_ID)?;
-    connection.execute_batch(
+    connection.execute_batch(&format!(
         "BEGIN IMMEDIATE;
          CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
          CREATE TABLE roots(
@@ -1751,21 +1795,7 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
          );
          CREATE INDEX sounds_general_order ON sounds(general_position, public_id);
          CREATE INDEX sounds_standalone ON sounds(rowid) WHERE standalone = 1;
-         CREATE TABLE hotkey_bindings(
-             binding_id TEXT PRIMARY KEY,
-             sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
-             control_action TEXT UNIQUE,
-             accelerator TEXT NOT NULL,
-             normalized TEXT,
-             state TEXT NOT NULL CHECK(state IN ('active', 'needs_attention')),
-             issue TEXT,
-             CHECK((sound_id IS NOT NULL) <> (control_action IS NOT NULL)),
-             CHECK((state = 'active' AND normalized IS NOT NULL)
-                   OR (state = 'needs_attention' AND normalized IS NULL))
-         );
-         CREATE UNIQUE INDEX hotkey_bindings_active_normalized
-             ON hotkey_bindings(normalized)
-             WHERE state = 'active';
+{HOTKEY_BINDINGS_SCHEMA}
          CREATE TABLE sound_locations(
              sound_id INTEGER NOT NULL REFERENCES sounds(rowid) ON DELETE CASCADE,
              root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
@@ -1837,11 +1867,11 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              VALUES('delete', old.rowid, old.search_name);
              INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
          END;
-         INSERT INTO meta(key, value) VALUES('schema_version', '4');
-         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v4');
-         PRAGMA user_version = 4;
+         INSERT INTO meta(key, value) VALUES('schema_version', '5');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v5');
+         PRAGMA user_version = 5;
          COMMIT;",
-    )?;
+    ))?;
     Ok(())
 }
 
@@ -1951,6 +1981,40 @@ fn migrate_schema_3_to_4(connection: &Connection) -> Result<(), LibraryError> {
          PRAGMA user_version = 4;
          COMMIT;",
     )?;
+    Ok(())
+}
+
+fn migrate_schema_4_to_5(connection: &Connection) -> Result<(), LibraryError> {
+    let flavor: String = connection.query_row(
+        "SELECT value FROM meta WHERE key = 'schema_flavor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if flavor != "bounded-generation-v4" {
+        return Err(LibraryError::InvalidData(
+            "library metadata does not match schema 4".to_string(),
+        ));
+    }
+    // The table is rebuilt rather than altered: SQLite cannot change a CHECK
+    // constraint in place, and the old one allowed only a sound or a control
+    // action. Renaming the old table first means the surviving table is created
+    // from HOTKEY_BINDINGS_SCHEMA verbatim, so it is indistinguishable from a
+    // freshly created one. Dropping the old table takes its indexes with it.
+    connection.execute_batch(&format!(
+        "BEGIN IMMEDIATE;
+         ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v4;
+         {HOTKEY_BINDINGS_SCHEMA}
+         INSERT INTO hotkey_bindings(
+             binding_id, sound_id, control_action, accelerator, normalized, state, issue
+         )
+         SELECT binding_id, sound_id, control_action, accelerator, normalized, state, issue
+         FROM hotkey_bindings_v4;
+         DROP TABLE hotkey_bindings_v4;
+         UPDATE meta SET value = '5' WHERE key = 'schema_version';
+         UPDATE meta SET value = 'bounded-generation-v5' WHERE key = 'schema_flavor';
+         PRAGMA user_version = 5;
+         COMMIT;",
+    ))?;
     Ok(())
 }
 
