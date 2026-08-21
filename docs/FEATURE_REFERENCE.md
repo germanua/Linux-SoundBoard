@@ -734,6 +734,77 @@ before.
 
 ---
 
+## System Tray
+
+Linux Soundboard can sit in the system tray and keep running with its window
+closed. This matters because global hotkeys live in the application itself:
+with the tray on, closing the window leaves them working; with it off, closing
+quits and the hotkeys stop with it.
+
+Settings live under `Settings` → `General` → `System Tray`.
+
+### Show Tray Icon
+
+- **Default:** On
+- **What it does:** Puts an icon in the desktop's status area
+
+> **Notes:**
+>
+> - Left-click shows or hides the window; right-click opens the menu
+> - Takes effect immediately — no restart
+> - Needs a desktop that supports `StatusNotifierItem`. KDE Plasma, XFCE, LXQt,
+>   Cinnamon, MATE, Budgie and waybar all do. **GNOME does not on its own** and
+>   needs the
+>   [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
+>   extension
+> - Where no tray exists, nothing appears and nothing breaks
+
+### Close Button Minimises To Tray
+
+- **Default:** On
+- **What it does:** The window's close button hides the window instead of
+  quitting, leaving global hotkeys live
+
+> **Notes:**
+>
+> - Only ever acted on while an icon is really showing, so the window is never
+>   hidden with no way back. Without a tray the close button quits as usual
+> - Launching the app again brings the hidden window back
+> - Quit from the tray menu, or from the desktop's media controls, to exit for
+>   real
+
+### Tray Menu
+
+| Row                      | What it does                          |
+| ------------------------ | ------------------------------------- |
+| `Show`/`Hide Linux Soundboard` | Toggles the window                |
+| `Play / Pause`           | Same as the transport button          |
+| `Stop All`               | Stops every playing sound             |
+| `Mute Real Mic`          | Toggles microphone passthrough        |
+| `Quit`                   | Shuts the application down            |
+
+The menu is deliberately short: everything else is reachable from the window
+and from [Global Control Hotkeys](#global-control-hotkeys).
+
+### Show In Media Controls
+
+- **Default:** Off
+- **What it does:** Publishes the playing sound to the desktop's media controls
+  — the panel widget that shows a track name with transport buttons
+
+> **Notes:**
+>
+> - Off by default for a reason: while a sound is playing the app becomes the
+>   active media player, which takes the media keys and the now-playing display
+>   away from whatever music was running
+> - The player appears only while a sound is playing and disappears the moment
+>   it stops, so the media keys go straight back
+> - Unlike the tray icon, this works on GNOME with no extension
+> - The panel's `Raise` action brings the window back, whatever the tray is
+>   doing
+
+---
+
 ## Status Banners and Feedback
 
 ### PipeWire Unavailable Banner

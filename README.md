@@ -183,6 +183,8 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 - **Drag and drop** — drag files or folders from a file manager directly into the window
 - **Search** — real-time search bar filters the visible list
 - **Hotkeys** — assign a global key combination to any sound; Wayland uses `swhkd`, X11 uses a native XInput2 backend
+- **System tray** — close the window and keep running, so global hotkeys stay live; left-click the icon to bring it back, right-click for transport controls. Needs a desktop supporting `StatusNotifierItem` (GNOME needs the AppIndicator extension)
+- **Media controls** — optionally show the playing sound in the panel's media widget, released again as soon as the sound ends so it does not hold the media keys
 
 ### Global hotkeys
 

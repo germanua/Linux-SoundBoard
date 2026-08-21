@@ -116,6 +116,47 @@ ls -la ~/.config/linux-soundboard/
 
 If needed, fix ownership and permissions for the user running the app.
 
+### No tray icon appears
+
+`Show Tray Icon` is on by default, but the desktop has to provide somewhere to
+put it. Check whether a watcher is running:
+
+```bash
+busctl --user list | grep StatusNotifier
+```
+
+Two names should be listed — a `StatusNotifierWatcher` and a
+`StatusNotifierHost`. If there are none, the desktop has no tray:
+
+- **GNOME** does not support tray icons on its own. Install the
+  [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/)
+  extension and log back in.
+- **KDE Plasma, XFCE, LXQt, Cinnamon, MATE, Budgie** support it natively; if
+  the watcher is missing there, the panel has probably crashed. Restarting it
+  is enough — the icon re-registers by itself.
+- **Sway, Hyprland and other wlroots compositors** need a panel with a tray
+  module, such as waybar with `tray` in its config.
+- **Flatpak** installs need `--talk-name=org.kde.StatusNotifierWatcher`, which
+  the published manifest grants. An override that drops it hides the icon.
+
+With no tray, the close button quits the way it always did, and global hotkeys
+stop with the application. To keep them running, leave the window open.
+
+### Closing the window stops my global hotkeys
+
+Global hotkeys run inside the application, so quitting stops them. Turn on
+`Settings` → `General` → `System Tray` → `Close Button Minimises To Tray`; the
+window then hides instead of quitting and the hotkeys stay live. It only takes
+effect while a tray icon is actually showing — see the entry above.
+
+### The soundboard took over my media keys
+
+Turn off `Settings` → `General` → `System Tray` → `Show In Media Controls`. It
+is off by default. While it is on and a sound is playing, the app is the
+desktop's active media player, so `Play/Pause` and the other media keys reach
+it rather than a music player. The player is published only for the length of
+the sound, but on very long clips that window is noticeable.
+
 ## Audio Problems
 
 ### Virtual microphone was not created

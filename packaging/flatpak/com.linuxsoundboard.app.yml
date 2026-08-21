@@ -34,6 +34,12 @@ finish-args:
   - --talk-name=org.freedesktop.portal.Desktop
   - --talk-name=org.freedesktop.portal.GlobalShortcuts
 
+  # System tray. The app registers a StatusNotifierItem with the desktop's
+  # watcher; without this the icon silently never appears. The MPRIS player it
+  # publishes for the media controls needs no permission — a Flatpak may own
+  # its own org.mpris.MediaPlayer2.* name.
+  - --talk-name=org.kde.StatusNotifierWatcher
+
   # GIO/GVfs support: lets GTK file operations reach mounted volumes and
   # network shares through the GVfs daemon socket.
   - --talk-name=org.gtk.vfs.*
