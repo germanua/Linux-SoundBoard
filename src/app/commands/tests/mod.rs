@@ -497,7 +497,13 @@ fn test_set_hotkey_valid() {
     );
     match result {
         Ok(_) => {
-            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_some());
+            let bindings = library
+                .hotkey_bindings_for_sound(&sound_id)
+                .recv()
+                .expect("read the sound's bindings");
+            assert_eq!(bindings.len(), 1);
+            // Stored canonicalized, not as typed.
+            assert_eq!(bindings[0].accelerator, "Ctrl+Digit1");
         }
         Err(e) => {
             println!(
@@ -530,7 +536,11 @@ fn test_set_hotkey_clear() {
     );
     match result {
         Ok(_) => {
-            assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
+            assert!(library
+                .hotkey_bindings_for_sound(&sound_id)
+                .recv()
+                .unwrap()
+                .is_empty());
         }
         Err(e) => {
             println!("Hotkey clear failed: {}", e);
@@ -662,8 +672,14 @@ fn a_sound_may_join_a_chord_another_sound_already_answers_to() {
     )
     .expect("a shared chord is a group to join, not a conflict");
 
+    let joined = library
+        .hotkey_bindings_for_sound(&second_id)
+        .recv()
+        .expect("read the sound's bindings")
+        .pop()
+        .expect("the second sound is bound");
     let members = library
-        .hotkey_group(&second_id)
+        .hotkey_group(&joined.binding_id)
         .recv()
         .expect("read the group");
     assert_eq!(members.len(), 2);
@@ -893,4 +909,112 @@ fn an_unknown_shared_hotkey_mode_is_rejected() {
         config.lock().settings.group_mode,
         crate::config::GroupMode::Same
     );
+}
+
+#[test]
+fn one_sound_can_carry_a_different_hotkey_in_each_tab() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    for (scope, chord) in [
+        ("tab:one", "Ctrl+Alt+Digit7"),
+        ("tab:two", "Ctrl+Alt+Digit8"),
+    ] {
+        commands::set_hotkey(
+            sound_id.clone(),
+            Some(chord.to_string()),
+            false,
+            Some(scope.to_string()),
+            library.clone(),
+            projection.clone(),
+        )
+        .unwrap_or_else(|error| panic!("bind {chord} in {scope}: {error}"));
+    }
+
+    let mut bindings = library
+        .hotkey_bindings_for_sound(&sound_id)
+        .recv()
+        .expect("read the sound's bindings");
+    bindings.sort_by(|a, b| a.tab_scope.cmp(&b.tab_scope));
+    let bound: Vec<(Option<&str>, &str)> = bindings
+        .iter()
+        .map(|binding| (binding.tab_scope.as_deref(), binding.accelerator.as_str()))
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            (Some("tab:one"), "Ctrl+Alt+Digit7"),
+            (Some("tab:two"), "Ctrl+Alt+Digit8"),
+        ]
+    );
+}
+
+#[test]
+fn rebinding_in_the_same_tab_replaces_rather_than_adds() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    for chord in ["Ctrl+Alt+Digit7", "Ctrl+Alt+Digit9"] {
+        commands::set_hotkey(
+            sound_id.clone(),
+            Some(chord.to_string()),
+            false,
+            Some("tab:one".to_string()),
+            library.clone(),
+            projection.clone(),
+        )
+        .expect("bind in the same tab twice");
+    }
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&sound_id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].accelerator, "Ctrl+Alt+Digit9");
+}
+
+#[test]
+fn a_binding_id_is_safe_to_write_into_the_swhkd_config() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    // A folder tab's scope key carries a path and a unit separator, neither of
+    // which the swhkd binding-id validator accepts, so the scope must never
+    // end up inside the id.
+    commands::set_hotkey(
+        sound_id.clone(),
+        Some("Ctrl+Alt+Digit6".to_string()),
+        false,
+        Some(crate::library_store::scope_key(
+            &crate::library_store::LibraryScope::Folder {
+                root_path: "/music".to_string(),
+                relative_path: "memes/loud".to_string(),
+            },
+        )),
+        library.clone(),
+        projection,
+    )
+    .expect("bind inside a folder tab");
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&sound_id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert!(bindings[0]
+        .binding_id
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_')));
 }

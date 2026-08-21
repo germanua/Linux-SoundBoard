@@ -254,7 +254,7 @@ Right-click any row in the sound list to open the context menu.
 > - With `Multiple Sounds Per Hotkey` on, a combination another sound already
 >   answers to names that sound and asks before adding to it
 > - With `Tab Hotkeys` on, the dialog also offers to limit the hotkey to the
->   tab it is set from
+>   tab it is set from, checked by default for a new shortcut
 >
 > See [Hotkey Behaviour](#hotkey-behaviour).
 
@@ -696,7 +696,10 @@ feature does.
 
 > **Notes:**
 >
-> - The same key combination can mean different sounds in different tabs
+> - The same key combination can mean different sounds in different tabs, and
+>   the same sound can take a different combination in each tab it appears in
+> - The hotkey column shows the shortcut that applies in the tab you are
+>   looking at; a tab's own shortcut wins over one that is live everywhere
 > - `General` lists every sound, so a combination used in two tabs does nothing
 >   while `General` is open rather than guessing between them
 > - Folder tabs cannot be bound yet

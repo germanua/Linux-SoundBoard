@@ -14,6 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Changed
 
+- **A sound can carry a different hotkey in each tab:** with `Tab Hotkeys` on, the same sound shown in two tabs takes a separate shortcut in each, and the hotkey column shows the one that applies where you are looking — a shortcut limited to another tab is no longer displayed as if it worked here. A tab's own shortcut takes precedence over one that is live everywhere. The scope checkbox in the hotkey dialog now defaults to this tab, since that is the point of turning the setting on.
 - **The library database upgrades on first launch:** storing which tab a hotkey belongs to needed a schema change. The upgrade is automatic and keeps every existing hotkey working exactly as before, but it is one-way: an older build will refuse to open the library afterwards.
 
 ### Fixed

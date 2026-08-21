@@ -2449,3 +2449,151 @@ fn every_kind_of_tab_has_a_scope_key() {
     assert_ne!(nested, ambiguous);
     assert!(nested.starts_with("folder:"));
 }
+
+#[test]
+fn a_hotkey_bound_in_one_tab_is_not_shown_in_another() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    // The helper hands out a hotkey; this sound gets its bindings below.
+    let mut shared = sound("shared", "Shared", "/music/shared.flac");
+    shared.hotkey = None;
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: shared,
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    // The same sound sits in both tabs, which is why a binding limited to one
+    // of them must not follow it into the other.
+    wait(store.apply_batch(LibraryBatch::ManualTabs(vec![
+        ManualTabRecord {
+            public_id: "one".to_string(),
+            name: "One".to_string(),
+            position: 0,
+        },
+        ManualTabRecord {
+            public_id: "two".to_string(),
+            name: "Two".to_string(),
+            position: 1,
+        },
+    ])));
+    wait(store.apply_batch(LibraryBatch::ManualMemberships(vec![
+        ManualMembershipRecord {
+            tab_public_id: "one".to_string(),
+            sound_public_id: "shared".to_string(),
+            position: 0,
+        },
+        ManualMembershipRecord {
+            tab_public_id: "two".to_string(),
+            sound_public_id: "shared".to_string(),
+            position: 0,
+        },
+    ])));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "binding-in-one".to_string(),
+        owner: HotkeyBindingOwner::Sound("shared".to_string()),
+        accelerator: "Ctrl+KeyA".to_string(),
+        normalized: Some("Ctrl+KeyA".to_string()),
+        issue: None,
+        tab_scope: Some("tab:one".to_string()),
+    })));
+
+    let in_one = wait(store.page(LibraryScope::ManualTab("one".to_string()), "", 0));
+    assert_eq!(in_one.sounds[0].hotkey.as_deref(), Some("Ctrl+KeyA"));
+
+    let in_two = wait(store.page(LibraryScope::ManualTab("two".to_string()), "", 0));
+    assert_eq!(in_two.sounds[0].hotkey, None);
+
+    // General lists every sound, and a binding limited to a tab does not
+    // answer there either.
+    let in_general = wait(store.page(LibraryScope::General, "", 0));
+    assert_eq!(in_general.sounds[0].hotkey, None);
+}
+
+#[test]
+fn a_binding_that_is_live_everywhere_shows_in_every_tab() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    // The helper hands out a hotkey; this sound gets its bindings below.
+    let mut shared = sound("shared", "Shared", "/music/shared.flac");
+    shared.hotkey = None;
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: shared,
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    wait(
+        store.apply_batch(LibraryBatch::ManualTabs(vec![ManualTabRecord {
+            public_id: "one".to_string(),
+            name: "One".to_string(),
+            position: 0,
+        }])),
+    );
+    wait(store.apply_batch(LibraryBatch::ManualMemberships(vec![
+        ManualMembershipRecord {
+            tab_public_id: "one".to_string(),
+            sound_public_id: "shared".to_string(),
+            position: 0,
+        },
+    ])));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "everywhere".to_string(),
+        owner: HotkeyBindingOwner::Sound("shared".to_string()),
+        accelerator: "Ctrl+KeyB".to_string(),
+        normalized: Some("Ctrl+KeyB".to_string()),
+        issue: None,
+        tab_scope: None,
+    })));
+
+    for scope in [
+        LibraryScope::General,
+        LibraryScope::ManualTab("one".to_string()),
+    ] {
+        let page = wait(store.page(scope, "", 0));
+        assert_eq!(page.sounds[0].hotkey.as_deref(), Some("Ctrl+KeyB"));
+    }
+}
+
+#[test]
+fn a_tab_binding_wins_over_one_that_is_live_everywhere() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    // The helper hands out a hotkey; this sound gets its bindings below.
+    let mut shared = sound("shared", "Shared", "/music/shared.flac");
+    shared.hotkey = None;
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: shared,
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    wait(
+        store.apply_batch(LibraryBatch::ManualTabs(vec![ManualTabRecord {
+            public_id: "one".to_string(),
+            name: "One".to_string(),
+            position: 0,
+        }])),
+    );
+    wait(store.apply_batch(LibraryBatch::ManualMemberships(vec![
+        ManualMembershipRecord {
+            tab_public_id: "one".to_string(),
+            sound_public_id: "shared".to_string(),
+            position: 0,
+        },
+    ])));
+    for (binding_id, accelerator, scope) in [
+        ("everywhere", "Ctrl+KeyB", None),
+        ("in-one", "Ctrl+KeyC", Some("tab:one".to_string())),
+    ] {
+        assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+            binding_id: binding_id.to_string(),
+            owner: HotkeyBindingOwner::Sound("shared".to_string()),
+            accelerator: accelerator.to_string(),
+            normalized: Some(accelerator.to_string()),
+            issue: None,
+            tab_scope: scope,
+        })));
+    }
+
+    // One sound, two bindings: the tab's own is the one that answers there.
+    let page = wait(store.page(LibraryScope::ManualTab("one".to_string()), "", 0));
+    assert_eq!(page.sounds[0].hotkey.as_deref(), Some("Ctrl+KeyC"));
+}

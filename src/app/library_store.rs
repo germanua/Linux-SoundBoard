@@ -11,10 +11,10 @@ use crate::config::{ControlHotkeyAction, LoudnessAnalysisState, Sound};
 
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
-pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 5;
+pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 6;
 /// Metadata tag written beside the schema version. Migrations keep their own
 /// historical literals; this is only ever the current one.
-pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v5";
+pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v6";
 pub(crate) const DATABASE_APPLICATION_ID: i64 = 0x4c53_4244;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
 const VISIBLE_QUEUE_CAPACITY: usize = 64;
@@ -416,6 +416,10 @@ enum Request {
         binding_id: String,
         reply: mpsc::SyncSender<Result<Option<HotkeyBindingRecord>, LibraryError>>,
     },
+    HotkeyBindingsForSound {
+        sound_id: String,
+        reply: mpsc::SyncSender<Result<Vec<HotkeyBindingRecord>, LibraryError>>,
+    },
     HotkeyGroup {
         binding_id: String,
         reply: mpsc::SyncSender<Result<Vec<HotkeyGroupMember>, LibraryError>>,
@@ -588,6 +592,7 @@ impl RequestQueue {
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
             | Request::HotkeyGroup { .. }
+            | Request::HotkeyBindingsForSound { .. }
             | Request::SetHotkeyBinding { .. }
             | Request::DeleteHotkeyBinding { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
             Request::HotkeyConflict { .. }
@@ -989,6 +994,22 @@ impl LibraryStore {
         self.enqueue(
             Request::HotkeyBinding {
                 binding_id: binding_id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
+    /// Every binding this sound holds: at most one that is live in every tab,
+    /// plus one per tab it is bound in. The caller picks which applies.
+    pub fn hotkey_bindings_for_sound(
+        &self,
+        sound_id: &str,
+    ) -> LibraryResponse<Vec<HotkeyBindingRecord>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::HotkeyBindingsForSound {
+                sound_id: sound_id.to_string(),
                 reply,
             },
             response,
@@ -1483,6 +1504,7 @@ impl Request {
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
             | Request::HotkeyGroup { .. }
+            | Request::HotkeyBindingsForSound { .. }
             | Request::HotkeyConflict { .. }
             | Request::LoudnessStats { .. }
             | Request::LibraryStats { .. }
@@ -1589,6 +1611,9 @@ fn handle_request(connection: &mut Connection, request: Request) {
         }
         Request::HotkeyGroup { binding_id, reply } => {
             let _ = reply.send(load_hotkey_group(connection, &binding_id));
+        }
+        Request::HotkeyBindingsForSound { sound_id, reply } => {
+            let _ = reply.send(load_hotkey_bindings_for_sound(connection, &sound_id));
         }
         Request::SetHotkeyBinding { binding, reply } => {
             let _ = reply.send(set_hotkey_binding(connection, binding));
@@ -1742,15 +1767,21 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
         migrate_schema_2_to_3(&connection)?;
         migrate_schema_3_to_4(&connection)?;
         migrate_schema_4_to_5(&connection)?;
+        migrate_schema_5_to_6(&connection)?;
     } else if schema_version == 2 {
         migrate_schema_2_to_3(&connection)?;
         migrate_schema_3_to_4(&connection)?;
         migrate_schema_4_to_5(&connection)?;
+        migrate_schema_5_to_6(&connection)?;
     } else if schema_version == 3 {
         migrate_schema_3_to_4(&connection)?;
         migrate_schema_4_to_5(&connection)?;
+        migrate_schema_5_to_6(&connection)?;
     } else if schema_version == 4 {
         migrate_schema_4_to_5(&connection)?;
+        migrate_schema_5_to_6(&connection)?;
+    } else if schema_version == 5 {
+        migrate_schema_5_to_6(&connection)?;
     } else {
         let meta_version: String = connection.query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -1786,6 +1817,10 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
 /// the unit separator cannot occur in a path, so the two halves stay
 /// unambiguous.
 ///
+/// A sound holds at most one binding *per tab*, not one binding: the same
+/// sound shown in two tabs can answer to a different key in each. NULL scopes
+/// compare equal through IFNULL, so "live everywhere" is still one binding.
+///
 /// There is deliberately no unique index on `normalized`: several sounds may
 /// share one chord. Rejecting a duplicate is a policy decision that depends on
 /// the Settings toggles, so it lives in the command layer, which is also where
@@ -1793,7 +1828,7 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
 const HOTKEY_BINDINGS_SCHEMA: &str = "\
          CREATE TABLE hotkey_bindings(
              binding_id TEXT PRIMARY KEY,
-             sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
+             sound_id INTEGER REFERENCES sounds(rowid) ON DELETE CASCADE,
              control_action TEXT UNIQUE,
              target_tab TEXT,
              tab_scope TEXT,
@@ -1810,6 +1845,9 @@ const HOTKEY_BINDINGS_SCHEMA: &str = "\
          CREATE INDEX hotkey_bindings_active_lookup
              ON hotkey_bindings(normalized, tab_scope)
              WHERE state = 'active';
+         CREATE UNIQUE INDEX hotkey_bindings_sound_scope
+             ON hotkey_bindings(sound_id, IFNULL(tab_scope, ''))
+             WHERE sound_id IS NOT NULL;
          CREATE UNIQUE INDEX hotkey_bindings_target_tab
              ON hotkey_bindings(target_tab)
              WHERE target_tab IS NOT NULL;";
@@ -1940,9 +1978,9 @@ fn create_schema(connection: &Connection) -> Result<(), LibraryError> {
              VALUES('delete', old.rowid, old.search_name);
              INSERT INTO sound_search(rowid, search_name) VALUES(new.rowid, new.search_name);
          END;
-         INSERT INTO meta(key, value) VALUES('schema_version', '5');
-         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v5');
-         PRAGMA user_version = 5;
+         INSERT INTO meta(key, value) VALUES('schema_version', '6');
+         INSERT INTO meta(key, value) VALUES('schema_flavor', 'bounded-generation-v6');
+         PRAGMA user_version = 6;
          COMMIT;",
     ))?;
     Ok(())
@@ -2070,13 +2108,37 @@ fn migrate_schema_4_to_5(connection: &Connection) -> Result<(), LibraryError> {
     }
     // The table is rebuilt rather than altered: SQLite cannot change a CHECK
     // constraint in place, and the old one allowed only a sound or a control
-    // action. Renaming the old table first means the surviving table is created
-    // from HOTKEY_BINDINGS_SCHEMA verbatim, so it is indistinguishable from a
-    // freshly created one. Dropping the old table takes its indexes with it.
-    connection.execute_batch(&format!(
+    // action.
+    //
+    // The shape is spelled out here rather than shared with create_schema: a
+    // migration has to produce the schema of its own version, and the shared
+    // definition moves on with every later one. Schema 6 follows this and
+    // rebuilds again.
+    connection.execute_batch(
         "BEGIN IMMEDIATE;
          ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v4;
-         {HOTKEY_BINDINGS_SCHEMA}
+         CREATE TABLE hotkey_bindings(
+             binding_id TEXT PRIMARY KEY,
+             sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
+             control_action TEXT UNIQUE,
+             target_tab TEXT,
+             tab_scope TEXT,
+             accelerator TEXT NOT NULL,
+             normalized TEXT,
+             state TEXT NOT NULL CHECK(state IN ('active', 'needs_attention')),
+             issue TEXT,
+             CHECK((sound_id IS NOT NULL) + (control_action IS NOT NULL)
+                   + (target_tab IS NOT NULL) = 1),
+             CHECK((state = 'active' AND normalized IS NOT NULL)
+                   OR (state = 'needs_attention' AND normalized IS NULL)),
+             CHECK(target_tab IS NULL OR tab_scope IS NULL)
+         );
+         CREATE INDEX hotkey_bindings_active_lookup
+             ON hotkey_bindings(normalized, tab_scope)
+             WHERE state = 'active';
+         CREATE UNIQUE INDEX hotkey_bindings_target_tab
+             ON hotkey_bindings(target_tab)
+             WHERE target_tab IS NOT NULL;
          INSERT INTO hotkey_bindings(
              binding_id, sound_id, control_action, accelerator, normalized, state, issue
          )
@@ -2086,6 +2148,44 @@ fn migrate_schema_4_to_5(connection: &Connection) -> Result<(), LibraryError> {
          UPDATE meta SET value = '5' WHERE key = 'schema_version';
          UPDATE meta SET value = 'bounded-generation-v5' WHERE key = 'schema_flavor';
          PRAGMA user_version = 5;
+         COMMIT;",
+    )?;
+    Ok(())
+}
+
+fn migrate_schema_5_to_6(connection: &Connection) -> Result<(), LibraryError> {
+    let flavor: String = connection.query_row(
+        "SELECT value FROM meta WHERE key = 'schema_flavor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if flavor != "bounded-generation-v5" {
+        return Err(LibraryError::InvalidData(
+            "library metadata does not match schema 5".to_string(),
+        ));
+    }
+    // Dropping a column constraint means rebuilding the table again, the same
+    // rename-then-create way schema 5 did, so the result is textually the
+    // table create_schema writes.
+    connection.execute_batch(&format!(
+        "BEGIN IMMEDIATE;
+         ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v5;
+         -- A renamed table keeps its indexes, and schema 5 already used these
+         -- names, so they have to go before the new table claims them.
+         DROP INDEX hotkey_bindings_active_lookup;
+         DROP INDEX hotkey_bindings_target_tab;
+         {HOTKEY_BINDINGS_SCHEMA}
+         INSERT INTO hotkey_bindings(
+             binding_id, sound_id, control_action, target_tab, tab_scope,
+             accelerator, normalized, state, issue
+         )
+         SELECT binding_id, sound_id, control_action, target_tab, tab_scope,
+                accelerator, normalized, state, issue
+         FROM hotkey_bindings_v5;
+         DROP TABLE hotkey_bindings_v5;
+         UPDATE meta SET value = '6' WHERE key = 'schema_version';
+         UPDATE meta SET value = 'bounded-generation-v6' WHERE key = 'schema_flavor';
+         PRAGMA user_version = 6;
          COMMIT;",
     ))?;
     Ok(())
@@ -3378,12 +3478,34 @@ const HIDDEN_FOLDER_FILTER: &str = "EXISTS(
           JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
           WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1)";
 
-const SOUND_FIELDS: &str = "sound.public_id, sound.name, sound.path, sound.source_path,
+/// The sound columns, with the hotkey chosen by `binding_filter`.
+///
+/// A sound can hold one binding per tab, so which hotkey it "has" depends on
+/// where it is being listed: a binding limited to another tab does not answer
+/// here and must not be shown here either. Callers that list sounds for a tab
+/// pass a filter naming that tab; callers where no tab is in play pass `"1"`
+/// and take whichever binding exists.
+///
+/// A tab's own binding wins over one that is live everywhere, which is the
+/// same precedence a press resolves with.
+fn sound_fields(binding_filter: &str) -> String {
+    format!(
+        "sound.public_id, sound.name, sound.path, sound.source_path,
     (SELECT binding.accelerator FROM hotkey_bindings AS binding
-     WHERE binding.sound_id = sound.rowid AND binding.state = 'active'),
+     WHERE binding.sound_id = sound.rowid AND binding.state = 'active'
+       AND ({binding_filter})
+     ORDER BY binding.tab_scope IS NULL
+     LIMIT 1),
     sound.duration_ms, sound.volume, sound.enabled, sound.loudness_lufs,
     sound.loudness_state, sound.loudness_confidence, sound.loudness_fingerprint,
-    sound.loudness_true_peak_dbtp";
+    sound.loudness_true_peak_dbtp"
+    )
+}
+
+/// Any binding the sound holds, for callers that are not listing a tab.
+fn any_sound_fields() -> String {
+    sound_fields("1")
+}
 
 fn load_loudness_stats(connection: &Connection) -> Result<LoudnessStats, LibraryError> {
     let sql = format!(
@@ -3451,8 +3573,9 @@ fn load_loudness_backfill_after(
     connection: &Connection,
     after: Option<&str>,
 ) -> Result<SoundPage, LibraryError> {
+    let fields = any_sound_fields();
     let sql = format!(
-        "SELECT {SOUND_FIELDS} FROM sounds AS sound
+        "SELECT {fields} FROM sounds AS sound
          WHERE sound.loudness_lufs IS NULL
            AND sound.loudness_state <> 'unavailable'
            AND {LIVE_SOUND_FILTER}
@@ -3474,10 +3597,11 @@ fn load_loudness_refinement_candidates(
     after: Option<&str>,
     limit: usize,
 ) -> Result<SoundPage, LibraryError> {
+    let fields = any_sound_fields();
     let (sql, threshold) = if force {
         (
             format!(
-                "SELECT {SOUND_FIELDS} FROM sounds AS sound
+                "SELECT {fields} FROM sounds AS sound
                  WHERE sound.loudness_state = 'estimated'
                    AND sound.loudness_lufs IS NOT NULL
                    AND {LIVE_SOUND_FILTER}
@@ -3489,7 +3613,7 @@ fn load_loudness_refinement_candidates(
     } else {
         (
             format!(
-                "SELECT {SOUND_FIELDS} FROM sounds AS sound
+                "SELECT {fields} FROM sounds AS sound
                  WHERE sound.loudness_state = 'estimated'
                    AND sound.loudness_lufs IS NOT NULL
                    AND {LIVE_SOUND_FILTER}
@@ -3616,22 +3740,27 @@ fn load_page(
     let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = usize_to_i64(offset)?;
     let fts = search_query(search);
-    let fields = SOUND_FIELDS;
+    let scope_key = scope_key(scope);
     let mut sounds = Vec::with_capacity(PAGE_SIZE);
     match scope {
         LibraryScope::General => {
+            let fields = sound_fields("binding.tab_scope IS NULL OR binding.tab_scope = ?5");
             let sql = format!(
                 "SELECT {fields} FROM sounds AS sound
                  WHERE {LIVE_SOUND_FILTER} AND {SEARCH_FILTER}
                  ORDER BY sound.general_position, sound.public_id LIMIT ?3 OFFSET ?4"
             );
             let mut statement = connection.prepare(&sql)?;
-            let rows = statement.query_map(params![search, fts, limit, offset], sound_from_row)?;
+            let rows = statement.query_map(
+                params![search, fts, limit, offset, scope_key],
+                sound_from_row,
+            )?;
             for sound in rows {
                 sounds.push(sound?);
             }
         }
         LibraryScope::ManualTab(tab_id) => {
+            let fields = sound_fields("binding.tab_scope IS NULL OR binding.tab_scope = ?6");
             let sql = format!(
                 "SELECT {fields} FROM manual_memberships AS membership
                  JOIN manual_tabs AS tab ON tab.id = membership.tab_id
@@ -3640,8 +3769,10 @@ fn load_page(
                  ORDER BY membership.position, sound.public_id LIMIT ?4 OFFSET ?5"
             );
             let mut statement = connection.prepare(&sql)?;
-            let rows =
-                statement.query_map(params![search, fts, tab_id, limit, offset], sound_from_row)?;
+            let rows = statement.query_map(
+                params![search, fts, tab_id, limit, offset, scope_key],
+                sound_from_row,
+            )?;
             for sound in rows {
                 sounds.push(sound?);
             }
@@ -3650,6 +3781,7 @@ fn load_page(
             root_path,
             relative_path,
         } => {
+            let fields = sound_fields("binding.tab_scope IS NULL OR binding.tab_scope = ?7");
             let sql = format!(
                 "WITH selected(folder_id, root_id, generation) AS (
                      SELECT folder.id, root.id, root.active_generation
@@ -3680,7 +3812,15 @@ fn load_page(
             );
             let mut statement = connection.prepare(&sql)?;
             let rows = statement.query_map(
-                params![search, fts, root_path, relative_path, limit, offset],
+                params![
+                    search,
+                    fts,
+                    root_path,
+                    relative_path,
+                    limit,
+                    offset,
+                    scope_key
+                ],
                 sound_from_row,
             )?;
             for sound in rows {
@@ -3692,8 +3832,9 @@ fn load_page(
 }
 
 fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, LibraryError> {
+    let fields = any_sound_fields();
     let sql = format!(
-        "SELECT {SOUND_FIELDS}
+        "SELECT {fields}
          FROM sounds AS sound
          WHERE public_id = ?1 AND {LIVE_SOUND_FILTER}"
     );
@@ -3704,8 +3845,9 @@ fn load_sound(connection: &Connection, id: &str) -> Result<Option<Sound>, Librar
 }
 
 fn load_sound_by_path(connection: &Connection, path: &str) -> Result<Option<Sound>, LibraryError> {
+    let fields = any_sound_fields();
     let sql = format!(
-        "SELECT {SOUND_FIELDS}
+        "SELECT {fields}
          FROM sounds AS sound
          WHERE path = ?1 AND {LIVE_SOUND_FILTER}"
     );
@@ -3719,8 +3861,9 @@ fn load_sound_for_binding(
     connection: &Connection,
     binding_id: &str,
 ) -> Result<Option<Sound>, LibraryError> {
+    let fields = any_sound_fields();
     let sql = format!(
-        "SELECT {SOUND_FIELDS}
+        "SELECT {fields}
          FROM hotkey_bindings AS binding
          JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.binding_id = ?1 AND binding.state = 'active'
@@ -4017,11 +4160,12 @@ fn collect_folders(
 }
 
 fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, LibraryError> {
+    let fields = any_sound_fields();
     let offset = page
         .checked_mul(PAGE_SIZE)
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
     let sql = format!(
-        "SELECT {SOUND_FIELDS}
+        "SELECT {fields}
          FROM hotkey_bindings AS binding
          JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active' AND {LIVE_SOUND_FILTER}
@@ -4104,6 +4248,35 @@ fn binding_owner(
         (None, None, Some(tab)) => Ok(HotkeyBindingOwner::Tab(tab)),
         _ => Err(rusqlite::Error::InvalidQuery),
     }
+}
+
+fn load_hotkey_bindings_for_sound(
+    connection: &Connection,
+    sound_id: &str,
+) -> Result<Vec<HotkeyBindingRecord>, LibraryError> {
+    let sql = "SELECT binding.binding_id, sound.public_id, binding.control_action,
+                      binding.accelerator, binding.normalized, binding.issue,
+                      binding.target_tab, binding.tab_scope
+               FROM hotkey_bindings AS binding
+               JOIN sounds AS sound ON sound.rowid = binding.sound_id
+               WHERE sound.public_id = ?1
+               ORDER BY binding.tab_scope IS NULL DESC, binding.tab_scope";
+    let mut statement = connection.prepare(sql)?;
+    let rows = statement.query_map([sound_id], |row| {
+        Ok(HotkeyBindingRecord {
+            binding_id: row.get(0)?,
+            owner: binding_owner(row.get(1)?, row.get(2)?, row.get(6)?)?,
+            accelerator: row.get(3)?,
+            normalized: row.get(4)?,
+            issue: row.get(5)?,
+            tab_scope: row.get(7)?,
+        })
+    })?;
+    let mut bindings = Vec::new();
+    for binding in rows {
+        bindings.push(binding?);
+    }
+    Ok(bindings)
 }
 
 fn load_hotkey_group(
@@ -4274,8 +4447,10 @@ fn set_hotkey_binding(
                     LibraryError::InvalidData(format!("unknown sound binding owner: {public_id}"))
                 })?;
             transaction.execute(
-                "DELETE FROM hotkey_bindings WHERE binding_id = ?1 OR sound_id = ?2",
-                params![&binding.binding_id, sound_id],
+                "DELETE FROM hotkey_bindings
+                  WHERE binding_id = ?1
+                     OR (sound_id = ?2 AND IFNULL(tab_scope, '') = IFNULL(?3, ''))",
+                params![&binding.binding_id, sound_id, &binding.tab_scope],
             )?;
             (Some(sound_id), None, None)
         }
@@ -4369,7 +4544,7 @@ fn load_sound_at(
 ) -> Result<Option<Sound>, LibraryError> {
     let fts = search_query(search);
     let offset = usize_to_i64(position)?;
-    let fields = SOUND_FIELDS;
+    let fields = any_sound_fields();
     match scope {
         LibraryScope::General => connection
             .query_row(

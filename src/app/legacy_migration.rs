@@ -2036,26 +2036,38 @@ mod tests {
         connection
             .execute_batch(
                 "ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_current;
+                 -- the renamed table keeps its indexes, and the names are reused
+                 DROP INDEX hotkey_bindings_active_lookup;
+                 DROP INDEX hotkey_bindings_target_tab;
+                 DROP INDEX hotkey_bindings_sound_scope;
                  CREATE TABLE hotkey_bindings(
                      binding_id TEXT PRIMARY KEY,
                      sound_id INTEGER UNIQUE REFERENCES sounds(rowid) ON DELETE CASCADE,
                      control_action TEXT UNIQUE,
+                     target_tab TEXT,
+                     tab_scope TEXT,
                      accelerator TEXT NOT NULL,
                      normalized TEXT,
                      state TEXT NOT NULL CHECK(state IN ('active', 'needs_attention')),
                      issue TEXT,
-                     CHECK((sound_id IS NOT NULL) <> (control_action IS NOT NULL)),
+                     CHECK((sound_id IS NOT NULL) + (control_action IS NOT NULL)
+                           + (target_tab IS NOT NULL) = 1),
                      CHECK((state = 'active' AND normalized IS NOT NULL)
-                           OR (state = 'needs_attention' AND normalized IS NULL))
+                           OR (state = 'needs_attention' AND normalized IS NULL)),
+                     CHECK(target_tab IS NULL OR tab_scope IS NULL)
                  );
-                 CREATE UNIQUE INDEX hotkey_bindings_active_normalized
-                     ON hotkey_bindings(normalized)
+                 CREATE INDEX hotkey_bindings_active_lookup
+                     ON hotkey_bindings(normalized, tab_scope)
                      WHERE state = 'active';
+                 CREATE UNIQUE INDEX hotkey_bindings_target_tab
+                     ON hotkey_bindings(target_tab)
+                     WHERE target_tab IS NOT NULL;
                  INSERT INTO hotkey_bindings(
-                     binding_id, sound_id, control_action, accelerator, normalized, state, issue
+                     binding_id, sound_id, control_action, target_tab, tab_scope,
+                     accelerator, normalized, state, issue
                  )
-                 SELECT binding_id, sound_id, control_action, accelerator, normalized,
-                        state, issue
+                 SELECT binding_id, sound_id, control_action, target_tab, tab_scope,
+                        accelerator, normalized, state, issue
                  FROM hotkey_bindings_current;
                  DROP TABLE hotkey_bindings_current;",
             )

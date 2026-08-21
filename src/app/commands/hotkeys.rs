@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use std::str::FromStr;
 
+use uuid::Uuid;
+
 use crate::config::{ControlHotkeyAction, TAB_BINDING_PREFIX};
 use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
 use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
@@ -59,9 +61,23 @@ pub fn set_hotkey(
         None => None,
     };
 
+    // A sound holds one binding per tab, so the row to replace is the one for
+    // this tab - not "the" binding for the sound. Ids stay opaque: they are
+    // written into the generated swhkd command, which only accepts
+    // alphanumerics, ':', '-' and '_', and a folder scope contains neither.
+    let existing = library
+        .hotkey_bindings_for_sound(&id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+    let binding_id = existing
+        .iter()
+        .find(|binding| binding.tab_scope.as_deref() == tab_scope.as_deref())
+        .map(|binding| binding.binding_id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
     ensure_store_hotkey_available(
         &library,
-        &id,
+        &binding_id,
         canonical_new.as_deref(),
         multi_sound_hotkeys,
         tab_scope.as_deref(),
@@ -70,7 +86,7 @@ pub fn set_hotkey(
     if let Some(hotkey) = canonical_new.as_ref() {
         library
             .set_hotkey_binding(HotkeyBindingRecord {
-                binding_id: id.clone(),
+                binding_id,
                 owner: HotkeyBindingOwner::Sound(id.clone()),
                 accelerator: hotkey.clone(),
                 normalized: Some(hotkey.clone()),
@@ -81,7 +97,7 @@ pub fn set_hotkey(
             .map_err(|error| CommandError::Library(error.to_string()))?;
     } else {
         library
-            .delete_hotkey_binding(&id)
+            .delete_hotkey_binding(&binding_id)
             .recv()
             .map_err(|error| CommandError::Library(error.to_string()))?;
     }
@@ -196,6 +212,28 @@ where
         move || {
             library
                 .hotkey_binding(&binding_id)
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))
+        },
+        on_complete,
+    )
+}
+
+/// Every binding a sound holds, so the dialog can tell whether the one that
+/// applies here is limited to this tab or live everywhere.
+pub fn hotkey_bindings_for_sound_async<F>(
+    sound_id: String,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Vec<HotkeyBindingRecord>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "hotkey_bindings_for_sound",
+        move || {
+            library
+                .hotkey_bindings_for_sound(&sound_id)
                 .recv()
                 .map_err(|error| CommandError::Library(error.to_string()))
         },

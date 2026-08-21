@@ -639,16 +639,19 @@ impl SoundListInner {
                 let tab_hotkeys = state_confirm.config.lock().settings.tab_hotkeys;
                 let active_scope =
                     crate::library_store::scope_key(&inner_confirm.active_scope.lock());
+                let active_scope_for_read = active_scope.clone();
 
                 // The stored scope decides how the choice is presented, so
                 // reopening the dialog cannot quietly widen the binding.
-                let open = move |stored_scope: Option<String>| {
+                // Checked means "only this tab". A binding already limited to
+                // this tab opens checked, one that is live everywhere opens
+                // unchecked, and a new binding defaults to this tab, which is
+                // the point of turning tab hotkeys on.
+                let open = move |scoped_now: bool| {
                     let Some(dialog_host) = dialog_host_weak.upgrade() else {
                         return;
                     };
-                    let scope_prompt = tab_hotkeys.then_some(HotkeyScopePrompt {
-                        scoped_now: stored_scope.is_some(),
-                    });
+                    let scope_prompt = tab_hotkeys.then_some(HotkeyScopePrompt { scoped_now });
                     dialog_host.show_hotkey_capture(
                     current_hotkey.as_deref(),
                     scope_prompt,
@@ -732,18 +735,28 @@ impl SoundListInner {
                 };
 
                 if !tab_hotkeys {
-                    open(None);
+                    open(false);
                     return;
                 }
-                let read = commands::hotkey_binding_async(
+                let scope_for_read = active_scope_for_read.clone();
+                let read = commands::hotkey_bindings_for_sound_async(
                     sound_id_for_scope.clone(),
                     state_for_scope.library.clone(),
                     move |result| {
-                        let stored = result.unwrap_or_else(|error| {
+                        let bindings = result.unwrap_or_else(|error| {
                             log::warn!("Could not read the shortcut's tab: {error}");
-                            None
+                            Vec::new()
                         });
-                        open(stored.and_then(|binding| binding.tab_scope));
+                        if bindings
+                            .iter()
+                            .any(|binding| binding.tab_scope.as_deref() == Some(&scope_for_read))
+                        {
+                            open(true);
+                        } else if bindings.iter().any(|binding| binding.tab_scope.is_none()) {
+                            open(false);
+                        } else {
+                            open(true);
+                        }
                     },
                 );
                 if let Err(error) = read {
