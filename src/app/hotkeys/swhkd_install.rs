@@ -234,14 +234,12 @@ pub fn install_swhkd_native_detailed(
     if enable_uinput {
         command.arg("--enable-uinput");
     }
-    let output = command
-        .output()
-        .map_err(|e| SwhkdInstallError {
-            kind: SwhkdInstallErrorKind::CommandFailed,
-            summary: "Failed to launch privileged installer.".to_string(),
-            details: format!("{}", e),
-            state: SwhkdInstallState::Installing,
-        })?;
+    let output = command.output().map_err(|e| SwhkdInstallError {
+        kind: SwhkdInstallErrorKind::CommandFailed,
+        summary: "Failed to launch privileged installer.".to_string(),
+        details: format!("{}", e),
+        state: SwhkdInstallState::Installing,
+    })?;
 
     if !output.status.success() {
         states.push(SwhkdInstallState::Failed);
