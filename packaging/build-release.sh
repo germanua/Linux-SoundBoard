@@ -110,6 +110,7 @@ WORK_DIR=""
 SELF_TEST_DIR=""
 CLEANUP_SYSTEMD_STUB=0
 NARROWED=0
+DIRTY_AT_START=()
 
 # ── Output ──────────────────────────────────────────────────────────────────
 
@@ -223,16 +224,36 @@ count_occurrences() {
 
 # ── Rollback ────────────────────────────────────────────────────────────────
 
-# Phase 0 guarantees a clean tree, so restoring the exact path list is exact
-# rather than best-effort. `git reset --hard` would reach past what this script
-# touched, which is why it is not used.
+# Restoring the exact path list is exact rather than best-effort. `git reset
+# --hard` would reach past what this script touched, which is why it is not used.
+# Under --allow-dirty the tree can hold edits this script did not make, and a
+# restore would delete them, so those paths are reported instead of restored.
 rollback_bump() {
     [[ "$BUMP_IN_PROGRESS" -eq 1 ]] || return 0
     [[ "${#BUMPED_FILES[@]}" -gt 0 ]] || return 0
 
     BUMP_IN_PROGRESS=0
-    warn "rolling back the partial bump (${#BUMPED_FILES[@]} file(s))"
-    git_repo restore --source=HEAD --staged --worktree -- "${BUMPED_FILES[@]}" \
+
+    local path
+    local -a restorable=() preserved=()
+    for path in "${BUMPED_FILES[@]}"; do
+        if list_has "$path" "${DIRTY_AT_START[@]+"${DIRTY_AT_START[@]}"}"; then
+            preserved+=("$path")
+        else
+            restorable+=("$path")
+        fi
+    done
+
+    if [[ "${#preserved[@]}" -gt 0 ]]; then
+        warn "not restoring ${#preserved[@]} file(s) that already had uncommitted changes before this run:"
+        for path in "${preserved[@]}"; do
+            warn "  $path - carries both your edits and a partial bump; resolve it by hand"
+        done
+    fi
+
+    [[ "${#restorable[@]}" -gt 0 ]] || return 0
+    warn "rolling back the partial bump (${#restorable[@]} file(s))"
+    git_repo restore --source=HEAD --staged --worktree -- "${restorable[@]}" \
         || warn "rollback failed; inspect 'git status' before retrying"
 }
 
@@ -399,6 +420,9 @@ phase_preflight() {
             fail "working tree is dirty. Artifacts build from the tree but the tag names HEAD, so the release would not be reproducible from its own tag. Commit first, or pass --allow-dirty (which implies --no-tag)."
         fi
         warn "working tree is dirty; artifacts will not match the tagged tree"
+        # Recorded before anything is rewritten: rollback must never restore a
+        # path over edits that were already there.
+        mapfile -t DIRTY_AT_START < <(git_repo status --porcelain | sed 's/^...//')
         if [[ "$OPT_TAG_DIRTY" -ne 1 ]]; then
             OPT_NO_TAG=1
             note "--allow-dirty implies --no-tag (override with --tag-dirty)"
@@ -1080,6 +1104,10 @@ bump_doc_filenames() {
     local file="$REPO_ROOT/$rel_path"
     local pattern replacement expected found
 
+    # Tracked up front: a count assertion that fails on the second pattern must
+    # still leave the first pattern's rewrite inside the rollback set.
+    track_bumped "$rel_path"
+
     while [[ $# -gt 0 ]]; do
         pattern="$1"; replacement="$2"; expected="$3"; shift 3
         found="$(count_occurrences "$file" "$pattern")"
@@ -1103,7 +1131,6 @@ bump_doc_filenames() {
             ' "$file" >"$tmp"
         replace_file "$file" "$tmp"
     done
-    track_bumped "$rel_path"
 }
 
 bump_docs() {
@@ -1273,6 +1300,12 @@ smoke_failure_is_known() {
 install_systemd_stub() {
     local built="$REPO_ROOT/target/release/$APP_BINARY"
     [[ -x "$built" ]] || { warn "--smoke-fix-systemd: no built binary at target/release/$APP_BINARY yet"; return 1; }
+    # The stub is removed again on exit, so installing over an existing file
+    # would delete a real system-wide install of the app.
+    if [[ -e "/usr/local/bin/$APP_BINARY" ]]; then
+        warn "--smoke-fix-systemd: /usr/local/bin/$APP_BINARY already exists; leaving it untouched"
+        return 1
+    fi
     info "installing $APP_BINARY to /usr/local/bin so systemd-analyze can resolve ExecStart"
     sudo install -Dm755 "$built" "/usr/local/bin/$APP_BINARY" || return 1
     return 0
@@ -1932,6 +1965,10 @@ phase_summary() {
 do_undo() {
     local head tag_version
     head="$(git_repo rev-parse --short HEAD)"
+
+    # reset --hard reaches the whole tree, not just the release commit.
+    tree_is_clean \
+        || fail "working tree has uncommitted changes and --undo runs 'git reset --hard', which would discard them. Commit or stash first."
 
     local subject
     subject="$(git_repo log -1 --pretty=%s)"
