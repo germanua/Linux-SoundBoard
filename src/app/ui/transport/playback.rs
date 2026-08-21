@@ -260,5 +260,6 @@ impl TransportInner {
         *self.last_track_sound_id.borrow_mut() = None;
         self.time_label.set_text("0:00");
         self.dur_label.set_text("0:00");
+        crate::ui_event_bridge::post_now_playing(None);
     }
 }

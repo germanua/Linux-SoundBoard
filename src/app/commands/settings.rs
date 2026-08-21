@@ -312,3 +312,10 @@ pub fn set_close_to_tray(enabled: bool, config: Arc<Mutex<Config>>) -> Result<()
         cfg.settings.close_to_tray = enabled;
     })
 }
+
+/// Publish the playing sound to the desktop's media controls.
+pub fn set_mpris_enabled(enabled: bool, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
+    with_saved_config(&config, |cfg| {
+        cfg.settings.mpris_enabled = enabled;
+    })
+}

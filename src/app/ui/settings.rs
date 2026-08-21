@@ -234,8 +234,25 @@ fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
         });
     }
 
+    let media_row = adw::SwitchRow::builder()
+        .title("Show In Media Controls")
+        .subtitle("Show the playing sound in the panel; takes the media keys while one plays")
+        .active(state.config.lock().settings.mpris_enabled)
+        .build();
+    {
+        let state = Arc::clone(&state);
+        media_row.connect_active_notify(move |row| {
+            if let Err(error) =
+                commands::set_mpris_enabled(row.is_active(), Arc::clone(&state.config))
+            {
+                log::warn!("Could not save the media controls setting: {error}");
+            }
+        });
+    }
+
     group.add(&icon_row);
     group.add(&close_row);
+    group.add(&media_row);
     group
 }
 

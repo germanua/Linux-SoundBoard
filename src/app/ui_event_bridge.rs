@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::audio::PlayerSnapshot;
 use crate::config::GroupMode;
+use crate::mpris::{MprisCommand, NowPlaying};
 use crate::tray::{MenuItem, TrayAction};
 
 type StringHandler = RefCell<Option<Box<dyn FnMut(String)>>>;
@@ -10,6 +11,8 @@ type SnapshotHandler = RefCell<Option<Box<dyn FnMut(PlayerSnapshot)>>>;
 type TrayActionHandler = RefCell<Option<Box<dyn FnMut(TrayAction)>>>;
 type TrayMenuHandler = RefCell<Option<Box<dyn FnMut(Vec<MenuItem>)>>>;
 type TrayEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
+type NowPlayingHandler = RefCell<Option<Box<dyn FnMut(Option<NowPlaying>)>>>;
+type MprisCommandHandler = RefCell<Option<Box<dyn FnMut(MprisCommand)>>>;
 
 thread_local! {
     static HOTKEY_HANDLER: StringHandler = RefCell::new(None);
@@ -27,6 +30,12 @@ thread_local! {
     static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
     static TRAY_MENU_HANDLER: TrayMenuHandler = RefCell::new(None);
     static TRAY_ENABLED_HANDLER: TrayEnabledHandler = RefCell::new(None);
+
+    /// The same split again for the desktop's media controls: the transport
+    /// knows what is playing, `bootstrap` owns the service, and the window is
+    /// what can act on a button press.
+    static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
+    static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
 
     /// Answers "should the close button hide the window instead of quitting?".
     /// Owned by `bootstrap`, which knows both the setting and whether a panel
@@ -126,6 +135,35 @@ pub fn post_tray_enabled(enabled: bool) {
         TRAY_ENABLED_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(enabled);
+            }
+        });
+    });
+}
+
+pub fn set_now_playing_handler(f: impl FnMut(Option<NowPlaying>) + 'static) {
+    NOW_PLAYING_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+/// Announce the sound that started, or `None` when playback stopped.
+pub fn post_now_playing(now: Option<NowPlaying>) {
+    glib::MainContext::default().invoke(move || {
+        NOW_PLAYING_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(now.clone());
+            }
+        });
+    });
+}
+
+pub fn set_mpris_command_handler(f: impl FnMut(MprisCommand) + 'static) {
+    MPRIS_COMMAND_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_mpris_command(command: MprisCommand) {
+    glib::MainContext::default().invoke(move || {
+        MPRIS_COMMAND_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(command);
             }
         });
     });

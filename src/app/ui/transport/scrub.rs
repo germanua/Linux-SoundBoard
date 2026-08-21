@@ -191,6 +191,8 @@ impl TransportInner {
                     play_id: position.play_id.clone(),
                 });
             }
+
+            publish_now_playing(position, duration_ms, &self.active_track.borrow());
         } else if positions.iter().all(|position| position.finished) {
             let play_mode = { self.state.config.lock().settings.play_mode };
             let has_navigation_sounds = self.has_navigation_sounds();
@@ -240,9 +242,42 @@ impl TransportInner {
                 drop(active);
                 inner.track_name_label.set_label(&sound.name);
                 inner.track_name_label.set_visible(true);
+                // The first snapshot for this sound could not name it, so the
+                // media controls were told nothing. Tell them now.
+                let active = inner.active_track.borrow();
+                if let Some(track) = active.as_ref() {
+                    crate::ui_event_bridge::post_now_playing(Some(crate::mpris::NowPlaying {
+                        id: track.sound_id.clone(),
+                        title: sound.name.clone(),
+                        duration_ms: track.sound_duration_ms,
+                        paused: false,
+                    }));
+                }
             },
         ) {
             log::warn!("Could not resolve the playing sound's name: {error}");
         }
     }
+}
+
+/// Tell the desktop's media controls what is playing.
+///
+/// Sends nothing at all until the sound's name is known: a card titled with a
+/// uuid is worse than no card, and the name arrives a moment later from
+/// `resolve_track_name_async`.
+fn publish_now_playing(
+    position: &crate::audio::PlaybackPosition,
+    duration_ms: u64,
+    active: &Option<super::ActiveTrack>,
+) {
+    let title = active
+        .as_ref()
+        .filter(|track| track.play_id == position.play_id)
+        .and_then(|track| track.sound_name.clone());
+    crate::ui_event_bridge::post_now_playing(title.map(|title| crate::mpris::NowPlaying {
+        id: position.sound_id.clone(),
+        title,
+        duration_ms: Some(duration_ms),
+        paused: position.paused,
+    }));
 }

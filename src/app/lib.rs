@@ -12,6 +12,7 @@ pub(crate) mod app_meta;
 pub(crate) mod app_state;
 pub(crate) mod diagnostics;
 pub(crate) mod hotkeys;
+pub(crate) mod mpris;
 pub(crate) mod timer_registry;
 pub(crate) mod tray;
 pub(crate) mod ui;

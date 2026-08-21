@@ -704,6 +704,12 @@ pub struct Settings {
     /// showing, so the window is never hidden with no way back.
     #[serde(default = "default_tray_setting")]
     pub close_to_tray: bool,
+    /// Publish the playing sound to the desktop's media controls. Off by
+    /// default: while a sound plays this app becomes the active media player,
+    /// which takes the media keys and the now-playing card away from whatever
+    /// music the user actually had going.
+    #[serde(default)]
+    pub mpris_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -828,6 +834,7 @@ impl Default for Settings {
             list_style: ListStyle::Compact,
             tray_enabled: default_tray_setting(),
             close_to_tray: default_tray_setting(),
+            mpris_enabled: false,
         }
     }
 }

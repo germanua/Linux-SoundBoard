@@ -1225,6 +1225,7 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     }
 
     let tray = install_tray(app, &state);
+    let mpris = install_mpris(app, &state);
 
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
@@ -1233,6 +1234,9 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
         // handler runs first and stops the emission when it hides to the tray.
         if let Some(tray) = tray.borrow().as_ref() {
             tray.shutdown();
+        }
+        if let Some(mpris) = mpris.as_ref() {
+            mpris.shutdown();
         }
         shutdown_application(&state_close, &timers_close);
         glib::Propagation::Proceed
@@ -1366,6 +1370,39 @@ fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
         *slot.borrow_mut() = start_tray_service(&connection, state);
     }
     slot
+}
+
+/// Publish the playing sound to the desktop's media controls.
+///
+/// Exported for the whole session but visible only while a sound plays and
+/// only while the setting is on, so the app does not sit in the panel's media
+/// controls holding the media keys when it has nothing to say.
+fn install_mpris(
+    app: &Application,
+    state: &Arc<AppState>,
+) -> Option<Rc<crate::mpris::MprisService>> {
+    let connection = app.dbus_connection()?;
+    let service = match crate::mpris::MprisService::start(
+        &connection,
+        crate::ui_event_bridge::post_mpris_command,
+    ) {
+        Ok(service) => Rc::new(service),
+        Err(error) => {
+            warn!("Could not export media controls: {error}");
+            return None;
+        }
+    };
+
+    let service_now = Rc::clone(&service);
+    let state_now = Arc::clone(state);
+    crate::ui_event_bridge::set_now_playing_handler(move |now| {
+        // Checked here rather than at the call site so turning the setting off
+        // clears the card on the next snapshot instead of leaving it stuck.
+        let enabled = state_now.config.lock().settings.mpris_enabled;
+        service_now.set_now_playing(if enabled { now } else { None });
+    });
+
+    Some(service)
 }
 
 fn start_tray_service(

@@ -392,6 +392,15 @@ pub fn build_window(
         });
     }
 
+    {
+        let state_mpris = Arc::clone(&state);
+        let window_mpris = window.clone();
+        let transport_mpris = transport.clone();
+        crate::ui_event_bridge::set_mpris_command_handler(move |command| {
+            handle_mpris_command(&window_mpris, &state_mpris, &transport_mpris, command);
+        });
+    }
+
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
@@ -535,6 +544,38 @@ fn handle_tray_action(
             window.close();
         }
     }
+}
+
+/// Act on a button pressed in the desktop's media controls.
+///
+/// Everything except Raise and Quit lands on the same dispatcher the control
+/// hotkeys use, so a panel button and a shortcut always do the same thing.
+fn handle_mpris_command(
+    window: &ApplicationWindow,
+    state: &Arc<AppState>,
+    transport: &TransportBar,
+    command: crate::mpris::MprisCommand,
+) {
+    use crate::config::ControlHotkeyAction;
+    use crate::mpris::MprisCommand;
+
+    let control = match command {
+        MprisCommand::PlayPause => ControlHotkeyAction::PlayPause,
+        MprisCommand::Stop => ControlHotkeyAction::StopAll,
+        MprisCommand::Next => ControlHotkeyAction::NextSound,
+        MprisCommand::Previous => ControlHotkeyAction::PreviousSound,
+        MprisCommand::Raise => {
+            window.present();
+            refresh_tray_menu(state, true);
+            return;
+        }
+        MprisCommand::Quit => {
+            crate::ui_event_bridge::mark_quit_requested();
+            window.close();
+            return;
+        }
+    };
+    handle_control_hotkey(state, transport, control);
 }
 
 fn handle_control_hotkey(
