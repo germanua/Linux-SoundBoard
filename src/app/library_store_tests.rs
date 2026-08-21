@@ -578,7 +578,7 @@ fn completed_scan_releases_stale_sound_hotkey_for_reassignment() {
     let empty_generation = wait(store.begin_root_scan("/music", 0));
     assert!(wait(store.finish_root_scan("/music", empty_generation)));
 
-    assert!(wait(store.hotkey_conflict("control:stop", "Ctrl+KeyP")).is_none());
+    assert!(wait(store.hotkey_conflict("control:stop", "Ctrl+KeyP", false)).is_none());
     assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
         binding_id: "control:stop".to_string(),
         owner: HotkeyBindingOwner::Control("stop".to_string()),

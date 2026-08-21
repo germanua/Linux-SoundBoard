@@ -12,12 +12,13 @@ fn ensure_store_hotkey_available(
     library: &LibraryStore,
     current_binding_id: &str,
     canonical_hotkey: Option<&str>,
+    sounds_may_share: bool,
 ) -> Result<(), CommandError> {
     let Some(canonical_hotkey) = canonical_hotkey else {
         return Ok(());
     };
     if let Some(conflict) = library
-        .hotkey_conflict(current_binding_id, canonical_hotkey)
+        .hotkey_conflict(current_binding_id, canonical_hotkey, sounds_may_share)
         .recv()
         .map_err(|error| CommandError::Library(error.to_string()))?
     {
@@ -29,9 +30,12 @@ fn ensure_store_hotkey_available(
     }
 }
 
+/// `multi_sound_hotkeys` is the Settings toggle: with it on, a chord another
+/// sound already answers to is a group to join rather than a conflict.
 pub fn set_hotkey(
     id: String,
     hotkey: Option<String>,
+    multi_sound_hotkeys: bool,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
 ) -> Result<(), CommandError> {
@@ -43,7 +47,7 @@ pub fn set_hotkey(
         None => None,
     };
 
-    ensure_store_hotkey_available(&library, &id, canonical_new.as_deref())?;
+    ensure_store_hotkey_available(&library, &id, canonical_new.as_deref(), multi_sound_hotkeys)?;
 
     if let Some(hotkey) = canonical_new.as_ref() {
         library
@@ -71,6 +75,7 @@ pub fn set_hotkey(
 pub fn set_hotkey_async<F>(
     id: String,
     hotkey: Option<String>,
+    multi_sound_hotkeys: bool,
     library: LibraryStore,
     projection: HotkeyProjectionCoordinator,
     on_complete: F,
@@ -80,7 +85,7 @@ where
 {
     dispatch_async_result(
         "set_hotkey",
-        move || set_hotkey(id, hotkey, library, projection),
+        move || set_hotkey(id, hotkey, multi_sound_hotkeys, library, projection),
         on_complete,
     )
 }
@@ -102,7 +107,7 @@ pub fn set_control_hotkey(
         None => None,
     };
 
-    ensure_store_hotkey_available(&library, binding_id, canonical_new.as_deref())?;
+    ensure_store_hotkey_available(&library, binding_id, canonical_new.as_deref(), false)?;
 
     if let Some(hotkey) = canonical_new.as_ref() {
         library

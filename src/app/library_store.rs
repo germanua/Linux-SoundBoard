@@ -410,6 +410,7 @@ enum Request {
     HotkeyConflict {
         binding_id: String,
         normalized: String,
+        sounds_may_share: bool,
         reply: mpsc::SyncSender<Result<Option<String>, LibraryError>>,
     },
     LoudnessStats {
@@ -1000,16 +1001,22 @@ impl LibraryStore {
         )
     }
 
+    /// The binding already holding `normalized`, described for the user, or
+    /// `None` when the chord is free. With `sounds_may_share` a sound binding
+    /// is not a conflict but a group to join; a control action or a tab hotkey
+    /// still is, because those cannot share a chord with anything.
     pub fn hotkey_conflict(
         &self,
         binding_id: &str,
         normalized: &str,
+        sounds_may_share: bool,
     ) -> LibraryResponse<Option<String>> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
             Request::HotkeyConflict {
                 binding_id: binding_id.to_string(),
                 normalized: normalized.to_string(),
+                sounds_may_share,
                 reply,
             },
             response,
@@ -1566,9 +1573,15 @@ fn handle_request(connection: &mut Connection, request: Request) {
         Request::HotkeyConflict {
             binding_id,
             normalized,
+            sounds_may_share,
             reply,
         } => {
-            let _ = reply.send(load_hotkey_conflict(connection, &binding_id, &normalized));
+            let _ = reply.send(load_hotkey_conflict(
+                connection,
+                &binding_id,
+                &normalized,
+                sounds_may_share,
+            ));
         }
         Request::LoudnessStats { reply } => {
             let _ = reply.send(load_loudness_stats(connection));
@@ -4119,6 +4132,7 @@ fn load_hotkey_conflict(
     connection: &Connection,
     binding_id: &str,
     normalized: &str,
+    sounds_may_share: bool,
 ) -> Result<Option<String>, LibraryError> {
     let sql = format!(
         "SELECT sound.name, binding.control_action
@@ -4128,15 +4142,20 @@ fn load_hotkey_conflict(
            AND binding.normalized = ?1
            AND binding.binding_id <> ?2
            AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+           AND (?3 = 0 OR binding.sound_id IS NULL)
          LIMIT 1"
     );
     let conflict = connection
-        .query_row(&sql, params![normalized, binding_id], |row| {
-            Ok((
-                row.get::<_, Option<String>>(0)?,
-                row.get::<_, Option<String>>(1)?,
-            ))
-        })
+        .query_row(
+            &sql,
+            params![normalized, binding_id, sounds_may_share],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
         .optional()?;
     Ok(conflict.map(|(sound_name, control_action)| {
         if let Some(sound_name) = sound_name {

@@ -574,9 +574,12 @@ impl SoundListInner {
                         let dialog_done = dialog_host_weak.clone();
                         let mut updated_sound = sound.clone();
                         updated_sound.hotkey = hotkey.clone();
+                        let multi_sound_hotkeys =
+                            state_confirm.config.lock().settings.multi_sound_hotkeys;
                         let dispatch = commands::set_hotkey_async(
                             sound.id.clone(),
                             hotkey,
+                            multi_sound_hotkeys,
                             state_confirm.library.clone(),
                             state_confirm.hotkey_projection.clone(),
                             move |result| match result {

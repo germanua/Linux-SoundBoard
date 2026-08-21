@@ -664,6 +664,14 @@ pub struct Settings {
     pub control_hotkeys: ControlHotkeys,
     #[serde(default)]
     pub play_mode: PlayMode,
+    /// Allow several sounds to answer to one hotkey. Off keeps every chord
+    /// unique, which is how hotkeys behaved before groups existed.
+    #[serde(default)]
+    pub multi_sound_hotkeys: bool,
+    /// Which member of a shared hotkey a press plays. Only consulted when
+    /// `multi_sound_hotkeys` is on.
+    #[serde(default)]
+    pub group_mode: GroupMode,
     #[serde(default)]
     pub list_style: ListStyle,
 }
@@ -783,6 +791,8 @@ impl Default for Settings {
             auto_gain_attack_ms: default_auto_gain_attack_ms(),
             auto_gain_release_ms: default_auto_gain_release_ms(),
             control_hotkeys: ControlHotkeys::default(),
+            multi_sound_hotkeys: false,
+            group_mode: GroupMode::default(),
             play_mode: PlayMode::Default,
             list_style: ListStyle::Compact,
         }

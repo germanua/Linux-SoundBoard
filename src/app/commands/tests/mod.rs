@@ -488,6 +488,7 @@ fn test_set_hotkey_valid() {
     let result = commands::set_hotkey(
         sound_id.clone(),
         Some("Ctrl+1".to_string()),
+        false,
         library.clone(),
         projection,
     );
@@ -516,7 +517,7 @@ fn test_set_hotkey_clear() {
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
-    let result = commands::set_hotkey(sound_id.clone(), None, library.clone(), projection);
+    let result = commands::set_hotkey(sound_id.clone(), None, false, library.clone(), projection);
     match result {
         Ok(_) => {
             assert!(library.hotkey_binding(&sound_id).recv().unwrap().is_none());
@@ -623,4 +624,96 @@ fn test_set_auto_gain_disabled() {
 
     let cfg = config.lock();
     assert!(!cfg.settings.auto_gain);
+}
+
+#[test]
+fn a_sound_may_join_a_chord_another_sound_already_answers_to() {
+    let hotkeys = create_projection_hotkey_manager();
+
+    let first = Sound::new("First".to_string(), "/tmp/first.mp3".to_string());
+    let second = Sound::new("Second".to_string(), "/tmp/second.mp3".to_string());
+    let second_id = second.id.clone();
+    let library = create_test_library_with(&[], &[first.clone(), second]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(first.id.clone()),
+        "Ctrl+Alt+KeyG",
+    );
+
+    commands::set_hotkey(
+        second_id.clone(),
+        Some("Ctrl+Alt+KeyG".to_string()),
+        true,
+        library.clone(),
+        projection,
+    )
+    .expect("a shared chord is a group to join, not a conflict");
+
+    let members = library
+        .hotkey_group(&second_id)
+        .recv()
+        .expect("read the group");
+    assert_eq!(members.len(), 2);
+}
+
+#[test]
+fn a_sound_may_not_join_a_chord_while_multiple_sounds_are_off() {
+    let hotkeys = create_projection_hotkey_manager();
+
+    let first = Sound::new("First".to_string(), "/tmp/first.mp3".to_string());
+    let second = Sound::new("Second".to_string(), "/tmp/second.mp3".to_string());
+    let second_id = second.id.clone();
+    let library = create_test_library_with(&[], &[first.clone(), second]);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(first.id.clone()),
+        "Ctrl+Alt+KeyG",
+    );
+
+    let error = commands::set_hotkey(
+        second_id,
+        Some("Ctrl+Alt+KeyG".to_string()),
+        false,
+        library,
+        projection,
+    )
+    .expect_err("without the toggle a taken chord is still a conflict");
+    assert!(crate::hotkeys::format_hotkey_error(&error.to_string()).contains("already assigned"));
+}
+
+#[test]
+fn a_sound_may_never_take_a_control_actions_chord() {
+    let hotkeys = create_projection_hotkey_manager();
+
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    let sound_id = sound.id.clone();
+    let library = create_test_library_with(&[], std::slice::from_ref(&sound));
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Control(
+            ControlHotkeyAction::StopAll.id().to_string(),
+        ),
+        "Ctrl+Alt+KeyH",
+    );
+
+    // Sharing applies between sounds. A control action reached under a sound's
+    // binding id would never run, so this stays a conflict either way.
+    let error = commands::set_hotkey(
+        sound_id,
+        Some("Ctrl+Alt+KeyH".to_string()),
+        true,
+        library,
+        projection,
+    )
+    .expect_err("a control action must keep its chord to itself");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&error.to_string()),
+        "That shortcut is already assigned to control action \"Stop All\"."
+    );
 }
