@@ -9,16 +9,9 @@
 #![allow(dead_code)]
 
 use crate::config::GroupMode;
-
-/// One binding that shares the pressed chord.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GroupMember {
-    pub binding_id: String,
-    pub sound_id: String,
-    /// `None` means the binding is live in every tab, which is how every
-    /// binding that predates tab scoping is stored.
-    pub tab_scope: Option<String>,
-}
+// The store's row type is the input to these rules; a second copy of the same
+// three fields would only need converting back and forth.
+use crate::library_store::HotkeyGroupMember as GroupMember;
 
 /// The two independent Settings toggles that govern resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

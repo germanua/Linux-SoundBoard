@@ -132,6 +132,15 @@ pub struct HotkeyBindingRecord {
     pub issue: Option<String>,
 }
 
+/// One sound that answers to a chord, as seen from a press.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyGroupMember {
+    pub binding_id: String,
+    pub sound_id: String,
+    /// The tab this binding is live in; `None` means every tab.
+    pub tab_scope: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct HotkeyBindingPage {
     pub bindings: Vec<HotkeyBindingRecord>,
@@ -386,6 +395,10 @@ enum Request {
         binding_id: String,
         reply: mpsc::SyncSender<Result<Option<HotkeyBindingRecord>, LibraryError>>,
     },
+    HotkeyGroup {
+        binding_id: String,
+        reply: mpsc::SyncSender<Result<Vec<HotkeyGroupMember>, LibraryError>>,
+    },
     SetHotkeyBinding {
         binding: HotkeyBindingRecord,
         reply: mpsc::SyncSender<Result<bool, LibraryError>>,
@@ -551,6 +564,7 @@ impl RequestQueue {
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
+            | Request::HotkeyGroup { .. }
             | Request::SetHotkeyBinding { .. }
             | Request::DeleteHotkeyBinding { .. } => (&mut state.control, CONTROL_QUEUE_CAPACITY),
             Request::HotkeyConflict { .. }
@@ -949,6 +963,20 @@ impl LibraryStore {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
             Request::HotkeyBinding {
+                binding_id: binding_id.to_string(),
+                reply,
+            },
+            response,
+        )
+    }
+
+    /// Every sound bound to the chord `binding_id` carries, ordered as the
+    /// library lists them. One entry for an ordinary binding, several when the
+    /// chord is shared.
+    pub fn hotkey_group(&self, binding_id: &str) -> LibraryResponse<Vec<HotkeyGroupMember>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::HotkeyGroup {
                 binding_id: binding_id.to_string(),
                 reply,
             },
@@ -1421,6 +1449,7 @@ impl Request {
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
+            | Request::HotkeyGroup { .. }
             | Request::HotkeyConflict { .. }
             | Request::LoudnessStats { .. }
             | Request::LibraryStats { .. }
@@ -1524,6 +1553,9 @@ fn handle_request(connection: &mut Connection, request: Request) {
         }
         Request::HotkeyBinding { binding_id, reply } => {
             let _ = reply.send(load_hotkey_binding(connection, &binding_id));
+        }
+        Request::HotkeyGroup { binding_id, reply } => {
+            let _ = reply.send(load_hotkey_group(connection, &binding_id));
         }
         Request::SetHotkeyBinding { binding, reply } => {
             let _ = reply.send(set_hotkey_binding(connection, binding));
@@ -3959,6 +3991,11 @@ fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, L
     Ok(SoundPage { sounds })
 }
 
+/// One row per chord: a chord several bindings share is projected under one of
+/// them, because the backends can only be told about it once. Control actions
+/// and tab hotkeys take that slot ahead of sounds — a press carrying a sound's
+/// id can still be resolved back to its chord, while a control action reached
+/// under another binding's id would simply never run.
 fn load_hotkey_bindings_after(
     connection: &Connection,
     after: Option<&str>,
@@ -3970,6 +4007,20 @@ fn load_hotkey_bindings_after(
          LEFT JOIN sounds AS sound ON sound.rowid = binding.sound_id
          WHERE binding.state = 'active' AND (?1 IS NULL OR binding.binding_id > ?1)
            AND (binding.control_action IS NOT NULL OR {LIVE_SOUND_FILTER})
+           AND binding.binding_id = (
+               SELECT representative.binding_id
+               FROM hotkey_bindings AS representative
+               LEFT JOIN sounds AS sound ON sound.rowid = representative.sound_id
+               WHERE representative.state = 'active'
+                 AND representative.normalized = binding.normalized
+                 AND (representative.control_action IS NOT NULL
+                      OR representative.target_tab IS NOT NULL
+                      OR (sound.rowid IS NOT NULL AND {LIVE_SOUND_FILTER}))
+               ORDER BY CASE WHEN representative.control_action IS NOT NULL THEN 0
+                             WHEN representative.target_tab IS NOT NULL THEN 1
+                             ELSE 2 END,
+                        representative.binding_id
+               LIMIT 1)
          ORDER BY binding.binding_id LIMIT ?2"
     );
     let mut statement = connection.prepare(&sql)?;
@@ -3994,6 +4045,41 @@ fn load_hotkey_bindings_after(
         bindings.push(binding?);
     }
     Ok(HotkeyBindingPage { bindings })
+}
+
+fn load_hotkey_group(
+    connection: &Connection,
+    binding_id: &str,
+) -> Result<Vec<HotkeyGroupMember>, LibraryError> {
+    // Keyed by the chord rather than by the binding, so every member of a
+    // shared chord resolves to the same group no matter which binding the
+    // backend reported. An unknown binding, or one still needing attention,
+    // has a NULL accelerator here and matches nothing.
+    let sql = format!(
+        "SELECT binding.binding_id, sound.public_id, binding.tab_scope
+         FROM hotkey_bindings AS binding
+         JOIN sounds AS sound ON sound.rowid = binding.sound_id
+         WHERE binding.state = 'active'
+           AND binding.normalized = (SELECT pressed.normalized
+                                     FROM hotkey_bindings AS pressed
+                                     WHERE pressed.binding_id = ?1
+                                       AND pressed.state = 'active')
+           AND {LIVE_SOUND_FILTER}
+         ORDER BY sound.general_position, sound.public_id"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([binding_id], |row| {
+        Ok(HotkeyGroupMember {
+            binding_id: row.get(0)?,
+            sound_id: row.get(1)?,
+            tab_scope: row.get(2)?,
+        })
+    })?;
+    let mut members = Vec::new();
+    for member in rows {
+        members.push(member?);
+    }
+    Ok(members)
 }
 
 fn load_hotkey_binding(

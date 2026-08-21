@@ -2288,3 +2288,126 @@ fn a_tab_binding_is_live_in_every_tab() {
         "a tab hotkey must stay reachable from every tab"
     );
 }
+
+#[test]
+fn several_sounds_on_one_chord_project_one_entry() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("first", "First", "/music/first.flac"),
+            general_position: 0,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("second", "Second", "/music/second.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+    for id in ["first", "second"] {
+        assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+            binding_id: id.to_string(),
+            owner: HotkeyBindingOwner::Sound(id.to_string()),
+            accelerator: "Ctrl+KeyA".to_string(),
+            normalized: Some("Ctrl+KeyA".to_string()),
+            issue: None,
+        })));
+    }
+
+    // The backends can only be told about a chord once, so a shared chord has
+    // to reach them as a single entry; the press resolves which sound plays.
+    let page = wait(store.hotkey_bindings_after(None));
+    assert_eq!(page.bindings.len(), 1);
+    assert_eq!(page.bindings[0].normalized.as_deref(), Some("Ctrl+KeyA"));
+}
+
+#[test]
+fn a_hotkey_group_lists_every_sound_on_the_chord() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("second", "Second", "/music/second.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("first", "First", "/music/first.flac"),
+            general_position: 0,
+            locations: Vec::new(),
+        },
+    ])));
+    for id in ["first", "second"] {
+        assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+            binding_id: id.to_string(),
+            owner: HotkeyBindingOwner::Sound(id.to_string()),
+            accelerator: "Ctrl+KeyA".to_string(),
+            normalized: Some("Ctrl+KeyA".to_string()),
+            issue: None,
+        })));
+    }
+
+    let members = wait(store.hotkey_group("first"));
+    let ids: Vec<&str> = members.iter().map(|m| m.sound_id.as_str()).collect();
+    assert_eq!(ids, ["first", "second"], "members follow library order");
+    assert!(members.iter().all(|member| member.tab_scope.is_none()));
+
+    // Pressing the chord arrives as whichever binding represents it, so every
+    // member has to see the same group.
+    assert_eq!(wait(store.hotkey_group("second")), members);
+}
+
+#[test]
+fn an_unshared_chord_is_a_group_of_one() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("first", "First", "/music/first.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "first".to_string(),
+        owner: HotkeyBindingOwner::Sound("first".to_string()),
+        accelerator: "Ctrl+KeyA".to_string(),
+        normalized: Some("Ctrl+KeyA".to_string()),
+        issue: None,
+    })));
+
+    let members = wait(store.hotkey_group("first"));
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].sound_id, "first");
+}
+
+#[test]
+fn a_control_binding_represents_a_chord_it_shares() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![SoundRecord {
+        sound: sound("first", "First", "/music/first.flac"),
+        general_position: 0,
+        locations: Vec::new(),
+    }])));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "first".to_string(),
+        owner: HotkeyBindingOwner::Sound("first".to_string()),
+        accelerator: "Ctrl+KeyA".to_string(),
+        normalized: Some("Ctrl+KeyA".to_string()),
+        issue: None,
+    })));
+    assert!(wait(store.set_hotkey_binding(HotkeyBindingRecord {
+        binding_id: "control:stop_all".to_string(),
+        owner: HotkeyBindingOwner::Control("stop_all".to_string()),
+        accelerator: "Ctrl+KeyA".to_string(),
+        normalized: Some("Ctrl+KeyA".to_string()),
+        issue: None,
+    })));
+
+    // A control action and a sound cannot normally share a chord, but if they
+    // ever do the control action must keep working: it is the one the press
+    // path cannot recover by any other route.
+    let page = wait(store.hotkey_bindings_after(None));
+    assert_eq!(page.bindings.len(), 1);
+    assert_eq!(page.bindings[0].binding_id, "control:stop_all");
+}
