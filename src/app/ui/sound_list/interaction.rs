@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -7,12 +8,84 @@ use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{DragSource, EventControllerKey, GestureClick, Widget};
 
+use crate::app_state::AppState;
 use crate::commands;
+use crate::config::Sound;
+use crate::ui::dialogs::{DialogHostWeak, HotkeyScopePrompt};
 use crate::ui::is_unmodified_delete_shortcut;
 
 use crate::ui::{menu, tab_dnd};
 
 use super::{SoundListInner, SoundRowData, SOUND_CONTEXT_NAMESPACE};
+
+/// One pending hotkey change, so the same dispatch serves both the direct path
+/// and the one that first asks about sharing.
+struct HotkeyAssignment {
+    inner: Rc<SoundListInner>,
+    state: Arc<AppState>,
+    dialog_host: DialogHostWeak,
+    sound: Sound,
+    hotkey: Option<String>,
+    multi_sound_hotkeys: bool,
+    tab_scope: Option<String>,
+}
+
+impl HotkeyAssignment {
+    fn dispatch(self) {
+        let Self {
+            inner,
+            state,
+            dialog_host,
+            sound,
+            hotkey,
+            multi_sound_hotkeys,
+            tab_scope,
+        } = self;
+
+        let mut updated_sound = sound.clone();
+        updated_sound.hotkey = hotkey.clone();
+        let dialog_done = dialog_host.clone();
+        let state_done = Arc::clone(&state);
+
+        let dispatch = commands::set_hotkey_async(
+            sound.id.clone(),
+            hotkey,
+            multi_sound_hotkeys,
+            tab_scope,
+            state.library.clone(),
+            state.hotkey_projection.clone(),
+            move |result| match result {
+                Ok(_) => inner.update_loaded_sound(updated_sound),
+                Err(e) => {
+                    if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
+                        inner.update_loaded_sound(updated_sound);
+                    }
+                    log::warn!("Set hotkey failed: {e}");
+                    let detail = e.to_string();
+                    let message = crate::hotkeys::format_hotkey_error(&detail);
+                    if let Some(dialog_host) = dialog_done.upgrade() {
+                        if crate::hotkeys::should_offer_swhkd_install(&detail) {
+                            dialog_host.show_hotkey_error_with_install_option(
+                                "Failed to Set Hotkey",
+                                &message,
+                                Arc::clone(&state_done.hotkeys),
+                                state_done.hotkey_projection.clone(),
+                            );
+                        } else {
+                            dialog_host.show_error("Failed to Set Hotkey", &message);
+                        }
+                    }
+                }
+            },
+        );
+        if let Err(error) = dispatch {
+            log::warn!("Failed to dispatch hotkey update: {error}");
+            if let Some(dialog_host) = dialog_host.upgrade() {
+                dialog_host.show_error("Failed to Set Hotkey", &error.to_string());
+            }
+        }
+    }
+}
 
 impl SoundListInner {
     pub(super) fn connect_activate(self: &Rc<Self>) {
@@ -559,65 +632,122 @@ impl SoundListInner {
                 let inner_confirm = Rc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
+                let state_for_scope = Arc::clone(&state);
+                let sound_id_for_scope = sound.id.clone();
                 let dialog_host_weak = dialog_host.downgrade();
                 let current_hotkey = sound.hotkey.clone();
-                dialog_host.show_hotkey_capture(
+                let tab_hotkeys = state_confirm.config.lock().settings.tab_hotkeys;
+                let active_scope =
+                    crate::library_store::scope_key(&inner_confirm.active_scope.lock());
+
+                // The stored scope decides how the choice is presented, so
+                // reopening the dialog cannot quietly widen the binding.
+                let open = move |stored_scope: Option<String>| {
+                    let Some(dialog_host) = dialog_host_weak.upgrade() else {
+                        return;
+                    };
+                    let scope_prompt = tab_hotkeys.then_some(HotkeyScopePrompt {
+                        scoped_now: stored_scope.is_some(),
+                    });
+                    dialog_host.show_hotkey_capture(
                     current_hotkey.as_deref(),
+                    scope_prompt,
                     move |hotkey| {
                         crate::hotkeys::canonicalize_hotkey_string(hotkey)
                             .map(|_| ())
                             .map_err(|error| error.to_string())
                     },
-                    move |hotkey| {
-                        let inner_done = Rc::clone(&inner_confirm);
-                        let state_done = Arc::clone(&state_confirm);
-                        let dialog_done = dialog_host_weak.clone();
-                        let mut updated_sound = sound.clone();
-                        updated_sound.hotkey = hotkey.clone();
+                    move |hotkey, scoped| {
+                        let tab_scope = scoped.then(|| active_scope.clone());
                         let multi_sound_hotkeys =
                             state_confirm.config.lock().settings.multi_sound_hotkeys;
-                        // No scope: the assign dialog does not offer one yet,
-                        // so bindings stay live in every tab.
-                        let dispatch = commands::set_hotkey_async(
-                            sound.id.clone(),
-                            hotkey,
+
+                        let assign = HotkeyAssignment {
+                            inner: Rc::clone(&inner_confirm),
+                            state: Arc::clone(&state_confirm),
+                            dialog_host: dialog_host_weak.clone(),
+                            sound: sound.clone(),
+                            hotkey: hotkey.clone(),
                             multi_sound_hotkeys,
-                            None,
+                            tab_scope: tab_scope.clone(),
+                        };
+
+                        // Sharing a shortcut is never silent: if a sound
+                        // already answers to it, say which one and ask.
+                        let Some(chord) = hotkey else {
+                            assign.dispatch();
+                            return;
+                        };
+                        if !multi_sound_hotkeys {
+                            assign.dispatch();
+                            return;
+                        }
+
+                        let dialog_ask = dialog_host_weak.clone();
+                        let sound_name = sound.name.clone();
+                        let chord_shown = chord.clone();
+                        let dispatch = commands::hotkey_holder_async(
+                            sound.id.clone(),
+                            chord,
+                            tab_scope,
                             state_confirm.library.clone(),
-                            state_confirm.hotkey_projection.clone(),
-                            move |result| match result {
-                                Ok(_) => inner_done.update_loaded_sound(updated_sound),
-                                Err(e) => {
-                                    if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
-                                        inner_done.update_loaded_sound(updated_sound);
+                            move |result| {
+                                let holder = match result {
+                                    Ok(Some(holder)) => holder,
+                                    Ok(None) => {
+                                        assign.dispatch();
+                                        return;
                                     }
-                                    log::warn!("Set hotkey failed: {e}");
-                                    let detail = e.to_string();
-                                    let message = crate::hotkeys::format_hotkey_error(&detail);
-                                    if let Some(dialog_host) = dialog_done.upgrade() {
-                                        if crate::hotkeys::should_offer_swhkd_install(&detail) {
-                                            dialog_host.show_hotkey_error_with_install_option(
-                                                "Failed to Set Hotkey",
-                                                &message,
-                                                Arc::clone(&state_done.hotkeys),
-                                                state_done.hotkey_projection.clone(),
-                                            );
-                                        } else {
-                                            dialog_host
-                                                .show_error("Failed to Set Hotkey", &message);
+                                    Err(error) => {
+                                        // The set below reports the same clash
+                                        // properly; do not block on the lookup.
+                                        log::warn!("Could not check the shortcut: {error}");
+                                        assign.dispatch();
+                                        return;
+                                    }
+                                };
+                                let Some(dialog_host) = dialog_ask.upgrade() else {
+                                    return;
+                                };
+                                let assign = RefCell::new(Some(assign));
+                                dialog_host.show_confirm(
+                                    "Share Shortcut",
+                                    &format!(
+                                        "{chord_shown} is already assigned to {holder}.\n\nAdd \"{sound_name}\" to that shortcut?"
+                                    ),
+                                    "Add",
+                                    move || {
+                                        if let Some(assign) = assign.borrow_mut().take() {
+                                            assign.dispatch();
                                         }
-                                    }
-                                }
+                                    },
+                                );
                             },
                         );
                         if let Err(error) = dispatch {
-                            log::warn!("Failed to dispatch hotkey update: {error}");
-                            if let Some(dialog_host) = dialog_host_weak.upgrade() {
-                                dialog_host.show_error("Failed to Set Hotkey", &error.to_string());
-                            }
+                            log::warn!("Failed to check the shortcut: {error}");
                         }
                     },
+                    );
+                };
+
+                if !tab_hotkeys {
+                    open(None);
+                    return;
+                }
+                let read = commands::hotkey_scope_async(
+                    sound_id_for_scope.clone(),
+                    state_for_scope.library.clone(),
+                    move |result| {
+                        open(result.unwrap_or_else(|error| {
+                            log::warn!("Could not read the shortcut's tab: {error}");
+                            None
+                        }));
+                    },
                 );
+                if let Err(error) = read {
+                    log::warn!("Failed to read the shortcut's tab: {error}");
+                }
             });
             action_group.add_action(&action);
         }

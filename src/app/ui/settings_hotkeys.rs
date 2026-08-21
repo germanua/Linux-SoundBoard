@@ -275,12 +275,14 @@ fn build_hotkey_row(
             let dialog_host_weak = dialog_host_record.downgrade();
             dialog_host_record.show_hotkey_capture(
                 current.as_deref(),
+                // Control actions are never limited to a tab.
+                None,
                 move |hotkey| {
                     crate::hotkeys::canonicalize_hotkey_string(hotkey)
                         .map(|_| ())
                         .map_err(|error| error.to_string())
                 },
-                move |hotkey| {
+                move |hotkey, _scoped| {
                     let display_hotkey = hotkey.clone();
                     let state_done = Arc::clone(&state3);
                     let dialog_done = dialog_host_weak.clone();

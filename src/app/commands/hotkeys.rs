@@ -179,6 +179,57 @@ where
     )
 }
 
+/// The tab a sound's hotkey is limited to, or `None` when it answers in every
+/// tab. Read before offering the choice again, so reopening the dialog shows
+/// what is stored rather than silently widening the binding on save.
+pub fn hotkey_scope_async<F>(
+    binding_id: String,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Option<String>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "hotkey_scope",
+        move || {
+            library
+                .hotkey_binding(&binding_id)
+                .recv()
+                .map(|binding| binding.and_then(|binding| binding.tab_scope))
+                .map_err(|error| CommandError::Library(error.to_string()))
+        },
+        on_complete,
+    )
+}
+
+/// Who already answers to `hotkey` in this scope, described for the user, or
+/// `None` when it is free. Used to ask before adding a sound to a shared
+/// shortcut, so the group is never formed silently.
+pub fn hotkey_holder_async<F>(
+    binding_id: String,
+    hotkey: String,
+    tab_scope: Option<String>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Option<String>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "hotkey_holder",
+        move || {
+            let canonical = crate::hotkeys::canonicalize_hotkey_string(&hotkey)
+                .map_err(|e| CommandError::Hotkey(e.to_string()))?;
+            library
+                .hotkey_conflict(&binding_id, &canonical, false, tab_scope.as_deref())
+                .recv()
+                .map_err(|error| CommandError::Library(error.to_string()))
+        },
+        on_complete,
+    )
+}
+
 /// Answer only the active tab's sound hotkeys while it is showing.
 pub fn set_tab_hotkeys(
     enabled: bool,

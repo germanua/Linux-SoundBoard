@@ -16,6 +16,13 @@ use crate::hotkeys::{
 type ResponseHandler = Box<dyn FnMut(&str) + 'static>;
 type HotkeyValidator = Box<dyn Fn(&str) -> Result<(), String> + 'static>;
 
+/// Offer to limit a sound's hotkey to the tab it is being set from.
+pub struct HotkeyScopePrompt {
+    /// Whether the binding is already scoped, so reopening the dialog shows
+    /// what is actually stored rather than a default.
+    pub scoped_now: bool,
+}
+
 #[derive(Clone)]
 pub struct DialogHost {
     inner: Rc<DialogHostInner>,
@@ -38,6 +45,7 @@ struct DialogHostInner {
     path_label: Label,
     hotkey_capture_box: GtkBox,
     hotkey_status_label: Label,
+    hotkey_scope_check: gtk4::CheckButton,
     hotkey_preview_label: Label,
     captured_hotkey: RefCell<Option<String>>,
     hotkey_validator: RefCell<Option<HotkeyValidator>>,
@@ -220,6 +228,14 @@ impl DialogHost {
         hotkey_capture_box.append(&hotkey_preview_label);
 
         hotkey_page.append(&hotkey_capture_box);
+
+        // Only shown when tab hotkeys are on; see show_hotkey_capture.
+        let hotkey_scope_check = gtk4::CheckButton::builder()
+            .label("Only while this tab is open")
+            .halign(gtk4::Align::Center)
+            .visible(false)
+            .build();
+        hotkey_page.append(&hotkey_scope_check);
         content_stack.add_named(&hotkey_page, Some("hotkey"));
         content.append(&content_stack);
         panel.append(&content);
@@ -266,6 +282,7 @@ impl DialogHost {
                 path_label,
                 hotkey_capture_box,
                 hotkey_status_label,
+                hotkey_scope_check,
                 hotkey_preview_label,
                 captured_hotkey: RefCell::new(None),
                 hotkey_validator: RefCell::new(None),
@@ -553,14 +570,18 @@ impl DialogHost {
         self.present(None);
     }
 
+    /// `scope_prompt` offers "only while this tab is open" and is `Some` only
+    /// when tab hotkeys are on; the flag it produces reaches `on_confirm` as
+    /// its second argument, and is always false when nothing was offered.
     pub fn show_hotkey_capture<F, V>(
         &self,
         current_hotkey: Option<&str>,
+        scope_prompt: Option<HotkeyScopePrompt>,
         validate_hotkey: V,
         on_confirm: F,
     ) where
         V: Fn(&str) -> Result<(), String> + 'static,
-        F: Fn(Option<String>) + 'static,
+        F: Fn(Option<String>, bool) + 'static,
     {
         self.prepare("hotkey", "Set Hotkey", "");
         self.inner
@@ -571,6 +592,16 @@ impl DialogHost {
             .set_text(current_hotkey.unwrap_or("Not set"));
         *self.inner.captured_hotkey.borrow_mut() = current_hotkey.map(str::to_string);
         *self.inner.hotkey_validator.borrow_mut() = Some(Box::new(validate_hotkey));
+        match scope_prompt {
+            Some(prompt) => {
+                self.inner.hotkey_scope_check.set_active(prompt.scoped_now);
+                self.inner.hotkey_scope_check.set_visible(true);
+            }
+            None => {
+                self.inner.hotkey_scope_check.set_active(false);
+                self.inner.hotkey_scope_check.set_visible(false);
+            }
+        }
 
         self.configure_actions(
             Some(ActionSpec::default("cancel", "Cancel")),
@@ -586,9 +617,9 @@ impl DialogHost {
             match response {
                 "save" => {
                     let captured_hotkey = host.inner.captured_hotkey.borrow().clone();
-                    on_confirm(captured_hotkey);
+                    on_confirm(captured_hotkey, host.inner.hotkey_scope_check.is_active());
                 }
-                "clear" => on_confirm(None),
+                "clear" => on_confirm(None, false),
                 _ => {}
             }
         });
