@@ -240,6 +240,11 @@ impl SoundList {
         self.inner.store.n_items() > 0
     }
 
+    /// The active tab as a hotkey scope key.
+    pub fn active_scope_key(&self) -> String {
+        crate::library_store::scope_key(&self.inner.active_scope.lock())
+    }
+
     pub fn active_tab_id(&self) -> String {
         self.inner.active_tab_id.lock().clone()
     }

@@ -33,7 +33,7 @@ pub fn build_window(
     _timers: &TimerRegistry,
     initial_sound_count: usize,
     initial_sound_page: crate::library_store::SoundPage,
-) -> (ApplicationWindow, TransportBar) {
+) -> ApplicationWindow {
     let build_started = Instant::now();
     {
         let cfg = state.config.lock();
@@ -359,6 +359,26 @@ pub fn build_window(
         });
     }
 
+    {
+        // Registered here rather than in bootstrap: resolving a press needs the
+        // sidebar and the sound list, which only exist inside this function.
+        let state_hk = Arc::clone(&state);
+        let window_hk = window.clone();
+        let transport_hk = transport.clone();
+        let tabs_hk = tabs.clone();
+        let sound_list_hk = sound_list.clone();
+        crate::ui_event_bridge::set_hotkey_handler(move |binding_id| {
+            handle_hotkey(
+                &window_hk,
+                &state_hk,
+                &transport_hk,
+                &tabs_hk,
+                &sound_list_hk,
+                &binding_id,
+            );
+        });
+    }
+
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
@@ -373,27 +393,27 @@ pub fn build_window(
         "Window build latency: phase=complete elapsed_us={}",
         build_started.elapsed().as_micros()
     );
-    (window, transport)
+    window
 }
 
 /// The settings a press is resolved against, read on the UI thread and carried
-/// into the worker. Tab scoping is not wired to the visible tab yet, so every
-/// binding is in scope.
-fn hotkey_press_context(state: &Arc<AppState>) -> commands::HotkeyPress {
-    let (multi_sound, mode) = {
+/// into the worker.
+fn hotkey_press_context(state: &Arc<AppState>, sound_list: &SoundList) -> commands::HotkeyPress {
+    let (tab_hotkeys, multi_sound, mode) = {
         let config = state.config.lock();
         (
+            config.settings.tab_hotkeys,
             config.settings.multi_sound_hotkeys,
             config.settings.group_mode,
         )
     };
     commands::HotkeyPress {
         toggles: crate::hotkeys::HotkeyToggles {
-            tab_hotkeys: false,
+            tab_hotkeys,
             multi_sound,
         },
         mode,
-        active_scope: crate::app_meta::GENERAL_TAB_ID.to_string(),
+        active_scope: sound_list.active_scope_key(),
         cursor: Arc::clone(&state.hotkey_group_cursor),
     }
 }
@@ -402,14 +422,20 @@ pub fn handle_hotkey(
     _window: &ApplicationWindow,
     state: &Arc<AppState>,
     transport: &TransportBar,
+    tabs: &TabsSidebar,
+    sound_list: &SoundList,
     id: &str,
 ) {
     if let Some(action) = crate::config::ControlHotkeyAction::from_binding_id(id) {
         handle_control_hotkey(state, transport, action);
+    } else if let Some(scope_key) = commands::tab_from_binding_id(id) {
+        if !tabs.activate_tab(scope_key) {
+            log::warn!("Hotkey names a tab that is not in the sidebar: {scope_key}");
+        }
     } else {
         let sound_id = id.to_string();
         let sound_id_for_log = sound_id.clone();
-        let press = hotkey_press_context(state);
+        let press = hotkey_press_context(state, sound_list);
         crate::ui_event_bridge::mark_explicit_play_pending();
         if let Err(e) =
             commands::play_hotkey_sound_async(sound_id, press, Arc::clone(state), move |result| {

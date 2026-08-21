@@ -1202,7 +1202,7 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
 
     let timer_registry = TimerRegistry::new();
 
-    let (window, transport) = crate::ui::app_window::build_window(
+    let window = crate::ui::app_window::build_window(
         app,
         Arc::clone(&state),
         &timer_registry,
@@ -1213,12 +1213,6 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     crate::diagnostics::memory::log_memory_snapshot("startup:window_built");
     record_state_phase("startup:window_built", &state);
 
-    let state_hk = Arc::clone(&state);
-    let window_hk = window.clone();
-    let transport_hk = transport.clone();
-    crate::ui_event_bridge::set_hotkey_handler(move |sound_id| {
-        crate::ui::app_window::handle_hotkey(&window_hk, &state_hk, &transport_hk, &sound_id);
-    });
     if let Err(err) = thread::Builder::new()
         .name("hotkey-ui-bridge".to_string())
         .spawn(move || {

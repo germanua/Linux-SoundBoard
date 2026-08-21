@@ -1538,6 +1538,32 @@ impl TabsSidebar {
         Self { inner }
     }
 
+    /// Make the tab named by a hotkey scope key active, as if its row had been
+    /// clicked, so selection travels the same path either way. Returns false
+    /// when the tab is not in the list: folder tabs live in the tree rather
+    /// than the list box and cannot be bound yet.
+    pub fn activate_tab(&self, scope_key: &str) -> bool {
+        let identity = match scope_key {
+            GENERAL_TAB_ID => GENERAL_TAB_ID,
+            other => match other.strip_prefix("tab:") {
+                Some(public_id) => public_id,
+                None => return false,
+            },
+        };
+
+        let mut row = self.inner.list_box.first_child();
+        while let Some(child) = row {
+            if let Some(list_row) = child.downcast_ref::<ListBoxRow>() {
+                if list_row.widget_name() == identity {
+                    self.inner.list_box.select_row(Some(list_row));
+                    return true;
+                }
+            }
+            row = child.next_sibling();
+        }
+        false
+    }
+
     pub fn widget(&self) -> &Widget {
         self.inner.root.upcast_ref()
     }

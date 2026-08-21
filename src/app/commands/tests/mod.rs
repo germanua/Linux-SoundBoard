@@ -839,3 +839,23 @@ fn a_scoped_binding_still_clashes_with_one_that_is_live_everywhere() {
     )
     .expect_err("an unscoped binding answers in this tab too");
 }
+
+#[test]
+fn a_tab_binding_id_is_not_mistaken_for_a_sound() {
+    let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
+    // Sound bindings are stored under the sound's own public id, so the two
+    // must stay distinguishable at the point a press arrives.
+    assert_eq!(commands::tab_from_binding_id(&sound.id), None);
+    assert_eq!(
+        commands::tab_from_binding_id(&commands::tab_binding_id("tab:party")),
+        Some("tab:party")
+    );
+    assert_eq!(
+        commands::tab_from_binding_id(&commands::tab_binding_id("general")),
+        Some("general")
+    );
+    assert_eq!(
+        commands::tab_from_binding_id(ControlHotkeyAction::StopAll.binding_id()),
+        None
+    );
+}
