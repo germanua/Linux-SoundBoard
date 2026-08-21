@@ -249,6 +249,15 @@ Right-click any row in the sound list to open the context menu.
 
 **Result:** The captured hotkey is bound to that sound and plays it globally when the hotkey backend is available.
 
+> **Notes:**
+>
+> - With `Multiple Sounds Per Hotkey` on, a combination another sound already
+>   answers to names that sound and asks before adding to it
+> - With `Tab Hotkeys` on, the dialog also offers to limit the hotkey to the
+>   tab it is set from
+>
+> See [Hotkey Behaviour](#hotkey-behaviour).
+
 > **Note:** Unsupported shortcuts are rejected by the active hotkey backend.
 
 ---
@@ -388,6 +397,19 @@ scans no longer create them; scanned folders appear under `FOLDERS` instead.
 - **What it does:** Opens a rename dialog and updates the tab name
 
 > **Note:** `General` cannot be renamed.
+
+---
+
+### Set Tab Hotkey
+
+- **Trigger:** Right-click a tab → `Set Tab Hotkey`
+- **What it does:** Binds a hotkey that makes that tab active
+
+> **Notes:**
+>
+> - Shown only while `Tab Hotkeys` is on; see [Hotkey Behaviour](#hotkey-behaviour)
+> - Works from any tab, so there is always a way back
+> - `General` can be bound too; folder tabs cannot be bound yet
 
 ---
 
@@ -645,6 +667,67 @@ Open via `Settings` → `Control Hotkeys`.
 | **Mute Headphones** | Toggles local headphone/speaker output                          |
 | **Mute Real Mic**   | Toggles real microphone passthrough into the virtual microphone |
 | **Cycle Play Mode** | Cycles `Default` → `Loop` → `Continue` → `Default`              |
+
+> **Note:** `Cycle Shared Hotkey Mode` is a global hotkey too, but its row
+> lives with the setting it changes under `Hotkey Behaviour`, and appears only
+> once `Multiple Sounds Per Hotkey` is on.
+
+---
+
+## Hotkey Behaviour
+
+Open via `Settings` → `Control Hotkeys` → `Hotkey Behaviour`. Both switches are
+off by default and work independently: either can be used without the other.
+
+### Tab Hotkeys
+
+- **Trigger:** Turn on `Tab Hotkeys`
+- **What it does:** Each tab can be given its own hotkey, and while a tab is
+  open only the sound hotkeys belonging to it respond
+
+**Binding a tab:** right-click the tab in the sidebar → `Set Tab Hotkey`. A
+tab's hotkey works from any tab, so there is always a way back. `General` can
+be bound the same way.
+
+**Binding a sound to one tab:** with the switch on, the sound hotkey dialog
+gains an `Only while this tab is open` checkbox. Leave it unchecked and the
+hotkey answers everywhere, which is what every hotkey assigned before this
+feature does.
+
+> **Notes:**
+>
+> - The same key combination can mean different sounds in different tabs
+> - `General` lists every sound, so a combination used in two tabs does nothing
+>   while `General` is open rather than guessing between them
+> - Folder tabs cannot be bound yet
+
+### Multiple Sounds Per Hotkey
+
+- **Trigger:** Turn on `Multiple Sounds Per Hotkey`
+- **What it does:** Several sounds can share one hotkey
+
+Assigning a combination another sound already answers to names that sound and
+asks before adding to it. With the switch off the combination is refused, as
+before.
+
+### Shared Hotkey Mode
+
+- **Trigger:** Select a mode, or use the `Cycle Shared Hotkey Mode` hotkey
+- **What it does:** Decides which sound a shared hotkey plays
+
+| Mode                    | Behavior                                          |
+| ----------------------- | ------------------------------------------------- |
+| `Play the same sound`   | Replays whichever member played last              |
+| `Play the next sound`   | Advances through the members, one per press       |
+| `Play a random sound`   | Picks a member at random                          |
+
+> **Notes:**
+>
+> - This is separate from `Play Mode`, which decides what happens when a sound
+>   *finishes* rather than what a press selects
+> - The position `Play the next sound` keeps is per hotkey and resets when the
+>   app restarts
+> - A hotkey with one sound ignores the mode entirely
 
 ---
 

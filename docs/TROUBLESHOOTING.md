@@ -297,6 +297,16 @@ original as `~/.config/linux-soundboard/config.json.pre-v8-backup` with `0600`
 permissions. Both files matter when you back up or move a profile; copying
 `config.json` alone no longer carries the library.
 
+### An older build refuses to open the library after upgrading
+
+Storing which tab a hotkey belongs to required a library schema change, applied
+automatically the first time the new build starts. The upgrade keeps every
+existing hotkey working, but it is one-way: an earlier build reports that the
+schema is newer than it supports and stops rather than touching the database.
+
+Nothing is lost. Either stay on the newer build, or restore a copy of
+`~/.config/linux-soundboard/library.sqlite3` taken before the upgrade.
+
 ### Sound library could not be opened
 
 Startup shows this when the database is missing, unreadable, or does not match

@@ -8,7 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Added
 
+- **Bind several sounds to one hotkey:** `Settings` → `Control Hotkeys` → `Hotkey Behaviour` → `Multiple Sounds Per Hotkey` lets a shortcut hold more than one sound. A new `Shared Hotkey Mode` decides which one a press plays — replay the same sound, advance to the next, or pick at random — and can be switched from a hotkey of its own. Assigning a shortcut another sound already answers to names that sound and asks first, so a group is never formed by accident. This is separate from `Play Mode`, which still only decides what happens when a sound finishes.
+- **Give each tab its own hotkey:** `Hotkey Behaviour` → `Tab Hotkeys` binds a shortcut to a tab, and while that tab is open only its sound hotkeys respond, so the same combination can mean different sounds in different tabs. Right-click a tab in the sidebar to bind it, `General` included; a tab's own hotkey works from anywhere. With the switch on, the sound hotkey dialog can limit a binding to the tab it is set from. Both switches are off by default and independent of each other, and hotkeys assigned before this release keep answering everywhere. Folder tabs cannot be bound yet.
 - **Choose how to install:** `install.sh` now asks whether to install automatically, from the AppImage, from the binary tarball, or from the native package, and the same choice is available noninteractively as `install --method auto|appimage|tarball|native`. Choosing the AppImage checks for FUSE first, since an installed AppImage mounts itself at every launch. Automatic stays the default and keeps the previous behaviour, and previous-version installs accept the tarball and AppImage methods.
+
+### Changed
+
+- **The library database upgrades on first launch:** storing which tab a hotkey belongs to needed a schema change. The upgrade is automatic and keeps every existing hotkey working exactly as before, but it is one-way: an older build will refuse to open the library afterwards.
 
 ### Fixed
 
