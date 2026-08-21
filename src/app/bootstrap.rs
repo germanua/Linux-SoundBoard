@@ -1224,19 +1224,17 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
         warn!("Failed to start hotkey UI bridge: {}", err);
     }
 
+    let tray = start_tray(app, &state);
+
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
     window.connect_close_request(move |_| {
-        timers_close.remove_all();
-        crate::diagnostics::set_timer_count(0);
-        crate::diagnostics::set_playback_registry_count(0);
-        record_state_phase("shutdown:close_request", &state_close);
-        state_close.player.stop_all();
-        state_close.player.shutdown();
-        state_close.hotkeys.lock().shutdown();
-        if let Err(e) = crate::diagnostics::write_memory_report() {
-            log::warn!("Failed to write memory report: {}", e);
+        // Only reached when the window is really closing: the window's own
+        // handler runs first and stops the emission when it hides to the tray.
+        if let Some(tray) = tray.as_ref() {
+            tray.shutdown();
         }
+        shutdown_application(&state_close, &timers_close);
         glib::Propagation::Proceed
     });
 
@@ -1290,6 +1288,59 @@ fn record_config_phase(name: &str, config: &Arc<Mutex<Config>>) {
 
 fn record_state_phase(name: &str, state: &Arc<AppState>) {
     record_config_phase(name, &state.config);
+}
+
+/// Tear the application down. Reached from the close button when the window is
+/// really closing, and from the tray's Quit row.
+///
+/// Guarded because both routes can end at the same window close, and shutting
+/// the player down twice is not something the engine IPC should have to cope
+/// with.
+fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, AtomicOrdering::SeqCst) {
+        return;
+    }
+    timers.remove_all();
+    crate::diagnostics::set_timer_count(0);
+    crate::diagnostics::set_playback_registry_count(0);
+    record_state_phase("shutdown:close_request", state);
+    state.player.stop_all();
+    state.player.shutdown();
+    state.hotkeys.lock().shutdown();
+    if let Err(e) = crate::diagnostics::write_memory_report() {
+        log::warn!("Failed to write memory report: {}", e);
+    }
+}
+
+/// Put an icon in the panel, if the session has anywhere to put one.
+///
+/// Returns `None` when the tray cannot be exported at all; a session with no
+/// watcher yet is not that case — the item waits and appears when a panel
+/// arrives. The close button consults [`TrayService::is_live`] rather than this
+/// value, so the window is never hidden to a tray nobody can see.
+fn start_tray(app: &Application, state: &Arc<AppState>) -> Option<Rc<crate::tray::TrayService>> {
+    let connection = app.dbus_connection()?;
+    let real_mic_muted = !state.config.lock().settings.mic_passthrough;
+    let tray = match crate::tray::TrayService::start(
+        &connection,
+        crate::tray::menu::build(true, real_mic_muted),
+        crate::ui_event_bridge::post_tray_action,
+    ) {
+        Ok(tray) => Rc::new(tray),
+        Err(error) => {
+            warn!("Could not export a tray icon: {error}");
+            return None;
+        }
+    };
+
+    let tray_menu = Rc::clone(&tray);
+    crate::ui_event_bridge::set_tray_menu_handler(move |items| tray_menu.set_menu(items));
+
+    let tray_policy = Rc::clone(&tray);
+    crate::ui_event_bridge::set_close_to_tray_policy(move || tray_policy.is_live());
+
+    Some(tray)
 }
 
 fn schedule_startup_loudness_backfill(state: Arc<AppState>, _timer_registry: &TimerRegistry) {

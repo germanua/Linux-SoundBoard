@@ -13,6 +13,7 @@ pub(crate) mod app_state;
 pub(crate) mod diagnostics;
 pub(crate) mod hotkeys;
 pub(crate) mod timer_registry;
+pub(crate) mod tray;
 pub(crate) mod ui;
 pub(crate) mod ui_event_bridge;
 

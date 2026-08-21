@@ -381,10 +381,31 @@ pub fn build_window(
         });
     }
 
+    {
+        // Registered here rather than in bootstrap for the same reason as the
+        // hotkey handler: acting on a click needs the transport and the window.
+        let state_tray = Arc::clone(&state);
+        let window_tray = window.clone();
+        let transport_tray = transport.clone();
+        crate::ui_event_bridge::set_tray_action_handler(move |action| {
+            handle_tray_action(&window_tray, &state_tray, &transport_tray, action);
+        });
+    }
+
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
-    window.connect_close_request(move |_| {
+    let state_cleanup = Arc::clone(&state);
+    window.connect_close_request(move |window| {
+        // The first close-request handler to run, and so the only one that can
+        // stop the teardown before the rest of it starts: bootstrap's handler
+        // shuts the player and the hotkey backends down, which is exactly what
+        // running in the background must not do.
+        if crate::ui_event_bridge::close_should_hide_to_tray() {
+            window.set_visible(false);
+            refresh_tray_menu(&state_cleanup, false);
+            return glib::Propagation::Stop;
+        }
         transport_cleanup.cleanup();
         tabs_cleanup.cleanup();
         sound_list_cleanup.cleanup();
@@ -457,6 +478,61 @@ pub fn handle_hotkey(
         {
             crate::ui_event_bridge::clear_explicit_play_pending();
             log::warn!("Failed to dispatch hotkey playback '{}': {}", id, e);
+        }
+    }
+}
+
+/// Send the tray a menu that matches the state the app is in now.
+///
+/// `window_visible` is passed in rather than read back off the window: the
+/// close handler runs before the hide takes effect, so asking the widget there
+/// would report the value that is about to change.
+fn refresh_tray_menu(state: &Arc<AppState>, window_visible: bool) {
+    let real_mic_muted = !state.config.lock().settings.mic_passthrough;
+    crate::ui_event_bridge::post_tray_menu(crate::tray::menu::build(
+        window_visible,
+        real_mic_muted,
+    ));
+}
+
+fn handle_tray_action(
+    window: &ApplicationWindow,
+    state: &Arc<AppState>,
+    transport: &TransportBar,
+    action: crate::tray::TrayAction,
+) {
+    use crate::tray::{MenuAction, TrayAction};
+
+    let action = match action {
+        TrayAction::Activate => MenuAction::ToggleWindow,
+        TrayAction::MenuItem(id) => match crate::tray::menu::action_for(id) {
+            Some(action) => action,
+            None => {
+                log::debug!("Tray: ignoring a click on unknown row {id}");
+                return;
+            }
+        },
+    };
+
+    match action {
+        MenuAction::ToggleWindow => {
+            let showing = window.is_visible();
+            if showing {
+                window.set_visible(false);
+            } else {
+                window.present();
+            }
+            refresh_tray_menu(state, !showing);
+        }
+        MenuAction::Control(control) => {
+            handle_control_hotkey(state, transport, control);
+            refresh_tray_menu(state, window.is_visible());
+        }
+        MenuAction::Quit => {
+            // Marked first so the window's own close handler lets the close
+            // through instead of hiding to the tray again.
+            crate::ui_event_bridge::mark_quit_requested();
+            window.close();
         }
     }
 }

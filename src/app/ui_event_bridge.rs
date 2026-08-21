@@ -2,10 +2,13 @@ use std::cell::{Cell, RefCell};
 
 use crate::audio::PlayerSnapshot;
 use crate::config::GroupMode;
+use crate::tray::{MenuItem, TrayAction};
 
 type StringHandler = RefCell<Option<Box<dyn FnMut(String)>>>;
 type GroupModeHandler = RefCell<Option<Box<dyn FnMut(GroupMode)>>>;
 type SnapshotHandler = RefCell<Option<Box<dyn FnMut(PlayerSnapshot)>>>;
+type TrayActionHandler = RefCell<Option<Box<dyn FnMut(TrayAction)>>>;
+type TrayMenuHandler = RefCell<Option<Box<dyn FnMut(Vec<MenuItem>)>>>;
 
 thread_local! {
     static HOTKEY_HANDLER: StringHandler = RefCell::new(None);
@@ -16,6 +19,23 @@ thread_local! {
     /// The settings panel is built once and kept, so a mode changed by hotkey
     /// would otherwise still read the old value the next time it is opened.
     static GROUP_MODE_HANDLER: GroupModeHandler = RefCell::new(None);
+
+    /// The tray lives in `bootstrap`, which has no transport or window, while
+    /// the code that can act on a click lives in the window. These two carry
+    /// clicks one way and the rebuilt menu back the other.
+    static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
+    static TRAY_MENU_HANDLER: TrayMenuHandler = RefCell::new(None);
+
+    /// Answers "should the close button hide the window instead of quitting?".
+    /// Owned by `bootstrap`, which knows both the setting and whether a panel
+    /// is really showing the icon, but consulted from the window's own
+    /// close-request handler — the earliest one to run, and so the only place
+    /// that can stop the teardown before it starts.
+    static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
+
+    /// Set once when the user asks to quit from the tray. Without it, closing
+    /// the window would consult the policy above and hide it again.
+    static QUIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 
     /// Set to true on the GTK main thread immediately before dispatching a
     /// user-initiated play request. Prevents Continue-mode auto-advance from
@@ -64,6 +84,59 @@ pub fn post_group_mode_changed(mode: GroupMode) {
             }
         });
     });
+}
+
+pub fn set_tray_action_handler(f: impl FnMut(TrayAction) + 'static) {
+    TRAY_ACTION_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_tray_action(action: TrayAction) {
+    glib::MainContext::default().invoke(move || {
+        TRAY_ACTION_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(action);
+            }
+        });
+    });
+}
+
+pub fn set_tray_menu_handler(f: impl FnMut(Vec<MenuItem>) + 'static) {
+    TRAY_MENU_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_tray_menu(items: Vec<MenuItem>) {
+    glib::MainContext::default().invoke(move || {
+        TRAY_MENU_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(items);
+            }
+        });
+    });
+}
+
+pub fn set_close_to_tray_policy(f: impl Fn() -> bool + 'static) {
+    CLOSE_TO_TRAY_POLICY.with(|policy| *policy.borrow_mut() = Some(Box::new(f)));
+}
+
+/// Whether closing the window should hide it. False unless a policy has been
+/// installed and agrees, so the close button keeps quitting when there is no
+/// tray to hide into.
+pub fn close_should_hide_to_tray() -> bool {
+    if QUIT_REQUESTED.with(|requested| requested.get()) {
+        return false;
+    }
+    CLOSE_TO_TRAY_POLICY.with(|policy| {
+        policy
+            .borrow()
+            .as_ref()
+            .is_some_and(|should_hide| should_hide())
+    })
+}
+
+/// Record that the next window close is a real quit. One-shot: the process is
+/// on its way out, so it is never cleared.
+pub fn mark_quit_requested() {
+    QUIT_REQUESTED.with(|requested| requested.set(true));
 }
 
 pub fn set_loudness_status_refresh_handler(f: impl FnMut() + 'static) {
