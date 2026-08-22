@@ -1,3 +1,13 @@
+linux-soundboard (2.3.0-1) unstable; urgency=medium
+
+  * System tray and background running
+  * Show the playing sound in the desktop's media controls
+  * Bind several sounds to one hotkey
+  * Give each tab its own hotkey
+  * Choose how to install
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 22 Aug 2026 18:42:02 +0300
+
 linux-soundboard (2.2.1-1) unstable; urgency=medium
 
   * Apply newly analyzed loudness values immediately during playback

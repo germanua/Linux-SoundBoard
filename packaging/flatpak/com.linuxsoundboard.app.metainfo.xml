@@ -67,6 +67,18 @@
   </keywords>
   
   <releases>
+    <release version="2.3.0" date="2026-08-22">
+      <description>
+        <p>Linux Soundboard 2.3.0:</p>
+        <ul>
+          <li>System tray and background running</li>
+          <li>Show the playing sound in the desktop's media controls</li>
+          <li>Bind several sounds to one hotkey</li>
+          <li>Give each tab its own hotkey</li>
+          <li>Choose how to install</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.2.1" date="2026-07-29">
       <description>
         <p>Playback loudness hotfix:</p>

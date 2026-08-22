@@ -41,7 +41,7 @@ Install the host FUSE package and retry:
 Use APT to resolve dependencies instead of `dpkg -i` alone:
 
 ```bash
-sudo apt install ./linux-soundboard_2.2.1-1_amd64.deb
+sudo apt install ./linux-soundboard_2.3.0-1_amd64.deb
 ```
 
 If host audio packages are missing:
@@ -55,7 +55,7 @@ sudo apt install pipewire wireplumber
 Install with DNF:
 
 ```bash
-sudo dnf install ./linux-soundboard-2.2.1-1.x86_64.rpm
+sudo dnf install ./linux-soundboard-2.3.0-1.x86_64.rpm
 ```
 
 If the audio stack is missing:

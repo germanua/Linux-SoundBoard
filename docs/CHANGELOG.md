@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-22
+
 ### Added
 
 - **System tray and background running:** `Settings` → `General` → `System Tray` puts Linux Soundboard in the status area and lets the close button hide the window instead of quitting, so global hotkeys keep working with the window shut. Left-click the icon to show or hide the window; right-click for a short menu — show/hide, play/pause, stop all, mute the real mic, and quit. Both switches are on by default, but the window is only ever hidden while an icon is really showing, so on a desktop with no tray the close button quits exactly as before. Needs a desktop that supports `StatusNotifierItem`: KDE Plasma, XFCE, LXQt, Cinnamon, MATE, Budgie and waybar do; GNOME needs the AppIndicator extension.
