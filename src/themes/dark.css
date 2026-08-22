@@ -16,6 +16,18 @@ entry {
   color: #dfd0b8;
 }
 
+toast {
+  background-color: #202832;
+  border: 1px solid rgba(148, 137, 121, 0.34);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  color: #dfd0b8;
+}
+
+toast label,
+toast button {
+  color: #dfd0b8;
+}
+
 window.main-window {
   font-size: 0.85rem;
 }
@@ -355,15 +367,12 @@ row.appearance-choice-row {
 @keyframes playing-dot-pulse {
   0% {
     opacity: 1;
-    color: #948979;
   }
   50% {
     opacity: 0.4;
-    color: #dfd0b8;
   }
   100% {
     opacity: 1;
-    color: #948979;
   }
 }
 
