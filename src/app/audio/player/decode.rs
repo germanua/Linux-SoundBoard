@@ -827,7 +827,7 @@ impl SymphoniaSource {
     }
 }
 
-fn is_strict_audio_container(path: &str) -> bool {
+pub(crate) fn is_strict_audio_container(path: &str) -> bool {
     matches!(
         std::path::Path::new(path)
             .extension()
@@ -841,7 +841,15 @@ fn is_audio_track(track: &Track) -> bool {
     track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
 }
 
-fn select_audio_track(format: &dyn FormatReader, strict_audio_container: bool) -> Option<&Track> {
+/// The audio track to read, or `None` when the container holds nothing usable.
+///
+/// A strict audio container (aac/m4a/mp4) only ever yields a track that is
+/// really audio; anything else may fall back to the default or first non-null
+/// track, which is how odd containers with a mislabelled stream still play.
+pub(crate) fn select_audio_track(
+    format: &dyn FormatReader,
+    strict_audio_container: bool,
+) -> Option<&Track> {
     format
         .tracks()
         .iter()

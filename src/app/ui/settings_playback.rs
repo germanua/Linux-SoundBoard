@@ -9,6 +9,21 @@ use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{AutoGainApplyTo, AutoGainMode};
 
+/// Both loudness buttons double as Stop while a run is going. `true` means the
+/// click was spent cancelling and the caller should not start anything.
+///
+/// In-flight is read off the coordinators rather than the library: asking the
+/// library parked the click behind the busy worker.
+fn cancelled_running_analysis(state: &AppState) -> bool {
+    let in_flight = state.loudness_coordinators.backfill.is_in_flight()
+        || state.loudness_coordinators.refinement.is_in_flight();
+    if in_flight {
+        commands::cancel_loudness_analysis(&state.loudness_coordinators);
+        crate::ui_event_bridge::post_loudness_status_refresh();
+    }
+    in_flight
+}
+
 fn format_loudness_status_subtitle(status: &commands::LoudnessStatusSummary) -> String {
     format!(
         "Pending {} | Estimated {} | Refined {} | Unavailable {}",
@@ -318,13 +333,7 @@ pub(super) fn build_playback_groups(
         {
             let state2 = Arc::clone(&state);
             analyze_btn.connect_clicked(move |btn| {
-                // In-flight lives on the coordinators. Asking the library instead
-                // parked this click behind the busy worker.
-                let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
-                    || state2.loudness_coordinators.refinement.is_in_flight();
-                if in_flight {
-                    commands::cancel_loudness_analysis(&state2.loudness_coordinators);
-                    crate::ui_event_bridge::post_loudness_status_refresh();
+                if cancelled_running_analysis(&state2) {
                     return;
                 }
                 match commands::trigger_missing_loudness_analysis_with_store(
@@ -359,13 +368,7 @@ pub(super) fn build_playback_groups(
         {
             let state2 = Arc::clone(&state);
             refine_btn.connect_clicked(move |btn| {
-                // Same as above: coordinators, not the library, or the click waits
-                // on the busy worker.
-                let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
-                    || state2.loudness_coordinators.refinement.is_in_flight();
-                if in_flight {
-                    commands::cancel_loudness_analysis(&state2.loudness_coordinators);
-                    crate::ui_event_bridge::post_loudness_status_refresh();
+                if cancelled_running_analysis(&state2) {
                     return;
                 }
                 match commands::trigger_estimated_loudness_refinement_with_store(

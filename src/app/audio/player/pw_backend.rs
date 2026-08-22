@@ -4,8 +4,8 @@
 //! - `BackendState` wraps either the PipeWire or PulseAudio backend.
 //! - `PipeWireBackendState` holds the live PipeWire connection handles.
 //! - `create_backend` / `create_pipewire_backend` build a backend from `RuntimeConfig`.
-//! - `remote_ok` is a helper for sending fire-and-forget requests to the
-//!   out-of-process engine and mapping its `Ok`/`Error` response to `EngineError`.
+//! - `remote_ok` / `remote_play` send a request to the out-of-process engine
+//!   and map its reply onto `EngineError`.
 
 use super::*;
 
@@ -21,6 +21,25 @@ pub(super) fn remote_ok(
         }
         other => Err(EngineError::Routing(format!(
             "Unexpected engine response: {other:?}"
+        ))),
+    }
+}
+
+/// Same, for the requests that answer with a play id. `request_name` only shows
+/// up in the message for a reply we did not expect.
+pub(super) fn remote_play(
+    request: crate::audio::engine_ipc::EngineRequest,
+    request_name: &str,
+) -> Result<String, EngineError> {
+    match crate::audio::engine_ipc::send_request(request)
+        .map_err(|e| EngineError::Setup(e.to_string()))?
+    {
+        crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
+        crate::audio::engine_ipc::EngineResponse::Error { message } => {
+            Err(EngineError::Playback(message))
+        }
+        other => Err(EngineError::Playback(format!(
+            "Unexpected engine response to {request_name}: {other:?}"
         ))),
     }
 }

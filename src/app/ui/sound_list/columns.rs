@@ -5,6 +5,7 @@ use glib::BoxedAnyObject;
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, ColumnViewColumn, Label, Orientation, SignalListItemFactory};
 
+use super::paged_model::PagedSoundModel;
 use super::{SoundList, SoundListInner, SoundRowData};
 
 fn format_duration(ms: u64) -> String {
@@ -20,7 +21,23 @@ impl SoundListInner {
         self.col_view.append_column(&self.build_hotkey_column());
     }
 
-    fn build_index_column(self: &Rc<Self>) -> ColumnViewColumn {
+    /// The index, duration and hotkey columns are the same cell: one label in a
+    /// `sound-cell` box, with the context menu, the drag source and the
+    /// playing/active classes wired up. Only the label's styling and what it
+    /// says differ, so those come in as `new_label` and `bind_label`.
+    ///
+    /// `pager` is `Some` for exactly one column. Binding a row asks the model to
+    /// load that row's page, and every column of a row binds together, so one
+    /// column asking is enough.
+    fn build_label_column(
+        self: &Rc<Self>,
+        title: Option<&str>,
+        fixed_width: i32,
+        extra_cell_class: Option<&'static str>,
+        pager: Option<PagedSoundModel>,
+        new_label: fn() -> Label,
+        bind_label: impl Fn(&Label, &SoundRowData, u32) + 'static,
+    ) -> ColumnViewColumn {
         let factory = SignalListItemFactory::new();
 
         {
@@ -33,13 +50,10 @@ impl SoundListInner {
                 cell.set_hexpand(true);
                 cell.set_halign(gtk4::Align::Fill);
                 cell.add_css_class("sound-cell");
-                cell.add_css_class("sound-cell-first");
-                let label = Label::builder()
-                    .xalign(1.0)
-                    .width_chars(3)
-                    .css_classes(vec!["sound-index"])
-                    .build();
-                cell.append(&label);
+                if let Some(class) = extra_cell_class {
+                    cell.add_css_class(class);
+                }
+                cell.append(&new_label());
                 inner.install_context_menu(&cell);
                 inner.install_drag_source(&cell);
                 let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
@@ -50,14 +64,15 @@ impl SoundListInner {
         }
 
         {
-            let store = self.store.clone();
             let playing_ids = Arc::clone(&self.playing_ids);
             let active_sound_id = Arc::clone(&self.active_sound_id);
             factory.connect_bind(move |_, item| {
                 let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
                     return;
                 };
-                store.load_position(list_item.position());
+                if let Some(pager) = pager.as_ref() {
+                    pager.load_position(list_item.position());
+                }
                 let Some(obj) = list_item
                     .item()
                     .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
@@ -72,7 +87,7 @@ impl SoundListInner {
                 else {
                     return;
                 };
-                label.set_text(&(list_item.position() + 1).to_string());
+                bind_label(&label, &sound, list_item.position());
                 cell.set_widget_name(&sound.id);
                 let is_playing = playing_ids.lock().contains(&sound.id);
                 let is_active = active_sound_id.lock().as_deref() == Some(&sound.id);
@@ -80,9 +95,26 @@ impl SoundListInner {
             });
         }
 
-        let column = ColumnViewColumn::new(None, Some(factory));
-        column.set_fixed_width(56);
+        let column = ColumnViewColumn::new(title, Some(factory));
+        column.set_fixed_width(fixed_width);
         column
+    }
+
+    fn build_index_column(self: &Rc<Self>) -> ColumnViewColumn {
+        self.build_label_column(
+            None,
+            56,
+            Some("sound-cell-first"),
+            Some(self.store.clone()),
+            || {
+                Label::builder()
+                    .xalign(1.0)
+                    .width_chars(3)
+                    .css_classes(vec!["sound-index"])
+                    .build()
+            },
+            |label, _sound, position| label.set_text(&(position + 1).to_string()),
+        )
     }
 
     fn build_name_column(self: &Rc<Self>) -> ColumnViewColumn {
@@ -181,118 +213,37 @@ impl SoundListInner {
     }
 
     fn build_duration_column(self: &Rc<Self>) -> ColumnViewColumn {
-        let factory = SignalListItemFactory::new();
-
-        {
-            let inner_weak = Rc::downgrade(self);
-            factory.connect_setup(move |_, item| {
-                let Some(inner) = inner_weak.upgrade() else {
-                    return;
-                };
-                let cell = GtkBox::new(Orientation::Horizontal, 0);
-                cell.set_hexpand(true);
-                cell.set_halign(gtk4::Align::Fill);
-                cell.add_css_class("sound-cell");
-                let label = Label::builder()
+        self.build_label_column(
+            Some("DURATION"),
+            96,
+            None,
+            None,
+            || {
+                Label::builder()
                     .xalign(0.0)
                     .hexpand(true)
                     .css_classes(vec!["sound-duration"])
-                    .build();
-                cell.append(&label);
-                inner.install_context_menu(&cell);
-                inner.install_drag_source(&cell);
-                let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
-                    return;
-                };
-                list_item.set_child(Some(&cell));
-            });
-        }
-
-        {
-            let playing_ids = Arc::clone(&self.playing_ids);
-            let active_sound_id = Arc::clone(&self.active_sound_id);
-            factory.connect_bind(move |_, item| {
-                let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
-                    return;
-                };
-                let Some(obj) = list_item
-                    .item()
-                    .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
-                else {
-                    return;
-                };
-                let sound = obj.borrow::<SoundRowData>();
-                let Some(cell) = list_item.child().and_then(|c| c.downcast::<GtkBox>().ok()) else {
-                    return;
-                };
-                let Some(label) = cell.first_child().and_then(|w| w.downcast::<Label>().ok())
-                else {
-                    return;
-                };
+                    .build()
+            },
+            |label, sound, _position| {
                 label.set_text(
                     &sound
                         .duration_ms
                         .map(format_duration)
                         .unwrap_or_else(|| "\u{2014}".to_string()),
                 );
-                cell.set_widget_name(&sound.id);
-                let is_playing = playing_ids.lock().contains(&sound.id);
-                let is_active = active_sound_id.lock().as_deref() == Some(&sound.id);
-                SoundList::sync_sound_state_classes(&cell, is_playing, is_active);
-            });
-        }
-
-        let column = ColumnViewColumn::new(Some("DURATION"), Some(factory));
-        column.set_fixed_width(96);
-        column
+            },
+        )
     }
 
     fn build_hotkey_column(self: &Rc<Self>) -> ColumnViewColumn {
-        let factory = SignalListItemFactory::new();
-
-        {
-            let inner_weak = Rc::downgrade(self);
-            factory.connect_setup(move |_, item| {
-                let Some(inner) = inner_weak.upgrade() else {
-                    return;
-                };
-                let cell = GtkBox::new(Orientation::Horizontal, 0);
-                cell.set_hexpand(true);
-                cell.set_halign(gtk4::Align::Fill);
-                cell.add_css_class("sound-cell");
-                let label = Label::builder().xalign(0.0).hexpand(true).build();
-                cell.append(&label);
-                inner.install_context_menu(&cell);
-                inner.install_drag_source(&cell);
-                let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
-                    return;
-                };
-                list_item.set_child(Some(&cell));
-            });
-        }
-
-        {
-            let playing_ids = Arc::clone(&self.playing_ids);
-            let active_sound_id = Arc::clone(&self.active_sound_id);
-            factory.connect_bind(move |_, item| {
-                let Some(list_item) = item.downcast_ref::<gtk4::ListItem>() else {
-                    return;
-                };
-                let Some(obj) = list_item
-                    .item()
-                    .and_then(|obj| obj.downcast::<BoxedAnyObject>().ok())
-                else {
-                    return;
-                };
-                let sound = obj.borrow::<SoundRowData>();
-                let Some(cell) = list_item.child().and_then(|c| c.downcast::<GtkBox>().ok()) else {
-                    return;
-                };
-                let Some(label) = cell.first_child().and_then(|w| w.downcast::<Label>().ok())
-                else {
-                    return;
-                };
-
+        self.build_label_column(
+            Some("HOTKEY"),
+            160,
+            None,
+            None,
+            || Label::builder().xalign(0.0).hexpand(true).build(),
+            |label, sound, _position| {
                 if let Some(hotkey) = &sound.hotkey {
                     label.set_text(hotkey);
                     label.add_css_class("hotkey-badge");
@@ -302,16 +253,7 @@ impl SoundListInner {
                     label.remove_css_class("hotkey-badge");
                     label.add_css_class("dim-label");
                 }
-
-                cell.set_widget_name(&sound.id);
-                let is_playing = playing_ids.lock().contains(&sound.id);
-                let is_active = active_sound_id.lock().as_deref() == Some(&sound.id);
-                SoundList::sync_sound_state_classes(&cell, is_playing, is_active);
-            });
-        }
-
-        let column = ColumnViewColumn::new(Some("HOTKEY"), Some(factory));
-        column.set_fixed_width(160);
-        column
+            },
+        )
     }
 }

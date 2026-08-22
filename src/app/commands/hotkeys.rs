@@ -40,6 +40,38 @@ fn ensure_store_hotkey_available(
     }
 }
 
+/// Write the binding, or clear it when `canonical` is `None`, then push the
+/// change out to the hotkey backends.
+///
+/// Sound, control and tab hotkeys all land here; they differ only in who owns
+/// the binding and whether it is limited to one tab.
+fn commit_hotkey_binding(
+    library: &LibraryStore,
+    projection: &HotkeyProjectionCoordinator,
+    binding_id: String,
+    owner: HotkeyBindingOwner,
+    tab_scope: Option<String>,
+    canonical: Option<&str>,
+) -> Result<(), CommandError> {
+    match canonical {
+        Some(hotkey) => library.set_hotkey_binding(HotkeyBindingRecord {
+            binding_id,
+            owner,
+            accelerator: hotkey.to_string(),
+            normalized: Some(hotkey.to_string()),
+            issue: None,
+            tab_scope,
+        }),
+        None => library.delete_hotkey_binding(&binding_id),
+    }
+    .recv()
+    .map_err(|error| CommandError::Library(error.to_string()))?;
+
+    projection
+        .reconcile_blocking()
+        .map_err(CommandError::HotkeyProjection)
+}
+
 /// `multi_sound_hotkeys` is the Settings toggle: with it on, a chord another
 /// sound already answers to is a group to join rather than a conflict.
 ///
@@ -83,28 +115,14 @@ pub fn set_hotkey(
         tab_scope.as_deref(),
     )?;
 
-    if let Some(hotkey) = canonical_new.as_ref() {
-        library
-            .set_hotkey_binding(HotkeyBindingRecord {
-                binding_id,
-                owner: HotkeyBindingOwner::Sound(id.clone()),
-                accelerator: hotkey.clone(),
-                normalized: Some(hotkey.clone()),
-                issue: None,
-                tab_scope: tab_scope.clone(),
-            })
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    } else {
-        library
-            .delete_hotkey_binding(&binding_id)
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    }
-
-    projection
-        .reconcile_blocking()
-        .map_err(CommandError::HotkeyProjection)
+    commit_hotkey_binding(
+        &library,
+        &projection,
+        binding_id,
+        HotkeyBindingOwner::Sound(id.clone()),
+        tab_scope.clone(),
+        canonical_new.as_deref(),
+    )
 }
 
 pub fn set_hotkey_async<F>(
@@ -154,28 +172,14 @@ pub fn set_control_hotkey(
 
     ensure_store_hotkey_available(&library, binding_id, canonical_new.as_deref(), false, None)?;
 
-    if let Some(hotkey) = canonical_new.as_ref() {
-        library
-            .set_hotkey_binding(HotkeyBindingRecord {
-                binding_id: binding_id.to_string(),
-                owner: HotkeyBindingOwner::Control(action.id().to_string()),
-                accelerator: hotkey.clone(),
-                normalized: Some(hotkey.clone()),
-                issue: None,
-                tab_scope: None,
-            })
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    } else {
-        library
-            .delete_hotkey_binding(binding_id)
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    }
-
-    projection
-        .reconcile_blocking()
-        .map_err(CommandError::HotkeyProjection)
+    commit_hotkey_binding(
+        &library,
+        &projection,
+        binding_id.to_string(),
+        HotkeyBindingOwner::Control(action.id().to_string()),
+        None,
+        canonical_new.as_deref(),
+    )
 }
 
 pub fn set_control_hotkey_async<F>(
@@ -343,28 +347,14 @@ pub fn set_tab_hotkey(
 
     ensure_store_hotkey_available(&library, &binding_id, canonical_new.as_deref(), false, None)?;
 
-    if let Some(hotkey) = canonical_new.as_ref() {
-        library
-            .set_hotkey_binding(HotkeyBindingRecord {
-                binding_id,
-                owner: HotkeyBindingOwner::Tab(scope_key),
-                accelerator: hotkey.clone(),
-                normalized: Some(hotkey.clone()),
-                issue: None,
-                tab_scope: None,
-            })
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    } else {
-        library
-            .delete_hotkey_binding(&binding_id)
-            .recv()
-            .map_err(|error| CommandError::Library(error.to_string()))?;
-    }
-
-    projection
-        .reconcile_blocking()
-        .map_err(CommandError::HotkeyProjection)
+    commit_hotkey_binding(
+        &library,
+        &projection,
+        binding_id,
+        HotkeyBindingOwner::Tab(scope_key),
+        None,
+        canonical_new.as_deref(),
+    )
 }
 
 pub fn set_tab_hotkey_async<F>(

@@ -134,23 +134,16 @@ impl TransportInner {
                 interaction.clone()
             };
 
-            // Only lock config when the play_id changes, i.e. a new sound started.
-            let same_play = self
-                .active_track
-                .borrow()
-                .as_ref()
-                .map(|t| t.play_id == position.play_id)
-                .unwrap_or(false);
-
-            let (sound_name, track_duration_ms) = if same_play {
-                let cached = self.active_track.borrow();
-                let t = cached.as_ref().unwrap();
-                (t.sound_name.clone(), t.sound_duration_ms)
-            } else {
-                // Schema-8 keeps no sounds in the config, so the name comes
-                // from SQLite below. The engine already reports duration.
-                (None, None)
-            };
+            // Only touch the cached track while the play_id is unchanged; a new
+            // play_id means a new sound, whose name comes from SQLite below.
+            // The engine reports the duration either way.
+            let (same_play, sound_name, track_duration_ms) =
+                match self.active_track.borrow().as_ref() {
+                    Some(track) if track.play_id == position.play_id => {
+                        (true, track.sound_name.clone(), track.sound_duration_ms)
+                    }
+                    _ => (false, None, None),
+                };
 
             let duration_ms = resolve_scrub_duration_ms(position.duration_ms, track_duration_ms);
 

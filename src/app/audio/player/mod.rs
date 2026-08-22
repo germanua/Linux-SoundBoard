@@ -49,7 +49,8 @@ use command_handlers::{audio_command_kind, handle_audio_command};
 use command_protocol::*;
 use decode::*;
 pub(crate) use decode::{
-    AudioSource as DecodedAudioSource, PlaybackSource as DecodedPlaybackSource,
+    is_strict_audio_container, select_audio_track, AudioSource as DecodedAudioSource,
+    PlaybackSource as DecodedPlaybackSource,
 };
 use default_source::{
     apply_default_source_mode, bind_default_metadata_from_global, claim_default_source_if_enabled,
@@ -67,7 +68,9 @@ use mixing::{clear_all_queues, fade_output_queues, mix_tick};
 use mixing::{enqueue_passthrough_chunk, fill_output_queues};
 use playback::ActivePlayback;
 use pulse_backend::PulseAudioBackend;
-use pw_backend::{create_backend, remote_ok, BackendState, ManagedStreamState, StreamHandle};
+use pw_backend::{
+    create_backend, remote_ok, remote_play, BackendState, ManagedStreamState, StreamHandle,
+};
 use queues::{ProcessQueues, RtSharedQueues, SampleQueue};
 use registry_handlers::*;
 use runtime_config::*;
@@ -666,7 +669,7 @@ impl AudioPlayer {
         }
 
         if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
-            return match crate::audio::engine_ipc::send_request(
+            return remote_play(
                 crate::audio::engine_ipc::EngineRequest::Play {
                     sound_id: sound_id.to_string(),
                     path: path.to_string(),
@@ -674,17 +677,8 @@ impl AudioPlayer {
                     sound_lufs,
                     sound_true_peak_dbtp,
                 },
-            )
-            .map_err(|e| EngineError::Setup(e.to_string()))?
-            {
-                crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
-                crate::audio::engine_ipc::EngineResponse::Error { message } => {
-                    Err(EngineError::Playback(message))
-                }
-                other => Err(EngineError::Playback(format!(
-                    "Unexpected engine response to Play: {other:?}"
-                ))),
-            };
+                "Play",
+            );
         }
         let AudioPlayerBackend::Local(local) = &self.backend else {
             return Err(EngineError::Setup(
@@ -780,7 +774,7 @@ impl AudioPlayer {
         }
 
         if matches!(self.backend, AudioPlayerBackend::Remote(_)) {
-            return match crate::audio::engine_ipc::send_request(
+            return remote_play(
                 crate::audio::engine_ipc::EngineRequest::PlayReplace {
                     sound_id: sound_id.to_string(),
                     path: path.to_string(),
@@ -788,17 +782,8 @@ impl AudioPlayer {
                     sound_lufs,
                     sound_true_peak_dbtp,
                 },
-            )
-            .map_err(|e| EngineError::Setup(e.to_string()))?
-            {
-                crate::audio::engine_ipc::EngineResponse::PlayId { play_id } => Ok(play_id),
-                crate::audio::engine_ipc::EngineResponse::Error { message } => {
-                    Err(EngineError::Playback(message))
-                }
-                other => Err(EngineError::Playback(format!(
-                    "Unexpected engine response to PlayReplace: {other:?}"
-                ))),
-            };
+                "PlayReplace",
+            );
         }
         // Local backend: stop_all + play via the command channel (in-process, no IPC race).
         self.stop_all();
