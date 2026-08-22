@@ -1227,6 +1227,9 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     let tray = install_tray(app, &state);
     let mpris = install_mpris(app);
     install_now_playing(&tray, &mpris, &state);
+    if let Some(mpris) = mpris.as_ref() {
+        mpris.set_enabled(state.config.lock().settings.mpris_enabled);
+    }
 
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
@@ -1416,9 +1419,10 @@ fn install_now_playing(
             });
         }
         if let Some(mpris) = mpris.as_ref() {
-            // Read here rather than at the call site so turning the setting off
-            // clears the card on the next snapshot instead of leaving it stuck.
+            // Read here rather than at the call site so the setting can be
+            // turned on or off without restarting.
             let enabled = state.config.lock().settings.mpris_enabled;
+            mpris.set_enabled(enabled);
             mpris.set_now_playing(if enabled { now } else { None });
         }
     });

@@ -287,7 +287,13 @@ fn publish_now_playing(
     duration_ms: u64,
     active: &Option<super::ActiveTrack>,
 ) {
-    crate::ui_event_bridge::post_now_playing(now_playing_for(position, duration_ms, active));
+    // A sound whose name has not come back from the library yet is not a sound
+    // that stopped. Saying nothing leaves the previous announcement standing;
+    // reporting `None` here would tear the media player down and rebuild it at
+    // the start of every single sound.
+    if let Some(now) = now_playing_for(position, duration_ms, active) {
+        crate::ui_event_bridge::post_now_playing(Some(now));
+    }
 }
 
 #[cfg(test)]

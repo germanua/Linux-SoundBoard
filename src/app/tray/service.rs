@@ -603,6 +603,9 @@ mod tests {
     /// watcher takes it. Ignored by default because it needs a session bus with
     /// a running watcher, which CI does not have; run it on a desktop with
     /// `cargo test -- --ignored registers_with_a_real_watcher --nocapture`.
+    ///
+    /// Run the live tests one at a time (`--test-threads=1`): they share the
+    /// process-wide session bus connection and export the same object paths.
     #[test]
     #[ignore = "needs a session bus with a StatusNotifierWatcher"]
     fn registers_with_a_real_watcher() {

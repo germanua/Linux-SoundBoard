@@ -246,7 +246,11 @@ fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
                 commands::set_mpris_enabled(row.is_active(), Arc::clone(&state.config))
             {
                 log::warn!("Could not save the media controls setting: {error}");
+                return;
             }
+            // Runs the now-playing handler, which claims or releases the
+            // player name to match the setting straight away.
+            crate::ui_event_bridge::post_now_playing(None);
         });
     }
 

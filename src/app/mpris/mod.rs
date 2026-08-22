@@ -13,7 +13,7 @@
 
 mod metadata;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use glib::prelude::ToVariant;
@@ -101,12 +101,50 @@ const INTERFACES_XML: &str = r#"
  </interface>
 </node>"#;
 
+/// Holds the well-known player name for as long as the feature is on.
+///
+/// An earlier version claimed the name only while a sound was playing, to hand
+/// the media keys straight back. That made the panel controls useless: a
+/// soundboard clip is a second or two, so the player appeared and vanished
+/// before anyone could press pause. Every real media player keeps its name and
+/// reports `Stopped` when idle, and so does this one.
+struct PlayerName {
+    connection: gio::DBusConnection,
+    owner: RefCell<Option<gio::OwnerId>>,
+}
+
+impl PlayerName {
+    fn claim(&self) {
+        if self.owner.borrow().is_some() {
+            return;
+        }
+        *self.owner.borrow_mut() = Some(gio::bus_own_name_on_connection(
+            &self.connection,
+            &format!("org.mpris.MediaPlayer2.{APP_BINARY}"),
+            gio::BusNameOwnerFlags::NONE,
+            |_, name| log::debug!("Media controls: acquired {name}"),
+            |_, name| log::warn!("Media controls: lost {name}"),
+        ));
+    }
+
+    fn release(&self) {
+        if let Some(owner) = self.owner.borrow_mut().take() {
+            gio::bus_unown_name(owner);
+            log::debug!("Media controls: released the player name");
+        }
+    }
+
+    fn is_held(&self) -> bool {
+        self.owner.borrow().is_some()
+    }
+}
+
 /// A media-controls publisher. Exported for the process's lifetime; visible to
 /// the desktop only while a sound is playing.
 pub(crate) struct MprisService {
     connection: gio::DBusConnection,
     registrations: RefCell<Vec<gio::RegistrationId>>,
-    owner: Cell<Option<gio::OwnerId>>,
+    name: PlayerName,
     now: Rc<RefCell<Option<NowPlaying>>>,
 }
 
@@ -134,57 +172,47 @@ impl MprisService {
         Ok(Self {
             connection: connection.clone(),
             registrations: RefCell::new(registrations),
-            owner: Cell::new(None),
+            name: PlayerName {
+                connection: connection.clone(),
+                owner: RefCell::new(None),
+            },
             now,
         })
     }
 
-    /// Announce a sound, or clear the card when playback stops.
+    /// Put the player in the panel, or take it out.
     ///
-    /// Claims the bus name on the first sound and releases it when there is
-    /// nothing playing, so the media keys go back to whatever the user was
-    /// actually listening to.
+    /// Driven by the setting rather than by playback: the controls have to be
+    /// there before a sound starts and still there after it ends, or there is
+    /// nothing to press.
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        if enabled == self.name.is_held() {
+            return;
+        }
+        if enabled {
+            self.name.claim();
+            self.announce();
+        } else {
+            self.name.release();
+        }
+    }
+
+    /// Announce the sound that started, or that playback stopped.
     pub(crate) fn set_now_playing(&self, now: Option<NowPlaying>) {
         if *self.now.borrow() == now {
             return;
         }
-        let stopping = now.is_none();
         *self.now.borrow_mut() = now;
-
-        if stopping {
-            self.release();
-            return;
-        }
-
-        let owner = self.owner.take();
-        if owner.is_none() {
-            self.owner.set(Some(gio::bus_own_name_on_connection(
-                &self.connection,
-                &format!("org.mpris.MediaPlayer2.{APP_BINARY}"),
-                gio::BusNameOwnerFlags::NONE,
-                |_, name| log::debug!("Media controls: acquired {name}"),
-                |_, name| log::warn!("Media controls: lost {name}"),
-            )));
-        } else {
-            self.owner.set(owner);
-        }
         self.announce();
     }
 
     /// Withdraw from the desktop's media controls.
     pub(crate) fn shutdown(&self) {
-        self.release();
+        self.name.release();
         for registration in self.registrations.borrow_mut().drain(..) {
             if let Err(error) = self.connection.unregister_object(registration) {
                 log::warn!("Media controls: could not unexport an object: {error}");
             }
-        }
-    }
-
-    fn release(&self) {
-        if let Some(owner) = self.owner.take() {
-            gio::bus_unown_name(owner);
-            log::debug!("Media controls: released the player name");
         }
     }
 
@@ -290,6 +318,7 @@ fn register_player(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn the_transport_methods_map_to_commands() {
@@ -313,12 +342,16 @@ mod tests {
     /// panel does. Ignored by default because it needs a session bus; run it on
     /// a desktop with
     /// `cargo test -- --ignored publishes_a_real_player --nocapture`.
+    ///
+    /// Run the live tests one at a time (`--test-threads=1`): they share the
+    /// process-wide session bus connection and export the same object paths.
     #[test]
     #[ignore = "needs a session bus"]
     fn publishes_a_real_player() {
         let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
             .expect("a session bus");
         let service = MprisService::start(&connection, |_| {}).expect("the objects export");
+        service.set_enabled(true);
 
         service.set_now_playing(Some(NowPlaying {
             id: "3f2504e0-4f89-41d3-9a0c-0305e82c3301".to_string(),
@@ -355,7 +388,8 @@ mod tests {
         // The player has to be findable under its well-known name; on its
         // unique name alone no panel would ever show it.
         let owned_while_playing = name_has_owner(&connection);
-        service.set_now_playing(None);
+        service.set_enabled(false);
+        settle();
         let owned_when_stopped = name_has_owner(&connection);
 
         service.shutdown();
@@ -377,8 +411,18 @@ mod tests {
         );
         assert!(
             !owned_when_stopped,
-            "the player name was still held after playback stopped, so the media keys stay captured"
+            "switching the feature off must release the name and hand the media keys back"
         );
+    }
+
+    /// Let the main loop turn, so queued D-Bus traffic actually goes out.
+    fn settle() {
+        let main_loop = glib::MainLoop::new(None, false);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(150), {
+            let main_loop = main_loop.clone();
+            move || main_loop.quit()
+        });
+        main_loop.run();
     }
 
     fn name_has_owner(connection: &gio::DBusConnection) -> bool {
@@ -416,6 +460,75 @@ mod tests {
         );
         main_loop.run();
         answer.get()
+    }
+
+    /// The reported fault: the panel's play/pause/stop stop working once a
+    /// second sound has been started. The controls have to survive a sound
+    /// ending, the gap, and the next sound beginning.
+    #[test]
+    #[ignore = "needs a session bus"]
+    fn the_panel_controls_survive_a_second_sound() {
+        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+            .expect("a session bus");
+        let service = MprisService::start(&connection, |_| {}).expect("the objects export");
+
+        let sound = |name: &str| {
+            Some(NowPlaying {
+                id: name.to_string(),
+                title: name.to_string(),
+                duration_ms: Some(2_000),
+                paused: false,
+            })
+        };
+
+        service.set_enabled(true);
+        settle();
+        let before_anything_played = name_has_owner(&connection);
+
+        service.set_now_playing(sound("first.mp3"));
+        settle();
+        let during_first = name_has_owner(&connection);
+
+        // The first sound ends, and a moment later the user starts another.
+        service.set_now_playing(None);
+        settle();
+        let between_sounds = name_has_owner(&connection);
+
+        service.set_now_playing(sound("second.mp3"));
+        settle();
+        let during_second = name_has_owner(&connection);
+
+        service.set_now_playing(None);
+        settle();
+        let after_everything = name_has_owner(&connection);
+
+        service.set_enabled(false);
+        settle();
+        let once_switched_off = name_has_owner(&connection);
+
+        service.shutdown();
+
+        assert!(
+            before_anything_played,
+            "the controls must be in the panel before the first sound, or there is nothing to press"
+        );
+        assert!(during_first, "the controls vanished during the first sound");
+        assert!(
+            between_sounds,
+            "the controls vanished when a sound ended; a soundboard clip is over in a second"
+        );
+        assert!(
+            during_second,
+            "the controls did not come back for the second sound, which is the reported fault"
+        );
+        assert!(
+            after_everything,
+            "the controls vanished once playback stopped"
+        );
+        assert!(
+            !once_switched_off,
+            "switching the setting off must hand the media keys back"
+        );
     }
 
     #[test]

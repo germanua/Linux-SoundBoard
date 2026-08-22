@@ -794,11 +794,15 @@ and from [Global Control Hotkeys](#global-control-hotkeys).
 
 > **Notes:**
 >
-> - Off by default for a reason: while a sound is playing the app becomes the
->   active media player, which takes the media keys and the now-playing display
->   away from whatever music was running
-> - The player appears only while a sound is playing and disappears the moment
->   it stops, so the media keys go straight back
+> - Off by default for a reason: with it on, the app is a media player as far
+>   as the desktop is concerned, so the media keys and the now-playing display
+>   can go to it rather than to whatever music was running
+> - The controls stay in the panel for as long as the switch is on, reporting
+>   `Stopped` between sounds. They have to: a soundboard clip is over in a
+>   second or two, and controls that appear and vanish with it are impossible
+>   to press
+> - Turning the switch off removes the player and hands the media keys back
+>   immediately
 > - Unlike the tray icon, this works on GNOME with no extension
 > - The panel's `Raise` action brings the window back, whatever the tray is
 >   doing

@@ -152,10 +152,13 @@ effect while a tray icon is actually showing — see the entry above.
 ### The soundboard took over my media keys
 
 Turn off `Settings` → `General` → `System Tray` → `Show In Media Controls`. It
-is off by default. While it is on and a sound is playing, the app is the
-desktop's active media player, so `Play/Pause` and the other media keys reach
-it rather than a music player. The player is published only for the length of
-the sound, but on very long clips that window is noticeable.
+is off by default, and switching it off releases the player straight away.
+
+While it is on, the app is a media player as far as the desktop is concerned,
+for as long as the switch is on rather than only while a sound plays. That is
+deliberate — controls that appeared and vanished with a one-second clip could
+not be clicked — but it does mean the media keys may reach the soundboard
+instead of a music player.
 
 ## Audio Problems
 
