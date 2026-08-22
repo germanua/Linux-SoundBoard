@@ -2,8 +2,7 @@ use super::AutoGainDynamicParams;
 
 const LIMITER_UPDATE_INTERVAL_FRAMES: usize = 256;
 
-/// Ceiling in linear gain (≈ −0.18 dBFS). ~2 % headroom for inter-sample peaks
-/// the digital domain can't see.
+/// Leaves 2% headroom for inter-sample peaks.
 const LIMITER_TARGET_PEAK: f32 = 0.98;
 
 pub(super) struct LookAheadLimiter {
@@ -74,7 +73,4 @@ impl LookAheadLimiter {
         // Keep dynamic warmup click-free by passing audio through immediately.
         sample * self.current_gain
     }
-
-    // No flush(): sliding peak window, not a delay line. process() hands back
-    // every sample as it goes, so nothing is left buffered to drain.
 }

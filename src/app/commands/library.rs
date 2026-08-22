@@ -103,8 +103,7 @@ impl StoreScanBatch {
             .parent()
             .filter(|path| path.components().next().is_some())
             .map(|path| path.to_string_lossy().into_owned());
-        // The store charges a folder one row per path component; mirror that
-        // instead of guessing. `max(1)` is exactly how it counts.
+        // Match the store's per-component folder row count.
         let folder_rows = parent
             .as_ref()
             .map(|path| Path::new(path).components().count().max(1))
@@ -113,8 +112,7 @@ impl StoreScanBatch {
             .as_ref()
             .is_some_and(|path| self.folder_paths.contains(path));
 
-        // A flush clears `folder_paths`, so the next batch always re-sends the
-        // folder. Reserve for it here or that batch lands one row over the cap.
+        // Reserve the folder row repeated after each flush.
         let rows_after_flush = 2_usize.saturating_add(folder_rows);
         if rows_after_flush > MAX_BATCH_ROWS {
             return Err(CommandError::Library(format!(
@@ -529,8 +527,6 @@ fn refresh_sounds_with_store_cancellable(
         .reconcile_blocking()
         .map_err(CommandError::HotkeyProjection)?;
     maybe_schedule_missing_loudness_backfill_with_store(&config, &library, coords);
-    // A refresh moves the "missing loudness" count, so an open settings view
-    // has to re-read it.
     crate::ui_event_bridge::post_loudness_status_refresh();
     Ok(RefreshSummary {
         added: after.saturating_sub(before),

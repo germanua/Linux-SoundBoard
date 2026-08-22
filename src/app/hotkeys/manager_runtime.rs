@@ -203,7 +203,7 @@ impl HotkeyManager {
                 warn!("Global hotkeys unavailable: {}", reason);
                 let reason_str = reason.to_string();
                 self.disabled_reason = Some(reason_str.clone());
-                // Keep deferred sender/state so install remediation can retry startup.
+                // Keep state for a retry after install.
                 self.deferred_sender = Some(sender);
                 self.deferred_start = true;
                 Err(HotkeyError::BackendUnavailable(format!(

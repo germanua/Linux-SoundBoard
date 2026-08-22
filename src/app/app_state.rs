@@ -18,13 +18,9 @@ pub struct AppState {
     pub hotkey_projection: HotkeyProjectionCoordinator,
     pub manual_tabs: Arc<Mutex<Vec<crate::library_store::ManualTabItem>>>,
     pub pipewire_status: Arc<Mutex<PipeWireStatus>>,
-    /// Debounce for `commands::play_sound_async`: swallows hotkey auto-repeat
-    /// firing the same sound twice inside 30 ms.
     pub play_dispatch_debounce: Arc<Mutex<Option<(Instant, String)>>>,
     /// In-flight loudness backfill and refinement jobs.
     pub loudness_coordinators: LoudnessCoordinators,
-    /// Round-robin cursor for shared hotkeys: last sound played, keyed by the
-    /// binding the press arrives as.
     pub hotkey_group_cursor: Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// Latch so the first-play diagnostic is only recorded once.
     pub first_playback_recorded: Arc<AtomicBool>,

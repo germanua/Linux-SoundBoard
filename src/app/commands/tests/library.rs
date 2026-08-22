@@ -46,8 +46,6 @@ fn store_refresh_streams_nested_folders_without_generated_tabs() {
     .expect("store refresh succeeds");
 
     assert_eq!(summary.added, 1);
-    // Generated tabs are no longer materialised anywhere: folders come from the
-    // store's folder tree, so a refresh must not create manual tabs.
     assert_eq!(
         library
             .manual_tabs(0)

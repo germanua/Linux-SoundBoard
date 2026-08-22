@@ -64,8 +64,7 @@ pub(super) fn create_runtime_virtual_source_stream(
             *pw::keys::NODE_DESCRIPTION => "Linux Soundboard Mic Feeder",
             "node.dont-reconnect" => "true",
             "node.always-process" => "true",
-            // Pin to the soundboard driver group so Discord opening a second
-            // consumer does not pull the feeder into a competing driver.
+            // Keep consumers from becoming competing drivers.
             "node.group" => SOUNDBOARD_NODE_GROUP,
             // Hold the negotiated quantum/rate against graph reconfiguration.
             "node.lock-quantum" => "true",
@@ -153,8 +152,7 @@ pub(super) fn create_capture_stream(
         .connect(
             spa::utils::Direction::Input,
             None,
-            // AUTOCONNECT for source binding; RT_PROCESS so the capture
-            // callback runs on the data thread.
+            // Capture needs autoconnect and RT processing.
             pw::stream::StreamFlags::AUTOCONNECT
                 | pw::stream::StreamFlags::MAP_BUFFERS
                 | pw::stream::StreamFlags::RT_PROCESS,
@@ -359,6 +357,6 @@ fn read_capture_buffer(stream: &pw::stream::Stream, queues: &RtSharedQueues) {
         if let Some(mut queues) = queues.try_lock() {
             queues.mic_in.push_slice(&scratch[..sample_count]);
         }
-        // else: drop frame — RT thread must never block; resyncs on next capture callback
+        // Drop the frame; RT never blocks and resyncs next callback.
     });
 }

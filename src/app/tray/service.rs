@@ -128,8 +128,7 @@ pub(crate) struct TrayService {
     watcher: Cell<Option<gio::SignalSubscriptionId>>,
     registrations: RefCell<Vec<gio::RegistrationId>>,
     state: Rc<RefCell<TrayState>>,
-    /// True once a watcher has appeared and accepted our registration. Until
-    /// then there is no icon on screen, whatever we have exported.
+    /// True after a watcher accepts registration.
     registered: Rc<Cell<bool>>,
 }
 
@@ -203,13 +202,11 @@ impl TrayService {
         })
     }
 
-    /// Whether a panel is actually showing the icon. The close button must not
-    /// hide the window to a tray that is not there.
     pub(crate) fn is_live(&self) -> bool {
         self.registered.get()
     }
 
-    /// Replace the menu. Hosts re-read the layout when the revision moves.
+    /// Replaces the menu and bumps its revision.
     pub(crate) fn set_menu(&self, items: Vec<MenuItem>) {
         {
             let mut state = self.state.borrow_mut();
@@ -239,8 +236,6 @@ impl TrayService {
         self.emit(ITEM_PATH, ITEM_INTERFACE, "NewToolTip", None);
     }
 
-    /// Remove the icon and release the bus name. Doing nothing on a second
-    /// call, so quitting by more than one route stays safe.
     pub(crate) fn shutdown(&self) {
         if let Some(watcher) = self.watcher.take() {
             self.connection.signal_unsubscribe(watcher);
@@ -336,8 +331,7 @@ fn register_item(
             "Menu" => glib::variant::ObjectPath::try_from(MENU_PATH)
                 .expect("the literal menu path is a valid object path")
                 .to_variant(),
-            // False, so a left-click reaches Activate and toggles the window
-            // instead of opening the menu.
+            // False lets left-click reach Activate.
             "ItemIsMenu" => false.to_variant(),
             "IconPixmap" | "OverlayIconPixmap" | "AttentionIconPixmap" => empty_pixmaps(),
             _ => String::new().to_variant(),
@@ -400,8 +394,7 @@ fn register_menu(
                         None => Err(unknown_id(id)),
                     }
                 }
-                // Qt returns false here and announces changes by signal
-                // instead; libdbusmenu ignores the return value either way.
+                // Qt signals changes and ignores this result.
                 "AboutToShow" => Ok(Some(Variant::tuple_from_iter([false.to_variant()]))),
                 "AboutToShowGroup" => Ok(Some(Variant::tuple_from_iter([
                     empty_int_list(),
@@ -410,8 +403,7 @@ fn register_menu(
                 "EventGroup" => Ok(Some(Variant::tuple_from_iter([empty_int_list()]))),
                 "Event" => {
                     if let Some(id) = clicked_id(&params) {
-                        // The handler may rebuild the menu, which borrows the
-                        // state this closure is holding.
+                        // The handler may rebuild the borrowed menu state.
                         drop(state);
                         handler(TrayAction::MenuItem(id));
                     }
@@ -437,8 +429,6 @@ fn register_menu(
         .build()
 }
 
-/// Id of a clicked row, `None` for anything else. Hosts push `hovered`,
-/// `opened` and `closed` through the same method.
 fn clicked_id(params: &Variant) -> Option<i32> {
     let event = params.try_child_get::<String>(1).ok().flatten()?;
     if event != "clicked" {
@@ -507,8 +497,6 @@ mod tests {
         assert_eq!(clicked_id(&event(7, "clicked")), Some(7));
     }
 
-    /// Hosts send hover and open events down the same method. Acting on them
-    /// would fire a menu item merely by moving the pointer over it.
     #[test]
     fn only_a_click_counts_as_a_click() {
         assert_eq!(clicked_id(&event(7, "hovered")), None);
@@ -553,8 +541,6 @@ mod tests {
         let tray = TrayService::start(&connection, super::super::menu::build(true, false), |_| {})
             .expect("the objects export");
 
-        // Registration is asynchronous, so let the main loop turn until the
-        // reply lands or a second goes by.
         let main_loop = glib::MainLoop::new(None, false);
         glib::timeout_add_seconds_local(1, {
             let main_loop = main_loop.clone();
@@ -597,8 +583,6 @@ mod tests {
 
         let layout = layout.borrow_mut().take().expect("a reply arrived");
 
-        // And read the tooltip back the way a panel does when the pointer
-        // rests on the icon.
         let tooltip = Rc::new(RefCell::new(None));
         let main_loop = glib::MainLoop::new(None, false);
         connection.call(

@@ -37,11 +37,7 @@ pub struct AppMemoryInventory {
     pub sound_count: usize,
     pub tab_count: usize,
     pub folder_count: usize,
-    /// Strings still held by the settings struct. The library is in SQLite, so
-    /// there is no resident per-sound string cost to report.
     pub settings_string_bytes: usize,
-    /// Rows the paged sound model is holding. Capped by its four-page / 2 MiB
-    /// cache, and the only sound-row payload resident in this process.
     pub ui_cached_pages: usize,
     pub ui_cached_payload_bytes: usize,
     pub ui_cached_row_count: usize,
@@ -328,8 +324,6 @@ pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory
     assemble_app_inventory(&runtime, config, thread_count)
 }
 
-/// Builds the inventory from numbers already collected. No globals, so one
-/// test's counts can't leak into the next.
 fn assemble_app_inventory(
     runtime: &RuntimeInventory,
     config: &crate::config::Config,
@@ -363,8 +357,6 @@ fn assemble_app_inventory(
         ui_cached_pages: runtime.ui_cached_pages,
         ui_cached_payload_bytes: runtime.ui_cached_payload_bytes,
         ui_cached_row_count: runtime.ui_cached_row_count,
-        // The store already counts control bindings with the sound ones — don't
-        // stack the settings copies on top.
         hotkey_binding_count: runtime.library_hotkey_count,
         validation_batch_size: runtime.validation_batch_size,
         validation_mode: runtime.validation_mode.clone(),

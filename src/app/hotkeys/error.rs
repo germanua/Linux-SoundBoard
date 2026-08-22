@@ -9,10 +9,10 @@ pub enum HotkeyError {
     /// Bad spec: unknown key token, empty string, that sort of thing.
     #[error("{0}")]
     Parse(String),
-    /// Clashes with an existing binding. Coded prefix so the UI can parse it.
+    /// Binding clash parsed by the UI.
     #[error("HOTKEY_CONFLICT:{0}")]
     Conflict(String),
-    /// Key the active backend can't express. Coded prefix, same reason.
+    /// Unsupported key parsed by the UI.
     #[error("UNSUPPORTED_KEY_FOR_BACKEND:{0}")]
     UnsupportedKey(String),
     /// swhkd or X11 setup failed.

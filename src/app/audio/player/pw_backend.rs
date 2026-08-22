@@ -16,8 +16,6 @@ pub(super) fn remote_ok(
     }
 }
 
-/// Same, for the requests that answer with a play id. `request_name` only shows
-/// up in the message for a reply we did not expect.
 pub(super) fn remote_play(
     request: crate::audio::engine_ipc::EngineRequest,
     request_name: &str,
@@ -244,8 +242,7 @@ fn create_pipewire_backend(
                         let source_id = source.id;
                         state.sources.insert(source_id, source);
                         link_monitor_source_to_known_sink(&mut state, source_id);
-                        // virtual_mic just became visible — claim default now
-                        // if mode requests it. Idempotent on subsequent calls.
+                        // Claim the default once the virtual mic appears.
                         claim_default_source_if_enabled(&mut state);
                         ensure_capture_stream_present(&mut state);
                     }
@@ -283,8 +280,7 @@ fn create_pipewire_backend(
                         .is_some_and(|metadata| metadata.id == id)
                     {
                         state.default_metadata = None;
-                        // Nothing reports the default any more, so the last
-                        // value seen is not evidence about the system now.
+                        // Drop stale default-source state with its metadata.
                         forget_default_source_belief(&mut state, "went away");
                     }
                     state.links.remove(&id);

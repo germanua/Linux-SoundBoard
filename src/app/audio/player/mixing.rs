@@ -75,8 +75,7 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         let Some((local_deficit, virtual_deficit)) =
             current_queue_deficits(&state.queues, local_target_samples, virtual_target_samples)
         else {
-            // Queue mutex is contended by an RT callback right now. Bail and
-            // retry on the next tick (2 ms) instead of blocking the main loop.
+            // RT owns the queue; retry next tick.
             state.stream_runtime.record_lock_contention();
             return;
         };
@@ -160,8 +159,6 @@ fn trim_latency_backlog(state: &mut LoopState, wants_virtual_output: bool) {
             );
         }
     }
-    // Contention: skip trim this tick; next tick will catch up. Backlog is a
-    // soft constraint, dropping a tick of trim has no audible impact.
 }
 
 fn current_queue_deficits(
@@ -185,8 +182,7 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
         return if let Some(mut queues) = state.queues.try_lock() {
             enqueue_passthrough_chunk(&mut queues, chunk_samples)
         } else {
-            // Contended — try again on next mix tick. Blocking here would
-            // invert priority: the main loop waiting on the RT callback's lock.
+            // Do not block the main loop on the RT lock.
             state.stream_runtime.record_lock_contention();
             0
         };
@@ -211,8 +207,7 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
         );
     }
 
-    // Pre-size the mic scratch buffer before acquiring the lock so the
-    // allocator never runs while the RT callback is waiting on try_lock.
+    // Allocate before taking the queue lock.
     if state.mic_scratch_buffer.len() < chunk_samples {
         state.mic_scratch_buffer.resize(chunk_samples, 0.0);
     }
@@ -253,8 +248,7 @@ pub(super) fn enqueue_passthrough_chunk(queues: &mut ProcessQueues, chunk_sample
 }
 
 pub(super) fn clear_virtual_mic_queues(queues: &RtSharedQueues) {
-    // Best-effort clear: if contended right now, the trim_latency_backlog on
-    // the next tick will catch up by draining stale samples. We never block.
+    // A later trim clears a contended queue.
     if let Some(mut queues) = queues.try_lock() {
         queues.mic_in.samples.clear();
         queues.virtual_out.samples.clear();
@@ -278,8 +272,7 @@ pub(super) fn clear_all_queues(queues: &RtSharedQueues) {
 // ~5 ms at 48 kHz stereo — enough to ramp to silence without audible delay
 const FADE_OUT_SAMPLES: usize = 480;
 
-/// Replace the output queue backlogs with a short linear fade-to-zero so that
-/// a Stop or Seek does not cut the waveform at an arbitrary phase.
+/// Replaces queued output with a short fade to zero.
 pub(super) fn fade_output_queues(queues: &RtSharedQueues) {
     if let Some(mut queues) = queues.try_lock() {
         apply_fade_out(&mut queues.local);

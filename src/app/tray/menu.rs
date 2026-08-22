@@ -37,8 +37,6 @@ pub(crate) fn build(window_visible: bool, real_mic_muted: bool) -> Vec<MenuItem>
     ]
 }
 
-/// The action a row id stands for, or `None` for a separator or an id from a
-/// menu we have since replaced.
 pub(crate) fn action_for(id: i32) -> Option<MenuAction> {
     match id {
         SHOW_HIDE => Some(MenuAction::ToggleWindow),

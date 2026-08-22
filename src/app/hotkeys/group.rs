@@ -1,6 +1,5 @@
 use crate::config::GroupMode;
-// The store's row type is the input to these rules; a second copy of the same
-// three fields would only need converting back and forth.
+// Reuse the store row instead of copying its fields.
 use crate::library_store::HotkeyGroupMember as GroupMember;
 
 /// The two independent Settings toggles that govern resolution.
@@ -10,24 +9,19 @@ pub(crate) struct HotkeyToggles {
     pub multi_sound: bool,
 }
 
-/// Why a press produced no sound. Each variant maps to a distinct user-facing
-/// explanation, so "nothing happened" is never silent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InertReason {
     /// The chord has no active bindings at all.
     NoMembers,
     /// Every binding for this chord belongs to some other tab.
     OutOfScope,
-    /// The chord resolves to bindings from more than one scope, so there is no
-    /// single right answer. Deliberately does nothing rather than guessing.
+    /// Refuse bindings from mixed scopes.
     Ambiguous,
     /// Several sounds share the chord but "Multiple sounds per hotkey" is off.
     MultiSoundDisabled,
 }
 
 impl InertReason {
-    /// What the user is told when a press does nothing. Silence with no
-    /// explanation reads as a broken hotkey.
     pub(crate) const fn message(self) -> &'static str {
         match self {
             Self::NoMembers => "That shortcut is not assigned to a sound.",
@@ -42,8 +36,6 @@ impl InertReason {
     }
 }
 
-/// The index into the `members` slice that was passed in, or the reason none
-/// was chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Selection {
     Play(usize),

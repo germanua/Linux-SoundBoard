@@ -34,8 +34,7 @@ impl MissingLoudnessAnalysisCoordinator {
         self.in_flight.load(Ordering::Acquire)
     }
 
-    /// Cancels this coordinator's run only; each owns its token, so a backfill
-    /// and a refinement never abort each other.
+    /// Cancels only this coordinator's run.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }

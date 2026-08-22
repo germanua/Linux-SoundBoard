@@ -33,8 +33,7 @@ const PREVIEW_ANCHORS_LONG_PCT: [u64; 5] = [5, 25, 50, 75, 92];
 
 static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
-/// Token for analyses with no run to cancel: single-sound playback gain and the
-/// acceptance harness. It is never set, so those decodes always run to the end.
+/// Never-cancelled token for one-off analyses.
 pub fn never_cancelled() -> &'static AtomicBool {
     &NEVER_CANCELLED
 }
@@ -249,8 +248,7 @@ fn analyze_context_with_stats(
     })
 }
 
-/// Maximum true-peak across all channels, in dBTP. Returns None if ebur128
-/// rejects every channel query (e.g. true-peak mode not actually enabled).
+/// Highest channel true peak, or none if every query fails.
 fn extract_true_peak_dbtp(ebur128: &EbuR128, channels: u32) -> Option<f32> {
     let mut max_peak: f64 = 0.0;
     let mut any_ok = false;

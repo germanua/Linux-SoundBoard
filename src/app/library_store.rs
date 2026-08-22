@@ -12,8 +12,7 @@ use crate::config::{ControlHotkeyAction, LoudnessAnalysisState, Sound};
 pub const PAGE_SIZE: usize = 256;
 pub const MAX_BATCH_ROWS: usize = 512;
 pub(crate) const DATABASE_SCHEMA_VERSION: i64 = 6;
-/// Metadata tag written beside the schema version. Migrations keep their own
-/// historical literals; this is only ever the current one.
+/// Current flavor only; migrations keep their old literals.
 pub(crate) const DATABASE_SCHEMA_FLAVOR: &str = "bounded-generation-v6";
 pub(crate) const DATABASE_APPLICATION_ID: i64 = 0x4c53_4244;
 const CONTROL_QUEUE_CAPACITY: usize = 16;
@@ -88,8 +87,6 @@ pub struct FolderPage {
     pub folders: Vec<FolderItem>,
 }
 
-/// A folder the user removed from the library. Carries its root so it can be
-/// restored without walking the tree it is currently absent from.
 #[derive(Debug, Clone)]
 pub struct HiddenFolderItem {
     pub root_path: String,
@@ -121,8 +118,7 @@ pub struct ManualTabPage {
 pub enum HotkeyBindingOwner {
     Sound(String),
     Control(String),
-    /// A hotkey that makes a tab active instead of playing anything. Always
-    /// live, whichever tab is showing, or there would be no way back.
+    /// Tab hotkeys stay live in every tab.
     Tab(String),
 }
 
@@ -133,8 +129,7 @@ pub struct HotkeyBindingRecord {
     pub accelerator: String,
     pub normalized: Option<String>,
     pub issue: Option<String>,
-    /// The tab this binding answers in; `None` means every tab. Ignored for
-    /// control actions and tab hotkeys, which are always live.
+    /// Tab scope; ignored for control and tab actions.
     pub tab_scope: Option<String>,
 }
 
@@ -770,8 +765,6 @@ impl LibraryStore {
                     let request = match worker_queue.try_pop() {
                         Some(request) => request,
                         None => {
-                            // Queues are drained. Republish the counts a
-                            // mutation invalidated, then park for more work.
                             publish_library_counts_if_dirty(
                                 &connection,
                                 &mut counts_dirty,
@@ -993,8 +986,6 @@ impl LibraryStore {
         )
     }
 
-    /// Every binding this sound holds: at most one that is live in every tab,
-    /// plus one per tab it is bound in. The caller picks which applies.
     pub fn hotkey_bindings_for_sound(
         &self,
         sound_id: &str,
@@ -3993,8 +3984,6 @@ fn load_folder_children(
     })
 }
 
-/// Folders the user removed, newest-shallowest first so a hidden parent is
-/// listed before anything nested under it.
 fn load_hidden_folders(
     connection: &Connection,
     page: usize,
@@ -4739,8 +4728,6 @@ mod idle_count_publication_tests {
 
     #[test]
     fn staged_scan_batches_do_not_dirty_the_counts() {
-        // Scanned rows are staged under a new generation and are not live until
-        // the scan finishes, so a batch cannot change any published count.
         let batch = Request::RootScanBatch {
             root_path: "/music".to_string(),
             generation: 1,
@@ -4770,8 +4757,6 @@ mod idle_count_publication_tests {
         };
         assert!(!page.changes_library_counts());
 
-        // Loudness values change, but not the number of sounds, tabs, roots or
-        // active bindings, so a backfill must not trigger a recount per batch.
         let loudness = Request::ApplyLoudnessUpdates {
             updates: Vec::new(),
             reply: reply(),
@@ -4803,8 +4788,6 @@ mod idle_count_publication_tests {
         std::fs::create_dir_all(&dir).expect("create test dir");
         let connection = open_connection(&dir.join("library.sqlite3")).expect("open connection");
 
-        // open_connection already optimized on open, so the worker starts with a
-        // timestamp and must not immediately run it again.
         let mut optimized_at = Some(std::time::Instant::now());
         assert!(
             !run_idle_optimize_if_due(&connection, &mut optimized_at),
@@ -4836,8 +4819,6 @@ mod idle_count_publication_tests {
             publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at).is_some()
         );
 
-        // Another mutation lands immediately: the recount must wait out the
-        // interval rather than run again on the very next drain.
         dirty = true;
         assert!(
             publish_library_counts_if_dirty(&connection, &mut dirty, &mut published_at).is_none(),

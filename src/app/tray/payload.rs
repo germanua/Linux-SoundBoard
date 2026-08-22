@@ -6,7 +6,7 @@ use glib::variant::{DictEntry, Variant};
 pub(crate) enum ItemKind {
     /// A plain clickable row.
     Command,
-    /// A horizontal rule. Carries no label.
+    /// Horizontal separator.
     Separator,
     /// A row with a checkmark, ticked or not.
     Checkmark(bool),
@@ -15,8 +15,7 @@ pub(crate) enum ItemKind {
 /// One row of the tray menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MenuItem {
-    /// Identifies the row in `Event` calls. Must be non-zero: the host reserves
-    /// 0 for the root.
+    /// Menu row ID; zero is reserved for the root.
     pub id: i32,
     pub label: String,
     pub kind: ItemKind,
@@ -84,8 +83,6 @@ pub(crate) fn item_properties(item: &MenuItem, filter: &[String]) -> Variant {
     )
 }
 
-/// The whole menu as the `(ia{sv}av)` tree `GetLayout` returns. The revision
-/// that goes with it belongs to the service, not the shape.
 pub(crate) fn layout(items: &[MenuItem], filter: &[String]) -> Variant {
     let children = items.iter().map(|item| {
         Variant::tuple_from_iter([
@@ -160,8 +157,6 @@ mod tests {
         assert!(clear.print(false).contains("'toggle-state': <0>"));
     }
 
-    /// A value in `a{sv}` is boxed exactly once. Boxing twice yields
-    /// `<<'x'>>`, which a host is not obliged to understand.
     #[test]
     fn a_property_value_is_boxed_exactly_once() {
         let props = item_properties(&MenuItem::command(1, "Show"), &all());

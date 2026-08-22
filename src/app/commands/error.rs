@@ -13,18 +13,12 @@ pub enum CommandError {
     #[error("Sound is disabled")]
     SoundDisabled,
 
-    /// The backing audio file for a sound is missing or unreadable. Carries the
-    /// path so the UI can mark the row invalid.
     #[error("Source file unavailable: {0}")]
     SourceUnavailable(String),
 
-    /// A requested tab (or tab/sound pair) does not exist. The field names which
-    /// (e.g. `"Tab"`, `"Source tab"`, `"Target tab"`, `"Tab or sound"`).
     #[error("{0} not found")]
     NotFound(&'static str),
 
-    /// Bad input: unknown mode string, empty name, out-of-range value,
-    /// unsupported file, missing path. The message is user-facing.
     #[error("{0}")]
     Invalid(String),
 
@@ -44,8 +38,6 @@ pub enum CommandError {
     #[error("{0}")]
     Hotkey(String),
 
-    /// SQLite saved the desired hotkey, but the active desktop backend could
-    /// not apply it. The UI must keep showing the durable choice as pending.
     #[error("Shortcut was saved but could not be activated: {0}")]
     HotkeyProjection(String),
 
@@ -55,7 +47,7 @@ pub enum CommandError {
 }
 
 impl CommandError {
-    /// Wrap a config-persistence failure (`Config::save` returns a boxed error).
+    /// Wraps config-save errors.
     pub(crate) fn config_save<E: std::fmt::Display>(err: E) -> Self {
         Self::ConfigSave(err.to_string())
     }

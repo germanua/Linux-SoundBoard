@@ -205,8 +205,6 @@ where
     )
 }
 
-/// Every binding a sound holds, so the dialog can tell whether the one that
-/// applies here is limited to this tab or live everywhere.
 pub fn hotkey_bindings_for_sound_async<F>(
     sound_id: String,
     library: LibraryStore,

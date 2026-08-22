@@ -298,8 +298,6 @@ pub fn check_pipewire_status() -> PipeWireStatus {
     check_pipewire()
 }
 
-/// Show or hide the tray icon. Takes effect immediately: the icon is exported
-/// or withdrawn without restarting.
 pub fn set_tray_enabled(enabled: bool, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
     with_saved_config(&config, |cfg| {
         cfg.settings.tray_enabled = enabled;

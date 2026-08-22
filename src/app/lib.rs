@@ -6,8 +6,6 @@ pub mod config;
 pub mod legacy_migration;
 pub mod library_store;
 
-// Implementation-only modules — accessible within this crate but not
-// part of the public API.
 pub(crate) mod app_meta;
 pub(crate) mod app_state;
 pub(crate) mod diagnostics;

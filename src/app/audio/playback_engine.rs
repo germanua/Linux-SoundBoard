@@ -21,8 +21,6 @@ pub trait PlaybackEngine: Send + Sync {
     fn get_playback_positions(&self) -> Vec<PlaybackPosition>;
 }
 
-/// Production impl: thin pass-throughs to [`AudioPlayer`]'s inherent methods,
-/// so the trait buys an injection seam and nothing else.
 impl PlaybackEngine for AudioPlayer {
     fn play(
         &self,

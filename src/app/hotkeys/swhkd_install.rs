@@ -380,8 +380,6 @@ fn distro_id(distro: DistroFamily) -> &'static str {
     }
 }
 
-/// True only when we are sure the uinput driver is absent: swhkd needs it to
-/// create its virtual keyboard, and opening the node then fails with ENODEV.
 pub fn uinput_unavailable() -> bool {
     if std::path::Path::new("/sys/module/uinput").exists() {
         return false;

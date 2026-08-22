@@ -1,5 +1,4 @@
-//! Capture-stream watchdog: detects missing or unhealthy mic-passthrough
-//! streams and re-establishes them without user intervention.
+//! Restarts unhealthy mic-passthrough streams.
 
 use super::*;
 use source_routing::{recreate_capture_stream, resolve_capture_target, resolve_source_id_by_name};

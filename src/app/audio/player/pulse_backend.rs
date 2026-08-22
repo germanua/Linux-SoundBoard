@@ -66,8 +66,7 @@ impl PulseAudioBackend {
         .map_err(|err| format!("PulseAudio local output unavailable: {err}"))
         .ok();
 
-        // Feed the null-sink that virtual_mic_module::NullSinkModule loaded, so
-        // Discord and friends see our mix on `linuxsoundboard.virtual_mic`.
+        // Feed the null sink backing linuxsoundboard.virtual_mic.
         let virtual_stream = create_playback_stream(
             &mainloop,
             &context,
@@ -210,8 +209,7 @@ fn connect_context(
         context
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
-                // SAFETY: `ml_ref` keeps the mainloop alive for this closure,
-                // and signal() is documented callable from its dispatch thread.
+                // SAFETY: ml_ref keeps the mainloop alive for this callback.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -457,8 +455,7 @@ fn write_playback_bytes(
             OutputTarget::Virtual => queues.virtual_out.pop_into(&mut samples),
         }
     } else {
-        // Mix tick is producing right now. Output silence this slot rather
-        // than blocking the PA mainloop thread on the producer.
+        // Output silence instead of blocking the PulseAudio thread.
         match target {
             OutputTarget::Local => stream_runtime.record_local_underrun(),
             OutputTarget::Virtual => stream_runtime.record_virtual_underrun(),

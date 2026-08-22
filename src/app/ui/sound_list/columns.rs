@@ -198,7 +198,7 @@ impl SoundListInner {
         }
 
         let column = ColumnViewColumn::new(Some("NAME"), Some(factory));
-        // Avoid GTK's automatic width scan requesting every row from a large lazy model.
+        // Avoid forcing GTK to scan every lazy row.
         column.set_fixed_width(240);
         column.set_expand(true);
         column

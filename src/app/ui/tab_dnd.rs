@@ -117,8 +117,6 @@ mod tests {
 
     #[test]
     fn the_merge_band_is_the_middle_half() {
-        // Aim at the row and it merges; only the edges reorder. The boundaries
-        // themselves still merge, so a slightly off aim never reorders.
         let height = 100.0;
         assert_eq!(folder_drop_zone(25.0, height), FolderDropZone::Into);
         assert_eq!(folder_drop_zone(75.0, height), FolderDropZone::Into);

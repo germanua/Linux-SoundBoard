@@ -1,6 +1,3 @@
-//! The `Metadata` map a media-control widget reads. Pure `glib::Variant`
-//! building so unit tests can pin the shapes; D-Bus lives in the parent.
-
 use glib::prelude::ToVariant;
 use glib::variant::{DictEntry, Variant};
 
@@ -43,8 +40,6 @@ pub(crate) fn track_id(sound_id: &str) -> glib::variant::ObjectPath {
         .expect("every character is sanitised to an object-path character")
 }
 
-/// The `a{sv}` a host reads to draw the now-playing card. Empty when nothing is
-/// playing — that's how a player says "no track" instead of leaving stale text.
 pub(crate) fn build(now: Option<&NowPlaying>) -> Variant {
     let Some(now) = now else {
         return Variant::array_from_iter::<DictEntry<String, Variant>>(Vec::<Variant>::new());
@@ -57,8 +52,6 @@ pub(crate) fn build(now: Option<&NowPlaying>) -> Variant {
             "xesam:artist",
             Variant::array_from_iter::<String>([APP_TITLE.to_variant()]),
         ),
-        // Hosts that show a placeholder image use this; the installed app icon
-        // is the only artwork a soundboard has.
         (
             "mpris:artUrl",
             format!("image://theme/{APP_ID}").to_variant(),
@@ -127,8 +120,6 @@ mod tests {
         assert!(!build(Some(&unknown)).print(false).contains("mpris:length"));
     }
 
-    /// A uuid's hyphens are not legal in a D-Bus object path, so a track id
-    /// built straight from a sound id would fail to serialise.
     #[test]
     fn a_track_path_survives_a_uuid_sound_id() {
         assert_eq!(

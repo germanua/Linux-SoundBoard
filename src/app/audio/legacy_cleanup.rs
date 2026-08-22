@@ -1,5 +1,4 @@
-//! One-time cleanup of obsolete audio routing artifacts from previous
-//! Linux Soundboard installations. Runs at engine startup.
+//! Removes stale routing artifacts at engine startup.
 
 const LEGACY_MANAGED_MARKER: &str = "managed-by: linux-soundboard";
 const LEGACY_MANAGED_END_MARKER: &str = "end-managed-by: linux-soundboard";

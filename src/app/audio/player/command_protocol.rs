@@ -1,5 +1,4 @@
-//! Audio engine command protocol: the `AudioCommand` enum sent over the
-//! PipeWire channel from `AudioPlayer` to the engine loop.
+//! Commands sent from AudioPlayer to the PipeWire loop.
 
 use super::*;
 

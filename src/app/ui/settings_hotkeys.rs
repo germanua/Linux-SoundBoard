@@ -30,8 +30,7 @@ pub(super) fn build_hotkeys_page(
     let description = unavailable_reason
         .as_ref()
         .map(|reason| {
-            // The description is parsed as markup and remediation commands carry
-            // "&&", which kills the parse and blanks the whole string.
+            // "&&" in remediation commands breaks Pango markup.
             format!(
                 "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
                 glib::markup_escape_text(reason)
@@ -90,8 +89,6 @@ pub(super) fn build_hotkeys_page(
     page
 }
 
-/// How hotkeys resolve, as opposed to which hotkey does what. Both toggles are
-/// off by default and independent of each other.
 fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("Hotkey Behaviour")
@@ -147,8 +144,7 @@ fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::
         GroupMode::Next => 1,
         GroupMode::Random => 2,
     });
-    // The same row is both written by the cycle hotkey and read by the user,
-    // so the hotkey's update must not loop back into a redundant save.
+    // Ignore updates coming from the cycle hotkey.
     let applying_mode = Rc::new(std::cell::Cell::new(false));
     {
         let state_mode = Arc::clone(&state);

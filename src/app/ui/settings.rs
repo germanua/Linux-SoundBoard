@@ -129,8 +129,6 @@ pub fn build_settings_overlay(
     }
     general_tab.set_active(true);
 
-    // Adaptive panel: cap the width on wide windows, let it shrink with side
-    // margins on narrow ones, instead of a fixed 600x700.
     let panel_clamp = adw::Clamp::builder()
         .maximum_size(640)
         .tightening_threshold(520)
@@ -146,8 +144,6 @@ pub fn build_settings_overlay(
     overlay.add_overlay(&panel_clamp);
 
     {
-        // The clamp fills the overlay, so a press beside the panel lands on it
-        // and never reaches the backdrop button underneath.
         let overlay_dismiss = overlay.clone();
         super::dialogs::dismiss_on_press_outside(&overlay, &panel, move || {
             overlay_dismiss.set_visible(false);
@@ -244,8 +240,6 @@ fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
                 log::warn!("Could not save the media controls setting: {error}");
                 return;
             }
-            // Runs the now-playing handler, which claims or releases the
-            // player name to match the setting straight away.
             crate::ui_event_bridge::post_now_playing(None);
         });
     }
@@ -380,8 +374,6 @@ fn build_general_page(
 
     let folder_rows: FolderRowRefs = Rc::new(RefCell::new(Vec::new()));
     let rebuild_pending: RebuildPending = Rc::new(Cell::new(false));
-    // Handle for the scan that follows adding a folder, so the Stop button
-    // below can cancel it. The row itself keeps adding folders throughout.
     let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
         Rc::new(RefCell::new(None));
     let scan_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
@@ -398,8 +390,7 @@ fn build_general_page(
         let add_folder_cancel_stop = Rc::clone(&add_folder_cancel);
         let add_folder_row_stop = add_folder_row.downgrade();
         scan_stop_btn.connect_clicked(move |btn| {
-            // Copy the handle out before touching widgets: GTK can re-enter
-            // the handler and a borrow held across a widget call aborts.
+            // Drop the borrow before touching GTK; callbacks may re-enter.
             let pending = add_folder_cancel_stop.borrow().as_ref().map(Arc::clone);
             let Some(cancelled) = pending else {
                 return;

@@ -18,8 +18,6 @@ type HotkeyValidator = Box<dyn Fn(&str) -> Result<(), String> + 'static>;
 
 /// Offer to limit a sound's hotkey to the tab it is being set from.
 pub struct HotkeyScopePrompt {
-    /// Whether the binding is already scoped, so reopening the dialog shows
-    /// what is actually stored rather than a default.
     pub scoped_now: bool,
 }
 
@@ -356,8 +354,7 @@ impl DialogHost {
         self.present(None);
     }
 
-    /// Asked before installing, and only when the module is genuinely missing, so
-    /// systems that already provide uinput are left untouched.
+    /// Runs only after consent for a confirmed missing module.
     pub fn prompt_swhkd_install(
         &self,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,

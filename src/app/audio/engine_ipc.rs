@@ -38,8 +38,7 @@ pub enum EngineRequest {
         #[serde(default)]
         sound_true_peak_dbtp: Option<f32>,
     },
-    /// Stop everything and start the new sound in one shot, so a snapshot poll
-    /// can't catch the "all stopped" gap in between.
+    /// Replaces playback without publishing an empty snapshot.
     PlayReplace {
         sound_id: String,
         path: String,

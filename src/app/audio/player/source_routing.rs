@@ -47,8 +47,7 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Engin
     let Some(target) = target else {
         if let Some(requested) = state.runtime.mic_source.as_deref() {
             if name_looks_like_enhancement_source(requested) {
-                // They asked for an enhancement source, so no silent fallback
-                // to the raw mic. Say it loudly and let them start it.
+                // Do not silently bypass the requested processor.
                 warn!(
                     "Selected mic source '{}' is currently absent. Soundboard will NOT \
                      fall back to the raw microphone — start the upstream processor \
@@ -104,14 +103,12 @@ pub(super) fn resolve_capture_target_from_default(
             .map(|candidate| candidate.node_name.clone());
     }
 
-    // Nothing explicit: rank it, so a processed feed beats a raw mic. Checking
-    // default_source first would return the raw mic and bypass their chain.
+    // Prefer processed audio over the raw default mic.
     if let Some(best) = best_upstream_mic_source_name(&state.sources) {
         return Some(best);
     }
 
-    // No sources registered yet — fall back to whatever PipeWire reports as the
-    // current default, or the default we recorded before claiming it ourselves.
+    // Fall back to PipeWire's current or pre-claim default.
     if let Some(default_source) = default_source {
         if is_upstream_mic_source(&default_source, &state.sources) {
             return Some(default_source);
@@ -221,21 +218,15 @@ pub(super) fn restore_default_source_for_transient_shutdown(state: &mut LoopStat
     state.claimed_default = false;
 }
 
-// For explicit selection: anything but a sink monitor (not a real mic) and our
-// own virtual mic (feedback loop).
 fn upstream_source_allowed(source: &SourceDescriptor) -> bool {
     !source.is_monitor && !source.is_our_virtual_mic
 }
 
-// Auto-detect may pick this: a known enhancement chain or real hardware, and
-// not a monitor or our own mic.
 fn auto_detect_eligible(source: &SourceDescriptor) -> bool {
     upstream_source_allowed(source)
         && (is_named_enhancement_source(source) || source.is_hardware_backed)
 }
 
-// Ranks sources that already passed auto_detect_eligible; an enhancement chain
-// beats a raw hardware mic.
 fn auto_detect_rank(source: &SourceDescriptor) -> u8 {
     if is_named_enhancement_source(source) {
         2

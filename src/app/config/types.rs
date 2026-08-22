@@ -176,8 +176,7 @@ impl FromStr for PlayMode {
 }
 impl_string_serde_enum!(PlayMode);
 
-/// How a hotkey shared by several sounds picks which one to play. Not
-/// [`PlayMode`] — that one is about what happens when a sound *finishes*.
+/// Picks a member for a shared hotkey.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GroupMode {
     /// Replay whichever member was played last.
@@ -232,8 +231,7 @@ pub enum ListStyle {
 pub enum DefaultSourceMode {
     #[default]
     Default,
-    /// Never touch the system default. The user picks their mic per-app or in
-    /// pavucontrol.
+    /// Leave the system default source alone.
     Manual,
 }
 
@@ -385,8 +383,6 @@ pub enum ControlHotkeyAction {
 
 pub const CONTROL_BINDING_PREFIX: &str = "control:";
 
-/// Binding id prefix for a hotkey that activates a tab. Keeps tab bindings
-/// apart from sound bindings, whose id is the sound's own public id.
 pub const TAB_BINDING_PREFIX: &str = "tab-hotkey:";
 
 #[derive(Debug, Clone, Copy)]
@@ -636,8 +632,7 @@ pub struct Settings {
     pub default_source_mode: DefaultSourceMode,
     #[serde(default)]
     pub mic_latency_profile: MicLatencyProfile,
-    /// App-name / process-binary patterns the autoroute filter must leave
-    /// alone. Case-insensitive substring match, trimmed, empties ignored.
+    /// Case-insensitive app/process substrings excluded from autoroute.
     #[serde(default)]
     pub excluded_apps: Vec<String>,
     #[serde(default)]
@@ -662,18 +657,12 @@ pub struct Settings {
     pub play_mode: PlayMode,
     #[serde(default)]
     pub tab_hotkeys: bool,
-    /// Allow several sounds to answer to one hotkey. Off keeps every chord
-    /// unique, which is how hotkeys behaved before groups existed.
     #[serde(default)]
     pub multi_sound_hotkeys: bool,
-    /// Which member of a shared hotkey a press plays. Only consulted when
-    /// `multi_sound_hotkeys` is on.
     #[serde(default)]
     pub group_mode: GroupMode,
     #[serde(default)]
     pub list_style: ListStyle,
-    /// Put an icon in the system tray. Off removes it; a session whose desktop
-    /// has no tray shows nothing either way.
     #[serde(default = "default_tray_setting")]
     pub tray_enabled: bool,
     #[serde(default = "default_tray_setting")]

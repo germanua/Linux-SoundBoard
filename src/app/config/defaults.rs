@@ -10,8 +10,6 @@ pub fn default_allow_multiple_playbacks() -> bool {
     false
 }
 
-/// Both tray settings default on. With no tray in the session the icon just
-/// never shows and close still quits, so it costs those users nothing.
 pub fn default_tray_setting() -> bool {
     true
 }

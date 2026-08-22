@@ -321,8 +321,6 @@ impl SwhkdProcesses {
         let startup_log = Self::read_startup_log_tail(log_path);
         let lowercase_log = startup_log.to_ascii_lowercase();
         let remediation = if lowercase_log.contains("uinput") {
-            // The /dev/uinput node exists even when the module is missing, so the
-            // open fails with ENODEV rather than looking like a missing device.
             "swhkd could not open /dev/uinput, which it needs to read input devices.\n\
              If your kernel was updated since you last booted, reboot first — the running \
              kernel can no longer load any module.\n\
@@ -416,8 +414,7 @@ impl SwhkdProcesses {
         let _ = child.wait();
     }
 
-    /// Clear the swhks socket and swhkd pidfile a killed daemon leaves behind,
-    /// or the new swhks dies binding its socket with `EADDRINUSE`.
+    /// Removes files left by a killed swhkd.
     fn remove_stale_runtime_files() {
         let uid = nix::unistd::getuid();
         let runtime_dir = PathBuf::from(format!("/run/user/{}", uid));

@@ -36,8 +36,6 @@ fn test_gain_factor_infinite_lufs() {
 
 #[test]
 fn test_gain_factor_true_peak_clamps_high_boost() {
-    // -30 LUFS, target -14 wants +16 dB boost, but file's true peak is -3 dBTP.
-    // Ceiling is -1 dBTP, so max safe gain is -1 - (-3) = +2 dB.
     let gain = compute_gain_factor(-30.0, -14.0, Some(-3.0));
     let expected = 10.0_f64.powf(2.0 / 20.0) as f32;
     assert!(
@@ -48,8 +46,6 @@ fn test_gain_factor_true_peak_clamps_high_boost() {
 
 #[test]
 fn test_gain_factor_true_peak_attenuation_does_not_relax() {
-    // -8 LUFS, target -14 wants -6 dB (already attenuating). True peak 0.5 dBTP.
-    // Headroom is -1 - 0.5 = -1.5 dB, but -6 dB is already lower; -6 wins.
     let gain = compute_gain_factor(-8.0, -14.0, Some(0.5));
     let expected = 10.0_f64.powf(-6.0 / 20.0) as f32;
     assert!(
@@ -60,7 +56,7 @@ fn test_gain_factor_true_peak_attenuation_does_not_relax() {
 
 #[test]
 fn test_gain_factor_true_peak_infinite_is_ignored() {
-    // Silence file: true_peak = -inf dBTP. Treat as no constraint.
+    // Silence has no true-peak limit.
     let gain = compute_gain_factor(-20.0, -14.0, Some(f32::NEG_INFINITY));
     assert!((gain - 2.0).abs() < 0.05);
 }

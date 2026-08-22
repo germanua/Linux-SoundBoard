@@ -235,8 +235,6 @@ impl Config {
         Ok(())
     }
 
-    /// Tidy the persisted settings. The library lives in SQLite now, so there
-    /// are no sound rows left in here to scrub.
     pub fn sanitize_for_persistence(&mut self) {
         self.settings.normalize_for_persistence();
     }
@@ -351,8 +349,6 @@ mod tests {
         let runtime =
             Config::load_runtime_settings_from_path(&path).expect("load bounded runtime settings");
 
-        // The runtime type doesn't model the legacy arrays at all, so a
-        // 2048-sound legacy file is free to load — only settings survive.
         assert_eq!(runtime.settings.local_volume, 37);
         assert_eq!(
             runtime.schema_version,

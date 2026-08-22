@@ -18,8 +18,6 @@ use super::CommandError;
 mod loudness;
 pub use loudness::analyze_all_loudness_with_store;
 
-// Pulled in here so the sibling test module can reach them through `super::`
-// without making them any more visible.
 #[cfg(test)]
 use loudness::{estimated_loudness_refinement_trigger, fast_loudness_preview_budget_ms};
 
@@ -35,8 +33,6 @@ const FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN: usize = 10;
 pub type LoudnessAnalysisCompletion =
     Box<dyn FnOnce(Result<u32, crate::audio::LoudnessError>) + Send + 'static>;
 
-/// One set per `AppState`, so background analysis jobs can be watched and
-/// cancelled without process globals.
 #[derive(Clone)]
 pub struct LoudnessCoordinators {
     pub(crate) backfill: Arc<crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator>,
@@ -231,8 +227,7 @@ fn play_resolved_sound(
     result
 }
 
-/// Everything a hotkey press needs to pick its sound. Carried from the UI
-/// thread into the worker so the library is never hit on the GTK main loop.
+/// Snapshot used to resolve a hotkey off the GTK thread.
 #[derive(Clone)]
 pub(crate) struct HotkeyPress {
     pub toggles: crate::hotkeys::HotkeyToggles,
@@ -275,8 +270,6 @@ fn resolve_hotkey_press(
         .map_err(|error| CommandError::Library(error.to_string()))?;
 
     let last_played = press.cursor.lock().get(binding_id).cloned();
-    // uuid is already how we get randomness for ids, so Random doesn't drag in
-    // a second RNG.
     let entropy = uuid::Uuid::new_v4().as_u128() as u64;
     let index = match crate::hotkeys::select_from_group(
         &members,
@@ -488,8 +481,7 @@ pub fn set_auto_gain(
         |player| player.set_auto_gain_enabled(enabled),
     )?;
     if enabled {
-        // The store is the only sound authority under schema 8 — the
-        // config-backed trigger sees an empty library and never schedules.
+        // Schema 8 keeps sounds only in the store.
         trigger_missing_loudness_analysis_with_store(
             Arc::clone(&config),
             library,
@@ -726,8 +718,7 @@ pub fn get_playback_positions(player: Arc<dyn PlaybackEngine>) -> Vec<PlaybackPo
     player.get_playback_positions()
 }
 
-/// Stops whichever run is going. Settings shows one Stop for both kinds, so
-/// hit both tokens; each run still only watches its own.
+/// Stops both analysis jobs.
 pub fn cancel_loudness_analysis(coords: &LoudnessCoordinators) {
     coords.backfill.cancel();
     coords.refinement.cancel();

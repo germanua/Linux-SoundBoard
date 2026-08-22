@@ -7,8 +7,6 @@ use pw::properties::properties;
 use super::EngineError;
 use super::LoopState;
 
-/// Audio channel discriminator. We only handle stereo FL/FR for now — same
-/// channel layout as EasyEffects and pavucontrol's virtual sources.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum AudioChannel {
     FrontLeft,
@@ -16,8 +14,6 @@ pub(super) enum AudioChannel {
 }
 
 impl AudioChannel {
-    /// Parse PipeWire's `audio.channel` port property. `FL`/`FR` are the short
-    /// form it uses in port names and in `audio.channel`.
     pub(super) fn from_prop(value: &str) -> Option<Self> {
         match value.trim() {
             "FL" => Some(Self::FrontLeft),
@@ -27,7 +23,7 @@ impl AudioChannel {
     }
 }
 
-/// Owned `Link` proxy. Dropping it destroys the link on the PipeWire daemon.
+/// Link proxy destroyed on drop.
 pub(super) struct FeederLink {
     _link: pw::link::Link,
 }
@@ -74,8 +70,7 @@ pub(super) fn try_link_feeder_to_virtual_mic(state: &mut LoopState) {
     }
 }
 
-/// Drop ALL active links. Called when either side disappears so we don't keep
-/// dangling proxies that would refuse to relink on reappearance.
+/// Clears links when either endpoint disappears.
 pub(super) fn drop_feeder_links(state: &mut LoopState) {
     if state.feeder_links.is_empty() {
         return;

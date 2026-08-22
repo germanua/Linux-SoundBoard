@@ -255,8 +255,7 @@ pub(super) fn install_volume_editor(adjustment: &Adjustment, label: &Label, entr
     }
 }
 
-/// Names resolve async, so the user may have moved on by the time one lands.
-/// Only label the track it was asked about.
+/// Rejects stale async name lookups.
 pub(super) fn should_apply_resolved_track_name(
     current_play_id: Option<&str>,
     resolved_for: &str,

@@ -225,8 +225,7 @@ impl TransportInner {
                 drop(active);
                 inner.track_name_label.set_label(&sound.name);
                 inner.track_name_label.set_visible(true);
-                // The first snapshot for this sound could not name it, so the
-                // media controls were told nothing. Tell them now.
+                // Publish metadata once the async name arrives.
                 let active = inner.active_track.borrow();
                 if let Some(track) = active.as_ref() {
                     crate::ui_event_bridge::post_now_playing(Some(crate::mpris::NowPlaying {
@@ -320,8 +319,6 @@ mod now_playing_tests {
         assert!(now.paused);
     }
 
-    /// The name is resolved asynchronously, so the first snapshot for a sound
-    /// has none yet.
     #[test]
     fn a_sound_whose_name_is_not_known_yet_announces_nothing() {
         assert_eq!(

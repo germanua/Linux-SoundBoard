@@ -24,8 +24,6 @@ pub(crate) enum MprisCommand {
     Stop,
     Next,
     Previous,
-    /// Bring the window to the front. Every desktop offers this, so it is a
-    /// second way back besides the tray icon.
     Raise,
     Quit,
 }
@@ -33,8 +31,6 @@ pub(crate) enum MprisCommand {
 /// The method a host called, or `None` for one we do not act on.
 fn command_for(method: &str) -> Option<MprisCommand> {
     match method {
-        // Play and Pause both toggle: the engine has one control, and a host
-        // only offers the button that matches the status we reported.
         "PlayPause" | "Play" | "Pause" => Some(MprisCommand::PlayPause),
         "Stop" => Some(MprisCommand::Stop),
         "Next" => Some(MprisCommand::Next),
@@ -121,8 +117,6 @@ impl PlayerName {
     }
 }
 
-/// Media-controls publisher. The objects stay exported for the life of the
-/// process; the desktop sees a player whenever the setting is on.
 pub(crate) struct MprisService {
     connection: gio::DBusConnection,
     registrations: RefCell<Vec<gio::RegistrationId>>,
@@ -300,8 +294,6 @@ mod tests {
         assert_eq!(command_for("Quit"), Some(MprisCommand::Quit));
     }
 
-    /// A host shows Play or Pause depending on the status we reported, and both
-    /// have to reach the same one control the engine offers.
     #[test]
     fn play_and_pause_both_toggle() {
         assert_eq!(command_for("Play"), Some(MprisCommand::PlayPause));
@@ -349,8 +341,7 @@ mod tests {
 
         let reply = reply.borrow_mut().take().expect("a reply arrived");
 
-        // The player has to be findable under its well-known name; on its
-        // unique name alone no panel would ever show it.
+        // Panels only discover the well-known bus name.
         let owned_while_playing = name_has_owner(&connection);
         service.set_enabled(false);
         settle();

@@ -33,8 +33,6 @@ pub trait HotkeyBackend: Send + Sync {
         Ok(())
     }
     fn start_listener(&self, sender: SyncSender<String>);
-    /// Drop whatever the backend owns (spawned daemons and friends) before we
-    /// exit. No-op unless there is something to tear down.
     fn shutdown(&self) {}
     fn as_any(&self) -> &dyn Any;
 }

@@ -112,7 +112,7 @@ impl TransportBar {
         self.inner.widget.upcast_ref()
     }
 
-    /// Button that reveals the collapsed sidebar; hidden unless the layout is collapsed.
+    /// Sidebar toggle for the narrow layout.
     pub fn sidebar_toggle_button(&self) -> &Button {
         &self.inner.sidebar_toggle_btn
     }

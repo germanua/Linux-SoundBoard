@@ -1645,8 +1645,6 @@ fn benchmark_20k_wide_folder_tree_store() {
 
         let started = std::time::Instant::now();
 
-        // 20,000 sibling album folders directly under the root: the wide
-        // fan-out the sidebar folder tree has never had to page through.
         let folders_per_batch = 500;
         for batch_start in (0..FOLDER_COUNT).step_by(folders_per_batch) {
             let batch_end = (batch_start + folders_per_batch).min(FOLDER_COUNT);
@@ -1683,8 +1681,6 @@ fn benchmark_20k_wide_folder_tree_store() {
             },
         ])));
 
-        // One sound per top-level folder, so every folder is audio-bearing
-        // and therefore actually appears in the folder tree.
         let sounds_per_batch = MAX_BATCH_ROWS / 2;
         for batch_start in (0..FOLDER_COUNT).step_by(sounds_per_batch) {
             let batch_end = (batch_start + sounds_per_batch).min(FOLDER_COUNT);
@@ -1801,8 +1797,6 @@ fn a_folder_can_be_reordered_to_an_arbitrary_slot_without_touching_other_prefere
                 .collect(),
         )),
     );
-    // Give "d" a display name and an expanded state, so the reorder can be
-    // shown not to disturb them. Dragging a folder must move it, nothing else.
     assert!(wait(store.set_folder_preferences(
         "/music",
         "d",
@@ -1917,8 +1911,6 @@ fn hiding_a_folder_removes_its_subtree_and_sounds_until_it_is_restored() {
     assert_eq!(wait(store.folder_children("/music", None, 0)).total, 2);
 }
 
-/// The schema exactly as version 4 created it, frozen. A migration test has to
-/// run against the real old shape, and it must not follow later schema edits.
 const SCHEMA_V4_SQL: &str = r#"BEGIN IMMEDIATE;
          CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
          CREATE TABLE roots(
@@ -2197,8 +2189,6 @@ fn one_chord_may_be_shared_by_several_sounds() {
     drop(LibraryStore::open(path.clone()).expect("migrate schema four database"));
 
     let connection = rusqlite::Connection::open(&path).expect("open migrated database");
-    // What the dropped unique index used to forbid. Policy now lives in the
-    // command layer, which is where the user-facing message comes from.
     connection
         .execute_batch(
             "UPDATE hotkey_bindings
@@ -2312,8 +2302,6 @@ fn several_sounds_on_one_chord_project_one_entry() {
         })));
     }
 
-    // The backends can only be told about a chord once, so a shared chord has
-    // to reach them as a single entry; the press resolves which sound plays.
     let page = wait(store.hotkey_bindings_after(None));
     assert_eq!(page.bindings.len(), 1);
     assert_eq!(page.bindings[0].normalized.as_deref(), Some("Ctrl+KeyA"));
@@ -2351,8 +2339,6 @@ fn a_hotkey_group_lists_every_sound_on_the_chord() {
     assert_eq!(ids, ["first", "second"], "members follow library order");
     assert!(members.iter().all(|member| member.tab_scope.is_none()));
 
-    // Pressing the chord arrives as whichever binding represents it, so every
-    // member has to see the same group.
     assert_eq!(wait(store.hotkey_group("second")), members);
 }
 
@@ -2443,8 +2429,6 @@ fn a_hotkey_bound_in_one_tab_is_not_shown_in_another() {
         general_position: 0,
         locations: Vec::new(),
     }])));
-    // The same sound sits in both tabs, which is why a binding limited to one
-    // of them must not follow it into the other.
     wait(store.apply_batch(LibraryBatch::ManualTabs(vec![
         ManualTabRecord {
             public_id: "one".to_string(),
@@ -2484,8 +2468,6 @@ fn a_hotkey_bound_in_one_tab_is_not_shown_in_another() {
     let in_two = wait(store.page(LibraryScope::ManualTab("two".to_string()), "", 0));
     assert_eq!(in_two.sounds[0].hotkey, None);
 
-    // General lists every sound, and a binding limited to a tab does not
-    // answer there either.
     let in_general = wait(store.page(LibraryScope::General, "", 0));
     assert_eq!(in_general.sounds[0].hotkey, None);
 }

@@ -347,8 +347,7 @@ row.appearance-choice-row {
   padding: 8px 16px;
 }
 
-/* GTK CSS Label does not support transform: scale() — use opacity-only pulse */
-/* One selector per keyframe: "0%, 100% {" only parses on GTK 4.20 and newer */
+/* GTK before 4.20 needs separate opacity-only keyframes. */
 @keyframes playing-dot-pulse {
   0% {
     opacity: 1;

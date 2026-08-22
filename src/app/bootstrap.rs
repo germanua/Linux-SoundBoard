@@ -376,7 +376,7 @@ fn show_engine_unavailable_error(
                         }
                     },
                 );
-                // Re-presented after this dialog finishes closing, so the choice stays open.
+                // Reopen the choice after this dialog closes.
                 glib::idle_add_local_once(move || {
                     show_engine_unavailable_error(
                         &callback_app,
@@ -1020,7 +1020,7 @@ struct PreparedApplication {
 struct StartupFailure {
     title: &'static str,
     message: String,
-    /// The in-process engine can serve this session instead of failing outright.
+    /// Whether this session can fall back to the in-process engine.
     transient_fallback: bool,
 }
 
@@ -1231,8 +1231,7 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
     window.connect_close_request(move |_| {
-        // Only reached when the window is really closing: the window's own
-        // handler runs first and stops the emission when it hides to the tray.
+        // Runs only after the window handler allows a real close.
         if let Some(tray) = tray.borrow().as_ref() {
             tray.shutdown();
         }
@@ -1312,8 +1311,6 @@ fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
     }
 }
 
-/// Where the tray icon lives while it is showing. Empty when the setting is
-/// off, when the session has no bus, or when exporting failed.
 type TraySlot = Rc<RefCell<Option<Rc<crate::tray::TrayService>>>>;
 
 fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
@@ -1394,8 +1391,7 @@ fn install_now_playing(
             });
         }
         if let Some(mpris) = mpris.as_ref() {
-            // Read here rather than at the call site so the setting can be
-            // turned on or off without restarting.
+            // Read on demand so toggling needs no restart.
             let enabled = state.config.lock().settings.mpris_enabled;
             mpris.set_enabled(enabled);
             mpris.set_now_playing(if enabled { now } else { None });
@@ -1631,8 +1627,7 @@ fn initialize_player(
         stop_audio_engine_service_and_process();
     } else {
         if startup_mode == StartupMode::Persistent {
-            // Reload and start the target even when a compatible engine is already
-            // connected so an upgraded RefuseManualStop policy takes effect.
+            // Reload updated service policy even when the engine is already up.
             let _ = manage_audio_engine_service(ServiceAction::Start);
         }
         let remote = match startup_mode {
@@ -1837,8 +1832,6 @@ fn ensure_user_audio_engine_units() {
         .status();
 }
 
-/// Standard search paths for systemd user unit files, in priority order.
-/// Mirrors the lookup order used by `systemctl --user` on most distributions.
 const SYSTEMD_USER_UNIT_DIRS: &[&str] = &[
     "/etc/systemd/user",
     "/usr/local/share/systemd/user",
@@ -1880,8 +1873,7 @@ fn is_appimage(path: &std::path::Path) -> bool {
 }
 
 fn render_audio_engine_service(executable: &std::path::Path) -> String {
-    // All three imply NoNewPrivileges — the seccomp ones implicitly — which blocks
-    // the setuid fusermount an AppImage needs to mount itself.
+    // These flags block an AppImage's setuid fusermount.
     let hardening = if is_appimage(executable) {
         ""
     } else {
@@ -2164,7 +2156,7 @@ mod tests {
         assert!(native_service.contains("RestrictSUIDSGID=yes"));
         assert!(native_service.contains("LockPersonality=yes"));
 
-        // Each of these implies NoNewPrivileges, which blocks the AppImage's mount.
+        // Each implies NoNewPrivileges, which blocks the AppImage mount.
         let service = render_audio_engine_service(&appimage);
         assert!(!service.contains("NoNewPrivileges"));
         assert!(!service.contains("RestrictSUIDSGID"));

@@ -86,8 +86,7 @@ use streams::{
 
 const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const TARGET_OUTPUT_CHANNELS: u32 = 2;
-// Mix tick runs every 2 ms. Ultra uses a 256-frame quantum (~5.3 ms), and a
-// tick faster than the quantum keeps the producer from starving under load.
+// Poll faster than PipeWire's 256-frame quantum.
 const MIX_INTERVAL_MS: u64 = 2;
 const MIX_CHUNK_FRAMES: usize = 512;
 const LOCAL_OUTPUT_QUEUE_TARGET_FRAMES: usize = 3_072;
@@ -138,8 +137,7 @@ pub struct PlayerSnapshot {
     pub playback_positions: Vec<PlaybackPosition>,
     pub playing_ids: Vec<String>,
     pub audio_sources: Vec<AudioSourceInfo>,
-    /// The node name of the microphone source currently captured for passthrough,
-    /// or `None` if passthrough is off or no suitable source was found yet.
+    /// Captured passthrough source, if any.
     pub active_capture_target: Option<String>,
 }
 
@@ -770,7 +768,7 @@ impl AudioPlayer {
                 "PlayReplace",
             );
         }
-        // Local backend: stop_all + play via the command channel (in-process, no IPC race).
+        // In-process stop-and-play avoids an IPC race.
         self.stop_all();
         self.play(
             sound_id,

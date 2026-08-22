@@ -6,15 +6,13 @@ pub(super) struct LoopState {
     // Config: read-only after `new()`, safe to clone into closures.
     pub(super) runtime: RuntimeConfig,
 
-    // Registry mirror: written only from the PipeWire `global`/`global_remove`
-    // callbacks, never from the RT process callback or the UI thread.
+    // Registry changes stay on the PipeWire loop thread.
     pub(super) available: bool,
     pub(super) default_metadata: Option<DefaultMetadataHandle>,
     pub(super) backend: Option<BackendState>,
     pub(super) sources: HashMap<u32, SourceDescriptor>,
     pub(super) sinks: HashMap<u32, SinkDescriptor>,
-    // Explicit-link state, filled in as Node and Port globals turn up. All four
-    // ids known -> `try_link_feeder_to_virtual_mic` builds the FL/FR links.
+    // Link once both FL/FR endpoint pairs exist.
     pub(super) feeder_node_id: Option<u32>,
     pub(super) feeder_output_ports: HashMap<AudioChannel, u32>,
     pub(super) virtual_mic_node_id: Option<u32>,
@@ -32,8 +30,6 @@ pub(super) struct LoopState {
     pub(super) claimed_default: bool,
     pub(super) default_source_command_in_flight: std::sync::Arc<AtomicBool>,
 
-    // Playback tracking: written by the mix tick (advance/finish) and the
-    // command handlers (Play/StopAll/Seek), read by `publish_snapshot`.
     pub(super) active_playback: Option<ActivePlayback>,
     pub(super) finished_playbacks: HashMap<String, PlaybackSnapshot>,
     pub(super) next_playback_order: u64,

@@ -23,8 +23,6 @@ fn test_config_default_has_empty_collections() {
     let _ = Config::default();
 }
 
-/// Pre-tray configs must load with the tray on. Plain `#[serde(default)]`
-/// would hand back `false` and silently opt every existing user out.
 #[test]
 fn a_config_without_the_tray_keys_still_turns_the_tray_on() {
     let settings: linux_soundboard::config::Settings =

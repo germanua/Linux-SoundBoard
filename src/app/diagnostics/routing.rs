@@ -1,5 +1,4 @@
-// Diagnostic output intentionally goes to stdout/stderr — this module is the
-// approved location for user-facing terminal output.
+// User-facing diagnostics print here on purpose.
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::HashMap;
@@ -84,8 +83,7 @@ fn relevant_graph_record(obj: &Value) -> Option<String> {
         return None;
     }
 
-    // Tight field set. `pw-dump` hides Link endpoints in info.props, same
-    // place media.class lives.
+    // pw-dump keeps Link endpoints under info.props.
     let prop = |key: &str| props.get(key).cloned().unwrap_or(Value::Null);
     let mut record = serde_json::Map::new();
     record.insert("id".into(), obj.get("id").cloned().unwrap_or(Value::Null));

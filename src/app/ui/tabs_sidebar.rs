@@ -44,12 +44,9 @@ struct FolderNode {
     context_gesture: RefCell<Option<GestureClick>>,
     drop_target: RefCell<Option<gtk4::DropTargetAsync>>,
     drag_source: RefCell<Option<gtk4::DragSource>>,
-    /// Where this node sits among its loaded siblings. Tells us when scrolling
-    /// has gotten close enough to the end to prefetch.
+    /// Loaded sibling index used for prefetch.
     sibling_index: usize,
     sibling_pager: Option<std::rc::Weak<SiblingPager>>,
-    /// Pager that loads this node's own children, one page at a time.
-    /// Created lazily on first expand and cleared on collapse.
     children_pager: Rc<RefCell<Option<Rc<SiblingPager>>>>,
 }
 
@@ -62,14 +59,12 @@ struct SiblingPager {
     next_page: Cell<usize>,
     has_more: Cell<bool>,
     in_flight: Cell<bool>,
-    /// Pages currently materialized in `children`. Everything else in the
-    /// store is a placeholder.
+    /// Materialized pages; the rest are placeholders.
     loaded_pages: RefCell<std::collections::BTreeSet<usize>>,
     /// Page most recently brought into view; eviction keeps its neighbours.
     focus_page: Cell<usize>,
     pending_pages: RefCell<std::collections::BTreeSet<usize>>,
-    /// The owning node's "children already requested" latch. Held so a failed
-    /// page load can clear it; see [`SiblingPager::mark_reloadable`].
+    /// Cleared after a failed page load.
     children_requested: Rc<Cell<bool>>,
 }
 
@@ -82,8 +77,7 @@ impl SiblingPager {
     }
 }
 
-/// How many unrendered rows are allowed to remain between the last bound
-/// sibling and the end of what's loaded before the next page is requested.
+/// Prefetch distance from the loaded end.
 const SIBLING_PREFETCH_MARGIN: usize = 32;
 
 fn should_request_next_sibling_page(
@@ -195,8 +189,6 @@ impl FolderNode {
             .clone()
     }
 
-    /// The child store only if it has already been created. Used by the
-    /// retention walk, which must not allocate stores just to count them.
     fn loaded_children(&self) -> Option<gio::ListStore> {
         self.children.borrow().clone()
     }
@@ -232,8 +224,6 @@ impl FolderNode {
         Self::folder_at(root_path, item, 0, None)
     }
 
-    /// Like [`FolderNode::folder`], but also records this node's position
-    /// among its siblings and the shared pager that can load more of them.
     fn folder_at(
         root_path: String,
         item: crate::library_store::FolderItem,
@@ -411,8 +401,6 @@ fn folder_display_label(relative_path: &str) -> &str {
         .unwrap_or(relative_path)
 }
 
-/// Every sound a folder currently resolves to, paged so one oversized folder
-/// cannot build an unbounded query.
 fn collect_folder_sound_ids(
     library: &crate::library_store::LibraryStore,
     scope: crate::library_store::LibraryScope,
@@ -445,8 +433,6 @@ fn handle_folder_drop(
     drop: &gtk4::gdk::Drop,
     callbacks: &FolderDropCallbacks,
 ) {
-    // Refusals are a normal outcome of a mis-aimed drag, so they are logged at
-    // debug rather than warn, but never silently.
     let reject = |reason: &str| {
         log::debug!("Folder reorder drop refused: {reason}");
         drop.finish(gtk4::gdk::DragAction::empty());
@@ -584,8 +570,6 @@ fn install_folder_drop_target(
     });
     target.connect_drop(move |target, drop, _, y| {
         set_folder_drop_feedback(target.widget(), None);
-        // A folder drop reorders; a sound drop changes membership. The zone
-        // only matters for folders, so it is resolved before reading the data.
         let row_height = f64::from(target.widget().map(|w| w.height()).unwrap_or(0));
         let zone = tab_dnd::folder_drop_zone(y, row_height);
         let is_folder_drag = drop.formats().contain_mime_type(tab_dnd::FOLDER_DND_MIME);
@@ -758,8 +742,7 @@ impl TabsSidebar {
         let library_for_children = state.library.clone();
         let folder_tree = TreeListModel::new(folder_roots.clone(), false, false, move |item| {
             let boxed = item.downcast_ref::<BoxedAnyObject>()?;
-            // A placeholder stands in for an evicted page: it is never
-            // expandable, and its real node reappears when the page reloads.
+            // Evicted pages leave non-expandable placeholders.
             let node = boxed.try_borrow::<FolderNode>().ok()?;
             if !node.has_children {
                 return None;
@@ -879,8 +862,7 @@ impl TabsSidebar {
             let children_requested = Rc::clone(&node.children_requested);
             drop(node);
             if let Some(pager) = sibling_pager.as_ref().and_then(std::rc::Weak::upgrade) {
-                // Track where the viewport is so eviction drops the pages
-                // farthest from it rather than whatever loaded first.
+                // Evict pages farthest from the viewport.
                 pager
                     .focus_page
                     .set(sibling_index / crate::library_store::PAGE_SIZE);
@@ -1104,8 +1086,6 @@ impl TabsSidebar {
                             let dialog_host = dialog_host.clone();
                             let display_name = name.borrow().clone();
                             let on_removed = Rc::clone(&on_removed);
-                            // The count is read first so the prompt can say what
-                            // disappears rather than leaving the user to guess.
                             if let Err(error) = commands::dispatch_async_result(
                                 "count_folder_before_remove",
                                 move || response.recv(),
@@ -1233,8 +1213,6 @@ impl TabsSidebar {
             };
             let (disclosure_handlers, expanded_handler, gesture, drop_target, drag_source) = {
                 let Ok(node) = boxed.try_borrow::<FolderNode>() else {
-                    // Placeholder rows install no handlers, so there is
-                    // nothing to disconnect.
                     return;
                 };
                 let disclosure_handlers = node.disclosure_handlers.borrow_mut().take();
@@ -1302,8 +1280,6 @@ impl TabsSidebar {
             }));
         }
         {
-            // A reorder only changes sibling order, so the tree is rebuilt but
-            // membership listeners are left alone.
             let inner_weak = Arc::downgrade(&inner);
             folder_reordered.borrow_mut().replace(Box::new(move || {
                 if let Some(inner) = inner_weak.upgrade() {
@@ -1344,8 +1320,6 @@ impl TabsSidebar {
                     return;
                 };
                 let Ok(node) = boxed.try_borrow::<FolderNode>() else {
-                    // A placeholder is not a selectable scope; its page is
-                    // already being re-read.
                     return;
                 };
                 let Some(relative_path) = node.relative_path.clone() else {
@@ -1537,8 +1511,7 @@ impl TabsInner {
             return;
         }
         if pager.in_flight.replace(true) {
-            // Keep the most recent request: it is the one the user is looking
-            // at. Dropping it would leave those rows blank permanently.
+            // Keep the active request queued.
             pager.pending_pages.borrow_mut().insert(page);
             return;
         }
@@ -1579,8 +1552,7 @@ impl TabsInner {
                             .has_more
                             .set(count == crate::library_store::PAGE_SIZE);
                     } else {
-                        // Replace this page's placeholders in place: equal
-                        // counts keep every index and the scroll position.
+                        // Preserve indices while swapping placeholders.
                         let replaced = count.min(existing - start_index);
                         pager_for_result.children.splice(
                             start_index as u32,
@@ -1597,8 +1569,7 @@ impl TabsInner {
                     log::warn!("Failed to load sound folder children: {error}");
                     pager_for_result.has_more.set(false);
                     pager_for_result.in_flight.set(false);
-                    // Transient store failures (a saturated worker queue, for
-                    // one) must not leave this folder empty for good.
+                    // Let transient failures retry.
                     pager_for_result.mark_reloadable();
                     Self::drain_pending_sibling_page(&pager_for_result);
                 }
@@ -1612,8 +1583,7 @@ impl TabsInner {
 
     /// Starts the page that was asked for while the pager was busy.
     fn drain_pending_sibling_page(pager: &Rc<SiblingPager>) {
-        // Nearest to the viewport first, so what the user is looking at fills
-        // in before anything they have already scrolled past.
+        // Load nearest to the viewport first.
         let focus = pager.focus_page.get();
         let next = pager
             .pending_pages
@@ -1930,8 +1900,7 @@ impl TabsInner {
             .hexpand(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
-        // Tagged so the Delete shortcut can read the tab name back off the row
-        // instead of querying the store from the GTK thread.
+        // Shortcuts must not query the store on the GTK thread.
         label.set_widget_name(TAB_NAME_LABEL);
 
         hbox.append(&icon);
@@ -2298,8 +2267,6 @@ impl TabsInner {
         }
     }
 
-    /// Asks whether to move every sound in one folder into another, then does
-    /// it. Only the folder membership changes; the files stay where they are.
     fn request_folder_merge(self: &Arc<Self>, request: FolderMergeRequest) {
         let library = self.state.library.clone();
         let scope = crate::library_store::LibraryScope::Folder {
@@ -2307,8 +2274,7 @@ impl TabsInner {
             relative_path: request.source_relative_path.clone(),
         };
         let inner_weak = Arc::downgrade(self);
-        // The sounds are collected before asking so the prompt can state a real
-        // count, and so the move applies exactly what was counted.
+        // Move exactly the sounds counted in the prompt.
         if let Err(error) = commands::dispatch_async_result(
             "collect_folder_merge_sounds",
             move || collect_folder_sound_ids(&library, scope),
@@ -2544,8 +2510,6 @@ impl TabsInner {
         if tab_hotkeys {
             menu_model.append(Some("Set Tab Hotkey"), Some("tab-ctx.hotkey"));
         }
-        // General cannot be renamed or deleted, so with tab hotkeys off it has
-        // nothing to offer and no menu should appear at all.
         if menu_model.n_items() == 0 {
             return;
         }
@@ -2704,7 +2668,6 @@ mod tests {
 
     #[test]
     fn should_request_next_sibling_page_triggers_near_loaded_end() {
-        // 32 rows from the end of what's loaded, more pages exist, nothing in flight.
         assert!(should_request_next_sibling_page(224, 256, true, false));
     }
 
@@ -2725,14 +2688,10 @@ mod tests {
 
     #[test]
     fn should_request_next_sibling_page_boundary_exactly_at_margin() {
-        // margin is 32: index 224 is exactly loaded(256) - margin, should trigger;
-        // index 223 is one short of the margin, should not.
         assert!(should_request_next_sibling_page(224, 256, true, false));
         assert!(!should_request_next_sibling_page(223, 256, true, false));
     }
 
-    /// Builds a node holding `child_count` loaded children, each of which may
-    /// itself hold `grandchildren` loaded children.
     fn node_with_loaded_children(child_count: usize, grandchildren: usize) -> BoxedAnyObject {
         let parent = FolderNode::folder_at(
             "/music".to_string(),
@@ -2791,8 +2750,6 @@ mod tests {
 
     #[test]
     fn counts_rows_loaded_under_nested_folders() {
-        // This is the case a running counter gets wrong: releasing the parent
-        // also drops the grandchildren, so they must be counted as retained.
         let node = node_with_loaded_children(3, 4);
         let store = gio::ListStore::new::<BoxedAnyObject>();
         store.append(&node);
@@ -2806,8 +2763,6 @@ mod tests {
         assert_eq!(count_loaded_child_rows(&store), 0);
     }
 
-    /// A transient store failure (the live one was "library worker queue is
-    /// full") must not leave the folder permanently empty.
     #[test]
     fn a_failed_page_load_leaves_the_node_reloadable() {
         let temp_dir =
@@ -2909,8 +2864,6 @@ mod tests {
 
     #[test]
     fn leaf_folders_allocate_no_child_store() {
-        // An empty gio::ListStore costs ~186 bytes. In a wide library almost
-        // every folder is a leaf, so allocating one per node is pure waste.
         let leaf = FolderNode::folder_at(
             "/music".to_string(),
             crate::library_store::FolderItem {
@@ -2972,7 +2925,6 @@ mod tests {
 
     #[test]
     fn dropping_above_an_earlier_row_keeps_the_slot() {
-        // Dragging downwards to upwards: nothing shifts, so the raw slot stands.
         assert_eq!(folder_reorder_target_index(3, 1, false), 1);
         assert_eq!(folder_reorder_target_index(3, 1, true), 2);
     }
@@ -3067,8 +3019,6 @@ mod tests {
         assert!(should_release_collapsed_children(4_097, 4_096));
     }
 
-    /// Drives the real GTK main context until `done` holds or the budget runs
-    /// out, so async store replies land the way they do in the running app.
     fn pump_until(done: impl Fn() -> bool) -> bool {
         let context = glib::MainContext::default();
         for _ in 0..2_000 {

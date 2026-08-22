@@ -543,8 +543,6 @@ impl PagedSoundModel {
         self.publish_cache_diagnostics();
     }
 
-    /// Diagnostics runs on worker threads too, so the cache size is copied out
-    /// rather than read back off this main-thread object.
     fn publish_cache_diagnostics(&self) {
         let imp = self.imp();
         let pages = imp.pages.borrow();

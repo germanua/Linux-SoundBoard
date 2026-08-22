@@ -359,8 +359,6 @@ fn explicit_selected_mic_rejects_linux_soundboard_virtual_mic() {
 
 #[test]
 fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
-    // easyeffects_source registered alongside physical mics: it wins whatever
-    // PipeWire calls the default and whatever previous_default_source_name holds.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         6,
@@ -397,7 +395,6 @@ fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
         Some("easyeffects_source")
     );
 
-    // Even when previous_default_source_name is set to a physical mic, enhancement wins.
     state.previous_default_source_name = Some("alsa_input.low".to_string());
     assert_eq!(
         resolve_capture_target_from_default(&state, Some(VIRTUAL_SOURCE_NAME.to_string()))
@@ -405,7 +402,6 @@ fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
         Some("easyeffects_source")
     );
 
-    // best_upstream_mic_source_name independently confirms easyeffects_source scores highest.
     assert_eq!(
         best_upstream_mic_source_name(&state.sources).as_deref(),
         Some("easyeffects_source")
@@ -422,8 +418,6 @@ fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
 
 #[test]
 fn auto_capture_falls_back_to_physical_mic_when_no_enhancement_source() {
-    // When EasyEffects is not running, best_upstream_mic_source_name picks
-    // the highest-priority physical mic by priority_session score.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state
         .sources

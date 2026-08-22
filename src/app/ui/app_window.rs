@@ -82,7 +82,7 @@ pub fn build_window(
             hotkeys.availability_message()
         };
         if let Some(reason) = hotkey_message {
-            // Banner titles are parsed as markup; remediation commands contain "&&".
+            // Escape remediation commands before Pango parses them.
             let banner = adw::Banner::new(&format!(
                 "Global hotkeys unavailable — {}",
                 glib::markup_escape_text(&reason)
@@ -354,8 +354,6 @@ pub fn build_window(
     }
 
     {
-        // Registered here rather than in bootstrap: resolving a press needs the
-        // sidebar and the sound list, which only exist inside this function.
         let state_hk = Arc::clone(&state);
         let window_hk = window.clone();
         let transport_hk = transport.clone();
@@ -376,8 +374,6 @@ pub fn build_window(
     }
 
     {
-        // Registered here rather than in bootstrap for the same reason as the
-        // hotkey handler: acting on a click needs the transport and the window.
         let state_tray = Arc::clone(&state);
         let window_tray = window.clone();
         let transport_tray = transport.clone();
@@ -423,8 +419,6 @@ pub fn build_window(
     window
 }
 
-/// The settings a press is resolved against, read on the UI thread and carried
-/// into the worker.
 fn hotkey_press_context(state: &Arc<AppState>, sound_list: &SoundList) -> commands::HotkeyPress {
     let (tab_hotkeys, multi_sound, mode) = {
         let config = state.config.lock();
@@ -523,8 +517,6 @@ fn handle_tray_action(
             refresh_tray_menu(state, window.is_visible());
         }
         MenuAction::Quit => {
-            // Marked first so the window's own close handler lets the close
-            // through instead of hiding to the tray again.
             crate::ui_event_bridge::mark_quit_requested();
             window.close();
         }

@@ -36,8 +36,6 @@ impl AuditWriter {
     }
 }
 
-/// Initialise the audit channel from the environment. Idempotent — calling
-/// twice is a no-op. Safe to call on any thread.
 pub fn init_from_env() {
     if !env_enabled() {
         return;
@@ -80,8 +78,6 @@ fn audit_log_path() -> PathBuf {
     std::env::temp_dir().join(FILE_NAME)
 }
 
-/// Record a PipeWire `default`-metadata write Soundboard performed (or
-/// cleared). `before`/`after` carry the prior and new `target.object` value.
 #[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub fn record_metadata_write(
@@ -204,7 +200,7 @@ mod tests {
         );
         assert_eq!(map.get("before"), Some(&Value::Null));
         let ts = map.get("ts").and_then(|v| v.as_str()).expect("ts string");
-        // Loose ISO8601 sanity: contains 'T', ends with 'Z', has a 4-digit year.
+        // Basic ISO 8601 shape check.
         assert!(ts.contains('T') && ts.ends_with('Z'), "ts={ts}");
         assert!(ts.split_once('-').is_some_and(|(year, _)| year.len() == 4));
     }
@@ -274,8 +270,6 @@ mod tests {
     #[test]
     fn is_enabled_is_false_when_env_unset_and_init_skipped() {
         let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
-        // The global OnceLock can't be unset, so drive the public API with
-        // AUDIT unset instead and assert nothing landed at the audit path.
         std::env::remove_var(ENV_VAR);
         let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         let dir = tempdir();

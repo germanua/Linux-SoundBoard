@@ -18,8 +18,6 @@ use crate::ui::{menu, tab_dnd};
 
 use super::{SoundListInner, SoundRowData, SOUND_CONTEXT_NAMESPACE};
 
-/// One pending hotkey change, so the same dispatch serves both the direct path
-/// and the one that first asks about sharing.
 struct HotkeyAssignment {
     inner: Rc<SoundListInner>,
     state: Arc<AppState>,
@@ -669,8 +667,6 @@ impl SoundListInner {
                             tab_scope: tab_scope.clone(),
                         };
 
-                        // Sharing a shortcut is never silent: if a sound
-                        // already answers to it, say which one and ask.
                         let Some(chord) = hotkey else {
                             assign.dispatch();
                             return;
@@ -696,8 +692,7 @@ impl SoundListInner {
                                         return;
                                     }
                                     Err(error) => {
-                                        // The set below reports the same clash
-                                        // properly; do not block on the lookup.
+                                        // Let set report the clash.
                                         log::warn!("Could not check the shortcut: {error}");
                                         assign.dispatch();
                                         return;

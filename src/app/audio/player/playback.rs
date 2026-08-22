@@ -186,8 +186,7 @@ impl ActivePlayback {
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
             let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
 
-            // Linear fade-in over the first FADE_IN_SAMPLES: kills the cold-start
-            // click when a waveform opens at non-zero amplitude.
+            // Fade in to avoid a cold-start click.
             const FADE_IN_SAMPLES: u64 = 480; // ~5 ms at 48 kHz stereo
             let fade_scale = if self.fallback_samples_written <= FADE_IN_SAMPLES {
                 self.fallback_samples_written as f32 / FADE_IN_SAMPLES as f32

@@ -14,8 +14,6 @@ fn create_test_config() -> Config {
         ),
         ..Config::default()
     };
-    // auto_gain off so library commands don't accidentally kick the loudness
-    // coordinator. Tests that want backfill behaviour turn it on themselves.
     cfg.settings.auto_gain = false;
     cfg
 }
@@ -35,8 +33,6 @@ fn create_projection_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(HotkeyManager::new_test_noop()))
 }
 
-/// Commits a binding straight to the store. `set_hotkey` would also register
-/// with the real backend, which isn't there in tests and flakes under load.
 fn seed_hotkey_binding(
     library: &crate::library_store::LibraryStore,
     owner: crate::library_store::HotkeyBindingOwner,
@@ -62,8 +58,6 @@ fn seed_hotkey_binding(
         .expect("seed hotkey binding");
 }
 
-/// Store fixture built through the bounded store API. Sounds and roots come in
-/// as arguments, since `Config` no longer carries the library.
 fn create_test_library_with(
     roots: &[String],
     sounds: &[Sound],
@@ -552,8 +546,6 @@ fn test_set_control_hotkey_rejects_duplicate_control_binding() {
     let library = create_test_library_with(&[], &[]);
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-    // The store owns hotkey bindings now, so commit the conflicting one there
-    // instead of setting it on the settings struct.
     seed_hotkey_binding(
         &library,
         crate::library_store::HotkeyBindingOwner::Control(
@@ -727,8 +719,6 @@ fn a_sound_may_never_take_a_control_actions_chord() {
         "Ctrl+Alt+KeyH",
     );
 
-    // Sharing applies between sounds. A control action reached under a sound's
-    // binding id would never run, so this stays a conflict either way.
     let error = commands::set_hotkey(
         sound_id,
         Some("Ctrl+Alt+KeyH".to_string()),
@@ -814,8 +804,6 @@ fn two_tabs_may_use_the_same_chord_for_different_sounds() {
     )
     .expect("bind the chord in the first tab");
 
-    // Different tabs never answer at the same time, so this is not a clash
-    // even with multiple sounds per hotkey off.
     commands::set_hotkey(
         second_id,
         Some("Ctrl+Alt+Digit3".to_string()),
@@ -856,8 +844,6 @@ fn a_scoped_binding_still_clashes_with_one_that_is_live_everywhere() {
 #[test]
 fn a_tab_binding_id_is_not_mistaken_for_a_sound() {
     let sound = Sound::new("Airhorn".to_string(), "/tmp/airhorn.mp3".to_string());
-    // Sound bindings are stored under the sound's own public id, so the two
-    // must stay distinguishable at the point a press arrives.
     assert_eq!(commands::tab_from_binding_id(&sound.id), None);
     assert_eq!(
         commands::tab_from_binding_id(&commands::tab_binding_id("tab:party")),

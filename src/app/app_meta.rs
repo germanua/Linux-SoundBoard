@@ -16,8 +16,7 @@ pub const X11_BACKEND: &str = "x11";
 pub const LOCAL_PLAYBACK_NODE_NAME: &str = "linuxsoundboard.local_playback";
 pub const MIC_CAPTURE_NODE_NAME: &str = "linuxsoundboard.mic_capture";
 pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
-// Client stream that pumps audio into the null-sink. The sink itself is
-// VIRTUAL_SOURCE_NAME; this is the thing feeding it.
+// Stream feeding the virtual mic's null sink.
 pub const VIRTUAL_MIC_FEEDER_NODE_NAME: &str = "linuxsoundboard.virtual_mic_feeder";
 pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
 pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";

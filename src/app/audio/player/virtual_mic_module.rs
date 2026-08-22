@@ -16,15 +16,13 @@ use crate::app_meta::{VIRTUAL_MIC_DESCRIPTION, VIRTUAL_SOURCE_NAME};
 const VIRTUAL_MIC_REPAIR_DELAY: Duration = Duration::from_secs(2);
 const VIRTUAL_MIC_REPAIR_COOLDOWN: Duration = Duration::from_secs(5);
 
-/// Owning handle for a `pactl`-loaded `module-null-sink` instance.
-/// Dropping this calls `pactl unload-module <id>`.
+/// Unloads its pactl null sink on drop.
 pub(super) struct NullSinkModule {
     pub(super) module_id: u32,
 }
 
 impl NullSinkModule {
-    /// Load a fresh null-sink, sweeping up anything a previous engine crash
-    /// left behind so the graph never holds duplicates under one `sink_name`.
+    /// Replaces stale null sinks from crashed engines.
     #[cfg(not(test))]
     pub(super) fn load_or_attach() -> Result<Self, EngineError> {
         let stale = find_all_existing_module_ids();
@@ -229,9 +227,8 @@ fn virtual_source_exists() -> bool {
     true
 }
 
-/// Every module-null-sink currently loaded under our virtual mic name. Used to
-/// sweep up duplicates from runs that died before Drop could unload them.
 #[cfg(not(test))]
+/// Finds every null sink using our virtual-mic name.
 fn find_all_existing_module_ids() -> Vec<u32> {
     let output = match Command::new("pactl")
         .args(["list", "short", "modules"])
@@ -284,8 +281,7 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("media.class=Audio/Source/Virtual"));
         assert!(joined.contains(&format!("sink_name={VIRTUAL_SOURCE_NAME}")));
-        // Description must be space-free so pactl doesn't truncate at the
-        // first whitespace. See app_meta::VIRTUAL_MIC_DESCRIPTION.
+        // pactl truncates descriptions at whitespace.
         assert!(joined.contains(VIRTUAL_MIC_DESCRIPTION));
         assert!(!VIRTUAL_MIC_DESCRIPTION.contains(' '));
     }

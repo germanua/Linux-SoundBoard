@@ -1,5 +1,3 @@
-/// Frames pre-allocated for the first `SampleBuffer`. Symphonia resizes on the
-/// first real decode if the frame size differs, so this only matters for packet one.
 const INITIAL_DECODER_BUFFER_FRAMES: u64 = 4_096;
 
 // Audio source abstraction
@@ -20,7 +18,7 @@ pub(super) trait ResettableSource: AudioSource {
     fn seek_resettable(&mut self, position: std::time::Duration) -> Result<(), SeekError>;
 }
 
-/// Converts a mono or stereo `AudioSource` to stereo at `to_rate` using linear interpolation.
+/// Resamples mono or stereo sources to stereo.
 pub(super) struct ChannelSampleRateConverter<S: AudioSource> {
     source: S,
     in_channels: u16,

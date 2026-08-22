@@ -100,8 +100,6 @@ fn test_is_smaps_mapping_header() {
 
 #[test]
 fn inventory_counts_the_library_not_the_config_arrays() {
-    // Production shape since the SQLite cutover: the config arrays are empty
-    // and every library count comes from the store.
     let runtime = RuntimeInventory {
         library_sound_count: 156_000,
         library_tab_count: 8,
@@ -138,8 +136,6 @@ fn inventory_reports_the_resident_row_cache_not_a_whole_library_estimate() {
 
 #[test]
 fn inventory_does_not_double_count_control_hotkeys() {
-    // library_hotkey_count already includes control bindings: the store counts
-    // rows where control_action IS NOT NULL alongside live sound bindings.
     let runtime = RuntimeInventory {
         library_hotkey_count: 5,
         ..Default::default()

@@ -1094,8 +1094,6 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             |row| row.get(0),
         )
         .optional()?;
-    // The flavor tag is per schema version, so match the version found above,
-    // not the current release.
     let expected_flavor = format!("bounded-generation-v{schema_version}");
     if flavor.as_deref() != Some(expected_flavor.as_str()) {
         return Err(LegacyMigrationError::Invalid(

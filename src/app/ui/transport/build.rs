@@ -28,7 +28,7 @@ impl TransportBar {
         hbox.add_css_class("transport-row");
         hbox.add_css_class("transport-row-primary");
 
-        // Reveals the sidebar when the layout is collapsed; hidden in the wide layout.
+        // Shows the sidebar only in the narrow layout.
         let sidebar_toggle_btn = icons::button(icons::SIDEBAR, "Show Tabs");
         sidebar_toggle_btn.add_css_class("transport-btn");
         sidebar_toggle_btn.add_css_class("transport-icon-btn");
@@ -308,8 +308,6 @@ impl TransportBar {
             build_started.elapsed().as_micros()
         );
 
-        // Compact layout only: the audio and utility clusters drop down here
-        // when the window is too narrow for one row.
         let row2 = GtkBox::new(Orientation::Horizontal, 5);
         row2.add_css_class("transport-row");
         row2.add_css_class("transport-row-secondary");

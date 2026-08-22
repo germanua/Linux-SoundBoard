@@ -20,8 +20,6 @@ thread_local! {
     static LOUDNESS_STATUS_REFRESH_HANDLER: RefCell<Option<Box<dyn FnMut()>>> =
         RefCell::new(None);
     static SNAPSHOT_HANDLER: SnapshotHandler = RefCell::new(None);
-    /// The settings panel is built once and kept, so a mode changed by hotkey
-    /// would otherwise still read the old value the next time it is opened.
     static GROUP_MODE_HANDLER: GroupModeHandler = RefCell::new(None);
 
     static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
@@ -33,8 +31,6 @@ thread_local! {
 
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
 
-    /// Set once when the user asks to quit from the tray. Without it, closing
-    /// the window would consult the policy above and hide it again.
     static QUIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 
     static EXPLICIT_PLAY_PENDING: Cell<bool> = const { Cell::new(false) };
@@ -170,8 +166,6 @@ pub fn close_should_hide_to_tray() -> bool {
     })
 }
 
-/// Record that the next window close is a real quit. One-shot: the process is
-/// on its way out, so it is never cleared.
 pub fn mark_quit_requested() {
     QUIT_REQUESTED.with(|requested| requested.set(true));
 }
@@ -195,8 +189,6 @@ pub fn set_snapshot_handler(f: impl FnMut(PlayerSnapshot) + 'static) {
     SNAPSHOT_HANDLER.with(|h| *h.borrow_mut() = Some(Box::new(f)));
 }
 
-/// Called from the audio engine, hopped onto the GTK thread by
-/// `MainContext::invoke`.
 pub fn dispatch_snapshot(snapshot: PlayerSnapshot) {
     SNAPSHOT_HANDLER.with(|h| {
         if let Some(handler) = h.borrow_mut().as_mut() {
@@ -210,8 +202,6 @@ pub fn mark_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(true));
 }
 
-/// Clear the pending-play flag. Called when the new sound appears in a
-/// snapshot (success) or when the play fails (error callback).
 pub fn clear_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(false));
 }

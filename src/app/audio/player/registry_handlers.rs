@@ -1,7 +1,5 @@
 use super::*;
 
-/// Parse a PipeWire `Audio/Source` or `Audio/Source/Virtual` node into a
-/// `SourceDescriptor`, or return `None` if the global is not a source.
 pub(super) fn source_from_global(
     global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
 ) -> Option<SourceDescriptor> {

@@ -209,8 +209,6 @@ mod dispatch {
         let second_id = second.id.clone();
         let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
         let fake = Arc::new(FakeAudioPlayer::new());
-        // One context across both presses: the cursor is what makes the second
-        // press land on the second sound.
         let context =
             super::super::SoundLookup::HotkeyBinding(press(true, crate::config::GroupMode::Next));
 
