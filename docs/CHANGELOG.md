@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- **A notification is replaced by the next one instead of queueing behind it:** Cycling a mode from its button or hotkey posted a notification per press, and those were shown one after another, so the text on screen lagged several presses behind the setting it described — the point of the message being to say what the next press will do. Each new message now dismisses the one before it, so what is on screen is always the current state.
+
 ## [2.3.2] - 2026-08-22
 
 ### Fixed

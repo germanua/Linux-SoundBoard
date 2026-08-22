@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -599,9 +600,26 @@ fn handle_control_hotkey(
     }
 }
 
+thread_local! {
+    static VISIBLE_TOAST: RefCell<Option<adw::Toast>> = const { RefCell::new(None) };
+}
+
 pub fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
+    if let Some(previous) = VISIBLE_TOAST.with(|visible| visible.borrow_mut().take()) {
+        previous.dismiss();
+    }
+
     let toast = adw::Toast::new(message);
     toast.set_timeout(2);
+    toast.connect_dismissed(|dismissed| {
+        VISIBLE_TOAST.with(|visible| {
+            let mut visible = visible.borrow_mut();
+            if visible.as_ref() == Some(dismissed) {
+                *visible = None;
+            }
+        });
+    });
+    VISIBLE_TOAST.with(|visible| *visible.borrow_mut() = Some(toast.clone()));
     overlay.add_toast(toast);
 }
 

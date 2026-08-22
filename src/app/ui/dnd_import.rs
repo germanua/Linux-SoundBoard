@@ -10,6 +10,7 @@ use crate::app_state::AppState;
 use crate::audio::scanner;
 use crate::commands;
 
+use super::app_window::show_toast;
 use super::icons;
 use super::sound_list::SoundList;
 
@@ -282,12 +283,6 @@ fn handle_drop_import(
         set_drop_state(drop_zone, title, subtitle, DropState::Hidden);
     }
     true
-}
-
-fn show_toast(overlay: &adw::ToastOverlay, message: &str) {
-    let toast = adw::Toast::new(message);
-    toast.set_timeout(2);
-    overlay.add_toast(toast);
 }
 
 pub(super) fn supported_audio_formats() -> String {
