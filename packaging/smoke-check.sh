@@ -477,6 +477,19 @@ for payload in \
     fi
 done
 
+missing_contexts=()
+while IFS= read -r context_dir; do
+    context_name="$(basename "$context_dir")"
+    if ! grep -qE "SYMBOLIC_CONTEXTS=\(([^)]*[[:space:]])?${context_name}:" "$APPIMAGE_PACKAGER"; then
+        missing_contexts+=("$context_name")
+    fi
+done < <(find "$REPO_ROOT/src/resources/icons/scalable" -mindepth 1 -maxdepth 1 -type d | sort)
+if [[ ${#missing_contexts[@]} -eq 0 ]]; then
+    pass "AppImage hicolor index declares every bundled symbolic icon context"
+else
+    fail "AppImage hicolor index omits bundled icon contexts: ${missing_contexts[*]}"
+fi
+
 if grep -qF 'LSB_INSTALL_VERSION' "$REPO_ROOT/src/app/bootstrap.rs" \
     && grep -qF '.installed-version' "$REPO_ROOT/packaging/linux/install-user.sh"; then
     pass "AppImage updater: installed version handoff is bundled"

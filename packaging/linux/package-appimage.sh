@@ -244,13 +244,26 @@ done < <(find "$ICON_SOURCE_ROOT" -type f | sort)
 # hicolor-icon-theme package have no other copy to merge ours with. Cheap
 # insurance for in-process lookups; the desktop panel resolves the window icon
 # from an installed .desktop instead and never sees the AppDir at all.
+APP_ICON_SIZES=(16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512)
+SYMBOLIC_CONTEXTS=(actions:Actions devices:Devices places:Places)
 {
     printf '[Icon Theme]\nName=Hicolor\nComment=Fallback icon theme\nHidden=true\nDirectories='
-    printf '%s' "$(printf '%s/apps,' 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512 | sed 's/,$//')"
+    directories=()
+    for size in "${APP_ICON_SIZES[@]}"; do
+        directories+=("$size/apps")
+    done
+    for context in "${SYMBOLIC_CONTEXTS[@]}"; do
+        directories+=("scalable/${context%%:*}")
+    done
+    printf '%s' "$(IFS=,; printf '%s' "${directories[*]}")"
     printf '\n\n'
-    for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+    for size in "${APP_ICON_SIZES[@]}"; do
         printf '[%s/apps]\nSize=%s\nContext=Applications\nType=Fixed\n\n' \
             "$size" "${size%%x*}"
+    done
+    for context in "${SYMBOLIC_CONTEXTS[@]}"; do
+        printf '[scalable/%s]\nSize=16\nMinSize=8\nMaxSize=512\nContext=%s\nType=Scalable\n\n' \
+            "${context%%:*}" "${context##*:}"
     done
 } >"$APPDIR/usr/share/icons/hicolor/index.theme"
 

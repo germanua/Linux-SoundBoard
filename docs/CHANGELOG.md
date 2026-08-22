@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **AppImage showed the desktop's icons instead of its own:** The AppImage generates a hicolor `index.theme` for its bundled application icons, and `AppRun` puts that directory ahead of the host in `XDG_DATA_DIRS`, so it becomes the hicolor index the app itself reads. GTK counts the resource paths registered by the application as part of hicolor and only scans the subdirectories the index declares; the generated file listed the `*/apps` sizes and nothing else, so every bundled symbolic icon in `scalable/actions`, `scalable/devices`, and `scalable/places` was invisible and each toolbar button silently fell back to whatever the desktop icon theme provided. The index now declares those contexts, and `packaging/smoke-check.sh` fails if a new one is added without it.
+
+### Changed
+
+- **Consistent, denser interface:** The stylesheets set about fifteen font sizes in absolute pixels while the labels that carry the most weight — sound names, tab names, preference row titles — set none and rendered at the raw desktop size, so a single list row could show three different sizes. Every size now sits on one scale expressed in `rem`, which also means the whole interface follows the desktop text-scaling setting; pixel font sizes did not, because GTK applies them as absolute Pango sizes. Toolbar buttons, list rows, list headers, dialogs, and the settings panel were tightened to match, and preference rows no longer keep GNOME's roomier metrics inside a window built to a denser rhythm.
+
 ## [2.3.1] - 2026-08-22
 
 ### Fixed

@@ -16,9 +16,13 @@ entry {
   color: #dfd0b8;
 }
 
+window.main-window {
+  font-size: 0.85rem;
+}
+
 .sound-cell {
   margin: 0;
-  padding: 6px 10px;
+  padding: 4px 10px;
 }
 
 .sound-cell-playing {
@@ -69,8 +73,8 @@ columnview row > cell.sound-cell-active {
   box-shadow: none;
   border-image: none;
   border-bottom: 2px solid rgba(148, 137, 121, 0.5);
-  padding: 3px 5px;
-  min-height: 38px;
+  padding: 2px 4px;
+  min-height: 32px;
   color: #dfd0b8;
 }
 
@@ -118,7 +122,7 @@ headerbar:backdrop,
 }
 
 .transport-track-name {
-  font-size: 11px;
+  font-size: 0.8rem;
   opacity: 0.78;
 }
 
@@ -143,8 +147,8 @@ headerbar:backdrop,
 }
 
 .transport-btn {
-  min-width: 31px;
-  min-height: 31px;
+  min-width: 28px;
+  min-height: 28px;
   padding: 0;
   border-radius: 10px;
   border: 1px solid transparent;
@@ -157,11 +161,11 @@ headerbar:backdrop,
 /* Symbolic icon coloring in transport bar */
 .transport-bar button image {
   color: #dfd0b8;
-  -gtk-icon-size: 15px;
+  -gtk-icon-size: 14px;
 }
 
 .transport-icon-btn image {
-  -gtk-icon-size: 15px;
+  -gtk-icon-size: 14px;
 }
 
 .transport-playmode-btn image {
@@ -333,7 +337,7 @@ row.appearance-choice-row {
 /* Hotkey badge — pill style */
 .hotkey-badge {
   font-family: monospace;
-  font-size: 10px;
+  font-size: 0.72rem;
   background-color: rgba(148, 137, 121, 0.1);
   border: 1px solid rgba(148, 137, 121, 0.3);
   border-radius: 4px;
@@ -447,7 +451,7 @@ columnview header button:checked {
 }
 
 .settings-overlay-header {
-  min-height: 60px;
+  min-height: 46px;
   padding: 0 12px;
   background-color: #383f49;
   border-bottom: 1px solid rgba(9, 12, 16, 0.3);
@@ -455,15 +459,15 @@ columnview header button:checked {
 }
 
 .settings-overlay-close-btn {
-  min-width: 30px;
-  min-height: 30px;
+  min-width: 26px;
+  min-height: 26px;
   padding: 0;
   background-color: rgba(223, 208, 184, 0.12);
   border-radius: 999px;
 }
 
 .settings-overlay-close-btn image {
-  -gtk-icon-size: 15px;
+  -gtk-icon-size: 14px;
 }
 
 .settings-overlay-close-btn:hover {
@@ -474,22 +478,59 @@ columnview header button:checked {
   min-height: 0;
 }
 
+.lsb-settings-dialog preferencesgroup label.heading {
+  font-size: 1rem;
+}
+
+.lsb-settings-dialog row {
+  min-height: 0;
+}
+
+.lsb-settings-dialog row > box.header {
+  min-height: 34px;
+  padding: 3px 10px;
+}
+
+.lsb-settings-dialog row > box.header > box.title {
+  margin-top: 0;
+  margin-bottom: 0;
+  border-spacing: 1px;
+}
+
+.lsb-settings-dialog row label.subtitle {
+  font-size: 0.75rem;
+}
+
+.lsb-settings-dialog preferencesgroup > box > box.header {
+  margin-bottom: 0;
+}
+
+.lsb-settings-dialog preferencesgroup > box > box.header > box.labels {
+  margin-bottom: 0;
+  border-spacing: 1px;
+}
+
+.lsb-settings-dialog row button {
+  min-height: 26px;
+  padding: 2px 10px;
+}
+
 .dialog-host-panel {
   min-width: 280px;
 }
 
 .dialog-host-header {
-  min-height: 44px;
+  min-height: 38px;
 }
 
 .dialog-host-title {
-  font-size: 15px;
+  font-size: 1rem;
   font-weight: 600;
   color: #dfd0b8;
 }
 
 .dialog-host-content {
-  padding: 16px;
+  padding: 12px;
 }
 
 .dialog-host-message {
@@ -497,17 +538,17 @@ columnview header button:checked {
 }
 
 .dialog-host-actions {
-  padding: 0 16px 16px;
+  padding: 0 12px 12px;
 }
 
 .dialog-host-action-btn {
-  min-height: 34px;
+  min-height: 30px;
   padding: 0 16px;
   border-radius: 8px;
 }
 
 .dialog-host-input {
-  min-height: 36px;
+  min-height: 32px;
 }
 
 .dialog-host-path-scroll {
@@ -525,7 +566,7 @@ columnview header button:checked {
 }
 
 .lsb-context-menu modelbutton {
-  min-height: 30px;
+  min-height: 26px;
   padding: 6px 10px;
   border-radius: 8px;
   color: #dfd0b8;
@@ -552,8 +593,8 @@ columnview header button:checked {
 
 .settings-overlay-tab {
   min-width: 0;
-  min-height: 36px;
-  padding: 0 16px;
+  min-height: 30px;
+  padding: 0 12px;
   background-color: transparent;
   background-image: none;
   border: 1px solid transparent;
@@ -567,7 +608,7 @@ columnview header button:checked {
 }
 
 .settings-overlay-tab label {
-  font-size: 15px;
+  font-size: 1rem;
   font-weight: 700;
 }
 
@@ -678,10 +719,10 @@ scrollbar slider:hover {
 }
 
 .transport-search {
-  min-height: 31px;
+  min-height: 28px;
   min-width: 104px;
   padding: 0 6px;
-  font-size: 10px;
+  font-size: 0.72rem;
   border-radius: 10px;
 }
 
@@ -745,7 +786,7 @@ scale.volume-slider slider {
 .volume-readout {
   min-width: 38px;
   font-family: monospace;
-  font-size: 11px;
+  font-size: 0.8rem;
   color: #dfd0b8;
   opacity: 0.9;
 }
@@ -758,7 +799,7 @@ entry.volume-input {
   border: 1px solid rgba(148, 137, 121, 0.35);
   background-color: rgba(34, 40, 49, 0.45);
   font-family: monospace;
-  font-size: 11px;
+  font-size: 0.8rem;
   color: #dfd0b8;
 }
 
@@ -888,7 +929,7 @@ columnview.data-table rubberband {
 
 /* Tab count badge */
 .tab-count-badge {
-  font-size: 10px;
+  font-size: 0.72rem;
   background-color: transparent;
   border-radius: 0;
   padding: 0;
@@ -898,12 +939,12 @@ columnview.data-table rubberband {
 /* Monospace label */
 .monospace {
   font-family: monospace;
-  font-size: 11px;
+  font-size: 0.8rem;
 }
 
 .sound-index {
   font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", monospace;
-  font-size: 13px;
+  font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.1px;
   color: rgba(223, 208, 184, 0.78);
@@ -911,7 +952,7 @@ columnview.data-table rubberband {
 
 .sound-duration {
   font-family: "JetBrains Mono", "Cascadia Mono", "Noto Sans Mono", monospace;
-  font-size: 11px;
+  font-size: 0.8rem;
   color: rgba(223, 208, 184, 0.86);
 }
 
@@ -944,9 +985,9 @@ columnview {
 }
 
 columnview header button {
-  padding: 6px 10px;
-  min-height: 34px;
-  font-size: 11px;
+  padding: 4px 10px;
+  min-height: 28px;
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.6px;
   opacity: 0.95;
@@ -1047,7 +1088,7 @@ columnview.list-style-card row > cell.sound-cell-active {
 /* Card mode sound name - bolder */
 .list-style-card .sound-name {
   font-weight: 600;
-  font-size: 13px;
+  font-size: 0.9rem;
 }
 
 /* Card mode hotkey badge - more subtle */
@@ -1059,7 +1100,7 @@ columnview.list-style-card row > cell.sound-cell-active {
 
 /* Card mode index number - more visible */
 .list-style-card .sound-index {
-  font-size: 12px;
+  font-size: 0.8rem;
   color: rgba(148, 137, 121, 0.6);
 }
 
@@ -1069,7 +1110,7 @@ columnview.list-style-card row > cell.sound-cell-active {
   color: #1a1614;
   padding: 6px 12px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: 0.8rem;
   font-weight: 600;
   border: 1px solid rgba(148, 137, 121, 1);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
