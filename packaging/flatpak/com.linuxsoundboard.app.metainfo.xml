@@ -67,6 +67,18 @@
   </keywords>
   
   <releases>
+    <release version="2.3.2" date="2026-08-22">
+      <description>
+        <p>Linux Soundboard 2.3.2:</p>
+        <ul>
+          <li>Consistent, denser interface</li>
+          <li>Toasts ignored the theme</li>
+          <li>The playing dot kept the previous theme's colour</li>
+          <li>The playing row lost its highlight on every second line</li>
+          <li>AppImage showed the desktop's icons instead of its own</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.1" date="2026-08-22">
       <description>
         <p>Linux Soundboard 2.3.1:</p>

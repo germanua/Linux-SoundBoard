@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.3.2] - 2026-08-22
+
 ### Fixed
 
 - **Toasts ignored the theme:** Notifications kept libadwaita's scheme-independent overlay grey in both themes, and the application's own text colour was painted on top of it. In the light theme that put dark brown text on a dark grey pill at 1.4:1 contrast, which is below anything readable. Toasts now use the same surface as the other floating panels — 13.7:1 in the light theme, 9.8:1 in the dark one.

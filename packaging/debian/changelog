@@ -1,3 +1,13 @@
+linux-soundboard (2.3.2-1) unstable; urgency=medium
+
+  * Consistent, denser interface
+  * Toasts ignored the theme
+  * The playing dot kept the previous theme's colour
+  * The playing row lost its highlight on every second line
+  * AppImage showed the desktop's icons instead of its own
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 22 Aug 2026 23:50:36 +0300
+
 linux-soundboard (2.3.1-1) unstable; urgency=medium
 
   * Native and tarball dependencies
