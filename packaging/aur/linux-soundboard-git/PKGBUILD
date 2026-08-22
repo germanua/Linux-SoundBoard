@@ -24,7 +24,6 @@ depends=(
 makedepends=(
   'cargo'
   'git'
-  'imagemagick'
   'clang'
   'pkgconf'
 )
@@ -58,7 +57,6 @@ pkgver() {
 prepare() {
   cd "${srcdir}/${_pkgname}"
 
-  bash packaging/linux/generate-icons.sh assets/icons/icon.png
   export CARGO_HOME="${srcdir}/cargo-home"
   cargo fetch --locked --manifest-path src/Cargo.toml
 }

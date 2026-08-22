@@ -218,15 +218,15 @@ The engine is a separate systemd user service. This design keeps the runtime vir
 
 ```bash
 # Arch
-sudo pacman -S cargo rust pkgconf imagemagick clang gtk4 libadwaita libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber
+sudo pacman -S cargo rust pkgconf clang gtk4 libadwaita libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber
 
 # Debian / Ubuntu
-sudo apt install build-essential cargo rustc pkg-config imagemagick \
+sudo apt install build-essential cargo rustc pkg-config \
   libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev libpipewire-0.3-dev \
   libx11-dev libxi-dev libclang-dev pipewire pipewire-pulse wireplumber pulseaudio-utils
 
 # Fedora
-sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config ImageMagick \
+sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
   gtk4-devel libadwaita-devel pulseaudio-libs-devel opus-devel libX11-devel \
   libXi-devel pipewire-devel pipewire pipewire-utils pipewire-pulseaudio wireplumber pulseaudio-utils
 ```

@@ -12,7 +12,6 @@ source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
-ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/target/release/$APP_BINARY"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
@@ -107,7 +106,6 @@ extract_linuxdeploy() {
 mkdir -p "$DIST_ROOT" "$TOOLS_ROOT"
 
 if [[ "$build_project" -eq 1 ]]; then
-    "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
     RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=${REPO_ROOT}=."
     if [[ -n "${HOME:-}" ]]; then
         RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"

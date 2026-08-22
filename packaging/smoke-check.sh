@@ -484,6 +484,19 @@ else
     fail "AppImage updater: installed version handoff is incomplete"
 fi
 
+if grep -qF 'generate-icons.sh' \
+    "$REPO_ROOT/packaging/linux/package-appimage.sh" \
+    "$REPO_ROOT/packaging/linux/package-tarball.sh" \
+    "$REPO_ROOT/packaging/debian/rules" \
+    "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    "$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.yml"; then
+    fail "package builds regenerate tracked icons"
+else
+    pass "package builds use committed icons"
+fi
+
 echo ""
 
 # ── 8. Shell script syntax checks ────────────────────────────────────────────

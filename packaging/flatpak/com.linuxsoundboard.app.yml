@@ -53,9 +53,6 @@ modules:
       env:
         CARGO_HOME: /run/build/linux-soundboard/cargo
     build-commands:
-      # Generate icons
-      - bash packaging/linux/generate-icons.sh icon.png
-      
       # Build application
       - cargo --offline fetch --manifest-path src/Cargo.toml --verbose
       - cargo --offline build --release --manifest-path src/Cargo.toml --verbose

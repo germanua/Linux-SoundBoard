@@ -29,7 +29,7 @@ if [ "${1:-}" = "--in-container" ]; then
         cargo rust clang-devel \
         gtk4-devel libadwaita-devel pulseaudio-libs-devel \
         opus-devel pipewire-devel libX11-devel libXi-devel \
-        pkgconf-pkg-config ImageMagick systemd-rpm-macros >/dev/null
+        pkgconf-pkg-config systemd-rpm-macros >/dev/null
 
     echo "==> Toolchain: $(rustc --version), $(cargo --version)"
 

@@ -344,14 +344,14 @@ On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` neede
 **Arch:**
 
 ```bash
-sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
+sudo pacman -S cargo rust pkgconf gtk4 libadwaita \
   libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber clang
 ```
 
 **Debian / Ubuntu:**
 
 ```bash
-sudo apt install build-essential cargo rustc pkg-config imagemagick \
+sudo apt install build-essential cargo rustc pkg-config \
   libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev \
   libpipewire-0.3-dev libx11-dev libxi-dev libclang-dev \
   pipewire pipewire-pulse wireplumber pulseaudio-utils
@@ -360,7 +360,7 @@ sudo apt install build-essential cargo rustc pkg-config imagemagick \
 **Fedora:**
 
 ```bash
-sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config ImageMagick \
+sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
   gtk4-devel libadwaita-devel pulseaudio-libs-devel opus-devel \
   libX11-devel libXi-devel pipewire-devel pipewire pipewire-utils \
   pipewire-pulseaudio wireplumber pulseaudio-utils

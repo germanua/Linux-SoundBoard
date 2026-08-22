@@ -10,7 +10,6 @@ source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
-ICON_SOURCE="$REPO_ROOT/assets/icons/icon.png"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/target/release/$APP_BINARY"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
@@ -40,7 +39,6 @@ for arg in "$@"; do
 done
 
 if [[ "$build_project" -eq 1 ]]; then
-    "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
     cargo build --locked --release --manifest-path "$MANIFEST_PATH"
 fi
 

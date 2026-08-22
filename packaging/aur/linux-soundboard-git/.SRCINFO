@@ -8,7 +8,6 @@ pkgbase = linux-soundboard-git
 	license = LicenseRef-PolyForm-Noncommercial-1.0.0
 	makedepends = cargo
 	makedepends = git
-	makedepends = imagemagick
 	makedepends = clang
 	makedepends = pkgconf
 	depends = gtk4

@@ -7,7 +7,6 @@ pkgbase = linux-soundboard
 	arch = x86_64
 	license = LicenseRef-PolyForm-Noncommercial-1.0.0
 	makedepends = cargo
-	makedepends = imagemagick
 	makedepends = clang
 	makedepends = pkgconf
 	depends = gtk4

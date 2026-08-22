@@ -20,7 +20,6 @@ BuildRequires:  pipewire-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
 BuildRequires:  pkgconf-pkg-config
-BuildRequires:  ImageMagick
 BuildRequires:  systemd-rpm-macros
 
 Requires:       pipewire
@@ -43,7 +42,6 @@ UI with native PipeWire virtual microphone support.
 %setup -q
 
 %build
-bash packaging/linux/generate-icons.sh assets/icons/icon.png
 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=$(pwd)=. --remap-path-prefix=${HOME}=~"
 cargo build --locked --release --manifest-path src/Cargo.toml
 

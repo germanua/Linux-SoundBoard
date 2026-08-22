@@ -289,7 +289,7 @@ detect_container_runtime() {
 
 target_is_available() {
     case "$1" in
-        tarball)      command -v cargo >/dev/null 2>&1 && command -v magick >/dev/null 2>&1 ;;
+        tarball)      command -v cargo >/dev/null 2>&1 ;;
         debappimage)  [[ "$OPT_FAKE_CONTAINERS" -eq 1 ]] || detect_container_runtime ;;
         rpm)          [[ "$OPT_FAKE_CONTAINERS" -eq 1 ]] || detect_container_runtime ;;
         flatpak)      command -v flatpak-builder >/dev/null 2>&1 ;;
@@ -299,7 +299,7 @@ target_is_available() {
 
 target_requirement() {
     case "$1" in
-        tarball)      printf 'host cargo + ImageMagick' ;;
+        tarball)      printf 'host cargo' ;;
         debappimage)  printf 'docker + rsync (ubuntu:24.04)' ;;
         rpm)          printf 'docker + rsync (fedora:latest)' ;;
         flatpak)      printf 'flatpak-builder' ;;

@@ -33,18 +33,10 @@ if [ "${1:-}" = "--in-container" ]; then
     apt-get install -y --no-install-recommends \
         debhelper dpkg-dev fakeroot build-essential cargo rustc \
         libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev \
-        libpipewire-0.3-dev libx11-dev libxi-dev pkg-config imagemagick \
+        libpipewire-0.3-dev libx11-dev libxi-dev pkg-config \
         clang libclang-dev \
         librsvg2-dev librsvg2-common libgdk-pixbuf-2.0-dev librsvg2-2 \
         curl ca-certificates file libfuse2t64 desktop-file-utils patchelf zsync >/dev/null
-
-    # Ubuntu 24.04 ships ImageMagick 6 (`convert`); generate-icons.sh calls the
-    # ImageMagick 7 `magick` command. Its usage is plain input->ops->output, which
-    # `convert` accepts unchanged, so provide a shim.
-    if ! command -v magick >/dev/null 2>&1; then
-        printf '#!/bin/sh\nexec convert "$@"\n' > /usr/local/bin/magick
-        chmod +x /usr/local/bin/magick
-    fi
 
     RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /src/rust-toolchain.toml | head -n 1)"
     [ -n "$RUST_TOOLCHAIN" ] || { echo "FATAL: rust-toolchain.toml has no channel" >&2; exit 3; }
