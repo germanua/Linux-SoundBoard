@@ -1,8 +1,3 @@
-//! Lifecycle of the in-process audio backend: `BackendState` wraps PipeWire or
-//! PulseAudio, `PipeWireBackendState` holds the live connection handles, and
-//! `create_backend` builds one from `RuntimeConfig`. `remote_ok`/`remote_play`
-//! are the out-of-process engine's side, mapping replies onto `EngineError`.
-
 use super::*;
 
 pub(super) fn remote_ok(
@@ -105,9 +100,6 @@ pub(super) struct PipeWireBackendState {
     pub(super) _local_stream: Option<StreamHandle>,
     pub(super) virtual_stream: Option<StreamHandle>,
     pub(super) capture_stream: Option<StreamHandle>,
-    // The real null-sink behind `linuxsoundboard.virtual_mic`; pactl loads it at
-    // start, Drop unloads it. Option because pactl may be missing, and there we
-    // fail loud rather than settle for a proxy that can never be default.
     pub(super) _virtual_mic_module: Option<virtual_mic_module::NullSinkModule>,
 }
 
@@ -211,14 +203,8 @@ fn create_pipewire_backend(
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
                     if let Some(metadata) = metadata {
-                        // Different object, and a fresh one replays no
-                        // properties, so the old belief would only suppress
-                        // the claim below.
                         forget_default_source_belief(&mut state, "bound");
                         state.default_metadata = Some(metadata);
-                        // The listener may already have fired with the current
-                        // default while binding, so re-assert if the engine
-                        // wants to be default.
                         claim_default_source_if_enabled(&mut state);
                     }
                     if let Some(capture_node_id) = capture_node_id {
@@ -261,9 +247,6 @@ fn create_pipewire_backend(
                         // virtual_mic just became visible — claim default now
                         // if mode requests it. Idempotent on subsequent calls.
                         claim_default_source_if_enabled(&mut state);
-                        // A new source appeared — if mic passthrough is on but
-                        // we haven't been able to attach yet (startup race), or
-                        // the user's preferred source just came online, retry.
                         ensure_capture_stream_present(&mut state);
                     }
                     if let Some(sink) = sink {
@@ -305,9 +288,6 @@ fn create_pipewire_backend(
                         forget_default_source_belief(&mut state, "went away");
                     }
                     state.links.remove(&id);
-                    // If the feeder or virtual_mic node disappears, drop any
-                    // held link proxies so they get recreated when the node
-                    // returns (e.g. on a PipeWire restart).
                     if state.feeder_node_id == Some(id) {
                         state.feeder_node_id = None;
                         state.feeder_output_ports.clear();
@@ -318,9 +298,6 @@ fn create_pipewire_backend(
                         state.virtual_mic_input_ports.clear();
                         drop_feeder_links(&mut state);
                     }
-                    // Port-level removal: if a removed id matches a known
-                    // FL/FR port, drop the matching link half so it gets
-                    // recreated when the port reappears.
                     let dropped_feeder_channel: Option<AudioChannel> = state
                         .feeder_output_ports
                         .iter()
@@ -342,9 +319,6 @@ fn create_pipewire_backend(
                     if state.capture_node_id == Some(id) {
                         state.capture_node_id = None;
                     }
-                    // Only reconnect if the source that left is the one we're
-                    // capturing. Reacting to every Audio/Source removal punches
-                    // a silence gap for nothing.
                     let affects_current_capture = removed_source_name
                         .as_deref()
                         .zip(state.active_capture_target.as_deref())
@@ -370,9 +344,6 @@ fn create_pipewire_backend(
     )
     .ok();
 
-    // Must come before the feeder stream, which targets the sink by name. On
-    // failure warn and carry on: the feeder still serves apps that aren't fussy
-    // about node type, it just can't be the system default.
     let virtual_mic_module = match virtual_mic_module::NullSinkModule::load_or_attach() {
         Ok(module) => Some(module),
         Err(err) => {

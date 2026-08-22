@@ -417,9 +417,6 @@ pub fn set_library_counts(sounds: usize, tabs: usize, folders: usize, hotkeys: u
     runtime.library_hotkey_count = hotkeys;
 }
 
-/// Published by the paged sound model when its cache changes. The model is a
-/// main-thread GTK object but phases get recorded from workers too, so copy
-/// the numbers here instead of reading the widget back.
 pub fn set_ui_row_cache(pages: usize, payload_bytes: usize, row_count: usize) {
     let mut runtime = RUNTIME_INVENTORY.lock();
     runtime.ui_cached_pages = pages;

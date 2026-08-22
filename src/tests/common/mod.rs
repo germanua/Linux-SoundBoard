@@ -1,6 +1,3 @@
-// Shared integration-test toolbox: each test binary includes `mod common` but
-// uses only the helpers it needs, so unused-in-this-binary items and re-exports
-// are expected rather than a defect.
 #![allow(dead_code, unused_imports)]
 
 pub mod config_fixture;

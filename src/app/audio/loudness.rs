@@ -31,9 +31,6 @@ const PREVIEW_TARGET_WINDOW_MS: u64 = 2_500;
 const PREVIEW_ANCHORS_MEDIUM_PCT: [u64; 4] = [8, 35, 65, 90];
 const PREVIEW_ANCHORS_LONG_PCT: [u64; 5] = [5, 25, 50, 75, 92];
 
-/// Cancellation is per run: each `MissingLoudnessAnalysisCoordinator` owns a
-/// token and hands it down. So cancelling a backfill can't abort a refinement,
-/// and starting one can't clear the other's cancel.
 static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Token for analyses with no run to cancel: single-sound playback gain and the
@@ -290,9 +287,6 @@ pub fn analyze_loudness_path(path: &Path) -> Result<f64, LoudnessError> {
     analyze_context(context, Some(path), None)
 }
 
-/// Like `analyze_loudness_path`, plus the file's true peak in dBTP (BS.1770).
-/// Use it when you want to stash the peak on `Sound` so playback gain can stay
-/// under clipping.
 pub fn analyze_loudness_path_full(
     path: &Path,
     cancel: &AtomicBool,
@@ -605,9 +599,6 @@ pub fn analyze_loudness_path_preview_smart_with_metrics(
     })
 }
 
-/// Measured loudness -> linear gain factor. When the file's true peak is known
-/// the gain is clamped to stay under `TRUE_PEAK_CEILING_DBTP`, otherwise a
-/// boost causes inter-sample clipping on the mic output.
 pub fn compute_gain_factor(sound_lufs: f64, target_lufs: f64, true_peak_dbtp: Option<f32>) -> f32 {
     if !sound_lufs.is_finite() {
         return 1.0;

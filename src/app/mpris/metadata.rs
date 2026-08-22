@@ -26,9 +26,6 @@ pub(crate) fn playback_status(now: Option<&NowPlaying>) -> &'static str {
     }
 }
 
-/// Track path from a sound id. D-Bus object paths only allow `[A-Za-z0-9_]`
-/// between slashes and our ids are UUIDs, so the hyphens go. Anything else odd
-/// gets replaced too, rather than emit a path that won't serialise.
 pub(crate) fn track_id(sound_id: &str) -> glib::variant::ObjectPath {
     let mut path = String::with_capacity(sound_id.len() + 24);
     path.push_str("/com/linuxsoundboard/track/");

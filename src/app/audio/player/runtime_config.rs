@@ -1,7 +1,3 @@
-//! Runtime configuration: values derived from user settings and applied to the
-//! live engine loop without restarting it. Also contains `StreamRuntimeShared`,
-//! the `Arc`-shared counters and limits the RT callbacks read on every tick.
-
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -120,9 +116,6 @@ pub(super) struct StreamRuntimeShared {
     max_virtual_callback_samples: AtomicUsize,
     max_virtual_backlog_samples: AtomicUsize,
     max_mic_backlog_samples: AtomicUsize,
-    // Underrun counters. RT callbacks bump these when they hand back fewer
-    // samples than asked for: try_lock lost, or the queue really was empty.
-    // The watchdog logs the totals every 10 s so glitches show in journalctl.
     local_underruns: AtomicU64,
     virtual_underruns: AtomicU64,
     lock_contention: AtomicU64,

@@ -1,13 +1,4 @@
-//! Runtime null-sink behind the virtual microphone.
-//!
-//! EasyEffects, pavucontrol and NoiseTorch all do the same thing:
-//! `module-null-sink` with `media.class` overridden to `Audio/Source/Virtual`,
-//! which yields a real driver node WirePlumber will accept as the default
-//! source. A `pw::stream::StreamRc` proxy will not — checked live, WirePlumber
-//! refuses to resolve one as `default.audio.source` even when
-//! `default.configured.audio.source` names it.
-//!
-//! `pactl load-module` at start, unload at shutdown. No config files touched.
+//! Runtime null-sink for the virtual microphone.
 
 #[cfg(not(test))]
 use std::process::Command;
@@ -36,9 +27,6 @@ impl NullSinkModule {
     /// left behind so the graph never holds duplicates under one `sink_name`.
     #[cfg(not(test))]
     pub(super) fn load_or_attach() -> Result<Self, EngineError> {
-        // Unload any prior null-sinks under our sink_name. Engine Drop should
-        // have done it already, but a SIGKILL (or a crash before Drop) leaves
-        // duplicates. No-op in the common case.
         let stale = find_all_existing_module_ids();
         if !stale.is_empty() {
             info!(
@@ -136,9 +124,6 @@ fn build_load_args() -> Vec<String> {
     vec![
         format!("media.class=Audio/Source/Virtual"),
         format!("sink_name={}", VIRTUAL_SOURCE_NAME),
-        // Single-word description on purpose: pipewire-pulse strips whitespace
-        // from sink_properties values whatever the quoting. See
-        // `app_meta::VIRTUAL_MIC_DESCRIPTION`.
         format!(
             "sink_properties=device.description={}",
             VIRTUAL_MIC_DESCRIPTION

@@ -1,9 +1,3 @@
-//! Which sound a hotkey press plays when several share one chord.
-//!
-//! No GTK, SQLite or I/O, so the rules are testable on their own. A chord is
-//! projected to the backends once (`projection.rs`), so the press arrives here
-//! with every binding sharing it and this picks one, or nothing.
-
 use crate::config::GroupMode;
 // The store's row type is the input to these rules; a second copy of the same
 // three fields would only need converting back and forth.
@@ -56,9 +50,6 @@ pub(crate) enum Selection {
     Inert(InertReason),
 }
 
-/// Resolve a pressed chord to one member. `active_scope` is the tab showing,
-/// `entropy` feeds `GroupMode::Random`. `last_played` is matched by sound id,
-/// not index, so adding or removing a member can't change what "Same" replays.
 pub(crate) fn select_from_group(
     members: &[GroupMember],
     active_scope: &str,
@@ -89,9 +80,6 @@ pub(crate) fn select_from_group(
         return Selection::Inert(InertReason::OutOfScope);
     };
 
-    // No way to rank members from different scopes, and guessing would make one
-    // key mean different things on different days. General holds every sound, so
-    // a chord reused in two tabs lands here.
     let scope = members[first].tab_scope.as_deref();
     if candidates
         .iter()

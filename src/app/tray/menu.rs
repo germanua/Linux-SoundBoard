@@ -1,12 +1,3 @@
-//! What the tray menu shows, and what each row does.
-//!
-//! Kept short on purpose. Everything here is also reachable from the window and
-//! from a global hotkey, so the tray carries the handful of things worth having
-//! while the window is hidden rather than mirroring the whole app.
-//!
-//! Row ids are stable numbers because that is what `com.canonical.dbusmenu`
-//! sends back in an `Event`; the gaps are the separators.
-
 use super::payload::MenuItem;
 use crate::config::ControlHotkeyAction;
 
@@ -27,10 +18,6 @@ const STOP_ALL: i32 = 4;
 const MUTE_REAL_MIC: i32 = 5;
 const QUIT: i32 = 7;
 
-/// The menu as it should look for the given state.
-///
-/// Labels match the ones in Settings so a row means the same thing in both
-/// places.
 pub(crate) fn build(window_visible: bool, real_mic_muted: bool) -> Vec<MenuItem> {
     vec![
         MenuItem::command(

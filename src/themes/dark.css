@@ -304,9 +304,6 @@ row.appearance-choice-row {
   background-color: rgba(148, 137, 121, 0.1);
 }
 
-/* Adwaita outlines any widget under an active drag. That square outline sits
-   inside the row's own rounded highlight and reads as a second selection, so it
-   is replaced below with feedback that says where the drop will actually go. */
 .lsb-folder-row:drop(active) {
   box-shadow: none;
   outline: none;
@@ -956,10 +953,6 @@ columnview header button {
   opacity: 0.95;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   Card List Style Mode
-   ══════════════════════════════════════════════════════════════════════════ */
-
 /* Card mode header - match cell padding */
 columnview.list-style-card header button {
   padding: 10px 12px;
@@ -1097,11 +1090,7 @@ entry.volume-input:focus,
   outline: none;
 }
 
-/* A focused control inside a row would otherwise draw its own ring on top of
-   the row's, nesting one bezel inside another. The row already shows focus, so
-   the inner control does not repeat it. Standalone entries keep their ring. */
 .lsb-settings-dialog row spinbutton:focus-within,
 .lsb-settings-dialog row entry:focus {
   box-shadow: none;
 }
-

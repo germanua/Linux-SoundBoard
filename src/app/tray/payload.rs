@@ -1,10 +1,3 @@
-//! The `com.canonical.dbusmenu` wire shapes.
-//!
-//! A tray host doesn't read a GTK menu model — it asks over D-Bus for a
-//! `(ia{sv}av)` tree plus properties per row. This turns a flat row list into
-//! those `glib::Variant` payloads and nothing else, no D-Bus and no GTK, so
-//! unit tests can pin the shapes. Flat: every row is a child of the root.
-
 use glib::prelude::ToVariant;
 use glib::variant::{DictEntry, Variant};
 
@@ -59,9 +52,6 @@ impl MenuItem {
     }
 }
 
-/// The properties a host may ask for, in the order we report them. A row only
-/// reports what its kind has — a separator has no label or toggle, a plain
-/// command no toggle.
 fn properties_of(item: &MenuItem) -> Vec<(&'static str, Variant)> {
     match item.kind {
         ItemKind::Separator => vec![("type", "separator".to_variant())],
@@ -78,9 +68,6 @@ fn properties_of(item: &MenuItem) -> Vec<(&'static str, Variant)> {
     }
 }
 
-/// Build an `a{sv}` from name/value pairs. The value slot is already type `v`,
-/// so values go in as-is — a second `to_variant()` double-boxes and sends
-/// `<<'x'>>` where the host wants `<'x'>`.
 fn dict(pairs: impl IntoIterator<Item = (&'static str, Variant)>) -> Variant {
     Variant::array_from_iter::<DictEntry<String, Variant>>(
         pairs
@@ -89,9 +76,6 @@ fn dict(pairs: impl IntoIterator<Item = (&'static str, Variant)>) -> Variant {
     )
 }
 
-/// One row's properties as `a{sv}`. Empty `filter` means the host wants
-/// everything; otherwise only what it listed, and names the row lacks are
-/// just absent.
 pub(crate) fn item_properties(item: &MenuItem, filter: &[String]) -> Variant {
     dict(
         properties_of(item)

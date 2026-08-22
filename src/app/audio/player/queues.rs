@@ -76,9 +76,6 @@ impl ProcessQueues {
     }
 }
 
-/// Handle on the inter-thread sample queues. `try_lock` only, so nothing in
-/// production can park the PipeWire loop or the RT callback. The test-only
-/// `lock()` fills them synchronously.
 #[derive(Clone)]
 pub(super) struct RtSharedQueues(Arc<Mutex<ProcessQueues>>);
 

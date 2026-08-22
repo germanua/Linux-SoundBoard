@@ -1,10 +1,3 @@
-//! Pre-schema-8 config shape, for building migration fixtures.
-//!
-//! Runtime `Config` dropped the library when SQLite took over, but files on
-//! disk still carry `sounds`, `tabs` and `sound_folders`. Migration tests have
-//! to write those, so the old shape lives here instead of in the type the app
-//! actually loads.
-
 use serde::Serialize;
 
 use crate::config::{Settings, Sound, SoundTab};

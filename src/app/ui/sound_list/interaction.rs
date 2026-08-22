@@ -641,9 +641,6 @@ impl SoundListInner {
                     crate::library_store::scope_key(&inner_confirm.active_scope.lock());
                 let active_scope_for_read = active_scope.clone();
 
-                // Shown from the stored scope, so reopening can't quietly widen
-                // a binding. Checked = "only this tab": already-scoped opens
-                // checked, global unchecked, new defaults to this tab.
                 let open = move |scoped_now: bool| {
                     let Some(dialog_host) = dialog_host_weak.upgrade() else {
                         return;

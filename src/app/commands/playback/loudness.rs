@@ -235,9 +235,6 @@ pub(super) fn maybe_trigger_estimated_loudness_refinement_with_store(
     })
 }
 
-/// Settings reads its loudness counts from the store, so writing only at page
-/// boundaries makes a long run look frozen. Flush every few sounds instead —
-/// refinement dwarfs the cost of the extra transactions.
 const LOUDNESS_PROGRESS_FLUSH_ROWS: usize = 8;
 
 fn should_flush_loudness_progress(pending: usize, page_finished: bool) -> bool {

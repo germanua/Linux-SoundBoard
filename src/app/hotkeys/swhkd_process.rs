@@ -177,11 +177,6 @@ impl SwhkdProcesses {
         })
     }
 
-    /// Kill any `swhkd`/`swhks` already running, then spawn our own pair.
-    ///
-    /// swhkd is setuid-root, so a hard exit leaves it under `systemd --user`
-    /// still grabbing keys. Adopting an orphan means trusting it to reload
-    /// config from an unknown state, so restart instead. Best-effort.
     pub fn terminate_stale_daemons() {
         info!("Stopping pre-existing swhkd/swhks daemons before spawning a managed pair");
 

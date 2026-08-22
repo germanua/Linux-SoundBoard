@@ -282,9 +282,6 @@ fn create_playback_stream(
             })));
     }
 
-    // PA pads underruns with silence and never tells the consumer, so this
-    // callback is the only way to count them. Also how we tell our own bugs
-    // apart from a downstream re-sync (BT codec, USB DAC).
     {
         let stream_runtime_for_underflow = stream_runtime.clone();
         let name_owned = name.to_string();
@@ -406,9 +403,6 @@ fn playback_buffer_attr(target_samples: usize) -> BufferAttr {
     BufferAttr {
         maxlength: u32::MAX,
         tlength: target_bytes,
-        // prebuf: how much PA re-buffers after an underrun before resuming.
-        // Keep it tiny or recovery turns into a chain of underruns. minreq is
-        // how often it asks for more — one mix chunk.
         prebuf: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         minreq: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         fragsize: u32::MAX,

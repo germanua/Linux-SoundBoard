@@ -40,9 +40,6 @@ fn ensure_store_hotkey_available(
     }
 }
 
-/// Write the binding, or clear it when `canonical` is `None`, then push it out
-/// to the backends. Sound, control and tab hotkeys all land here — they differ
-/// only in owner and tab scope.
 fn commit_hotkey_binding(
     library: &LibraryStore,
     projection: &HotkeyProjectionCoordinator,
@@ -70,9 +67,6 @@ fn commit_hotkey_binding(
         .map_err(CommandError::HotkeyProjection)
 }
 
-/// `multi_sound_hotkeys` on: a chord another sound already answers to is a
-/// group to join, not a conflict. `tab_scope` is the tab it answers in, `None`
-/// meaning all of them — where bindings stay until tab hotkeys are enabled.
 pub fn set_hotkey(
     id: String,
     hotkey: Option<String>,
@@ -89,9 +83,6 @@ pub fn set_hotkey(
         None => None,
     };
 
-    // One binding per tab, so replace the row for *this* tab, not "the" binding
-    // for the sound. Ids stay opaque: they end up in the swhkd command, which
-    // only takes alphanumerics, ':', '-' and '_', and a folder scope has more.
     let existing = library
         .hotkey_bindings_for_sound(&id)
         .recv()
@@ -194,9 +185,6 @@ where
     )
 }
 
-/// The binding as stored, so a dialog opens on what is actually there rather
-/// than a default. This is how reopening the sound hotkey dialog knows which
-/// tab the binding is limited to, and why a re-save can't silently widen it.
 pub fn hotkey_binding_async<F>(
     binding_id: String,
     library: LibraryStore,
@@ -239,9 +227,6 @@ where
     )
 }
 
-/// Who already answers to `hotkey` in this scope, described for the user, or
-/// `None` when it is free. Used to ask before adding a sound to a shared
-/// shortcut, so the group is never formed silently.
 pub fn hotkey_holder_async<F>(
     binding_id: String,
     hotkey: String,
@@ -319,9 +304,6 @@ pub fn tab_from_binding_id(binding_id: &str) -> Option<&str> {
     binding_id.strip_prefix(TAB_BINDING_PREFIX)
 }
 
-/// Bind a hotkey to a tab, so pressing it makes that tab active. Always live
-/// whichever tab is showing, so it never conflicts by scope and never shares a
-/// chord with anything.
 pub fn set_tab_hotkey(
     scope_key: String,
     hotkey: Option<String>,

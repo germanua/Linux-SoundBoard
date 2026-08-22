@@ -801,9 +801,6 @@ impl SymphoniaSource {
                     let spec = *decoded.spec();
                     self.spec = spec;
                     if decoded.frames() == 0 {
-                        // Vorbis can emit an empty priming packet before the first PCM
-                        // frame. It decoded fine, so keep going rather than handing the
-                        // iterator an empty buffer that looks like end-of-stream.
                         continue;
                     }
                     if self.buffer.capacity() < decoded.capacity() {
@@ -841,9 +838,6 @@ fn is_audio_track(track: &Track) -> bool {
     track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
 }
 
-/// The track to read, `None` if the container has nothing usable. aac/m4a/mp4
-/// must yield real audio; everything else may fall back to the default or first
-/// non-null track, which is how a mislabelled stream still plays.
 pub(crate) fn select_audio_track(
     format: &dyn FormatReader,
     strict_audio_container: bool,

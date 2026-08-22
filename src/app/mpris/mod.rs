@@ -1,11 +1,4 @@
-//! Publish what is playing to the desktop's media controls — the panel card
-//! with the sound name and transport buttons, and on KDE the lock screen.
-//! MPRIS2, served over GIO's GDBus like the tray, no extra dependency.
-//!
-//! Off by default: while it is on the desktop treats us as the active player
-//! and the media keys come here instead of to the user's music. The bus name is
-//! held for as long as the setting is, reporting `Stopped` between sounds —
-//! clips are a second long, and controls that vanish with them are useless.
+//! MPRIS2 player for desktop media controls.
 
 mod metadata;
 
@@ -97,11 +90,6 @@ const INTERFACES_XML: &str = r#"
  </interface>
 </node>"#;
 
-/// Holds the well-known player name while the feature is on.
-///
-/// Claiming it only during playback handed the media keys back sooner, but the
-/// panel controls appeared and vanished inside a second. Real players keep the
-/// name and report `Stopped` when idle.
 struct PlayerName {
     connection: gio::DBusConnection,
     owner: RefCell<Option<gio::OwnerId>>,
@@ -174,9 +162,6 @@ impl MprisService {
         })
     }
 
-    /// Put the player in the panel, or take it out. Driven by the setting, not
-    /// by playback — the controls have to be there before a sound starts and
-    /// after it ends, or there is nothing to press.
     pub(crate) fn set_enabled(&self, enabled: bool) {
         if enabled == self.name.is_held() {
             return;
@@ -208,9 +193,6 @@ impl MprisService {
         }
     }
 
-    /// GDBus does not emit `PropertiesChanged` for objects registered by hand,
-    /// so a player has to do it itself. `Position` is excluded by the spec —
-    /// hosts poll it.
     fn announce(&self) {
         let now = self.now.borrow();
         let changed = [
@@ -293,9 +275,6 @@ fn register_player(
                 "Rate" | "MinimumRate" | "MaximumRate" => 1.0f64.to_variant(),
                 "Volume" => 1.0f64.to_variant(),
                 "Shuffle" => false.to_variant(),
-                // The engine reports a position but seeking a sound effect from
-                // a panel widget is not something to promise, so it stays at
-                // zero and CanSeek stays false.
                 "Position" => 0i64.to_variant(),
                 "CanGoNext" | "CanGoPrevious" | "CanPlay" | "CanPause" | "CanControl" => {
                     true.to_variant()
@@ -330,11 +309,6 @@ mod tests {
         assert_eq!(command_for("PlayPause"), Some(MprisCommand::PlayPause));
     }
 
-    /// Publishes a real player and reads it back the way a panel does. Needs a
-    /// session bus, so run it on a desktop:
-    /// `cargo test -- --ignored publishes_a_real_player --nocapture`.
-    /// One at a time (`--test-threads=1`) — the live tests share a connection
-    /// and export the same object paths.
     #[test]
     #[ignore = "needs a session bus"]
     fn publishes_a_real_player() {
@@ -452,9 +426,6 @@ mod tests {
         answer.get()
     }
 
-    /// The reported fault: the panel's play/pause/stop stop working once a
-    /// second sound has been started. The controls have to survive a sound
-    /// ending, the gap, and the next sound beginning.
     #[test]
     #[ignore = "needs a session bus"]
     fn the_panel_controls_survive_a_second_sound() {

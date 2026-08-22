@@ -138,9 +138,6 @@ pub struct HotkeyBindingRecord {
     pub tab_scope: Option<String>,
 }
 
-/// Scope key for a hotkey binding. Covers General, a manual tab, and a folder
-/// tab, which has no id of its own — hence the unit separator, which can't
-/// appear in a path, keeping the two halves unambiguous.
 pub fn scope_key(scope: &LibraryScope) -> String {
     match scope {
         LibraryScope::General => crate::app_meta::GENERAL_TAB_ID.to_string(),
@@ -652,9 +649,6 @@ impl RequestQueue {
         }
     }
 
-    /// Takes the next request without blocking. `None` means every queue is
-    /// drained, which is the worker's cue to run idle maintenance before it
-    /// parks in `pop`.
     fn try_pop(&self) -> Option<Request> {
         let mut state = self.state.lock().ok()?;
         state
@@ -1015,9 +1009,6 @@ impl LibraryStore {
         )
     }
 
-    /// Every sound bound to the chord `binding_id` carries, ordered as the
-    /// library lists them. One entry for an ordinary binding, several when the
-    /// chord is shared.
     pub fn hotkey_group(&self, binding_id: &str) -> LibraryResponse<Vec<HotkeyGroupMember>> {
         let (reply, response) = mpsc::sync_channel(1);
         self.enqueue(
@@ -1045,10 +1036,6 @@ impl LibraryStore {
         )
     }
 
-    /// Who already holds `normalized`, described for the user, or `None` if the
-    /// chord is free. With `sounds_may_share` a sound binding is a group to
-    /// join, not a conflict; control actions and tab hotkeys still are, since
-    /// they can't share a chord with anything.
     pub fn hotkey_conflict(
         &self,
         binding_id: &str,
@@ -1349,9 +1336,6 @@ impl LibraryStore {
         })
     }
 
-    /// Hides or restores a folder. Hiding takes the whole subtree and the
-    /// sounds that live only inside it out of the library; nothing on disk is
-    /// touched, and a rescan will not bring it back.
     pub fn set_folder_hidden(
         &self,
         root_path: &str,
@@ -1396,9 +1380,6 @@ impl LibraryStore {
         })
     }
 
-    /// Places a folder at `target_index` among its siblings. Unlike
-    /// `set_folder_preferences` this writes only the ordering, so a drag cannot
-    /// disturb a folder's display name or its expanded state.
     pub fn reorder_folder(
         &self,
         root_path: &str,
@@ -1445,14 +1426,8 @@ impl LibraryStore {
     }
 }
 
-/// How often the worker re-runs `PRAGMA optimize` while idle. SQLite advises
-/// running it on open and periodically thereafter for a long-lived connection;
-/// `open_connection` covers the open, this covers the rest of the session.
 const OPTIMIZE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
-/// Runs `PRAGMA optimize` if the interval has passed. Called from the store
-/// worker once its queues drain, so it never runs while requests are waiting
-/// and never runs on the GTK thread. Returns whether it ran.
 fn run_idle_optimize_if_due(
     connection: &Connection,
     optimized_at: &mut Option<std::time::Instant>,
@@ -1471,14 +1446,6 @@ fn run_idle_optimize_if_due(
 const COUNTS_REPUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Request {
-    /// Can this request move the published counts — live sounds, roots, manual
-    /// tabs, active bindings?
-    ///
-    /// Bulk row writes are out. A caller waiting on each batch drains the queue
-    /// every time, so it would recount the whole table per batch: 30 s for a
-    /// 156k import that otherwise takes ~3 s. They can't change a count anyway —
-    /// `RootScanBatch` stages under a new generation until `FinishRootScan`, and
-    /// `ApplyBatch` only builds a database offline that startup counts later.
     fn changes_library_counts(&self) -> bool {
         match self {
             Request::FinishRootScan { .. }
@@ -1517,9 +1484,6 @@ impl Request {
     }
 }
 
-/// Recount and republish, but only if a mutation landed since last time. Runs
-/// on the store worker once its queues drain, so an import pays nothing and a
-/// burst of edits collapses into one recount.
 fn publish_library_counts_if_dirty(
     connection: &Connection,
     dirty: &mut bool,
@@ -1528,9 +1492,6 @@ fn publish_library_counts_if_dirty(
     if !*dirty {
         return None;
     }
-    // A bulk caller waiting on each write drains the queue between batches, and
-    // recounting every time took a 156k import from ~3 s to over 30 s. Rate limited;
-    // the flag stays set and the next drain past the interval publishes.
     if published_at.is_some_and(|at| at.elapsed() < COUNTS_REPUBLISH_INTERVAL) {
         return None;
     }
@@ -1799,18 +1760,6 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     Ok(connection)
 }
 
-/// Written verbatim by `create_schema` and `migrate_schema_4_to_5`, so a
-/// migrated library and a fresh one are the same database.
-///
-/// A binding owns exactly one of a sound, a control action, or a tab. Keys:
-/// `general`, `tab:<public id>`, `folder:<root>\u{1f}<relative path>`; NULL
-/// `tab_scope` means every tab, which is how everything predating tab scoping
-/// is stored.
-///
-/// One binding *per tab*, so a sound in two tabs can take a different key in
-/// each; NULL scopes compare equal through IFNULL. No unique index on
-/// `normalized` — sounds may share a chord, and rejecting a duplicate depends
-/// on the Settings toggles, so that call lives in the command layer.
 const HOTKEY_BINDINGS_SCHEMA: &str = "\
          CREATE TABLE hotkey_bindings(
              binding_id TEXT PRIMARY KEY,
@@ -2092,10 +2041,6 @@ fn migrate_schema_4_to_5(connection: &Connection) -> Result<(), LibraryError> {
             "library metadata does not match schema 4".to_string(),
         ));
     }
-    // Rebuilt, not altered: SQLite can't change a CHECK in place and the old one
-    // only allowed a sound or a control action. Spelled out rather than shared
-    // with create_schema — a migration has to emit the schema of its own
-    // version, and the shared one moves on. Schema 6 rebuilds again.
     connection.execute_batch(
         "BEGIN IMMEDIATE;
          ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v4;
@@ -2146,9 +2091,6 @@ fn migrate_schema_5_to_6(connection: &Connection) -> Result<(), LibraryError> {
             "library metadata does not match schema 5".to_string(),
         ));
     }
-    // Dropping a column constraint means rebuilding the table again, the same
-    // rename-then-create way schema 5 did, so the result is textually the
-    // table create_schema writes.
     connection.execute_batch(&format!(
         "BEGIN IMMEDIATE;
          ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v5;
@@ -2947,10 +2889,6 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
     Ok(changed != 0)
 }
 
-/// Move a folder to `target_index`, renumbering its siblings to a dense 0..n.
-/// Writes `sibling_position` and nothing else — a drag must not touch the
-/// display name or expanded flag, hence not going through
-/// `set_folder_preferences`.
 fn reorder_folder(
     connection: &mut Connection,
     root_path: &str,
@@ -3450,21 +3388,11 @@ const LIVE_SOUND_FILTER: &str = "(sound.standalone = 1
                                  WHERE hidden_closure.descendant_id = live_location.folder_id
                                    AND hidden_pref.hidden = 1)))";
 
-/// True when a folder is hidden, or sits under a folder that is. Written
-/// against `folder.id`, so a query must expose the folder it is testing under
-/// that alias.
 const HIDDEN_FOLDER_FILTER: &str = "EXISTS(
           SELECT 1 FROM folder_closure AS hidden_closure
           JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
           WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1)";
 
-/// The sound columns, hotkey picked by `binding_filter`.
-///
-/// One binding per tab, so which hotkey a sound "has" depends where it's listed
-/// — a binding limited to another tab doesn't answer here and must not show
-/// here. Listing for a tab passes a filter naming it; with no tab in play pass
-/// `"1"` and take whatever exists. A tab's own binding beats a global one, same
-/// precedence a press resolves with.
 fn sound_fields(binding_filter: &str) -> String {
     format!(
         "sound.public_id, sound.name, sound.path, sound.source_path,
@@ -3975,9 +3903,6 @@ fn load_folder_children(
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
     let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = usize_to_i64(offset)?;
-    // `child.root_id = root.id` is redundant — children always share a root —
-    // but it puts the EXISTS on `folders_parent_order`, whose leading column is
-    // root_id. Without it SQLite scans every folder in the generation per row.
     let fields = "folder.id, folder.relative_path,
                   COALESCE(pref.display_name, folder.name), COALESCE(pref.expanded, 0),
                   EXISTS(SELECT 1 FROM folders AS child
@@ -4158,10 +4083,6 @@ fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, L
     Ok(SoundPage { sounds })
 }
 
-/// One row per chord — the backends can only be told about it once, so a shared
-/// chord is projected under a single binding. Control actions and tab hotkeys
-/// win that slot: a press carrying a sound id can still be resolved back to its
-/// chord, but a control action reached under someone else's id never runs.
 fn load_hotkey_bindings_after(
     connection: &Connection,
     after: Option<&str>,
@@ -4257,9 +4178,6 @@ fn load_hotkey_group(
     connection: &Connection,
     binding_id: &str,
 ) -> Result<Vec<HotkeyGroupMember>, LibraryError> {
-    // Keyed by chord, not binding, so every member resolves to the same group
-    // whichever binding the backend reported. Unknown or needs-attention
-    // bindings have a NULL accelerator and match nothing.
     let sql = format!(
         "SELECT binding.binding_id, sound.public_id, binding.tab_scope
          FROM hotkey_bindings AS binding
@@ -4872,9 +4790,6 @@ mod idle_count_publication_tests {
 
     #[test]
     fn bulk_row_writes_do_not_dirty_the_counts() {
-        // A caller that waits on each batch drains the queue every time. Marking
-        // these dirty recounts the whole table once per batch, which took a 156k
-        // import from about 3 s to over 30 s.
         let batch = Request::ApplyBatch {
             batch: LibraryBatch::Roots(Vec::new()),
             reply: reply(),

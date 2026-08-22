@@ -9,9 +9,6 @@ use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{AutoGainApplyTo, AutoGainMode};
 
-/// Both loudness buttons double as Stop while a run is going; `true` means the
-/// click was spent cancelling. In-flight comes off the coordinators, not the
-/// library — asking the library parked the click behind the busy worker.
 fn cancelled_running_analysis(state: &AppState) -> bool {
     let in_flight = state.loudness_coordinators.backfill.is_in_flight()
         || state.loudness_coordinators.refinement.is_in_flight();
@@ -404,9 +401,6 @@ pub(super) fn build_playback_groups(
         let analyze_btn_weak = analyze_btn.downgrade();
         let refine_btn_weak = refine_btn.downgrade();
 
-        // One status query at a time, off the GTK thread. Refinement posts a
-        // refresh every few sounds, and reading the summary inline here pinned
-        // the main loop to the busy SQLite worker.
         let status_query_in_flight = Rc::new(std::cell::Cell::new(false));
         let status_query_pending = Rc::new(std::cell::Cell::new(false));
         let refresh_loudness_status: Rc<dyn Fn()> = Rc::new({

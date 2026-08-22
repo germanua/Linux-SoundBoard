@@ -95,9 +95,6 @@ impl TransportInner {
                 self.is_continue_suppressed(),
             );
             if should_continue {
-                // A play was just dispatched, so this empty snapshot is the
-                // stop_all()/play() gap in the worker, not an end of track.
-                // Skip; the new sound shows up next snapshot.
                 if crate::ui_event_bridge::is_explicit_play_pending() {
                     return;
                 }
@@ -133,9 +130,6 @@ impl TransportInner {
                 interaction.clone()
             };
 
-            // Only touch the cached track while the play_id is unchanged; a new
-            // play_id means a new sound, whose name comes from SQLite below.
-            // The engine reports the duration either way.
             let (same_play, sound_name, track_duration_ms) =
                 match self.active_track.borrow().as_ref() {
                     Some(track) if track.play_id == position.play_id => {
@@ -206,9 +200,6 @@ impl TransportInner {
         }
     }
 
-    /// Looks the playing sound's name up in the library and shows it when the
-    /// answer arrives. One bounded row lookup per newly started sound, never
-    /// on the position-update path.
     fn resolve_track_name_async(self: &std::rc::Rc<Self>, sound_id: &str, play_id: &str) {
         let response = self.state.library.sound_by_id(sound_id);
         let weak = std::rc::Rc::downgrade(self);
@@ -252,9 +243,6 @@ impl TransportInner {
     }
 }
 
-/// What the tray tooltip and media controls should show. `None` until the name
-/// is known — a card titled with a uuid is worse than no card, and
-/// `resolve_track_name_async` announces it a moment later.
 fn now_playing_for(
     position: &crate::audio::PlaybackPosition,
     duration_ms: u64,
@@ -277,9 +265,6 @@ fn publish_now_playing(
     duration_ms: u64,
     active: &Option<super::ActiveTrack>,
 ) {
-    // A name that hasn't come back yet is not a sound that stopped. Saying
-    // nothing leaves the last announcement standing; `None` would tear the
-    // media player down and rebuild it on every sound.
     if let Some(now) = now_playing_for(position, duration_ms, active) {
         crate::ui_event_bridge::post_now_playing(Some(now));
     }

@@ -1,14 +1,4 @@
-//! Explicit graph links for the virtual-mic feeder.
-//!
-//! AUTOCONNECT can't link our `Stream/Output/Audio` feeder to an
-//! `Audio/Source/Virtual` null-sink: WirePlumber sees a Playback stream aimed
-//! at a Source class and silently drops it, leaving the feeder dangling and the
-//! sink dry. So we wire it ourselves through link-factory, the same API
-//! `pw-link` uses, and WirePlumber leaves existing links alone.
-//!
-//! Track four ids (feeder node + its two output ports, mic node + its two
-//! input ports), create FL→FL and FR→FR once all four are up, and drop the
-//! proxies when any of them goes (PipeWire restart, null-sink reload).
+//! PipeWire links for the virtual mic feeder.
 
 use log::{info, warn};
 use pipewire as pw;
@@ -42,9 +32,6 @@ pub(super) struct FeederLink {
     _link: pw::link::Link,
 }
 
-/// Idempotent reconciler. Registry callbacks run it whenever a Port or Node
-/// global comes or goes, and when the feeder/null-sink state changes. Cheap
-/// when there is nothing to do.
 pub(super) fn try_link_feeder_to_virtual_mic(state: &mut LoopState) {
     let core_opt = state.backend.as_ref().and_then(|b| b.pipewire_core());
     let Some(core) = core_opt else {
@@ -109,9 +96,6 @@ fn create_link(
         "link.output.port" => output_port.to_string(),
         "link.input.node" => input_node.to_string(),
         "link.input.port" => input_port.to_string(),
-        // We own this link, so it must not outlive the proxy. Without the flag
-        // WirePlumber can read it as a persistent user route and keep bringing
-        // it back.
         "object.linger" => "false",
     };
     core.create_object::<pw::link::Link>("link-factory", &props)

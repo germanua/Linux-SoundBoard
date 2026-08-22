@@ -24,32 +24,19 @@ thread_local! {
     /// would otherwise still read the old value the next time it is opened.
     static GROUP_MODE_HANDLER: GroupModeHandler = RefCell::new(None);
 
-    /// The tray lives in `bootstrap`, which has no transport or window, while
-    /// the code that can act on a click lives in the window. These two carry
-    /// clicks one way and the rebuilt menu back the other.
     static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
     static TRAY_MENU_HANDLER: TrayMenuHandler = RefCell::new(None);
     static TRAY_ENABLED_HANDLER: TrayEnabledHandler = RefCell::new(None);
 
-    /// The same split again for the desktop's media controls: the transport
-    /// knows what is playing, `bootstrap` owns the service, and the window is
-    /// what can act on a button press.
     static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
     static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
 
-    /// Should close hide the window instead of quitting? `bootstrap` owns it —
-    /// it knows the setting and whether a panel really shows the icon — but the
-    /// window's close handler asks, since that runs first and is the only place
-    /// that can stop teardown.
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
 
     /// Set once when the user asks to quit from the tray. Without it, closing
     /// the window would consult the policy above and hide it again.
     static QUIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 
-    /// Set on the main thread just before a user-initiated play. Stops
-    /// Continue-mode auto-advance firing on the transient "all stopped"
-    /// snapshot the engine emits between stop_all() and play().
     static EXPLICIT_PLAY_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -171,9 +158,6 @@ pub fn set_close_to_tray_policy(f: impl Fn() -> bool + 'static) {
     CLOSE_TO_TRAY_POLICY.with(|policy| *policy.borrow_mut() = Some(Box::new(f)));
 }
 
-/// Whether closing the window should hide it. False unless a policy has been
-/// installed and agrees, so the close button keeps quitting when there is no
-/// tray to hide into.
 pub fn close_should_hide_to_tray() -> bool {
     if QUIT_REQUESTED.with(|requested| requested.get()) {
         return false;

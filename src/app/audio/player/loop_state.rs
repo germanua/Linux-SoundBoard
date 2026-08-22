@@ -1,13 +1,4 @@
-//! `LoopState` — everything the PipeWire loop thread owns.
-//!
-//! Five field groups, one writer each. That is load-bearing; a new field
-//! fitting none of them probably wants its own sub-struct.
-//!
-//! - config: written at init, read by everyone
-//! - registry mirror: the `global`/`global_remove` callbacks only
-//! - playback: mix tick and command handlers write, snapshot publish reads
-//! - RT shared: mix tick writes, the process callback `try_lock`s from the RT side
-//! - UI publish: `publish_snapshot` writes, the UI thread reads the `RwLock`
+//! State owned by the PipeWire loop thread.
 
 use super::*;
 
@@ -47,9 +38,6 @@ pub(super) struct LoopState {
     pub(super) finished_playbacks: HashMap<String, PlaybackSnapshot>,
     pub(super) next_playback_order: u64,
 
-    // RT shared. The process callback only ever `try_lock`s `queues`, never
-    // blocks. The three buffers are mix-tick scratch, pre-allocated so the tick
-    // never hits the allocator while holding the lock.
     pub(super) queues: RtSharedQueues,
     pub(super) stream_runtime: std::sync::Arc<StreamRuntimeShared>,
     pub(super) ultra_starvation_ticks: u32,
@@ -57,9 +45,6 @@ pub(super) struct LoopState {
     pub(super) virtual_mix_buffer: Vec<f32>,
     pub(super) mic_scratch_buffer: Vec<f32>,
 
-    // UI publish. `snapshot` is shared with the UI thread; the main loop writes
-    // it in `publish_snapshot`. `last_ui_send`/`last_had_active` throttle how
-    // often we invoke the GTK main context, so the UI isn't flooded.
     pub(super) snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
     pub(super) last_ui_send: Option<Instant>,
     pub(super) last_had_active: bool,

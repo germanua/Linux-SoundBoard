@@ -1,3 +1,5 @@
+//! PipeWire streams for playback and mic capture.
+
 use super::*;
 use std::sync::Arc;
 
@@ -16,22 +18,10 @@ pub(super) fn create_local_output_stream(
             *pw::keys::MEDIA_ROLE => "Music",
             *pw::keys::NODE_NAME => LOCAL_PLAYBACK_NODE_NAME,
             *pw::keys::NODE_DESCRIPTION => VIRTUAL_OUTPUT_DESCRIPTION,
-            // Keep our local + feeder + capture streams under one driver so
-            // Discord/screen-share opening a new consumer does not split our
-            // streams across two driver clocks (see PipeWire `node.group`).
             "node.group" => SOUNDBOARD_NODE_GROUP,
-            // Run the process callback every quantum even when the sink is
-            // briefly suspended (BT autosuspend, USB selective suspend). The
-            // wake-up burst on resume is otherwise audible as a brief glitch.
             "node.always-process" => "true",
-            // Prevent WirePlumber from renegotiating the quantum/rate when
-            // Discord enters the graph. JACK clients use these properties to
-            // hold their negotiated period; we need the same protection.
             "node.lock-quantum" => "true",
             "node.lock-rate" => "true",
-            // Declare a hint so the sink does not pick a much smaller quantum
-            // than the soundboard's queue target — undersized quantum is the
-            // primary cause of perceived "broken samples" on headphones.
             "node.latency" => latency_hint,
         },
     )
@@ -57,18 +47,6 @@ pub(super) fn create_local_output_stream(
     Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
-/// Feeder stream pushing our mix into the virtual-mic null-sink that
-/// `pactl load-module` set up.
-///
-/// No AUTOCONNECT: WirePlumber won't link a Stream/Output/Audio to an
-/// Audio/Source/Virtual node and drops it from the policy graph, so
-/// explicit_links.rs wires it with link-factory instead.
-///
-/// `node.always-process=true` is mandatory, `node.passive` must stay unset. The
-/// feeder has to produce a buffer every quantum, silence included, or the
-/// explicit link goes inactive — then the cold wake-up handshake misfires and
-/// the first consumer after start hears a burst of stale buffer, a harsh
-/// whizzling noise.
 pub(super) fn create_runtime_virtual_source_stream(
     core: pw::core::CoreRc,
     queues: RtSharedQueues,
@@ -84,13 +62,7 @@ pub(super) fn create_runtime_virtual_source_stream(
             *pw::keys::MEDIA_ROLE => "Communication",
             *pw::keys::NODE_NAME => crate::app_meta::VIRTUAL_MIC_FEEDER_NODE_NAME,
             *pw::keys::NODE_DESCRIPTION => "Linux Soundboard Mic Feeder",
-            // WirePlumber's session-manager policy ignores this node because
-            // AUTOCONNECT is never set on its connect() call below; the graph
-            // is wired explicitly via link-factory in explicit_links.rs.
             "node.dont-reconnect" => "true",
-            // Run the callback even with no consumer reading. Keeps the
-            // explicit links `active` and avoids the cold wake-up whizzle on
-            // first capture.
             "node.always-process" => "true",
             // Pin to the soundboard driver group so Discord opening a second
             // consumer does not pull the feeder into a competing driver.
@@ -113,14 +85,12 @@ pub(super) fn create_runtime_virtual_source_stream(
             *listener_state.borrow_mut() = ManagedStreamState::from_pipewire(new);
         })
         .process(move |stream, _| {
+            // RT callback: never block.
             write_output_buffer(stream, &queues, &stream_runtime, OutputTarget::Virtual);
         })
         .register()
         .map_err(|e| EngineError::Setup(e.to_string()))?;
 
-    // MAP_BUFFERS + RT_PROCESS — no AUTOCONNECT. RT_PROCESS moves the process
-    // callback to the data thread (SCHED_FIFO 88 via RTKit) so it cannot be
-    // starved by main-loop work (mix tick, registry events, decoder).
     connect_output_stream_with_flags(
         &stream,
         pw::stream::StreamFlags::MAP_BUFFERS | pw::stream::StreamFlags::RT_PROCESS,
@@ -149,9 +119,6 @@ pub(super) fn create_capture_stream(
             "node.dont-reconnect" => "true",
             "state.restore-target" => "false",
             "node.latency" => latency_hint,
-            // Same driver group as local + feeder, so capture stays on one
-            // clock. A second driver means the audioadapter resamples across
-            // clock domains and you hear micro-glitches.
             "node.group" => SOUNDBOARD_NODE_GROUP,
             "node.always-process" => "true",
             "node.lock-quantum" => "true",
@@ -202,9 +169,6 @@ pub(super) fn create_capture_stream(
 fn connect_output_stream(stream: &pw::stream::StreamRc) -> Result<(), EngineError> {
     connect_output_stream_with_flags(
         stream,
-        // RT_PROCESS routes the callback to the data thread. Without it the
-        // callback runs on the main loop shared with mix-tick and registry
-        // listeners; a slow mix-tick stalls the local output and causes glitches.
         pw::stream::StreamFlags::AUTOCONNECT
             | pw::stream::StreamFlags::MAP_BUFFERS
             | pw::stream::StreamFlags::RT_PROCESS,
@@ -240,9 +204,6 @@ fn build_audio_format_pod() -> Result<Vec<u8>, EngineError> {
         })
 }
 
-/// `node.group` for all three streams. Local output, feeder and capture stay on
-/// one driver, so cross-clock resampling can't creep in when Discord or a
-/// browser joins the graph.
 const SOUNDBOARD_NODE_GROUP: &str = "linuxsoundboard.engine";
 
 #[derive(Clone, Copy)]
@@ -323,9 +284,6 @@ fn write_output_buffer(
                         }
                     }
                 } else {
-                    // The mix tick is holding the lock. Emit silence for this
-                    // quantum and count it: one quantum of zeros downstream
-                    // beats the main loop stalling the RT thread for 10-50 ms.
                     match target {
                         OutputTarget::Local => stream_runtime.record_local_underrun(),
                         OutputTarget::Virtual => stream_runtime.record_virtual_underrun(),

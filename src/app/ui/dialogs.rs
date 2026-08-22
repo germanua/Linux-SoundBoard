@@ -71,13 +71,6 @@ impl DialogHostWeak {
     }
 }
 
-/// Dismiss an overlay panel on a press outside it.
-///
-/// The panel sits in an `AdwClamp` filling the overlay, so the empty area
-/// beside it belongs to the clamp and never reaches the backdrop button.
-/// Hit-testing the panel's own bounds sidesteps that — the widget doesn't
-/// matter, only whether the point is inside. Capture phase, and it claims the
-/// press so the dismissing click can't also activate what was underneath.
 pub(super) fn dismiss_on_press_outside<F>(
     overlay: &gtk4::Overlay,
     panel: &impl IsA<gtk4::Widget>,
@@ -159,9 +152,6 @@ impl DialogHost {
             .build();
         content.append(&message_label);
 
-        // Size the stack to the visible page, not the tallest one. Otherwise the
-        // small input/message dialogs reserve the height of the path and hotkey
-        // pages and sit there looking half empty.
         let content_stack = gtk4::Stack::builder()
             .transition_type(gtk4::StackTransitionType::None)
             .vhomogeneous(false)
@@ -249,9 +239,6 @@ impl DialogHost {
         actions.append(&primary_btn);
         panel.append(&actions);
 
-        // Cap the dialog width and let it shrink with the window rather than
-        // forcing a fixed size: compact maximum on wide windows, side margins
-        // on narrow ones.
         let clamp = adw::Clamp::builder()
             .maximum_size(440)
             .tightening_threshold(360)
@@ -300,9 +287,6 @@ impl DialogHost {
         }
     }
 
-    /// True while the capture dialog is waiting for a chord. The global
-    /// backends keep delivering presses meanwhile, and playing a sound while
-    /// the user records that same sound's shortcut is never what they meant.
     pub fn is_capturing_hotkey(&self) -> bool {
         self.inner.hotkey_validator.borrow().is_some()
     }
@@ -574,9 +558,6 @@ impl DialogHost {
         self.present(None);
     }
 
-    /// `scope_prompt` offers "only while this tab is open" and is `Some` only
-    /// when tab hotkeys are on. The flag it produces is `on_confirm`'s second
-    /// argument, and is false whenever nothing was offered.
     pub fn show_hotkey_capture<F, V>(
         &self,
         current_hotkey: Option<&str>,
@@ -779,13 +760,6 @@ impl DialogHost {
         }
     }
 
-    /// Move this host to the end of the overlay's children, i.e. the top of the
-    /// paint order.
-    ///
-    /// The host is attached while the window is built, but panels that open
-    /// dialogs (Settings above all) are lazy and land on top of it. Raising here
-    /// keeps the rule in one place, and runs while the host is hidden so nothing
-    /// flickers.
     fn raise_to_front(&self) {
         let Some(parent) = self
             .inner

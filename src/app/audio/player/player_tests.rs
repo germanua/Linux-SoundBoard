@@ -445,9 +445,6 @@ fn auto_capture_falls_back_to_physical_mic_when_no_enhancement_source() {
 
 #[test]
 fn auto_capture_ignores_unrecognized_virtual_source_in_favor_of_hardware_mic() {
-    // An unrecognised virtual source (Vencord screenshare null sink) is neither
-    // a known enhancement chain nor hardware-backed, so auto-detect must skip it
-    // for a real mic. A high priority.session must not rescue it.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -486,9 +483,6 @@ fn auto_capture_ignores_unrecognized_virtual_source_in_favor_of_hardware_mic() {
 
 #[test]
 fn auto_capture_trusts_named_enhancement_over_hardware_mic() {
-    // A recognised enhancement chain (matched by node name) is the user's
-    // deliberate processed-mic feed and outranks a raw hardware mic even though it
-    // is not hardware-backed itself.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -527,9 +521,6 @@ fn auto_capture_trusts_named_enhancement_over_hardware_mic() {
 
 #[test]
 fn auto_capture_returns_none_when_only_unrecognized_virtual_source_present() {
-    // Only a screenshare null sink registered: pick nothing and wait for a real
-    // mic rather than pipe app audio into the virtual mic. The default/previous
-    // fallback must not resurrect it either.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -555,9 +546,6 @@ fn auto_capture_returns_none_when_only_unrecognized_virtual_source_present() {
 
 #[test]
 fn selected_enhancement_source_does_not_silently_fall_back() {
-    // User picked easyeffects_source and it isn't registered. Even with a
-    // perfectly good physical mic sitting right there, resolution returns None
-    // and the caller warns and waits. Never silently swap in the raw mic.
     let mut runtime = test_runtime_config();
     runtime.mic_source = Some("easyeffects_source".to_string());
     let mut state = LoopState::new(runtime, test_player_snapshot_store());
@@ -1350,9 +1338,6 @@ fn fill_output_queues_mic_passthrough_without_capture_stream_keeps_queues_idle()
 
 #[test]
 fn passthrough_chunk_skips_when_mic_in_below_threshold() {
-    // When mic_in has fewer samples than chunk_samples, no output should be
-    // pushed. Padding with zeros would cause a silence discontinuity through
-    // the consumer's resampler ~40 ms later.
     let mut queues = ProcessQueues::new(8, 8, 8);
     queues.mic_in.push_slice(&[0.25, -0.5]); // only 2 samples
 

@@ -1,11 +1,3 @@
-//! Typed error for the command layer.
-//!
-//! [`CommandError::SourceUnavailable`] replaced the old
-//! `SOURCE_UNAVAILABLE_ERROR_PREFIX` + `starts_with` sniffing. Engine, loudness
-//! and hotkey failures are still `String` at the source and get wrapped in
-//! named variants here rather than leaking upward. `Display` keeps the old
-//! wording so toasts and log lines don't change.
-
 /// An error returned by a command-layer function.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CommandError {

@@ -1068,9 +1068,6 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             crate::library_store::DATABASE_APPLICATION_ID
         )));
     }
-    // Runs before the store opens the database, so it has to accept anything
-    // the store can still migrate forward. Demanding the current version would
-    // lock users out of their library on every schema bump.
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if !(1..=crate::library_store::DATABASE_SCHEMA_VERSION).contains(&schema_version) {
         return Err(LegacyMigrationError::Invalid(format!(
@@ -2013,9 +2010,6 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         initialize_empty_library(&destination, "library").expect("create database");
 
-        // Stand-in for a library from the previous release. The startup gate
-        // runs before the store migrates, so requiring the current version
-        // there would lock existing users out.
         let previous = crate::library_store::DATABASE_SCHEMA_VERSION - 1;
         let connection = Connection::open(&destination).expect("open database");
         connection

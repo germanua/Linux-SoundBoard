@@ -228,20 +228,8 @@ pub enum ListStyle {
     Card,
 }
 
-/// What we do with the user's default microphone.
-///
-/// The soundboard works by *being* the default mic — Discord, Arma and OBS just
-/// pick up `linuxsoundboard.virtual_mic`. Same trick EasyEffects uses, and we
-/// sit downstream: real mic → EE → easyeffects_source → capture → mix →
-/// virtual_mic = default.
-///
-/// `Manual` is the escape hatch for anyone who sets their own default in
-/// pavucontrol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DefaultSourceMode {
-    /// Claim the default mic at engine start and re-assert if something takes
-    /// it, same as EasyEffects does. API-level only — we write no config files;
-    /// WirePlumber's `default-nodes` module handles surviving a reboot.
     #[default]
     Default,
     /// Never touch the system default. The user picks their mic per-app or in
@@ -672,9 +660,6 @@ pub struct Settings {
     pub control_hotkeys: ControlHotkeys,
     #[serde(default)]
     pub play_mode: PlayMode,
-    /// Give each tab its own hotkey, and answer only the active tab's sound
-    /// hotkeys while it is showing. Off leaves every binding live everywhere,
-    /// which is how hotkeys behaved before tabs could be bound.
     #[serde(default)]
     pub tab_hotkeys: bool,
     /// Allow several sounds to answer to one hotkey. Off keeps every chord
@@ -691,14 +676,8 @@ pub struct Settings {
     /// has no tray shows nothing either way.
     #[serde(default = "default_tray_setting")]
     pub tray_enabled: bool,
-    /// Let the close button hide the window instead of quitting, so global
-    /// hotkeys keep working. Only ever acted on while a tray icon is really
-    /// showing, so the window is never hidden with no way back.
     #[serde(default = "default_tray_setting")]
     pub close_to_tray: bool,
-    /// Publish the playing sound to the desktop's media controls. Off by
-    /// default — while it is on we are the active media player, so the media
-    /// keys and the now-playing card come here instead of to their music.
     #[serde(default)]
     pub mpris_enabled: bool,
 }

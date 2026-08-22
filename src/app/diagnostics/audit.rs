@@ -1,13 +1,4 @@
-//! Opt-in route-decision audit log.
-//!
-//! `LSB_ROUTE_AUDIT=1` appends every metadata write and default-source
-//! claim/restore as JSONL to
-//! `$XDG_RUNTIME_DIR/linux-soundboard-route-audit.log`, `/tmp` if unset.
-//! Without it the channel is never built and `record_*` bails on one atomic
-//! load, so this is free to leave in tree.
-//!
-//! Written for the "Auto-route breaks Vesktop screen-share-with-sound"
-//! regression — see `docs/TROUBLESHOOTING.md`.
+//! Optional route-audit logging.
 
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
@@ -127,11 +118,6 @@ pub fn record_metadata_write(
     );
 }
 
-/// Record a default-source claim or restore. `kind` is
-/// `"default_source.claim"`, `"...restore"`, `"...pulse_claim"` or
-/// `"...pulse_restore"`.
-// Callers are in `#[cfg(not(test))]` blocks, so only clippy's test target
-// thinks this is dead.
 #[allow(dead_code)]
 pub fn record_default_source_command(
     kind: &str,

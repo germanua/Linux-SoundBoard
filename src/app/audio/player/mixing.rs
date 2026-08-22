@@ -88,9 +88,6 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         let chunk_samples = wanted_samples.min(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize);
         let pushed = enqueue_mixed_chunk(state, chunk_samples);
         if pushed == 0 {
-            // mic_in too short, or the mutex was contended. No point spinning:
-            // resync next tick once capture delivers a quantum or the RT side
-            // lets go of the lock.
             break;
         }
         batches = batches.saturating_add(1);
@@ -225,9 +222,6 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
         return 0;
     };
 
-    // Mix mic into virtual output only when a full chunk is available.
-    // Padding with zeros would inject a discontinuity through the consumer's
-    // resampler and codec, causing audible glitches.
     if passthrough_active && queues.mic_in.len() >= chunk_samples {
         let slot = &mut state.mic_scratch_buffer[..chunk_samples];
         let dequeued = queues.mic_in.pop_into(slot);
@@ -291,9 +285,6 @@ pub(super) fn fade_output_queues(queues: &RtSharedQueues) {
         apply_fade_out(&mut queues.local);
         apply_fade_out(&mut queues.virtual_out);
     }
-    // Contention: skip the fade. The waveform discontinuity is briefly
-    // audible but no worse than the underrun the priority-inverting wait
-    // would cause.
 }
 
 pub(super) fn apply_fade_out(queue: &mut SampleQueue) {

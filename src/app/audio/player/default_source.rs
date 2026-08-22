@@ -1,14 +1,4 @@
-//! Default-source ownership.
-//!
-//! We make `linuxsoundboard.virtual_mic` the system default mic, the same way
-//! EasyEffects does with `easyeffects_source`. Apps with no explicit device
-//! just take the default — no per-stream metadata writes, no fight with
-//! stream-restore.
-//!
-//! API calls only (`wpctl set-default`, `pactl set-default-source`); persistence
-//! is WirePlumber's `default-nodes`, same path pavucontrol uses. Shutdown does
-//! NOT revert — staying default across engine restarts is the point. Only
-//! uninstall restores the old default, in `install-user.sh`.
+//! Owns the system default audio source.
 
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
@@ -40,9 +30,6 @@ pub(super) struct DefaultMetadataHandle {
     _listener: Pin<Box<pw::metadata::MetadataListener>>,
 }
 
-/// Bind a registry global as the `default` metadata object, if that is what it
-/// is — the one carrying `default.audio.source`/`default.audio.sink`. Installs
-/// a property listener that re-claims when the default drifts off our mic.
 pub(super) fn bind_default_metadata_from_global(
     registry: &pw::registry::RegistryRc,
     global: &GlobalObject<&pw::spa::utils::dict::DictRef>,
@@ -129,17 +116,10 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     claim_default_source_if_enabled(state);
 }
 
-/// Already ours, so no need to claim. Both halves matter: the cached name only
-/// counts for a claim this engine saw confirmed, and the flag only counts while
-/// that name still says virtual_mic.
 fn already_holds_default(cached_name: Option<&str>, claimed: bool) -> bool {
     claimed && cached_name == Some(VIRTUAL_SOURCE_NAME)
 }
 
-/// Forget what we think the default is. Everything we know came from one
-/// metadata object's property events; once that object is gone the belief is
-/// about nothing, and a fresh one replays no properties — keep it and the claim
-/// never fires again.
 pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) {
     // Both silent failures this caused were miserable to diagnose precisely
     // because nothing logged that the engine had gone blind to the default.
@@ -151,13 +131,7 @@ pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) 
 /// How to take the default source back.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ReclaimStrategy {
-    /// Another device holds it. `wpctl`/`pactl` write
-    /// `default.configured.audio.source`, and changing it makes WirePlumber
-    /// re-derive the runtime key.
     ConfiguredClaim,
-    /// Nothing holds it: the runtime key is gone while the configured key can
-    /// still name us. Rewriting the configured key with the value it already
-    /// has changes nothing, so the runtime key has to be written directly.
     RuntimeKey,
 }
 
@@ -174,11 +148,6 @@ fn default_source_metadata_value(name: &str) -> String {
     format!(r#"{{"name":"{name}"}}"#)
 }
 
-/// Should we claim, given the mode and what the system now reports?
-///
-/// `None` means the property was deleted, not that all is well: with nothing
-/// set PipeWire falls back to its highest-ranked node, which isn't us. Reclaim
-/// it like any foreign device.
 fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bool {
     if mode == DefaultSourceMode::Manual {
         return false;
@@ -186,10 +155,6 @@ fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bo
     new_name != Some(VIRTUAL_SOURCE_NAME)
 }
 
-/// Write `default.audio.source` through the metadata proxy we already hold.
-/// Called from the property callback on the loop thread; the write queues to
-/// the server instead of re-entering, and the event it comes back as ends the
-/// reclaim.
 fn write_runtime_default_source(state: &LoopState) {
     let Some(handle) = state.default_metadata.as_ref() else {
         // No metadata bound yet; the claim below still sets the configured key,
@@ -220,9 +185,6 @@ fn parse_default_source_name(raw: &str) -> Option<String> {
     Some(after[..quote_end].to_string())
 }
 
-/// Idempotently claim the default source when we're allowed to. Called on
-/// engine start, when virtual_mic first appears in the registry, and when the
-/// default metadata changes externally.
 pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
     if state.runtime.default_source_mode != DefaultSourceMode::Default {
         return;
@@ -239,9 +201,6 @@ pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
         .find(|source| source.node_name == VIRTUAL_SOURCE_NAME)
         .map(|source| source.id)
     else {
-        // virtual_mic isn't visible yet (engine startup race or PipeWire
-        // restart in progress). The registry listener will re-call us when
-        // it appears.
         return;
     };
 
@@ -314,9 +273,6 @@ mod tests {
 
     #[test]
     fn a_cleared_default_is_reclaimed() {
-        // PipeWire deletes the property instead of reassigning it when the
-        // node disappears — every engine restart, since the mic is recreated.
-        // Treating that as "nothing to do" left us silently not the default.
         assert!(should_reclaim_default(DefaultSourceMode::Default, None));
     }
 
@@ -343,9 +299,6 @@ mod tests {
 
     #[test]
     fn a_forgotten_belief_claims_again() {
-        // PipeWire can swap the whole metadata object rather than touch a
-        // property. A fresh one fires no events, so trusting the old belief
-        // means sitting silent while the system has no default at all.
         assert!(!already_holds_default(None, false));
     }
 
@@ -364,9 +317,6 @@ mod tests {
 
     #[test]
     fn a_cleared_default_writes_the_runtime_key() {
-        // wpctl and pactl both write default.configured.audio.source. If that
-        // already names us and only the runtime key is gone, rewriting it is a
-        // no-op, WirePlumber never re-derives, and we stay on the fallback.
         assert_eq!(reclaim_strategy(None), ReclaimStrategy::RuntimeKey);
     }
 

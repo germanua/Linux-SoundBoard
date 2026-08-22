@@ -8,11 +8,7 @@ use parking_lot::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
-/// Shared state; UI, hotkeys and IPC all get an `Arc<AppState>`.
-///
-/// Lock order: config -> hotkeys -> pipewire_status. `player` holds no locks
-/// of its own (channel to the PipeWire loop), so it is safe under any of them.
-/// Fields are per-instance, not globals, so tests don't share them.
+/// Lock order: config -> hotkeys -> pipewire_status.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<Config>>,

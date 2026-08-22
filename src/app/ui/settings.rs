@@ -182,9 +182,6 @@ pub fn build_settings_overlay(
     overlay
 }
 
-/// Tray icon and what the close button does. Closing to tray only happens
-/// while an icon is really showing, so both defaulting on costs nothing where
-/// there is no tray.
 fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("System Tray")
@@ -323,9 +320,6 @@ fn build_settings_content(
 
     content.append(stack);
 
-    // Cap the scrollable content to the window height: content-sized when it
-    // fits, scrolling when the window is short. Tracked live from a tick
-    // callback on the mapped content.
     content.add_tick_callback(move |_content, _clock| {
         if let Some(overlay) = visibility_weak.upgrade() {
             let available = overlay.height();
@@ -367,9 +361,6 @@ fn build_general_page(
             Arc::clone(&state),
             on_library_changed.clone(),
         );
-    // Removing a root deletes the folders under it, so anything hidden there is
-    // gone too. Refreshing from the shared callback keeps the list honest
-    // without threading it through the folder rebuild.
     let on_library_changed = {
         let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
         let inner = on_library_changed.clone();
@@ -393,9 +384,6 @@ fn build_general_page(
     // below can cancel it. The row itself keeps adding folders throughout.
     let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
         Rc::new(RefCell::new(None));
-    // The row keeps taking folders while a scan runs, so a second scan can
-    // start before the first ends. Only the newest owns the Stop button — an
-    // older run finishing must not yank it out from under the newer one.
     let scan_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
     let scan_stop_btn = gtk4::Button::builder()
         .label("Stop")
@@ -472,9 +460,6 @@ fn build_general_page(
                                         let add_folder_row_refresh = add_folder_row_done.clone();
                                         let cancel_done = Rc::clone(&add_folder_cancel3);
                                         let stop_btn_done = scan_stop_btn3.clone();
-                                        // Claim the generation before
-                                        // dispatching; the completion is on
-                                        // this main loop and can't beat us.
                                         let scan_id =
                                             scan_generation3.get().wrapping_add(1);
                                         scan_generation3.set(scan_id);
@@ -527,10 +512,6 @@ fn build_general_page(
                                             },
                                         ) {
                                             Ok(cancelled) => {
-                                                // Scanning is the slow part.
-                                                // Stop goes beside the row,
-                                                // row stays free for another
-                                                // folder.
                                                 *add_folder_cancel3.borrow_mut() = Some(cancelled);
                                                 add_folder_row_done
                                                     .set_subtitle("Scanning for audio files…");
@@ -570,9 +551,6 @@ fn build_general_page(
         on_library_changed.clone(),
     );
     page.add(&folders_group);
-    // The overlay is built once and only shown/hidden after, so reload the list
-    // every time the page appears — folders removed from the sidebar in between
-    // would otherwise still be sitting there.
     {
         let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
         page.connect_map(move |_| refresh_hidden_folders());

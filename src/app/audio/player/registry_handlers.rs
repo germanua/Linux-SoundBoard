@@ -1,7 +1,3 @@
-//! Registry event parsers, called from the `global`/`global_remove` callbacks
-//! in `create_pipewire_backend`. Raw `GlobalObject` in, typed value or `None`
-//! out; the caller picks which `LoopState` map to update.
-
 use super::*;
 
 /// Parse a PipeWire `Audio/Source` or `Audio/Source/Virtual` node into a
@@ -15,9 +11,6 @@ pub(super) fn source_from_global(
 
     let props = global.props?;
     let media_class = props.get(*pw::keys::MEDIA_CLASS)?;
-    // Virtual sources (EasyEffects, NoiseTorch, our own mic) advertise
-    // Audio/Source/Virtual, physical mics plain Audio/Source. Take both, so an
-    // EasyEffects chain still gets processed mic + soundboard in one feed.
     if media_class != "Audio/Source" && media_class != "Audio/Source/Virtual" {
         return None;
     }
@@ -36,11 +29,6 @@ pub(super) fn source_from_global(
         .get("object.serial")
         .and_then(|value| value.parse::<u64>().ok());
     let is_virtual = media_class == "Audio/Source/Virtual";
-    // device.id is the hardware signal: the registry `global` event has no
-    // device.api or factory.name (those live in bound node info, what `pw-dump`
-    // prints) but does carry device.id for anything behind a Device. Software
-    // sources have none. The device.api list is a fallback for setups that do
-    // surface it, allow-listed so an exotic software node can't slip through.
     let is_hardware_backed = props.get("device.id").is_some()
         || matches!(
             props.get(*pw::keys::DEVICE_API),
@@ -60,9 +48,6 @@ pub(super) fn source_from_global(
     })
 }
 
-/// Recognise our feeder Node or the virtual-mic Node by name. Returns
-/// `(role, id)` where role is "feeder" or "vmic" — caller stores the id
-/// in the right `LoopState` slot.
 pub(super) fn explicit_link_node_from_global(
     global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
 ) -> Option<(ExplicitLinkRole, u32)> {
@@ -80,9 +65,6 @@ pub(super) fn explicit_link_node_from_global(
     Some((role, global.id))
 }
 
-/// Recognise a Port belonging to a tracked Node (feeder or virtual mic).
-/// Returns `(node_id, channel, direction, port_id)` so the caller can route
-/// it into the right `LoopState` map.
 pub(super) fn explicit_link_port_from_global(
     global: &pw::registry::GlobalObject<&spa::utils::dict::DictRef>,
 ) -> Option<(u32, AudioChannel, PortDirection, u32)> {
@@ -135,9 +117,6 @@ pub(super) fn sink_from_global(
     })
 }
 
-// PipeWire sinks expose their monitor as a separate Audio/Source node named
-// "<sink_name>.monitor". The two registry events can arrive in either order, so
-// both code paths back-fill the cross-link when the second half lands.
 pub(super) fn link_sink_to_known_monitor_source(state: &mut LoopState, sink_id: u32) {
     let monitor_name = match state.sinks.get(&sink_id) {
         Some(sink) => format!("{}.monitor", sink.node_name),

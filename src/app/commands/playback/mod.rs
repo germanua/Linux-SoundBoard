@@ -62,9 +62,6 @@ impl Default for LoudnessCoordinators {
     }
 }
 
-/// Drop a repeat play of the same sound inside this window. Hotkey auto-repeat
-/// fires every ~30-50 ms and you couldn't hear the difference anyway, since
-/// each play stop_all's the last one. Different sounds are untouched.
 const SAME_SOUND_DEBOUNCE_MS: u128 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,9 +239,6 @@ pub(crate) struct HotkeyPress {
     pub mode: crate::config::GroupMode,
     /// The tab currently showing, as a scope key.
     pub active_scope: String,
-    /// Last sound played per chord, keyed by the binding the press arrives as.
-    /// In memory on purpose: "where was I in this group" is session state, and
-    /// starting over next launch is what people expect.
     pub cursor: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -270,11 +264,6 @@ fn play_sound_from_library(
     play_resolved_sound(sound, player)
 }
 
-/// Turn the binding a press arrived as into the one sound to play.
-///
-/// A chord reaches the backends once, so the press names whichever binding
-/// stands for it and every sound on that chord is a candidate. Costs one extra
-/// query — fold the sound rows into the group query if that ever shows up.
 fn resolve_hotkey_press(
     binding_id: &str,
     press: &HotkeyPress,

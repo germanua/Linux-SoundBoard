@@ -53,18 +53,12 @@ pub(super) fn decode_drag_payload(bytes: &Bytes) -> Option<SoundTabDragPayload> 
     payload.normalized()
 }
 
-/// Folder drags get their own MIME type rather than a flag in the sound
-/// payload. A folder drop rewrites whole memberships, so disjoint types make
-/// confusing the two impossible instead of merely unlikely.
 pub(super) const FOLDER_DND_MIME: &str = "application/x-lsb-folder-dnd";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FolderDragPayload {
     pub root_path: String,
     pub relative_path: String,
-    /// Parent of the dragged folder, `None` at top level. Reordering is only
-    /// offered among siblings, so the drop side compares this instead of
-    /// guessing from the tree.
     #[serde(default)]
     pub parent_relative_path: Option<String>,
 }
@@ -93,9 +87,6 @@ pub(super) enum FolderDropZone {
     After,
 }
 
-/// Splits a row into insert / merge / insert bands: middle half merges, outer
-/// quarters insert. Aim at a row and you merge, hover near the gap and you
-/// reorder.
 pub(super) fn folder_drop_zone(y: f64, height: f64) -> FolderDropZone {
     if height <= 0.0 {
         return FolderDropZone::Into;

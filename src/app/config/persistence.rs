@@ -266,9 +266,6 @@ mod tests {
         let config = Config::load_from_path(&path).expect("migrate schema 6 fixture");
 
         assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
-        // This type doesn't carry the library any more: legacy sounds, tabs and
-        // folders survive in the backup asserted below and come back via the
-        // migration, not via runtime settings.
         assert_eq!(
             config.settings.mic_source.as_deref(),
             Some("easyeffects_source")

@@ -1599,9 +1599,6 @@ fn benchmark_156k_bounded_store() {
         "manual tab counts took {elapsed:?}"
     );
 
-    // The worker recomputes these for diagnostics once its queues drain after a
-    // mutation. It shares that worker with visible page loads, so the recount
-    // has to fit the same per-query budget.
     let stats_started = std::time::Instant::now();
     let stats = wait(store.stats());
     let stats_elapsed = stats_started.elapsed();
@@ -1739,9 +1736,6 @@ fn benchmark_20k_wide_folder_tree_store() {
         let tail = wait(store.folder_children(ROOT_PATH, None, last_page));
         assert_eq!(tail.folders.len(), last_page_rows);
 
-        // Regression gate: the `has_children` EXISTS must stay on
-        // `folders_parent_order`. Lose the index and SQLite scans every folder
-        // in the generation per row — this page goes ~12 ms to seconds.
         let deep_page_started = std::time::Instant::now();
         let deep_page = wait(store.folder_children(ROOT_PATH, None, last_page));
         let deep_page_elapsed = deep_page_started.elapsed();
@@ -1763,10 +1757,6 @@ fn benchmark_20k_wide_folder_tree_store() {
         );
         assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
     }
-    // `store` and its worker connection drop here, freeing the file so a plain
-    // connection can stamp the two meta rows startup wants. Same as
-    // legacy_migration::initialize_empty_library, which won't take an existing
-    // path.
     {
         let connection = rusqlite::Connection::open(&db_path).expect("open raw connection");
         connection
@@ -2415,9 +2405,6 @@ fn a_control_binding_represents_a_chord_it_shares() {
         tab_scope: None,
     })));
 
-    // A control action and a sound cannot normally share a chord, but if they
-    // ever do the control action must keep working: it is the one the press
-    // path cannot recover by any other route.
     let page = wait(store.hotkey_bindings_after(None));
     assert_eq!(page.bindings.len(), 1);
     assert_eq!(page.bindings[0].binding_id, "control:stop_all");
@@ -2432,9 +2419,6 @@ fn every_kind_of_tab_has_a_scope_key() {
         scope_key(&LibraryScope::ManualTab("party".to_string())),
         "tab:party"
     );
-    // A folder tab has no id of its own, so the key carries both halves. The
-    // separator cannot occur in a path, so "/a" + "b/c" can never collide with
-    // "/a/b" + "c".
     let nested = scope_key(&LibraryScope::Folder {
         root_path: "/music".to_string(),
         relative_path: "memes/loud".to_string(),

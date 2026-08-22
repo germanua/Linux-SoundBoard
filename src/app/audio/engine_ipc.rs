@@ -188,9 +188,7 @@ pub fn engine_info_at(path: &Path) -> Result<EngineInfo, EngineIpcError> {
 }
 
 pub fn engine_info_compatible(info: &EngineInfo) -> bool {
-    // The engine parses the same config file as the UI, so equal schemas is a
-    // deliberate gate: bump the schema and both sides have to come back up from
-    // the same build.
+    // Schema mismatch means the UI and engine must restart together.
     info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
         && info.config_schema_version == CURRENT_SCHEMA_VERSION
         && info.app_version == APP_VERSION

@@ -1,8 +1,4 @@
-//! The playback surface `commands` drives.
-//!
-//! A trait, not the concrete [`AudioPlayer`], so tests can swap in a double and
-//! assert on dispatches without a live backend. Transport only — routing and
-//! auto-gain stay on `AudioPlayer`, driven through config state instead.
+//! Playback transport seam for commands and tests.
 
 use super::player::{AudioPlayer, EngineError, PlaybackPosition};
 

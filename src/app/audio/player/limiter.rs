@@ -1,8 +1,5 @@
 use super::AutoGainDynamicParams;
 
-/// How often the limiter recomputes gain, in interleaved frames. 256 ≈ 5.3 ms
-/// at 48 kHz stereo: quick enough for transients, slow enough to amortize the
-/// per-frame branch.
 const LIMITER_UPDATE_INTERVAL_FRAMES: usize = 256;
 
 /// Ceiling in linear gain (≈ −0.18 dBFS). ~2 % headroom for inter-sample peaks

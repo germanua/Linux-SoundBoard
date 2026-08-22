@@ -1,15 +1,4 @@
-//! The StatusNotifierItem and its dbusmenu, over GIO's GDBus.
-//!
-//! GTK4 dropped `GtkStatusIcon`, so a panel icon means speaking
-//! StatusNotifierItem ourselves. Neither obvious crate fits: `tray-icon` pulls
-//! GTK 3 into a GTK 4 process, `ksni` pulls in Tokio for a codebase with no
-//! async runtime. `gio` is already a dependency, serves both interfaces, and
-//! delivers callbacks on the GTK main thread where the actions have to run.
-//!
-//! `ItemIsMenu` stays false — left-click toggles the window, right-click opens
-//! the menu, same as Steam and Discord. `ContextMenu` is unimplemented: it
-//! wants the app to draw a menu at absolute screen coordinates, which GTK4
-//! can't do on Wayland.
+//! StatusNotifierItem and D-Bus menu implementation.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -18,9 +7,6 @@ use glib::prelude::ToVariant;
 use glib::variant::Variant;
 
 use super::payload::{self, MenuItem};
-// The icon that packaging actually installs into the icon theme is named after
-// the application id, not `APP_ICON_NAME`; a tray host resolves the name in a
-// separate process, so it has to be the installed one.
 use crate::app_meta::{APP_ID, APP_TITLE};
 
 const WATCHER_NAME: &str = "org.kde.StatusNotifierWatcher";
@@ -135,9 +121,6 @@ struct TrayState {
     tooltip: String,
 }
 
-/// A live tray icon. Dropping it does NOT remove the icon: none of GIO's ids
-/// release on drop, so the owner calls [`Self::shutdown`]. They sit behind
-/// `Cell`s because releasing consumes them while the service is shared.
 pub(crate) struct TrayService {
     connection: gio::DBusConnection,
     bus_name: String,
@@ -151,9 +134,6 @@ pub(crate) struct TrayService {
 }
 
 impl TrayService {
-    /// Export the item and ask the watcher to show it. `Err` only if the export
-    /// itself fails — a missing watcher is normal on desktops where a panel or
-    /// extension provides one later, and the item waits for it.
     pub(crate) fn start(
         connection: &gio::DBusConnection,
         items: Vec<MenuItem>,
@@ -188,13 +168,6 @@ impl TrayService {
             |_, name| log::warn!("Tray: lost {name}"),
         );
 
-        // Watchers show up late and restart under us (panel crash, extension
-        // toggled), so follow the name rather than register once and hope.
-        //
-        // `gio::bus_watch_name_on_connection` would be the tool, but in gio 0.20
-        // its `WatcherId` comes from a private module shadowed by a second
-        // export of the same name — unnameable, so the watch can't be stored or
-        // cancelled. NameOwnerChanged by hand gives us an id we can unsubscribe.
         let registered = Rc::new(Cell::new(false));
         let watcher = connection.signal_subscribe(
             Some("org.freedesktop.DBus"),
@@ -217,9 +190,6 @@ impl TrayService {
             },
         );
 
-        // Usually the watcher is already up, so no NameOwnerChanged is coming
-        // and this attempt is the one that counts. Failing is fine — plenty of
-        // desktops have no watcher until a panel starts.
         register_with_watcher(connection, &bus_name, &registered);
 
         Ok(Self {
@@ -261,9 +231,6 @@ impl TrayService {
         );
     }
 
-    /// Tooltip text. Where the playing sound belongs — hovering is the first
-    /// thing anyone tries, and unlike the media controls it works anywhere a
-    /// tray icon does.
     pub(crate) fn set_tooltip(&self, description: &str) {
         if self.state.borrow().tooltip == description {
             return;
@@ -299,9 +266,6 @@ impl TrayService {
     }
 }
 
-/// Whether a `NameOwnerChanged` body reports the watcher arriving rather than
-/// leaving. The body is `(name, old_owner, new_owner)`; an empty new owner
-/// means the name was released.
 fn watcher_appeared(params: &Variant) -> bool {
     params
         .try_child_get::<String>(2)
@@ -351,9 +315,6 @@ fn register_item(
     connection
         .register_object(ITEM_PATH, info)
         .method_call(move |_, _, _, _, method, _, invocation| {
-            // Scroll and SecondaryActivate are answered but ignored: a
-            // soundboard has nothing sensible to do with a scroll wheel, and
-            // returning an error for them makes some hosts log noise.
             if method == "Activate" {
                 handler(TrayAction::Activate);
             }
@@ -584,11 +545,6 @@ mod tests {
         assert!(!watcher_appeared(&name_owner_changed(":1.42", "")));
     }
 
-    /// Exports a real item and checks the desktop's watcher takes it. Needs a
-    /// session bus with a running watcher, which CI hasn't got:
-    /// `cargo test -- --ignored registers_with_a_real_watcher --nocapture`.
-    /// One at a time (`--test-threads=1`) — the live tests share a connection
-    /// and export the same object paths.
     #[test]
     #[ignore = "needs a session bus with a StatusNotifierWatcher"]
     fn registers_with_a_real_watcher() {
@@ -612,9 +568,6 @@ mod tests {
         let registered = tray.is_live();
         tray.set_tooltip("Playing: airhorn.mp3");
 
-        // Ask our own dbusmenu for its layout the way a panel does. The call
-        // has to be asynchronous: a blocking one would stop the main context
-        // that has to dispatch it, and deadlock.
         let layout = Rc::new(RefCell::new(None));
         let main_loop = glib::MainLoop::new(None, false);
         connection.call(

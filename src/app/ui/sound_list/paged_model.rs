@@ -186,9 +186,6 @@ impl PagedSoundModel {
             return;
         };
 
-        // Reserve page 0 so the first-page fetch and the count fetch can race:
-        // whoever lands first publishes readable rows, and the scroll path sees
-        // page 0 as in flight instead of requesting it again.
         let placeholders = (0..PAGE_SIZE as u32)
             .map(|offset| self.placeholder(generation, offset))
             .collect();
@@ -603,14 +600,6 @@ impl PagedSoundModel {
         true
     }
 
-    /// Reconcile a provisional total — from a first page that beat the exact
-    /// count — with the real count once it lands.
-    ///
-    /// `total` is always exactly what GTK has been told, since every site that
-    /// changes it emits the matching `items_changed` alongside. So the delta is
-    /// precisely what GTK still needs, and announcing only the size change
-    /// leaves the first page's row identities alone. Previous total 0 makes
-    /// this a plain count announcement.
     fn apply_exact_total(&self, generation: u64, exact_total: u32) -> bool {
         let imp = self.imp();
         if imp.generation.get() != generation {
@@ -630,13 +619,6 @@ impl PagedSoundModel {
     }
 
     fn notify_replacements(&self, generation: u64, start: u32, len: u32, record_first_rows: bool) {
-        // Never report past `total` — past what GTK has been told exists.
-        // `reload` reserves page 0 with a full PAGE_SIZE before any count is
-        // known, so unlike `ensure_page`'s pages that vector isn't bounded by
-        // `total`. Exact count smaller than what the page query then returns
-        // (independent queries, store can grow between them) and
-        // `install_page`/`fail_page` would announce rows beyond it and trip the
-        // list-item-manager assertion. Clamping here covers every caller.
         let len = len.min(self.imp().total.get().saturating_sub(start));
         if len == 0 {
             return;
@@ -1079,15 +1061,6 @@ mod tests {
             "Prepared"
         );
     }
-
-    // Do NOT pump `glib::MainContext::default()` from a test in this module.
-    //
-    // `idle_add_local` hardcodes the global default context in glib 0.20.12, so
-    // a test can't redirect it to a private one. Tests here leave real non-Send
-    // closures on that shared context, each pinned to whichever OS thread ran
-    // it, and the first test to pump picks up someone else's and SIGABRTs the
-    // binary: "Value accessed from different thread than where it was created".
-    // Passes alone, kills the full run in order. Assert synchronously instead.
 
     #[test]
     fn externally_referenced_row_keeps_identity_after_page_eviction() {

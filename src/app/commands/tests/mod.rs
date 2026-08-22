@@ -988,9 +988,6 @@ fn a_binding_id_is_safe_to_write_into_the_swhkd_config() {
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
 
-    // A folder tab's scope key carries a path and a unit separator, neither of
-    // which the swhkd binding-id validator accepts, so the scope must never
-    // end up inside the id.
     commands::set_hotkey(
         sound_id.clone(),
         Some("Ctrl+Alt+Digit6".to_string()),

@@ -93,9 +93,6 @@ pub fn run() {
     app.run();
 }
 
-// Accepts `--diagnose-graph-snapshot <path>` and `--diagnose-graph-snapshot=<path>`.
-// Returns None if the flag isn't present; exits with a usage message if the
-// flag is present but no path follows it.
 #[allow(clippy::print_stderr)]
 fn parse_graph_snapshot_arg() -> Option<PathBuf> {
     const FLAG: &str = "--diagnose-graph-snapshot";
@@ -1298,9 +1295,6 @@ fn record_state_phase(name: &str, state: &Arc<AppState>) {
     record_config_phase(name, &state.config);
 }
 
-/// Tear the app down: the close button when the window really is closing, and
-/// the tray's Quit row. Guarded, since both routes end at the same close and
-/// the engine IPC shouldn't have to survive a double shutdown.
 fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
     static DONE: AtomicBool = AtomicBool::new(false);
     if DONE.swap(true, AtomicOrdering::SeqCst) {
@@ -1322,12 +1316,6 @@ fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
 /// off, when the session has no bus, or when exporting failed.
 type TraySlot = Rc<RefCell<Option<Rc<crate::tray::TrayService>>>>;
 
-/// Put an icon in the panel and keep it in step with the settings.
-///
-/// No watcher is not a failure — the item stays exported and shows up if a
-/// panel appears later. The close button checks
-/// [`crate::tray::TrayService::is_live`] first, so the window never hides into
-/// a tray nobody can see.
 fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
     let slot: TraySlot = Rc::new(RefCell::new(None));
     let Some(connection) = app.dbus_connection() else {
@@ -1373,9 +1361,6 @@ fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
     slot
 }
 
-/// Publish the playing sound to the desktop's media controls. Exported for the
-/// session, visible only while the setting is on — otherwise we'd sit in the
-/// panel holding the media keys uninvited.
 fn install_mpris(app: &Application) -> Option<Rc<crate::mpris::MprisService>> {
     let connection = app.dbus_connection()?;
     let service = match crate::mpris::MprisService::start(
@@ -1392,9 +1377,6 @@ fn install_mpris(app: &Application) -> Option<Rc<crate::mpris::MprisService>> {
     Some(service)
 }
 
-/// Route the playing sound to both places that show it. The tray tooltip is
-/// not part of the media-controls feature and isn't gated on its setting —
-/// hovering the icon is the first thing anyone tries.
 fn install_now_playing(
     tray: &TraySlot,
     mpris: &Option<Rc<crate::mpris::MprisService>>,
@@ -1640,9 +1622,6 @@ fn initialize_player(
 ) -> Result<(crate::audio::AudioPlayer, bool), String> {
     use crate::audio::AudioBackendKind;
 
-    // With route audit on, skip the systemd engine: the unit inherits none of
-    // the user's environment, so it would never see `LSB_ROUTE_AUDIT` and the
-    // log would stay empty. In-process, init_from_env() already opened the file.
     let force_in_process = crate::diagnostics::audit::is_enabled();
     if force_in_process {
         log::warn!(

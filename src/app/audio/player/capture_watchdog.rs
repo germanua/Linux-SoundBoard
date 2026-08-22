@@ -12,10 +12,6 @@ pub(super) fn capture_stream_missing(state: &LoopState) -> bool {
     }
 }
 
-/// Watchdog for the mic-passthrough capture stream. Two races it covers: we
-/// start before the registry lists any mic, and the preferred source
-/// (EasyEffects and friends) comes up after us. Both used to need a manual
-/// passthrough off/on to recover.
 pub(super) fn ensure_capture_stream_present(state: &mut LoopState) {
     if !state.runtime.mic_passthrough {
         state.capture_health_miss_ticks = 0;
@@ -59,10 +55,6 @@ pub(super) fn ensure_capture_stream_present(state: &mut LoopState) {
             warn!("Capture-stream watchdog failed to repair unhealthy stream: {err}");
         }
     }
-
-    // Link health lies while WirePlumber rewires nodes. Keep the stream and
-    // just drop its passthrough contribution until a good link shows up, rather
-    // than tearing down and flushing the playback queues.
 }
 
 pub(super) fn pipewire_capture_stream_healthy(

@@ -20,7 +20,4 @@ pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
 // VIRTUAL_SOURCE_NAME; this is the thing feeding it.
 pub const VIRTUAL_MIC_FEEDER_NODE_NAME: &str = "linuxsoundboard.virtual_mic_feeder";
 pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
-// Underscores, not spaces: pipewire-pulse truncates `sink_properties=` values
-// at the first space and no quoting gets around it. Users read this verbatim
-// in mic dropdowns.
 pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";

@@ -7,10 +7,6 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// Dump a PipeWire graph snapshot to `path`, one JSON line per object we care
-/// about (Stream/Input/Audio, Audio/Source, Audio/Sink, Links). The rest is
-/// filtered out so this can ship with a route-audit log without leaking the
-/// user's whole graph. Goes with `LSB_ROUTE_AUDIT=1`.
 pub fn run_graph_snapshot(path: &std::path::Path) -> i32 {
     use std::io::Write;
     let pw_dump = match Command::new("pw-dump").output() {

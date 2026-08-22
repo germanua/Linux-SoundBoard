@@ -1,9 +1,3 @@
-//! A `PlaybackEngine` test double.
-//!
-//! `FakeAudioPlayer` records what `commands` dispatches and keeps just enough
-//! playback state for query-style commands like `seek_sound`. Drop it in for
-//! the real `AudioPlayer` and assert on the dispatches — no audio backend.
-
 use parking_lot::Mutex;
 use std::collections::HashMap;
 

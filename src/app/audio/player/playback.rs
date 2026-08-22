@@ -177,9 +177,6 @@ impl ActivePlayback {
             }
 
             let Some(sample) = self.source.next() else {
-                // Source is dry. The limiter is a sliding peak window, not a
-                // delay line (see limiter.rs), so there is nothing buffered to
-                // drain — flag it and let the next pass loop or finish.
                 self.source_exhausted = true;
                 continue;
             };

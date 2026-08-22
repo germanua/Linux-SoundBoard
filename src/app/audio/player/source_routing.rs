@@ -7,9 +7,6 @@ const PACTL_COMMAND_TIMEOUT: Duration = Duration::from_millis(900);
 #[cfg(not(test))]
 const WPCTL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-// Upstream mic processors we prefer over a raw mic. Case-insensitive substring
-// match on node.name and node.description. Picked as `mic_source` and offline,
-// we refuse to fall back quietly — they chose it for a reason.
 const ENHANCEMENT_SOURCE_PATTERNS: &[&str] = &[
     "easyeffects",
     "easy effects",
@@ -127,21 +124,12 @@ pub(super) fn resolve_capture_target_from_default(
         .filter(|source_name| is_upstream_mic_source(source_name, &state.sources))
 }
 
-// A tracked Audio/Source auto-detect may fall back to: known enhancement chain
-// or real hardware. Default / previous-default paths only, and it must not
-// resurrect a screenshare source the ranking already rejected.
 fn is_upstream_mic_source(source_name: &str, sources: &HashMap<u32, SourceDescriptor>) -> bool {
     sources
         .values()
         .any(|candidate| candidate.node_name == source_name && auto_detect_eligible(candidate))
 }
 
-// Auto-detect picks exactly two kinds: a known mic-enhancement chain
-// (preferred — someone deployed it on purpose) or a real hardware mic.
-// Screenshare null sinks, OBS virtual audio, loopback cables and custom virtual
-// sources need explicit selection.
-//
-// Uses only what the registry `global` event carries: node name and device.id.
 pub(super) fn best_upstream_mic_source_name(
     sources: &HashMap<u32, SourceDescriptor>,
 ) -> Option<String> {
