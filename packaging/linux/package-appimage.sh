@@ -241,6 +241,21 @@ while IFS= read -r icon_path; do
     install -Dm644 "$icon_path" "$APPDIR/usr/libexec/linux-soundboard/installer/icons/$relative_path"
 done < <(find "$ICON_SOURCE_ROOT" -type f | sort)
 
+# A directory of PNGs is not an icon theme without this: the spec makes
+# index.theme the thing that marks one, and hosts that lack the
+# hicolor-icon-theme package have no other copy to merge ours with. Cheap
+# insurance for in-process lookups; the desktop panel resolves the window icon
+# from an installed .desktop instead and never sees the AppDir at all.
+{
+    printf '[Icon Theme]\nName=Hicolor\nComment=Fallback icon theme\nHidden=true\nDirectories='
+    printf '%s' "$(printf '%s/apps,' 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512 | sed 's/,$//')"
+    printf '\n\n'
+    for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+        printf '[%s/apps]\nSize=%s\nContext=Applications\nType=Fixed\n\n' \
+            "$size" "${size%%x*}"
+    done
+} >"$APPDIR/usr/share/icons/hicolor/index.theme"
+
 DEPLOY_PATH="$TOOLS_ROOT:$LINUXDEPLOY_ROOT/usr/bin:$PATH"
 
 (
@@ -301,18 +316,22 @@ echo "Library cleanup complete"
 echo "Adding preflight dependency checker..."
 install -Dm755 "$SCRIPT_DIR/appimage-preflight-check.sh" "$APPDIR/usr/bin/appimage-preflight-check"
 
-# Wire the preflight check into AppRun.
-if [ -f "$APPDIR/AppRun" ]; then
-    # Insert the check before the final exec line.
-    # shellcheck disable=SC2016
-    sed -i '/^exec "$this_dir"\/AppRun.wrapped/i \
-# Run preflight checks (skip with SKIP_PREFLIGHT_CHECK=1).\
-if [ -z "$SKIP_PREFLIGHT_CHECK" ]; then\
-    "$this_dir"/usr/bin/appimage-preflight-check || exit 1\
-fi\
-' "$APPDIR/AppRun"
-    echo "✓ Preflight checker integrated into AppRun"
+# Wire the preflight check into the gtk plugin's AppRun hook.
+#
+# Not into AppRun itself: linuxdeploy rewrites that on the packaging run below
+# ("Found an AppRun file/symlink, possibly due to re-run of linuxdeploy,
+# overwriting"), and it regenerates the source lines from the hooks its own
+# plugins registered — a file dropped into apprun-hooks/ by hand is ignored.
+# Editing a registered hook is what survives, which is the same thing the
+# GTK_THEME rewrite above relies on.
+[ -f "$gtk_hook" ] || { echo "no $gtk_hook to hang the preflight check on" >&2; exit 1; }
+cat >>"$gtk_hook" <<'HOOK'
+
+# Run preflight checks (skip with SKIP_PREFLIGHT_CHECK=1).
+if [ -z "$SKIP_PREFLIGHT_CHECK" ]; then
+    "$APPDIR"/usr/bin/appimage-preflight-check || exit 1
 fi
+HOOK
 
 (
     cd "$DIST_ROOT"
@@ -321,6 +340,15 @@ fi
         --appdir "$APPDIR" \
         --output appimage
 )
+
+# Shipping the checker without a caller is exactly the bug this replaced, so
+# check both halves: the hook still holds the call, and AppRun still sources it.
+grep -q 'appimage-preflight-check' "$gtk_hook" \
+    && grep -q "apprun-hooks/\"linuxdeploy-plugin-gtk.sh\"" "$APPDIR/AppRun" || {
+    echo "the preflight check is not reachable from AppRun; it would never run" >&2
+    exit 1
+}
+echo "✓ Preflight checker wired into AppRun"
 
 cp "$versioned_path" "$stable_path"
 

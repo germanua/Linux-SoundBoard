@@ -73,5 +73,9 @@ docker run --rm \
 
 mkdir -p "$REPO_ROOT/dist"
 cp "$CTX"/dist/*.rpm "$REPO_ROOT/dist/"
+# package-rpm.sh hashed the container's dist/, not this one, so the host list is
+# still missing the rpm we just copied in.
+"$REPO_ROOT/packaging/generate-checksums.sh" "$REPO_ROOT/dist" >/dev/null
+
 echo "==> Done. Artifacts in $REPO_ROOT/dist:"
-ls -1 "$REPO_ROOT"/dist/*.rpm
+ls -1 "$REPO_ROOT"/dist/*.rpm "$REPO_ROOT"/dist/SHA256SUMS.txt

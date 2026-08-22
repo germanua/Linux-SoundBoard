@@ -1955,6 +1955,14 @@ phase_summary() {
     done < <(expected_artifacts)
     printf '      dist/SHA256SUMS.txt\n'
 
+    # The AUR lives in its own git remote, so nothing this script does reaches
+    # it. It is still part of the release; see packaging/aur/README.md.
+    printf '\n  Then the AUR (separate repository, after the assets are live):\n'
+    printf '    build-release.sh --finish-aur --tag %s      # real sha256, .SRCINFO\n' "$TAG_NAME"
+    printf '    cp packaging/aur/{PKGBUILD,.SRCINFO,linux-soundboard.install} <aur clone>/\n'
+    printf '    makepkg --cleanbuild --syncdeps && namcap PKGBUILD *.pkg.tar.zst\n'
+    printf '    git -C <aur clone> commit -am %s && git -C <aur clone> push\n' "$NEW_VERSION"
+
     printf '\n  exit %d\n\n' "$EXIT_STATUS"
 }
 

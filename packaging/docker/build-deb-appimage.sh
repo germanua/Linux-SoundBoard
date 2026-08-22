@@ -57,6 +57,10 @@ if [ "${1:-}" = "--in-container" ]; then
     cd /src
     mkdir -p dist
 
+    # On the way out, success or not: root-owned build outputs in the bind mount
+    # leave the host unable to delete the temp context it created.
+    trap 'chown -R "$HOST_UID:$HOST_GID" /src/dist /src/target 2>/dev/null || true' EXIT
+
     echo "==> Building .deb"
     # Mirror packaging/debian/package-deb.sh, but pass -d: its default
     # dpkg-buildpackage invocation fails dpkg-checkbuilddeps because apt has no
@@ -70,9 +74,6 @@ if [ "${1:-}" = "--in-container" ]; then
     echo "==> Building portable AppImage"
     bash packaging/linux/package-appimage.sh
 
-    # Hand every build output (including the root-owned cargo target/) back to the
-    # host user so the host can delete the temporary build context afterwards.
-    chown -R "$HOST_UID:$HOST_GID" dist target 2>/dev/null || true
     exit 0
 fi
 
