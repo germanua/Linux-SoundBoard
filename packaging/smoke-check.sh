@@ -79,7 +79,7 @@ if grep -qF 'maintainer-scripts = "../packaging/debian"' "$REPO_ROOT/src/Cargo.t
 else
     fail "cargo-deb: maintainer scripts are not registered for the control archive"
 fi
-if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pipewire, wireplumber, pkexec | policykit-1"' "$REPO_ROOT/src/Cargo.toml"; then
+if grep -qF 'depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pulseaudio-utils, pipewire, pipewire-pulse, wireplumber, pkexec | policykit-1"' "$REPO_ROOT/src/Cargo.toml"; then
     pass "cargo-deb: runtime dependencies do not rely on optional auto-detection"
 else
     fail "cargo-deb: explicit GTK, Opus, audio, and X11 runtime dependencies are incomplete"
@@ -94,10 +94,50 @@ if grep -qF 'libopus-dev,' "$REPO_ROOT/packaging/debian/control"; then
 else
     fail "Debian: libopus-dev is required for the Rust Opus bindings"
 fi
+if grep -qF 'libclang-dev,' "$REPO_ROOT/packaging/debian/control"; then
+    pass "Debian: libclang build dependency is declared"
+else
+    fail "Debian: libclang-dev is required by PipeWire bindgen"
+fi
 if grep -qF 'BuildRequires:  opus-devel' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
     pass "RPM: Opus build dependency is declared"
 else
     fail "RPM: opus-devel is required for the Rust Opus bindings"
+fi
+if grep -qF 'pulseaudio-utils' "$REPO_ROOT/packaging/debian/control" \
+    && grep -qF 'pipewire-pulse' "$REPO_ROOT/packaging/debian/control"; then
+    pass "Debian: pactl and the PipeWire Pulse server are installed"
+else
+    fail "Debian: pulseaudio-utils and pipewire-pulse are required at runtime"
+fi
+if grep -qF 'Requires:       pulseaudio-utils' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    && grep -qF 'Requires:       pipewire-utils' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    && grep -qF 'Requires:       pipewire-pulseaudio' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
+    pass "RPM: pactl, PipeWire tools, and the Pulse server are installed"
+else
+    fail "RPM: pulseaudio-utils, pipewire-utils, and pipewire-pulseaudio are required at runtime"
+fi
+if grep -Eq '^[[:space:]]*(cargo|rustc)[[:space:]]*\(' "$REPO_ROOT/packaging/debian/control" \
+    || grep -Eq '^BuildRequires:[[:space:]]+(cargo|rust)[[:space:]]*[<=>]' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
+    fail "Native package build dependencies must not pin Rust package versions"
+else
+    pass "Native package build dependencies use distro-selected Rust versions"
+fi
+if grep -qF 'libasound2-dev' "$REPO_ROOT/packaging/debian/control" \
+    || grep -qF 'alsa-lib-devel' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    || grep -qF 'libasound2-dev' "$REPO_ROOT/packaging/docker/build-deb-appimage.sh" \
+    || grep -qF 'alsa-lib-devel' "$REPO_ROOT/packaging/docker/build-rpm.sh"; then
+    fail "Native package builds still install unused ALSA development files"
+else
+    pass "Native package builds omit unused ALSA development files"
+fi
+if grep -Eq '(rust|Rust|cargo).*(1\.85|1\.85\.0)|(1\.85|1\.85\.0).*(rust|Rust|cargo)' \
+    "$REPO_ROOT/packaging/docker/build-deb-appimage.sh" \
+    "$REPO_ROOT/packaging/docker/build-rpm.sh" \
+    || grep -Eq 'toolchain:[[:space:]]*"?[0-9]' "$REPO_ROOT/.github/workflows/ci.yml"; then
+    fail "Build workflows hardcode the Rust dependency version"
+else
+    pass "Build workflows take the Rust version from project metadata"
 fi
 if grep -qF '%global debug_package %{nil}' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
     pass "RPM: empty remapped debug packages are disabled"
@@ -130,6 +170,42 @@ if grep -qFx "  'opus'" "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD"
     pass "AUR development package: Opus runtime dependency is declared"
 else
     fail "AUR development package: opus runtime dependency is incomplete"
+fi
+if grep -qFx "  'pipewire-pulse'" "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    && grep -qF $'\tdepends = pipewire-pulse' "$REPO_ROOT/packaging/aur/.SRCINFO" \
+    && grep -qFx "  'pipewire-pulse'" "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    && grep -qF $'\tdepends = pipewire-pulse' "$REPO_ROOT/packaging/aur/linux-soundboard-git/.SRCINFO"; then
+    pass "AUR packages: PipeWire Pulse server is installed"
+else
+    fail "AUR packages: pipewire-pulse is required at runtime"
+fi
+
+for build_recipe in \
+    "$REPO_ROOT/packaging/aur/PKGBUILD" \
+    "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD" \
+    "$REPO_ROOT/packaging/debian/rules" \
+    "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
+    "$REPO_ROOT/packaging/linux/package-tarball.sh"; do
+    if grep -qF -- '--locked' "$build_recipe"; then
+        pass "locked Rust graph: ${build_recipe#"$REPO_ROOT/"}"
+    else
+        fail "Rust build does not enforce Cargo.lock: $build_recipe"
+    fi
+done
+
+if grep -qF 'for cmd in pactl pw-cli pw-dump pw-metadata wpctl' "$REPO_ROOT/install.sh" \
+    && grep -qF 'pulseaudio-utils pipewire pipewire-pulse wireplumber' "$REPO_ROOT/install.sh" \
+    && grep -qF 'pulseaudio-utils pipewire pipewire-utils pipewire-pulseaudio wireplumber' "$REPO_ROOT/install.sh"; then
+    pass "Tarball installer checks and installs audio command providers"
+else
+    fail "Tarball installer does not cover every audio command provider"
+fi
+
+if grep -qF 'pick_pkg "apt-cache show"' "$REPO_ROOT/install.sh" \
+    || grep -qF 'pick_pkg "zypper --non-interactive info"' "$REPO_ROOT/install.sh"; then
+    fail "Installer package lookup quotes a command and its arguments as one executable"
+else
+    pass "Installer package lookup invokes package managers correctly"
 fi
 
 echo ""

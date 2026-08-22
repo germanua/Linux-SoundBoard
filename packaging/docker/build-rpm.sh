@@ -27,17 +27,11 @@ if [ "${1:-}" = "--in-container" ]; then
     dnf -y --setopt=install_weak_deps=False install \
         rpm-build rpmdevtools tar gzip findutils \
         cargo rust clang-devel \
-        gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
+        gtk4-devel libadwaita-devel pulseaudio-libs-devel \
         opus-devel pipewire-devel libX11-devel libXi-devel \
         pkgconf-pkg-config ImageMagick systemd-rpm-macros >/dev/null
 
     echo "==> Toolchain: $(rustc --version), $(cargo --version)"
-    # The spec requires rust/cargo >= 1.85; fail early if the base is too old.
-    rv="$(rustc --version | awk '{print $2}')"
-    if [ "$(printf '%s\n1.85.0\n' "$rv" | sort -V | head -1)" != "1.85.0" ]; then
-        echo "FATAL: distro rust $rv < 1.85 (required by the spec)" >&2
-        exit 3
-    fi
 
     echo "==> Building RPM via packaging/rpm/package-rpm.sh"
     cd /src

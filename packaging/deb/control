@@ -3,7 +3,7 @@ Version: 2.3.0
 Section: sound
 Priority: optional
 Architecture: amd64
-Depends: libgtk-4-1, libadwaita-1-0, libpulse0, pipewire, wireplumber, pkexec | policykit-1
+Depends: libgtk-4-1, libadwaita-1-0, libpulse0, libopus0, pulseaudio-utils, pipewire, pipewire-pulse, wireplumber, pkexec | policykit-1
 Maintainer: germanua <114772595+germanua@users.noreply.github.com>
 Description: A Linux soundboard with PipeWire virtual mic support
  LinuxSoundBoard is a feature-rich soundboard application for Linux

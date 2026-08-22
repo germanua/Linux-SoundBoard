@@ -47,7 +47,7 @@ sudo apt install ./linux-soundboard_2.3.0-1_amd64.deb
 If host audio packages are missing:
 
 ```bash
-sudo apt install pipewire wireplumber
+sudo apt install pipewire pipewire-pulse wireplumber pulseaudio-utils
 ```
 
 ### `.rpm` install reports missing dependencies
@@ -61,7 +61,7 @@ sudo dnf install ./linux-soundboard-2.3.0-1.x86_64.rpm
 If the audio stack is missing:
 
 ```bash
-sudo dnf install pipewire wireplumber
+sudo dnf install pipewire pipewire-utils pipewire-pulseaudio wireplumber pulseaudio-utils
 ```
 
 ## Startup and UI Problems
@@ -612,7 +612,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-### GTK, Libadwaita, PipeWire, X11, or ALSA development packages are missing
+### GTK, Libadwaita, PipeWire, Opus, or X11 development packages are missing
 
 Use the dependency blocks in [INSTALL.md](INSTALL.md) under the source-build section.
 

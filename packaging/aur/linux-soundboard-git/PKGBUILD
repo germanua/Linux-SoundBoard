@@ -18,6 +18,7 @@ depends=(
   'hicolor-icon-theme'
   'polkit'
   'pipewire'
+  'pipewire-pulse'
   'wireplumber'
 )
 makedepends=(

@@ -242,7 +242,7 @@ sudo apt install ./linux-soundboard_2.3.0-1_amd64.deb
 Required runtime packages (usually already present on modern Ubuntu/Debian):
 
 ```
-pipewire  wireplumber  libpulse0
+pipewire  pipewire-pulse  wireplumber  libpulse0  pulseaudio-utils
 ```
 
 The package enables the engine service for new logins automatically. To enable
@@ -268,7 +268,7 @@ sudo dnf install ./linux-soundboard-2.3.0-1.x86_64.rpm
 Required runtime packages:
 
 ```
-pipewire  wireplumber  pulseaudio-libs
+pipewire  pipewire-utils  pipewire-pulseaudio  wireplumber  pulseaudio-libs  pulseaudio-utils
 ```
 
 Same as Debian: run the smart wrapper repair command after the RPM install to configure the engine service and clean obsolete user-level audio routing for your account, without copying package-owned files into `~/.local`.
@@ -345,23 +345,25 @@ On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` neede
 
 ```bash
 sudo pacman -S cargo rust pkgconf imagemagick gtk4 libadwaita \
-  libpulse alsa-lib opus libx11 libxi pipewire wireplumber
+  libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber clang
 ```
 
 **Debian / Ubuntu:**
 
 ```bash
 sudo apt install build-essential cargo rustc pkg-config imagemagick \
-  libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev \
-  libopus-dev libx11-dev libxi-dev pipewire wireplumber
+  libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev \
+  libpipewire-0.3-dev libx11-dev libxi-dev libclang-dev \
+  pipewire pipewire-pulse wireplumber pulseaudio-utils
 ```
 
 **Fedora:**
 
 ```bash
-sudo dnf install cargo rust gcc gcc-c++ clang pkg-config ImageMagick \
-  gtk4-devel libadwaita-devel pulseaudio-libs-devel alsa-lib-devel \
-  opus-devel libX11-devel libXi-devel pipewire-devel pipewire wireplumber
+sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config ImageMagick \
+  gtk4-devel libadwaita-devel pulseaudio-libs-devel opus-devel \
+  libX11-devel libXi-devel pipewire-devel pipewire pipewire-utils \
+  pipewire-pulseaudio wireplumber pulseaudio-utils
 ```
 
 ### Build and install

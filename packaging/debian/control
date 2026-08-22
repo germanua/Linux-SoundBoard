@@ -4,15 +4,15 @@ Priority: optional
 Maintainer: germanua <114772595+germanua@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13),
                cargo,
-               rustc (>= 1.85),
+               rustc,
                libgtk-4-dev,
                libadwaita-1-dev,
                libpulse-dev,
-               libasound2-dev,
                libopus-dev,
                libpipewire-0.3-dev,
                libx11-dev,
                libxi-dev,
+               libclang-dev,
                pkg-config,
                imagemagick
 Standards-Version: 4.6.2
@@ -29,8 +29,11 @@ Depends: ${shlibs:Depends},
          libx11-6,
          libxi6,
          libpulse0,
+         libopus0,
+         pulseaudio-utils,
          pkexec | policykit-1,
          pipewire,
+         pipewire-pulse,
          wireplumber
 Recommends: xwayland
 Description: Native Linux soundboard with virtual microphone support

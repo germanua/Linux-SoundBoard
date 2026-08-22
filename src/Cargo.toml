@@ -65,7 +65,7 @@ copyright = "2026, germanua"
 section = "sound"
 priority = "optional"
 revision = "1"
-depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pipewire, wireplumber, pkexec | policykit-1"
+depends = "libgtk-4-1, libadwaita-1-0, libx11-6, libxi6, libpulse0, libopus0, pulseaudio-utils, pipewire, pipewire-pulse, wireplumber, pkexec | policykit-1"
 recommends = "xwayland"
 maintainer-scripts = "../packaging/debian"
 extended-description = """\
@@ -126,12 +126,12 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
-gtk4 = "*"
-libadwaita = "*"
 pipewire = "*"
+pipewire-utils = "*"
+pipewire-pulseaudio = "*"
 wireplumber = "*"
 polkit = "*"
-pulseaudio-libs = "*"
+pulseaudio-utils = "*"
 
 [lints]
 workspace = true

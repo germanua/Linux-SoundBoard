@@ -113,7 +113,7 @@ if [[ "$build_project" -eq 1 ]]; then
         RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${HOME}=~"
     fi
     export RUSTFLAGS
-    cargo build --release --manifest-path "$MANIFEST_PATH"
+    cargo build --locked --release --manifest-path "$MANIFEST_PATH"
 fi
 
 if [[ ! -x "$BINARY_SOURCE" ]]; then

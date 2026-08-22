@@ -16,7 +16,7 @@ override_dh_auto_configure:
 	bash packaging/linux/generate-icons.sh assets/icons/icon.png
 
 override_dh_auto_build:
-	cargo build --release --manifest-path src/Cargo.toml
+	cargo build --locked --release --manifest-path src/Cargo.toml
 
 override_dh_auto_test:
 	# Skip tests for now (require display server)

@@ -9,28 +9,25 @@ License:        PolyForm-Noncommercial-1.0.0
 URL:            https://github.com/germanua/Linux-SoundBoard
 Source0:        %{name}-%{version}.tar.gz
 
-BuildRequires:  cargo >= 1.85
-BuildRequires:  rust >= 1.85
+BuildRequires:  cargo
+BuildRequires:  rust
 BuildRequires:  clang-devel
 BuildRequires:  gtk4-devel
 BuildRequires:  libadwaita-devel
 BuildRequires:  pulseaudio-libs-devel
-BuildRequires:  alsa-lib-devel
 BuildRequires:  opus-devel
 BuildRequires:  pipewire-devel
 BuildRequires:  libX11-devel
 BuildRequires:  libXi-devel
-BuildRequires:  pkgconfig
+BuildRequires:  pkgconf-pkg-config
 BuildRequires:  ImageMagick
 BuildRequires:  systemd-rpm-macros
 
-Requires:       gtk4
-Requires:       libadwaita
-Requires:       pulseaudio-libs
-Requires:       libX11
-Requires:       libXi
 Requires:       pipewire
+Requires:       pipewire-utils
+Requires:       pipewire-pulseaudio
 Requires:       wireplumber
+Requires:       pulseaudio-utils
 Requires:       polkit
 
 Recommends:     xorg-x11-server-Xwayland
@@ -48,7 +45,7 @@ UI with native PipeWire virtual microphone support.
 %build
 bash packaging/linux/generate-icons.sh assets/icons/icon.png
 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }--remap-path-prefix=$(pwd)=. --remap-path-prefix=${HOME}=~"
-cargo build --release --manifest-path src/Cargo.toml
+cargo build --locked --release --manifest-path src/Cargo.toml
 
 %install
 rm -rf %{buildroot}

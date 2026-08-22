@@ -233,12 +233,18 @@ zypper_refresh() {
 }
 zypper_install() { zypper_refresh; as_root zypper --non-interactive install --no-recommends "$@"; }
 
+package_available() {
+    case "$DISTRO_FAMILY" in
+        debian)   apt-cache show "$1" >/dev/null 2>&1 ;;
+        opensuse) zypper --non-interactive info "$1" >/dev/null 2>&1 ;;
+        *)        return 1 ;;
+    esac
+}
+
 pick_pkg() {
-    # Pick first available package from a list (checks apt-cache or zypper info)
-    local cmd=$1; shift
     local pkg
     for pkg in "$@"; do
-        if "$cmd" "$pkg" >/dev/null 2>&1; then printf '%s\n' "$pkg"; return 0; fi
+        if package_available "$pkg"; then printf '%s\n' "$pkg"; return 0; fi
     done
     return 1
 }
@@ -388,8 +394,9 @@ install_fedora() {
 # and AUR packages declare. Checked by soname first: a desktop system normally
 # has all of it, and this path should not ask for a password when it does not
 # have to.
-missing_runtime_libraries() {
+missing_runtime_dependencies() {
     local cache=""
+    local cmd
     local lib
     local missing=()
 
@@ -398,11 +405,14 @@ missing_runtime_libraries() {
     elif [[ -x /sbin/ldconfig ]]; then
         cache="$(/sbin/ldconfig -p 2>/dev/null || true)"
     fi
-    [[ -n "$cache" ]] || return 0
+    if [[ -n "$cache" ]]; then
+        for lib in libgtk-4.so.1 libadwaita-1.so.0 libpulse.so.0 libopus.so.0 libpipewire-0.3.so.0 libX11.so.6 libXi.so.6; do
+            grep -qF "$lib" <<<"$cache" || missing+=("$lib")
+        done
+    fi
 
-    # Sonames, so the dots are literal: -F, not a regex.
-    for lib in libgtk-4.so.1 libadwaita-1.so.0 libpulse.so.0 libopus.so.0 libpipewire-0.3.so.0 libX11.so.6 libXi.so.6; do
-        grep -qF "$lib" <<<"$cache" || missing+=("$lib")
+    for cmd in pactl pw-cli pw-dump pw-metadata wpctl; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
     done
 
     ((${#missing[@]} > 0)) && printf '%s\n' "${missing[@]}"
@@ -413,20 +423,18 @@ runtime_packages() {
     local polkit
     case "$DISTRO_FAMILY" in
         arch)
-            printf '%s\n' gtk4 libadwaita libpulse opus libx11 libxi hicolor-icon-theme polkit pipewire wireplumber
+            printf '%s\n' gtk4 libadwaita libpulse opus libx11 libxi hicolor-icon-theme polkit pipewire pipewire-pulse wireplumber
             ;;
         debian)
-            # policykit-1 was split up in Debian 12 and Ubuntu 23.04: the tool now
-            # lives in pkexec, so ask apt which of the two this release carries.
-            polkit="$(pick_pkg "apt-cache show" pkexec policykit-1 polkitd || true)"
-            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libx11-6 libxi6 pipewire wireplumber ${polkit:+"$polkit"}
+            polkit="$(pick_pkg pkexec policykit-1 polkitd || true)"
+            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libx11-6 libxi6 pulseaudio-utils pipewire pipewire-pulse wireplumber ${polkit:+"$polkit"}
             ;;
         fedora)
-            printf '%s\n' gtk4 libadwaita pulseaudio-libs opus libX11 libXi polkit pipewire wireplumber
+            printf '%s\n' gtk4 libadwaita pulseaudio-libs opus libX11 libXi polkit pulseaudio-utils pipewire pipewire-utils pipewire-pulseaudio wireplumber
             ;;
         opensuse)
-            polkit="$(pick_pkg "zypper --non-interactive info" polkit polkit-default-privs || true)"
-            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libX11-6 libXi6 pipewire wireplumber ${polkit:+"$polkit"}
+            polkit="$(pick_pkg polkit polkit-default-privs || true)"
+            printf '%s\n' libgtk-4-1 libadwaita-1-0 libpulse0 libopus0 libX11-6 libXi6 pulseaudio-utils pipewire pipewire-tools pipewire-pulseaudio wireplumber ${polkit:+"$polkit"}
             ;;
     esac
 }
@@ -435,25 +443,22 @@ ensure_runtime_dependencies() {
     local missing=()
     local pkgs=()
 
-    mapfile -t missing < <(missing_runtime_libraries)
+    mapfile -t missing < <(missing_runtime_dependencies)
     ((${#missing[@]} > 0)) || return 0
 
-    warn "The binary needs libraries this system does not have: ${missing[*]}"
+    warn "The binary needs libraries or commands this system does not have: ${missing[*]}"
 
     mapfile -t pkgs < <(runtime_packages)
     if ((${#pkgs[@]} == 0)); then
-        warn "Install your distro's GTK 4, libadwaita, PulseAudio, Opus, and X11 runtime packages, then run this again."
-        return 0
+        fail "Install your distro's GTK 4, libadwaita, PulseAudio, Opus, PipeWire, and X11 runtime packages, then run this again."
     fi
 
     if [[ ! -t 0 ]]; then
-        warn "Install these packages and run this again: ${pkgs[*]}"
-        return 0
+        fail "Install these packages and run this again: ${pkgs[*]}"
     fi
 
     if ! confirm "Install them now (${pkgs[*]})?"; then
-        warn "Continuing without them; the app will not start until they are installed."
-        return 0
+        fail "Nothing was installed. The app needs those dependencies."
     fi
 
     case "$DISTRO_FAMILY" in
@@ -462,6 +467,9 @@ ensure_runtime_dependencies() {
         fedora)   dnf_install    "${pkgs[@]}" ;;
         opensuse) zypper_install "${pkgs[@]}" ;;
     esac
+
+    mapfile -t missing < <(missing_runtime_dependencies)
+    ((${#missing[@]} == 0)) || fail "Dependencies are still missing after installation: ${missing[*]}"
 }
 
 install_tarball() {
@@ -531,15 +539,15 @@ fuse_packages() {
             printf '%s\n' fuse2
             ;;
         debian)
-            pick_pkg "apt-cache show" libfuse2t64 libfuse2 || true
-            pick_pkg "apt-cache show" fuse || true
+            pick_pkg libfuse2t64 libfuse2 || true
+            pick_pkg fuse || true
             ;;
         fedora)
             printf '%s\n' fuse-libs fuse
             ;;
         opensuse)
-            pick_pkg "zypper --non-interactive info" libfuse2 || true
-            pick_pkg "zypper --non-interactive info" fuse || true
+            pick_pkg libfuse2 || true
+            pick_pkg fuse || true
             ;;
     esac
 }
@@ -940,8 +948,8 @@ install_swhkd() {
             build_swhkd_from_source
             ;;
         opensuse)
-            local pkgcfg; pkgcfg="$(pick_pkg "zypper --non-interactive info" pkg-config pkgconf-pkg-config || true)"
-            local udevdev; udevdev="$(pick_pkg "zypper --non-interactive info" systemd-devel libudev-devel || true)"
+            local pkgcfg; pkgcfg="$(pick_pkg pkg-config pkgconf-pkg-config || true)"
+            local udevdev; udevdev="$(pick_pkg systemd-devel libudev-devel || true)"
             [[ -n "$pkgcfg" && -n "$udevdev" ]] || fail "Could not locate pkg-config or libudev-devel in zypper repos."
             zypper_install git make gcc cargo rust "$pkgcfg" "$udevdev"
             build_swhkd_from_source

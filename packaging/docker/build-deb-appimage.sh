@@ -31,8 +31,8 @@ if [ "${1:-}" = "--in-container" ]; then
     echo "==> Installing build dependencies (apt)"
     apt-get update -qq
     apt-get install -y --no-install-recommends \
-        debhelper dpkg-dev fakeroot build-essential \
-        libgtk-4-dev libadwaita-1-dev libpulse-dev libasound2-dev libopus-dev \
+        debhelper dpkg-dev fakeroot build-essential cargo rustc \
+        libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev \
         libpipewire-0.3-dev libx11-dev libxi-dev pkg-config imagemagick \
         clang libclang-dev \
         librsvg2-dev librsvg2-common libgdk-pixbuf-2.0-dev librsvg2-2 \
@@ -46,10 +46,11 @@ if [ "${1:-}" = "--in-container" ]; then
         chmod +x /usr/local/bin/magick
     fi
 
-    # The crate pins Rust 1.85 (rust-toolchain.toml); apt's rustc is older.
-    echo "==> Installing Rust 1.85 via rustup"
+    RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /src/rust-toolchain.toml | head -n 1)"
+    [ -n "$RUST_TOOLCHAIN" ] || { echo "FATAL: rust-toolchain.toml has no channel" >&2; exit 3; }
+    echo "==> Installing Rust $RUST_TOOLCHAIN via rustup"
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain 1.85.0 --profile minimal >/dev/null
+        | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal >/dev/null
     # shellcheck disable=SC1091
     . "$HOME/.cargo/env"
     echo "==> Toolchain: $(rustc --version)"
@@ -62,12 +63,8 @@ if [ "${1:-}" = "--in-container" ]; then
     trap 'chown -R "$HOST_UID:$HOST_GID" /src/dist /src/target 2>/dev/null || true' EXIT
 
     echo "==> Building .deb"
-    # Mirror packaging/debian/package-deb.sh, but pass -d: its default
-    # dpkg-buildpackage invocation fails dpkg-checkbuilddeps because apt has no
-    # `rustc (>= 1.85)` package. rustup provides cargo/rustc on PATH instead, so
-    # the build-dependency check is skipped while the actual toolchain is present.
     rm -rf debian && mkdir -p debian && cp -a packaging/debian/. debian/
-    dpkg-buildpackage -us -uc -b -d
+    dpkg-buildpackage -us -uc -b
     mv ../*.deb dist/ 2>/dev/null || true
     rm -rf debian ../*.buildinfo ../*.changes
 

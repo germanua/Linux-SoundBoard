@@ -41,7 +41,7 @@ done
 
 if [[ "$build_project" -eq 1 ]]; then
     "$SCRIPT_DIR/generate-icons.sh" "$ICON_SOURCE"
-    cargo build --release --manifest-path "$MANIFEST_PATH"
+    cargo build --locked --release --manifest-path "$MANIFEST_PATH"
 fi
 
 if [[ ! -x "$BINARY_SOURCE" ]]; then
