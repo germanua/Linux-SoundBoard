@@ -224,11 +224,10 @@ impl SwhkdConfig {
         }
     }
 
-    /// Convert a canonical hotkey to `swhkd` syntax.
+    /// Canonical hotkey -> swhkd syntax.
     ///
-    /// `~` (don't-swallow / pass-through) must be placed immediately before the
-    /// final key token, not before the modifiers.  swhkd 1.3.x rejects `~ctrl + l`
-    /// but accepts `ctrl + ~l`.
+    /// `~` (pass-through) goes immediately before the final key, never before
+    /// the modifiers: swhkd 1.3.x rejects `~ctrl + l` but takes `ctrl + ~l`.
     fn convert_to_swhkd_format(hotkey: &str) -> Result<String, HotkeyError> {
         let swhkd = parse_hotkey_spec(hotkey)?.swhkd_string()?;
         if let Some(last_plus) = swhkd.rfind(" + ") {

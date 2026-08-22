@@ -308,8 +308,8 @@ impl TransportBar {
             build_started.elapsed().as_micros()
         );
 
-        // Secondary row used only by the compact layout; the audio and utility clusters
-        // move here when the window is too narrow for a single row.
+        // Compact layout only: the audio and utility clusters drop down here
+        // when the window is too narrow for one row.
         let row2 = GtkBox::new(Orientation::Horizontal, 5);
         row2.add_css_class("transport-row");
         row2.add_css_class("transport-row-secondary");

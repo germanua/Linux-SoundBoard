@@ -177,11 +177,9 @@ impl ActivePlayback {
             }
 
             let Some(sample) = self.source.next() else {
-                // Source ran out. The limiter is intentionally a peak-analysis
-                // sliding window, not a delay line (see limiter.rs::flush) —
-                // every sample was already returned by process(). Nothing is
-                // buffered to drain, so we just mark exhausted and let the
-                // next loop iteration loop-or-finish.
+                // Source is dry. The limiter is a sliding peak window, not a
+                // delay line (see limiter.rs), so there is nothing buffered to
+                // drain — flag it and let the next pass loop or finish.
                 self.source_exhausted = true;
                 continue;
             };
@@ -191,8 +189,8 @@ impl ActivePlayback {
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
             let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
 
-            // Linear fade-in over the first FADE_IN_SAMPLES to avoid a cold-start click
-            // when the waveform starts at non-zero amplitude.
+            // Linear fade-in over the first FADE_IN_SAMPLES: kills the cold-start
+            // click when a waveform opens at non-zero amplitude.
             const FADE_IN_SAMPLES: u64 = 480; // ~5 ms at 48 kHz stereo
             let fade_scale = if self.fallback_samples_written <= FADE_IN_SAMPLES {
                 self.fallback_samples_written as f32 / FADE_IN_SAMPLES as f32

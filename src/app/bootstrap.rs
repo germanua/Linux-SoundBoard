@@ -1298,12 +1298,11 @@ fn record_state_phase(name: &str, state: &Arc<AppState>) {
     record_config_phase(name, &state.config);
 }
 
-/// Tear the application down. Reached from the close button when the window is
-/// really closing, and from the tray's Quit row.
+/// Tear the app down. Reached from the close button when the window really is
+/// closing, and from the tray's Quit row.
 ///
-/// Guarded because both routes can end at the same window close, and shutting
-/// the player down twice is not something the engine IPC should have to cope
-/// with.
+/// Guarded: both routes can end at the same window close, and the engine IPC
+/// shouldn't have to cope with being shut down twice.
 fn shutdown_application(state: &Arc<AppState>, timers: &TimerRegistry) {
     static DONE: AtomicBool = AtomicBool::new(false);
     if DONE.swap(true, AtomicOrdering::SeqCst) {
@@ -1378,9 +1377,9 @@ fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
 
 /// Publish the playing sound to the desktop's media controls.
 ///
-/// Exported for the whole session but visible only while a sound plays and
-/// only while the setting is on, so the app does not sit in the panel's media
-/// controls holding the media keys when it has nothing to say.
+/// Exported for the whole session but only visible while the setting is on, so
+/// the app doesn't sit in the panel's media controls holding the media keys
+/// when the user never asked for it.
 fn install_mpris(app: &Application) -> Option<Rc<crate::mpris::MprisService>> {
     let connection = app.dbus_connection()?;
     let service = match crate::mpris::MprisService::start(
@@ -1647,12 +1646,11 @@ fn initialize_player(
 ) -> Result<(crate::audio::AudioPlayer, bool), String> {
     use crate::audio::AudioBackendKind;
 
-    // Debug aid: when route audit is requested, bypass the systemd-spawned
-    // engine entirely. The systemd unit doesn't inherit the user's environment,
-    // so an engine started via `systemctl --user` would never see
-    // `LSB_ROUTE_AUDIT`; routing writes happen in the engine, so the audit log
-    // would stay empty. Forcing the in-process backend keeps everything inside
-    // this process where init_from_env() already opened the audit file.
+    // Debug aid: with route audit on, skip the systemd-spawned engine entirely.
+    // The unit inherits none of the user's environment, so that engine would
+    // never see `LSB_ROUTE_AUDIT` — and since routing writes happen in the
+    // engine, the log would stay empty. In-process keeps it all here, where
+    // init_from_env() already opened the file.
     let force_in_process = crate::diagnostics::audit::is_enabled();
     if force_in_process {
         log::warn!(

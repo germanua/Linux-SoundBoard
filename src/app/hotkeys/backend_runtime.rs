@@ -33,9 +33,8 @@ pub trait HotkeyBackend: Send + Sync {
         Ok(())
     }
     fn start_listener(&self, sender: SyncSender<String>);
-    /// Release any resources owned by the backend (e.g. spawned daemons) before
-    /// the application exits. Default is a no-op for backends with nothing to
-    /// tear down.
+    /// Drop whatever the backend owns (spawned daemons and friends) before we
+    /// exit. No-op unless there is something to tear down.
     fn shutdown(&self) {}
     fn as_any(&self) -> &dyn Any;
 }

@@ -7,13 +7,13 @@ use std::process::Command;
 
 use serde_json::Value;
 
-/// Capture a focused PipeWire-graph snapshot to `path`, writing one JSON line
-/// per object of interest (Stream/Input/Audio nodes, Audio/Source/Audio/Sink
-/// nodes, and Links). Filters out unrelated objects so the user can bundle the
-/// snapshot with the route-audit log without leaking unrelated PipeWire state.
+/// Dump a focused PipeWire graph snapshot to `path`: one JSON line per object
+/// we care about (Stream/Input/Audio, Audio/Source, Audio/Sink, Links).
+/// Everything else is filtered out so the snapshot can ship with a route-audit
+/// log without leaking unrelated graph state.
 ///
-/// Companion to `LSB_ROUTE_AUDIT=1` route audit logging — see
-/// `docs/TROUBLESHOOTING.md` "Capturing Auto-route audit data".
+/// Goes with `LSB_ROUTE_AUDIT=1` — see `docs/TROUBLESHOOTING.md`, "Capturing
+/// Auto-route audit data".
 pub fn run_graph_snapshot(path: &std::path::Path) -> i32 {
     use std::io::Write;
     let pw_dump = match Command::new("pw-dump").output() {
@@ -91,8 +91,8 @@ fn relevant_graph_record(obj: &Value) -> Option<String> {
         return None;
     }
 
-    // Pull a tight set of fields. `pw-dump` exposes Link endpoints under
-    // info.props, the same place media.class lives.
+    // Tight field set. `pw-dump` hides Link endpoints in info.props, same
+    // place media.class lives.
     let prop = |key: &str| props.get(key).cloned().unwrap_or(Value::Null);
     let mut record = serde_json::Map::new();
     record.insert("id".into(), obj.get("id").cloned().unwrap_or(Value::Null));

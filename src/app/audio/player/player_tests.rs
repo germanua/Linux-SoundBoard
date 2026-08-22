@@ -359,9 +359,8 @@ fn explicit_selected_mic_rejects_linux_soundboard_virtual_mic() {
 
 #[test]
 fn auto_capture_prefers_enhancement_source_over_default_and_previous() {
-    // When easyeffects_source is registered alongside physical mics,
-    // the soundboard must pick easyeffects_source regardless of what
-    // PipeWire reports as the current default or what previous_default_source_name holds.
+    // easyeffects_source registered alongside physical mics: it wins whatever
+    // PipeWire calls the default and whatever previous_default_source_name holds.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         6,
@@ -446,11 +445,11 @@ fn auto_capture_falls_back_to_physical_mic_when_no_enhancement_source() {
 
 #[test]
 fn auto_capture_ignores_unrecognized_virtual_source_in_favor_of_hardware_mic() {
-    // Auto-detect must never pick an unrecognised virtual source — e.g. a
-    // Vencord/Discord screenshare null sink — over a real hardware mic. Such a
-    // source is neither a recognised enhancement chain nor hardware-backed (no
-    // device.id), so it is reachable only by explicit selection. A high
-    // priority.session must not rescue it.
+    // Auto-detect must never take an unrecognised virtual source — a
+    // Vencord/Discord screenshare null sink, say — over a real mic. It is
+    // neither a known enhancement chain nor hardware-backed (no device.id), so
+    // only explicit selection reaches it. A high priority.session must not
+    // rescue it.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -530,10 +529,10 @@ fn auto_capture_trusts_named_enhancement_over_hardware_mic() {
 
 #[test]
 fn auto_capture_returns_none_when_only_unrecognized_virtual_source_present() {
-    // With nothing but an unrecognised virtual source (a screenshare null sink)
-    // registered, auto-detect selects nothing — passthrough waits for a real mic
-    // rather than routing application audio into the virtual mic, and the
-    // default/previous fallback must not resurrect it either.
+    // Nothing registered but an unrecognised virtual source (screenshare null
+    // sink): auto-detect picks nothing and passthrough waits for a real mic
+    // instead of piping app audio into the virtual mic. The default/previous
+    // fallback must not resurrect it either.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -559,9 +558,9 @@ fn auto_capture_returns_none_when_only_unrecognized_virtual_source_present() {
 
 #[test]
 fn selected_enhancement_source_does_not_silently_fall_back() {
-    // User explicitly picked easyeffects_source, but it's not registered.
-    // Even with a perfectly good physical mic available, resolution must
-    // return None (caller will warn and wait) — never substitute the raw mic.
+    // User picked easyeffects_source and it isn't registered. Even with a
+    // perfectly good physical mic sitting right there, resolution returns None
+    // and the caller warns and waits. Never silently swap in the raw mic.
     let mut runtime = test_runtime_config();
     runtime.mic_source = Some("easyeffects_source".to_string());
     let mut state = LoopState::new(runtime, test_player_snapshot_store());

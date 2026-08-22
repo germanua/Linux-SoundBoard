@@ -1,17 +1,15 @@
 //! Typed error for the command layer.
 //!
-//! [`CommandError::SourceUnavailable`] replaces the old
-//! `SOURCE_UNAVAILABLE_ERROR_PREFIX` + `str::starts_with` protocol the sound
-//! list used to detect a missing backing file.
+//! [`CommandError::SourceUnavailable`] replaced the old
+//! `SOURCE_UNAVAILABLE_ERROR_PREFIX` + `starts_with` sniffing the sound list
+//! used to do.
 //!
-//! Errors from the audio engine / IPC layer, loudness analysis, and the hotkey
-//! backend are still string-typed at their source. Rather than let a bare
-//! `String` leak through, we wrap them in named variants at this boundary
-//! ([`Engine`](CommandError::Engine), [`Hotkey`](CommandError::Hotkey),
-//! [`Analysis`](CommandError::Analysis)).
+//! Engine/IPC, loudness and hotkey failures are still `String` at their source,
+//! so they get wrapped in named variants here instead of leaking a bare String
+//! upward.
 //!
-//! `Display` deliberately reproduces the previous wording so UI toasts and log
-//! lines are unchanged.
+//! `Display` keeps the old wording on purpose, so toasts and log lines read the
+//! same as before.
 
 /// An error returned by a command-layer function.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -38,9 +36,8 @@ pub enum CommandError {
     #[error("{0} not found")]
     NotFound(&'static str),
 
-    /// Caller-supplied input failed validation: an unknown mode string, an empty
-    /// name, an out-of-range value, an unsupported file, a missing path, etc.
-    /// The message is user-facing.
+    /// Bad input: unknown mode string, empty name, out-of-range value,
+    /// unsupported file, missing path. The message is user-facing.
     #[error("{0}")]
     Invalid(String),
 
@@ -52,8 +49,7 @@ pub enum CommandError {
     #[error("Library operation failed: {0}")]
     Library(String),
 
-    /// An error surfaced by the audio engine / IPC layer (still string-typed;
-    /// that layer is migrated separately).
+    /// Straight from the audio engine / IPC layer, still string-typed there.
     #[error("{0}")]
     Engine(String),
 

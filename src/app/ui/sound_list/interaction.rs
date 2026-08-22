@@ -641,12 +641,11 @@ impl SoundListInner {
                     crate::library_store::scope_key(&inner_confirm.active_scope.lock());
                 let active_scope_for_read = active_scope.clone();
 
-                // The stored scope decides how the choice is presented, so
-                // reopening the dialog cannot quietly widen the binding.
-                // Checked means "only this tab". A binding already limited to
-                // this tab opens checked, one that is live everywhere opens
-                // unchecked, and a new binding defaults to this tab, which is
-                // the point of turning tab hotkeys on.
+                // The stored scope drives how the choice is shown, so reopening
+                // the dialog can't quietly widen a binding. Checked means "only
+                // this tab": already-scoped opens checked, global opens
+                // unchecked, and a new binding defaults to this tab — the whole
+                // point of turning tab hotkeys on.
                 let open = move |scoped_now: bool| {
                     let Some(dialog_host) = dialog_host_weak.upgrade() else {
                         return;

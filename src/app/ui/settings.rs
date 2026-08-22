@@ -129,8 +129,8 @@ pub fn build_settings_overlay(
     }
     general_tab.set_active(true);
 
-    // Keep the settings panel adaptive: cap its width on wide windows and let it shrink
-    // with side margins on narrow ones, instead of forcing a fixed 600x700 size.
+    // Adaptive panel: cap the width on wide windows, let it shrink with side
+    // margins on narrow ones, instead of a fixed 600x700.
     let panel_clamp = adw::Clamp::builder()
         .maximum_size(640)
         .tightening_threshold(520)
@@ -324,9 +324,9 @@ fn build_settings_content(
 
     content.append(stack);
 
-    // Cap the scrollable content height to the available window height so the panel is
-    // content-sized when it fits and scrolls (rather than overflowing) when the window
-    // is short. Tracked live via a tick callback on the mapped content.
+    // Cap the scrollable content to the window height: content-sized when it
+    // fits, scrolling when the window is short. Tracked live from a tick
+    // callback on the mapped content.
     content.add_tick_callback(move |_content, _clock| {
         if let Some(overlay) = visibility_weak.upgrade() {
             let available = overlay.height();
@@ -394,10 +394,9 @@ fn build_general_page(
     // below can cancel it. The row itself keeps adding folders throughout.
     let add_folder_cancel: Rc<RefCell<Option<Arc<std::sync::atomic::AtomicBool>>>> =
         Rc::new(RefCell::new(None));
-    // The row keeps adding folders while a scan runs, so a second scan can
-    // start before the first finishes. Only the newest one owns the Stop
-    // button; an older run finishing must not hide it out from under the
-    // newer one.
+    // The row keeps taking folders while a scan runs, so a second scan can
+    // start before the first ends. Only the newest owns the Stop button — an
+    // older run finishing must not yank it out from under the newer one.
     let scan_generation: Rc<Cell<u64>> = Rc::new(Cell::new(0));
     let scan_stop_btn = gtk4::Button::builder()
         .label("Stop")
@@ -412,8 +411,8 @@ fn build_general_page(
         let add_folder_cancel_stop = Rc::clone(&add_folder_cancel);
         let add_folder_row_stop = add_folder_row.downgrade();
         scan_stop_btn.connect_clicked(move |btn| {
-            // Copy the handle out before touching widgets: GTK can re-enter a
-            // handler, and a borrow held across a widget call aborts.
+            // Copy the handle out before touching widgets: GTK can re-enter
+            // the handler and a borrow held across a widget call aborts.
             let pending = add_folder_cancel_stop.borrow().as_ref().map(Arc::clone);
             let Some(cancelled) = pending else {
                 return;
@@ -475,9 +474,9 @@ fn build_general_page(
                                         let cancel_done = Rc::clone(&add_folder_cancel3);
                                         let stop_btn_done = scan_stop_btn3.clone();
                                         // Claim the generation before
-                                        // dispatching: the completion runs on
-                                        // this same main loop, so it cannot
-                                        // fire before this returns.
+                                        // dispatching — the completion runs
+                                        // on this same main loop, so it can't
+                                        // fire before we return.
                                         let scan_id =
                                             scan_generation3.get().wrapping_add(1);
                                         scan_generation3.set(scan_id);
@@ -530,9 +529,9 @@ fn build_general_page(
                                             },
                                         ) {
                                             Ok(cancelled) => {
-                                                // The scan is the slow part. Show
-                                                // Stop beside the row and leave
-                                                // the row itself free to add
+                                                // The scan is the slow part.
+                                                // Park Stop beside the row and
+                                                // leave the row free to take
                                                 // another folder.
                                                 *add_folder_cancel3.borrow_mut() = Some(cancelled);
                                                 add_folder_row_done
@@ -573,9 +572,9 @@ fn build_general_page(
         on_library_changed.clone(),
     );
     page.add(&folders_group);
-    // The overlay is built once and only shown and hidden afterwards, so the
-    // list has to reload every time the page appears; folders removed from the
-    // sidebar in between would otherwise be missing from it.
+    // The overlay is built once and only shown/hidden after, so reload the list
+    // every time the page appears — folders removed from the sidebar in between
+    // would otherwise still be sitting there.
     {
         let refresh_hidden_folders = Rc::clone(&refresh_hidden_folders);
         page.connect_map(move |_| refresh_hidden_folders());

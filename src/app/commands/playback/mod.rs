@@ -18,9 +18,8 @@ use super::CommandError;
 mod loudness;
 pub use loudness::analyze_all_loudness_with_store;
 
-// Bring internal helpers into this module's namespace so the sibling test
-// module can import them via `super::` without widening their visibility
-// beyond this crate.
+// Pulled in here so the sibling test module can reach them through `super::`
+// without making them any more visible.
 #[cfg(test)]
 use loudness::{estimated_loudness_refinement_trigger, fast_loudness_preview_budget_ms};
 
@@ -36,9 +35,8 @@ const FAST_LUFS_REFINEMENT_MAX_SOUNDS_PER_RUN: usize = 10;
 pub type LoudnessAnalysisCompletion =
     Box<dyn FnOnce(Result<u32, crate::audio::LoudnessError>) + Send + 'static>;
 
-/// Per-instance loudness analysis coordinators. Add one to `AppState` at
-/// startup so that each background analysis job can be tracked, observed, and
-/// cancelled without process-global state.
+/// One set per `AppState`, so background analysis jobs can be watched and
+/// cancelled without process globals.
 #[derive(Clone)]
 pub struct LoudnessCoordinators {
     pub(crate) backfill: Arc<crate::audio::analysis_worker::MissingLoudnessAnalysisCoordinator>,
@@ -64,10 +62,9 @@ impl Default for LoudnessCoordinators {
     }
 }
 
-/// Drop a same-sound play request if one was just dispatched within this window.
-/// Hotkey auto-repeat fires at ~30–50ms; mashing a single sound at button-press rate
-/// can't be heard as more than one playback anyway because each play resets the
-/// previous via stop_all. Distinct sounds are unaffected.
+/// Drop a repeat play of the same sound inside this window. Hotkey auto-repeat
+/// fires every ~30-50 ms and you couldn't hear the difference anyway, since
+/// each play stop_all's the last one. Different sounds are untouched.
 const SAME_SOUND_DEBOUNCE_MS: u128 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,19 +234,17 @@ fn play_resolved_sound(
     result
 }
 
-/// Everything a hotkey press needs to decide which sound it means. Carried
-/// from the UI thread into the worker so the library is never queried on the
-/// GTK main loop.
+/// Everything a hotkey press needs to pick its sound. Carried from the UI
+/// thread into the worker so the library is never hit on the GTK main loop.
 #[derive(Clone)]
 pub(crate) struct HotkeyPress {
     pub toggles: crate::hotkeys::HotkeyToggles,
     pub mode: crate::config::GroupMode,
     /// The tab currently showing, as a scope key.
     pub active_scope: String,
-    /// Which sound each chord played last, keyed by the binding the press
-    /// arrives as. In memory on purpose: "where was I in this group" is
-    /// session state, and starting over on the next launch is the expected
-    /// behaviour rather than something to persist.
+    /// Last sound played per chord, keyed by the binding the press arrives as.
+    /// In memory on purpose: "where was I in this group" is session state, and
+    /// starting over next launch is what people expect.
     pub cursor: Arc<Mutex<HashMap<String, String>>>,
 }
 
@@ -275,13 +270,12 @@ fn play_sound_from_library(
     play_resolved_sound(sound, player)
 }
 
-/// Turn the binding a press arrived as into the one sound it should play.
+/// Turn the binding a press arrived as into the one sound to play.
 ///
 /// A chord reaches the backends once, so the press names whichever binding
-/// represents the chord; every sound on that chord is a candidate. Costs one
-/// query more than the old single-binding lookup, which is invisible next to
-/// the press itself — fold the sound rows into the group query if that ever
-/// stops being true.
+/// stands for it and every sound on that chord is a candidate. One query more
+/// than the old single-binding lookup, which is invisible next to the press
+/// itself — fold the sound rows into the group query if that ever changes.
 fn resolve_hotkey_press(
     binding_id: &str,
     press: &HotkeyPress,
@@ -293,8 +287,8 @@ fn resolve_hotkey_press(
         .map_err(|error| CommandError::Library(error.to_string()))?;
 
     let last_played = press.cursor.lock().get(binding_id).cloned();
-    // uuid is already the crate's source of randomness for ids, so Random does
-    // not pull in a second one.
+    // uuid is already how we get randomness for ids, so Random doesn't drag in
+    // a second RNG.
     let entropy = uuid::Uuid::new_v4().as_u128() as u64;
     let index = match crate::hotkeys::select_from_group(
         &members,
@@ -506,7 +500,7 @@ pub fn set_auto_gain(
         |player| player.set_auto_gain_enabled(enabled),
     )?;
     if enabled {
-        // The library store is the only sound authority under schema 8; the
+        // The store is the only sound authority under schema 8 — the
         // config-backed trigger sees an empty library and never schedules.
         trigger_missing_loudness_analysis_with_store(
             Arc::clone(&config),
@@ -744,9 +738,8 @@ pub fn get_playback_positions(player: Arc<dyn PlaybackEngine>) -> Vec<PlaybackPo
     player.get_playback_positions()
 }
 
-/// Stops whichever loudness run is active. The settings view shows one Stop
-/// control for both kinds, so it cancels both tokens; each run still observes
-/// only its own, and starting one no longer clears the other's request.
+/// Stops whichever run is going. Settings shows one Stop for both kinds, so
+/// hit both tokens; each run still only watches its own.
 pub fn cancel_loudness_analysis(coords: &LoudnessCoordinators) {
     coords.backfill.cancel();
     coords.refinement.cancel();

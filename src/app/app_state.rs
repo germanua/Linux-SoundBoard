@@ -8,22 +8,14 @@ use parking_lot::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
-/// Shared application state handed out as `Arc<AppState>` to UI, hotkey, and
-/// IPC paths.
+/// Shared state, handed to the UI, hotkey and IPC paths as `Arc<AppState>`.
 ///
-/// ## Lock ordering
+/// Lock order is `config` -> `hotkeys` -> `pipewire_status`; never take an
+/// earlier one while holding a later one. `player` has no locks of its own
+/// (it talks to the PipeWire loop over a channel) so it is safe under any.
 ///
-/// When multiple locks must be acquired in the same call chain, always take
-/// them in this order to avoid deadlocks:
-///
-/// 1. `config`
-/// 2. `hotkeys`
-/// 3. `pipewire_status`
-///
-/// Never acquire a lower-numbered lock while holding a higher-numbered one.
-/// `player` owns no `Mutex` fields visible here — it uses an internal channel
-/// to the PipeWire engine loop and is always safe to call while holding any of
-/// the above locks.
+/// The `Arc<Mutex<..>>` fields below are per-instance rather than process
+/// globals so each test gets its own.
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Mutex<Config>>,
@@ -33,19 +25,14 @@ pub struct AppState {
     pub hotkey_projection: HotkeyProjectionCoordinator,
     pub manual_tabs: Arc<Mutex<Vec<crate::library_store::ManualTabItem>>>,
     pub pipewire_status: Arc<Mutex<PipeWireStatus>>,
-    /// Debounce state for `commands::play_sound_async`. Prevents hotkey
-    /// auto-repeat from dispatching the same sound twice within 30 ms.
-    /// Owned here rather than as a process-global so that tests can give each
-    /// test case an independent instance.
+    /// Debounce for `commands::play_sound_async`: swallows hotkey auto-repeat
+    /// firing the same sound twice inside 30 ms.
     pub play_dispatch_debounce: Arc<Mutex<Option<(Instant, String)>>>,
-    /// Per-instance loudness analysis coordinators. Tracks in-flight backfill
-    /// and refinement jobs without process-global state.
+    /// In-flight loudness backfill and refinement jobs.
     pub loudness_coordinators: LoudnessCoordinators,
-    /// Which sound each shared hotkey played last, keyed by the binding a
-    /// press arrives as. Owned here rather than as a process-global so tests
-    /// can give each case an independent cursor.
+    /// Round-robin cursor for shared hotkeys: last sound played, keyed by the
+    /// binding the press arrives as.
     pub hotkey_group_cursor: Arc<Mutex<std::collections::HashMap<String, String>>>,
-    /// Set once on the first successful play. Used by `play_sound_async` to
-    /// record a one-shot diagnostic phase without process-global state.
+    /// Latch so the first-play diagnostic is only recorded once.
     pub first_playback_recorded: Arc<AtomicBool>,
 }

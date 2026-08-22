@@ -34,8 +34,8 @@ impl MissingLoudnessAnalysisCoordinator {
         self.in_flight.load(Ordering::Acquire)
     }
 
-    /// Requests cancellation of this coordinator's run only. Each coordinator
-    /// owns its token, so cancelling one analysis kind never aborts another.
+    /// Cancels this coordinator's run only; each owns its token, so a backfill
+    /// and a refinement never abort each other.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
@@ -45,8 +45,7 @@ impl MissingLoudnessAnalysisCoordinator {
         self.cancelled.load(Ordering::SeqCst)
     }
 
-    /// Token handed to the running analysis so it can poll for cancellation
-    /// without reaching for process-global state.
+    /// Handed to the running analysis so it can poll for a cancel.
     pub fn cancel_token(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancelled)
     }
@@ -68,8 +67,7 @@ impl MissingLoudnessAnalysisCoordinator {
             return Ok(false);
         }
 
-        // Clear only this coordinator's token. A run must never reset the
-        // cancellation another kind of run is still acting on.
+        // Ours only — don't clobber a cancel another run is still acting on.
         self.cancelled.store(false, Ordering::SeqCst);
 
         let in_flight = Arc::clone(&self.in_flight);

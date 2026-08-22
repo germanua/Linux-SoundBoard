@@ -30,8 +30,8 @@ pub(super) fn build_hotkeys_page(
     let description = unavailable_reason
         .as_ref()
         .map(|reason| {
-            // The group description is parsed as markup, and remediation commands
-            // contain "&&", which aborts the parse and blanks the whole text.
+            // The description is parsed as markup and remediation commands carry
+            // "&&", which kills the parse and blanks the whole string.
             format!(
                 "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
                 glib::markup_escape_text(reason)

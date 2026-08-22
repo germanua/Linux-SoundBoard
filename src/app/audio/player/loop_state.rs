@@ -1,38 +1,37 @@
-//! `LoopState` — all mutable state owned by the PipeWire engine loop thread.
+//! `LoopState` — everything the PipeWire engine loop thread owns.
 //!
-//! ## Access-pattern grouping
+//! The fields split into five groups and the split is load-bearing: each group
+//! has exactly one writer. A new field that fits none of them probably wants a
+//! sub-struct of its own.
 //!
-//! The fields below fall into four logical groups. **Do not violate these
-//! invariants** when adding new fields — if a new field doesn't fit cleanly
-//! into one group, it probably belongs in a new sub-struct.
-//!
-//! | Group | Who writes | Who reads |
-//! |-------|-----------|-----------|
-//! | Config (`runtime`) | once at init | everyone |
-//! | Registry mirror (`sources` … `default_source_command_in_flight`) | `global`/`global_remove` registry callback | command handlers, capture watchdog |
-//! | Playback (`active_playback` … `next_playback_order`) | mix tick, command handlers | mix tick, snapshot publish |
-//! | RT shared (`queues` … `mic_scratch_buffer`) | mix tick (main-loop side) | PipeWire process callback (RT side via `try_lock`) |
-//! | UI publish (`snapshot` … `last_had_active`) | `publish_snapshot` (main-loop) | UI thread (reads `Arc<RwLock>`) |
+//! - config (`runtime`): written once at init, read by everyone
+//! - registry mirror (`sources` .. `default_source_command_in_flight`): written
+//!   only by the `global`/`global_remove` callbacks, read by command handlers
+//!   and the capture watchdog
+//! - playback (`active_playback` .. `next_playback_order`): mix tick and
+//!   command handlers write, snapshot publish reads
+//! - RT shared (`queues` .. `mic_scratch_buffer`): mix tick writes on the main
+//!   loop, the process callback reads from the RT side through `try_lock`
+//! - UI publish (`snapshot` .. `last_had_active`): `publish_snapshot` writes,
+//!   the UI thread reads the `Arc<RwLock>`
 
 use super::*;
 
 pub(super) struct LoopState {
-    // ── Config ───────────────────────────────────────────────────────────────
-    // Read-only after `new()`. Safe to clone and pass to closures.
+    // Config: read-only after `new()`, safe to clone into closures.
     pub(super) runtime: RuntimeConfig,
 
-    // ── Registry mirror ───────────────────────────────────────────────────────
-    // Written exclusively from the PipeWire `global`/`global_remove` registry
-    // callbacks. Never written from the RT process callback or the UI thread.
+    // Registry mirror: written only from the PipeWire `global`/`global_remove`
+    // callbacks, never from the RT process callback or the UI thread.
     pub(super) available: bool,
     pub(super) default_metadata: Option<DefaultMetadataHandle>,
     pub(super) backend: Option<BackendState>,
     pub(super) sources: HashMap<u32, SourceDescriptor>,
     pub(super) sinks: HashMap<u32, SinkDescriptor>,
-    // Explicit-link state. Filled in by the PipeWire registry callback as
-    // Node and Port globals arrive. `try_link_feeder_to_virtual_mic` creates
-    // FL/FR Links via link-factory once all four ids (feeder node + its two
-    // output ports, virtual mic node + its two input ports) are known.
+    // Explicit-link state, filled by the registry callback as Node and Port
+    // globals turn up. Once all four ids are known — feeder node plus its two
+    // output ports, virtual mic plus its two input ports —
+    // `try_link_feeder_to_virtual_mic` builds the FL/FR links.
     pub(super) feeder_node_id: Option<u32>,
     pub(super) feeder_output_ports: HashMap<AudioChannel, u32>,
     pub(super) virtual_mic_node_id: Option<u32>,
@@ -50,20 +49,16 @@ pub(super) struct LoopState {
     pub(super) claimed_default: bool,
     pub(super) default_source_command_in_flight: std::sync::Arc<AtomicBool>,
 
-    // ── Playback tracking ─────────────────────────────────────────────────────
-    // Written by the mix tick (advance / finish) and command handlers (Play /
-    // StopAll / Seek). Read by `publish_snapshot` to build the UI snapshot.
+    // Playback tracking: written by the mix tick (advance/finish) and the
+    // command handlers (Play/StopAll/Seek), read by `publish_snapshot`.
     pub(super) active_playback: Option<ActivePlayback>,
     pub(super) finished_playbacks: HashMap<String, PlaybackSnapshot>,
     pub(super) next_playback_order: u64,
 
-    // ── RT shared ─────────────────────────────────────────────────────────────
-    // `queues` is shared with the PipeWire process callback (RT side). The RT
-    // callback acquires it with `try_lock` only — never with a blocking lock.
-    // `local_mix_buffer`, `virtual_mix_buffer`, and `mic_scratch_buffer` are
-    // scratch space used on the main-loop side during the mix tick; they are
-    // pre-allocated so the mix tick never calls the allocator while inside the
-    // queues lock.
+    // RT shared. `queues` goes to the PipeWire process callback, which only
+    // ever `try_lock`s it, never blocks. The three buffers are main-loop
+    // scratch for the mix tick, pre-allocated so the tick never reaches the
+    // allocator while holding the queues lock.
     pub(super) queues: RtSharedQueues,
     pub(super) stream_runtime: std::sync::Arc<StreamRuntimeShared>,
     pub(super) ultra_starvation_ticks: u32,
@@ -71,11 +66,9 @@ pub(super) struct LoopState {
     pub(super) virtual_mix_buffer: Vec<f32>,
     pub(super) mic_scratch_buffer: Vec<f32>,
 
-    // ── UI publish ────────────────────────────────────────────────────────────
-    // `snapshot` is an `Arc<RwLock<PlayerSnapshot>>` shared with the UI thread,
-    // which reads it. The main-loop side writes it inside `publish_snapshot`.
-    // `last_ui_send` and `last_had_active` gate how often the GTK main context
-    // is invoked to avoid flooding the UI with redundant updates.
+    // UI publish. `snapshot` is shared with the UI thread; the main loop writes
+    // it in `publish_snapshot`. `last_ui_send`/`last_had_active` throttle how
+    // often we invoke the GTK main context, so the UI isn't flooded.
     pub(super) snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
     pub(super) last_ui_send: Option<Instant>,
     pub(super) last_had_active: bool,

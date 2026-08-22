@@ -57,26 +57,22 @@ pub(super) fn create_local_output_stream(
     Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
-/// Runtime feeder Playback stream that pushes mixed audio into the real
-/// virtual-mic null-sink (loaded separately via `pactl load-module`).
+/// Feeder Playback stream that pushes our mix into the real virtual-mic
+/// null-sink (loaded separately with `pactl load-module`).
 ///
-/// Apps see the null-sink as `linuxsoundboard.virtual_mic` (Audio/Source/Virtual,
-/// real driver node, eligible for system-default selection). The feeder is
-/// connected **without** AUTOCONNECT — WirePlumber's session-manager policy
-/// refuses to link a Stream/Output/Audio (Playback) to an Audio/Source/Virtual
-/// node, so AUTOCONNECT silently drops the stream from the policy graph. We
-/// wire it ourselves via `core.create_object::<Link>("link-factory", …)` from
-/// the explicit-link manager — same mechanism `pw-link` on the CLI uses,
-/// bypassing the policy refusal.
+/// Apps see that null-sink as `linuxsoundboard.virtual_mic`: a real driver node
+/// eligible to be the system default. The feeder connects **without**
+/// AUTOCONNECT, because WirePlumber's policy won't link a Stream/Output/Audio
+/// to an Audio/Source/Virtual node and silently drops it from the policy graph.
+/// explicit_links.rs wires it with link-factory instead — the same thing
+/// `pw-link` does on the CLI.
 ///
-/// `node.always-process=true` is required (and `node.passive` must NOT be set):
-/// the feeder needs to run every quantum and produce a buffer (silence when
-/// the queue is empty) so that the explicit link to the null-sink stays
-/// `active` and consumers opening the virtual-mic immediately see fresh
-/// samples. Without it the feeder sleeps with its driver (the null-sink),
-/// the cold wake-up handshake on the manually-created link is unreliable, and
-/// the first consumer after engine start hears a burst of zero/stale buffer
-/// fragments — audible as a harsh "whizzling" noise.
+/// `node.always-process=true` is mandatory and `node.passive` must stay unset:
+/// the feeder has to run every quantum and produce a buffer (silence when the
+/// queue is dry) or the explicit link stops being `active`. Without it the
+/// feeder sleeps with its driver, the cold wake-up handshake on a hand-made
+/// link is unreliable, and the first consumer after engine start gets a burst
+/// of zero/stale buffer fragments — audible as a harsh whizzling noise.
 pub(super) fn create_runtime_virtual_source_stream(
     core: pw::core::CoreRc,
     queues: RtSharedQueues,
@@ -334,11 +330,9 @@ fn write_output_buffer(
                         }
                     }
                 } else {
-                    // Producer (mix tick) is holding the lock right now.
-                    // Output silence this quantum and record it; the
-                    // consumer downstream sees one quantum of zeros which
-                    // is far better than the main loop blocking the RT
-                    // thread (~10–50 ms stall on contention).
+                    // The mix tick is holding the lock. Emit silence for this
+                    // quantum and count it: one quantum of zeros downstream
+                    // beats the main loop stalling the RT thread for 10-50 ms.
                     match target {
                         OutputTarget::Local => stream_runtime.record_local_underrun(),
                         OutputTarget::Virtual => stream_runtime.record_virtual_underrun(),

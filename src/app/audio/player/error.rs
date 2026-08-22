@@ -2,13 +2,13 @@
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
-    /// Playback or audio decode operation failed.
+    /// Decode or playback blew up.
     #[error("{0}")]
     Playback(String),
-    /// Source routing or microphone configuration failed.
+    /// Source routing or mic configuration blew up.
     #[error("{0}")]
     Routing(String),
-    /// PipeWire, PulseAudio, or audio backend setup failed.
+    /// Bringing the PipeWire/Pulse backend up blew up.
     #[error("{0}")]
     Setup(String),
 }

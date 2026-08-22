@@ -235,10 +235,9 @@ pub(super) fn maybe_trigger_estimated_loudness_refinement_with_store(
     })
 }
 
-/// The settings view reads its loudness counts from the store, so a run that
-/// only writes when a whole page finishes looks frozen. Flush partial progress
-/// every few sounds: refinement analysis dominates the cost, so the extra
-/// transactions are not measurable against it.
+/// Settings reads its loudness counts from the store, so writing only at page
+/// boundaries makes a long run look frozen. Flush every few sounds instead —
+/// refinement dwarfs the cost of the extra transactions.
 const LOUDNESS_PROGRESS_FLUSH_ROWS: usize = 8;
 
 fn should_flush_loudness_progress(pending: usize, page_finished: bool) -> bool {
@@ -300,8 +299,7 @@ fn refine_estimated_loudness_with_store(
                 }
             };
             updates.push(refinement_update(outcome, &sound));
-            // Publish partial progress so the settings view, which reads its
-            // counts from the store, moves while the run is still going.
+            // Push partial progress so the settings counts move mid-run.
             if should_flush_loudness_progress(updates.len(), false) {
                 library
                     .apply_loudness_updates(std::mem::take(&mut updates))

@@ -1,9 +1,9 @@
 //! PipeWire registry event parsers and graph-state helpers.
 //!
-//! These functions are called from the `global` and `global_remove` callbacks
-//! registered in `create_pipewire_backend`. Each parser takes a raw
-//! `GlobalObject` and returns a typed value (or `None`); the caller then
-//! decides which `LoopState` maps to update.
+//! Called from the `global`/`global_remove` callbacks set up in
+//! `create_pipewire_backend`. Each parser takes a raw `GlobalObject` and hands
+//! back a typed value or `None`; the caller decides which `LoopState` map to
+//! update.
 
 use super::*;
 
@@ -18,10 +18,10 @@ pub(super) fn source_from_global(
 
     let props = global.props?;
     let media_class = props.get(*pw::keys::MEDIA_CLASS)?;
-    // Modern PipeWire-native virtual sources (EasyEffects, NoiseTorch, our own
-    // Linux Soundboard Mic) advertise Audio/Source/Virtual; physical
-    // mics use plain Audio/Source. Accept both so users can route through
-    // EasyEffects to get processed mic + soundboard mixed into one feed.
+    // PipeWire-native virtual sources (EasyEffects, NoiseTorch, our own mic)
+    // advertise Audio/Source/Virtual; physical mics use plain Audio/Source.
+    // Take both, so routing through EasyEffects gives processed mic plus
+    // soundboard in one feed.
     if media_class != "Audio/Source" && media_class != "Audio/Source/Virtual" {
         return None;
     }
@@ -40,15 +40,14 @@ pub(super) fn source_from_global(
         .get("object.serial")
         .and_then(|value| value.parse::<u64>().ok());
     let is_virtual = media_class == "Audio/Source/Virtual";
-    // Explicit allow-list of hardware APIs rather than "any device.api present" —
-    // guards against exotic software nodes that might set device.api to a custom value.
-    // PipeWire's registry `global` event does NOT carry device.api or factory.name
-    // — those live only in the bound node info (what `pw-dump` shows). It DOES
-    // expose device.id for nodes backed by a hardware Device: alsa/bluez/usb
-    // capture and playback. Pure software sources (null sinks, loopbacks, filter
-    // chains, EasyEffects, screenshare virtual mics) have no device.id. Use that as
-    // the hardware signal, keeping the device.api allow-list as a fallback for the
-    // rare setups that surface it at the registry layer.
+    // device.id is the real hardware signal here. The registry `global` event
+    // carries neither device.api nor factory.name — those only exist in bound
+    // node info, which is what `pw-dump` prints — but it does expose device.id
+    // for anything backed by a Device (alsa/bluez/usb capture and playback).
+    // Software sources (null sinks, loopbacks, filter chains, EasyEffects,
+    // screenshare mics) have none. The device.api list stays as a fallback for
+    // the rare setups that do surface it, and is an allow-list rather than "any
+    // device.api" so an exotic software node can't slip through.
     let is_hardware_backed = props.get("device.id").is_some()
         || matches!(
             props.get(*pw::keys::DEVICE_API),

@@ -83,15 +83,14 @@ use streams::{
 
 const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const TARGET_OUTPUT_CHANNELS: u32 = 2;
-// Mix tick fires at 2 ms cadence. The Ultra latency profile uses a
-// 256-frame quantum (~5.3 ms); a tick faster than the quantum prevents
-// producer starvation even under system load.
+// Mix tick runs every 2 ms. Ultra uses a 256-frame quantum (~5.3 ms), and a
+// tick faster than the quantum keeps the producer from starving under load.
 const MIX_INTERVAL_MS: u64 = 2;
 const MIX_CHUNK_FRAMES: usize = 512;
-// 3 × 1024-frame quantum. Three-quantum headroom is the floor recommended by
-// PipeWire for non-RT producers feeding RT consumers; the extra quantum
-// absorbs a missed mix tick (e.g. while Opus seek scans frames or WirePlumber
-// reconfigures the graph) without producing audible silence.
+// 3 x 1024-frame quantum. Three quanta is PipeWire's recommended floor for a
+// non-RT producer feeding an RT consumer; the third absorbs a missed mix tick
+// (Opus seek scanning frames, WirePlumber reshuffling the graph) without
+// audible silence.
 const LOCAL_OUTPUT_QUEUE_TARGET_FRAMES: usize = 3_072;
 const BALANCED_VIRTUAL_QUEUE_TARGET_FRAMES: usize = 2_048;
 const LOW_VIRTUAL_QUEUE_TARGET_FRAMES: usize = 1_024;
@@ -172,16 +171,15 @@ struct SourceDescriptor {
     priority_session: i32,
     is_monitor: bool,
     is_our_virtual_mic: bool,
-    // PipeWire-standard "this is a virtual/software source" signal (media.class).
-    // True when media.class == "Audio/Source/Virtual" (EasyEffects, NoiseTorch,
-    // most filter-chain modules). User-configurable in some modules, so treat as
-    // one of several signals — not authoritative on its own.
+    // PipeWire's "software source" signal: media.class == Audio/Source/Virtual
+    // (EasyEffects, NoiseTorch, most filter chains). Some modules let the user
+    // set it, so treat it as one signal among several, not gospel.
     is_virtual: bool,
-    // True when the node is backed by a hardware Device. PipeWire's registry
-    // `global` event exposes device.id for alsa/bluez/usb capture & playback nodes
-    // but NOT device.api or factory.name (those are only in the bound node info).
-    // Software sources — null sinks, loopbacks, filter chains, EasyEffects,
-    // screenshare virtual mics — have no device.id. See registry_handlers.
+    // Backed by a real hardware Device. The registry `global` event exposes
+    // device.id for alsa/bluez/usb nodes but not device.api or factory.name
+    // (those live in bound node info). Software sources — null sinks,
+    // loopbacks, filter chains, EasyEffects, screenshare mics — have no
+    // device.id. See registry_handlers.
     is_hardware_backed: bool,
 }
 
@@ -765,10 +763,9 @@ impl AudioPlayer {
         }
     }
 
-    /// Stop all active sounds and immediately start a new one.
-    /// For the remote backend this is a single atomic IPC request, so no
-    /// snapshot poll can observe the transient "all stopped" state between the
-    /// two operations.
+    /// Stop everything and start a new sound. On the remote backend that is one
+    /// atomic IPC request, so no snapshot poll can catch the "all stopped" gap
+    /// in between.
     pub fn play_replace(
         &self,
         sound_id: &str,
@@ -1027,18 +1024,17 @@ fn pipewire_thread_main(
                 }
             }
         });
-        // 200 ms cadence is plenty: ensure_capture_stream_present is idempotent
-        // and cheap. The default-source watchdog is event-driven through the
-        // PipeWire metadata listener, so no polling needed for that.
+        // 200 ms is plenty — ensure_capture_stream_present is idempotent and
+        // cheap. The default-source watchdog rides the metadata listener
+        // instead, so it needs no polling at all.
         let _ = graph_watchdog_timer.update_timer(
             Some(Duration::from_millis(200)),
             Some(Duration::from_millis(200)),
         );
 
-        // Underrun-counter logger: emits a debug line every 10 s with the
-        // cumulative local/virtual underrun and lock-contention counts. If
-        // these stay flat the audio path is glitch-free; if they grow,
-        // glitches are happening and journalctl will show how often.
+        // Dumps cumulative local/virtual underrun and lock-contention counts
+        // every 10 s. Flat means the audio path is clean; climbing means
+        // glitches, and journalctl shows how often.
         let underrun_timer = mainloop.loop_().add_timer({
             let weak = weak.clone();
             move |_| {

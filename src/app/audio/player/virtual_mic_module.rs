@@ -1,18 +1,16 @@
-//! Runtime null-sink for the virtual microphone.
+//! Runtime null-sink behind the virtual microphone.
 //!
 //! EasyEffects, pavucontrol's "Create Virtual Source", NoiseTorch — they all
-//! create their source via `module-null-sink` with `media.class` overridden
-//! to `Audio/Source/Virtual`. This produces a *real* adapter/driver node in
-//! the PipeWire graph that WirePlumber will accept as the system default
-//! source. A plain `pw::stream::StreamRc` proxy will NOT — WirePlumber's
-//! default-source policy refuses to pin a stream-proxy as the resolved
-//! `default.audio.source`, even when `default.configured.audio.source` names
-//! it (verified live).
+//! build their source from `module-null-sink` with `media.class` overridden to
+//! `Audio/Source/Virtual`. That gives a real adapter/driver node, which
+//! WirePlumber will accept as the system default source. A plain
+//! `pw::stream::StreamRc` proxy will not: WirePlumber refuses to pin a
+//! stream-proxy as the resolved `default.audio.source` even when
+//! `default.configured.audio.source` names it (checked live).
 //!
-//! Lifecycle: loaded at engine start via `pactl load-module`, unloaded at
-//! shutdown via `pactl unload-module`. No system config files are touched —
-//! the module is purely a runtime side-effect of the running engine, the
-//! same way pavucontrol or NoiseTorch loads it from the GUI.
+//! Loaded at engine start with `pactl load-module`, unloaded at shutdown. No
+//! system config files are touched — it is a runtime side effect of the running
+//! engine, the same way pavucontrol or NoiseTorch loads one from a GUI.
 
 #[cfg(not(test))]
 use std::process::Command;
@@ -37,15 +35,13 @@ pub(super) struct NullSinkModule {
 }
 
 impl NullSinkModule {
-    /// Load a fresh null-sink. Before loading, eagerly clean up any stale
-    /// instances from prior engine crashes — keeping the graph free of
-    /// duplicate null-sinks under the same `sink_name`.
+    /// Load a fresh null-sink, sweeping up anything a previous engine crash
+    /// left behind so the graph never holds duplicates under one `sink_name`.
     #[cfg(not(test))]
     pub(super) fn load_or_attach() -> Result<Self, EngineError> {
-        // Unload any prior null-sink instances with our sink_name. Each
-        // engine-Drop should already do this, but a SIGKILL (or a crash
-        // before Drop runs) can leave duplicates behind. Idempotent on the
-        // common case (no stale instances).
+        // Unload any prior null-sinks under our sink_name. Engine Drop should
+        // have done it already, but a SIGKILL (or a crash before Drop) leaves
+        // duplicates. No-op in the common case.
         let stale = find_all_existing_module_ids();
         if !stale.is_empty() {
             info!(
@@ -143,10 +139,9 @@ fn build_load_args() -> Vec<String> {
     vec![
         format!("media.class=Audio/Source/Virtual"),
         format!("sink_name={}", VIRTUAL_SOURCE_NAME),
-        // Description is single-word (`Linux_Soundboard_Mic`) by design:
-        // pipewire-pulse's `pactl load-module` strips whitespace from
-        // sink_properties values regardless of quoting. See
-        // `app_meta::VIRTUAL_MIC_DESCRIPTION` for the rationale.
+        // Single-word description on purpose: pipewire-pulse strips whitespace
+        // from sink_properties values whatever the quoting. See
+        // `app_meta::VIRTUAL_MIC_DESCRIPTION`.
         format!(
             "sink_properties=device.description={}",
             VIRTUAL_MIC_DESCRIPTION
@@ -252,9 +247,8 @@ fn virtual_source_exists() -> bool {
     true
 }
 
-/// Find every module-null-sink instance currently loaded for our virtual mic
-/// name. Used to clean up duplicates from previous engine runs that crashed
-/// before Drop could unload them.
+/// Every module-null-sink currently loaded under our virtual mic name. Used to
+/// sweep up duplicates from runs that died before Drop could unload them.
 #[cfg(not(test))]
 fn find_all_existing_module_ids() -> Vec<u32> {
     let output = match Command::new("pactl")

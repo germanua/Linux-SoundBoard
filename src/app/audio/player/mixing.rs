@@ -75,9 +75,8 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         let Some((local_deficit, virtual_deficit)) =
             current_queue_deficits(&state.queues, local_target_samples, virtual_target_samples)
         else {
-            // Queue mutex contended by an RT callback this instant. Bail out
-            // and try again on the next mix tick (2 ms later) rather than
-            // blocking the main loop.
+            // Queue mutex is contended by an RT callback right now. Bail and
+            // retry on the next tick (2 ms) instead of blocking the main loop.
             state.stream_runtime.record_lock_contention();
             return;
         };
@@ -89,9 +88,9 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         let chunk_samples = wanted_samples.min(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize);
         let pushed = enqueue_mixed_chunk(state, chunk_samples);
         if pushed == 0 {
-            // mic_in too short OR mutex contended — no point spinning. Resync
-            // on next mix tick once the capture callback delivers a fresh
-            // quantum or the RT callback releases the lock.
+            // mic_in too short, or the mutex was contended. No point spinning:
+            // resync next tick once capture delivers a quantum or the RT side
+            // lets go of the lock.
             break;
         }
         batches = batches.saturating_add(1);

@@ -71,16 +71,15 @@ impl DialogHostWeak {
     }
 }
 
-/// Dismisses an overlay panel when the pointer is pressed anywhere outside it.
+/// Dismiss an overlay panel when the pointer is pressed anywhere outside it.
 ///
-/// The visible panel sits inside an `AdwClamp` that fills the whole overlay, so
-/// the empty area beside the panel belongs to the clamp and a press there never
-/// reaches the backdrop button underneath it. Hit-testing the panel's own bounds
-/// sidesteps that: it does not care which widget the press landed on, only
-/// whether the point is inside the panel.
+/// The panel sits in an `AdwClamp` that fills the overlay, so the empty area
+/// beside it belongs to the clamp and a press there never reaches the backdrop
+/// button underneath. Hit-testing the panel's own bounds sidesteps that: it
+/// doesn't care which widget got the press, only whether the point is inside.
 ///
-/// Runs in the capture phase and claims the press, so a dismissing click cannot
-/// also activate whatever was underneath.
+/// Capture phase, and it claims the press, so a dismissing click can't also
+/// activate whatever was under it.
 pub(super) fn dismiss_on_press_outside<F>(
     overlay: &gtk4::Overlay,
     panel: &impl IsA<gtk4::Widget>,
@@ -162,9 +161,9 @@ impl DialogHost {
             .build();
         content.append(&message_label);
 
-        // Size the stack to the page that is actually visible, not to the tallest /
-        // widest page. Without this the small input/message dialogs reserve the height
-        // of the path and hotkey pages and look mostly empty.
+        // Size the stack to the visible page, not the tallest one. Otherwise the
+        // small input/message dialogs reserve the height of the path and hotkey
+        // pages and sit there looking half empty.
         let content_stack = gtk4::Stack::builder()
             .transition_type(gtk4::StackTransitionType::None)
             .vhomogeneous(false)
@@ -252,9 +251,9 @@ impl DialogHost {
         actions.append(&primary_btn);
         panel.append(&actions);
 
-        // Constrain the dialog width and let it shrink with the window instead of
-        // forcing a fixed size. The clamp caps the panel at a compact maximum on wide
-        // windows and tightens it down with side margins on narrow ones.
+        // Cap the dialog width and let it shrink with the window rather than
+        // forcing a fixed size: compact maximum on wide windows, side margins
+        // on narrow ones.
         let clamp = adw::Clamp::builder()
             .maximum_size(440)
             .tightening_threshold(360)
@@ -303,10 +302,9 @@ impl DialogHost {
         }
     }
 
-    /// True while the hotkey capture dialog is waiting for a key combination.
-    /// The global backends keep delivering presses to the app throughout, and
-    /// playing a sound while the user is recording that same sound's shortcut
-    /// is never what they meant.
+    /// True while the capture dialog is waiting for a chord. The global
+    /// backends keep delivering presses meanwhile, and playing a sound while
+    /// the user records that same sound's shortcut is never what they meant.
     pub fn is_capturing_hotkey(&self) -> bool {
         self.inner.hotkey_validator.borrow().is_some()
     }
@@ -579,8 +577,8 @@ impl DialogHost {
     }
 
     /// `scope_prompt` offers "only while this tab is open" and is `Some` only
-    /// when tab hotkeys are on; the flag it produces reaches `on_confirm` as
-    /// its second argument, and is always false when nothing was offered.
+    /// when tab hotkeys are on. The flag it produces is `on_confirm`'s second
+    /// argument, and is false whenever nothing was offered.
     pub fn show_hotkey_capture<F, V>(
         &self,
         current_hotkey: Option<&str>,
@@ -783,15 +781,14 @@ impl DialogHost {
         }
     }
 
-    /// Moves this host to the end of its parent overlay's child list, which is
-    /// the top of the paint order.
+    /// Move this host to the end of its parent overlay's children, which is the
+    /// top of the paint order.
     ///
-    /// The host is attached while the window is built, but panels that open
-    /// dialogs — Settings above all — are built lazily and attached later, so
-    /// they end up above it. Raising here rather than at each panel's
-    /// construction keeps the rule in one place: whoever attaches an overlay
-    /// later cannot bury a dialog. It runs while the host is still hidden, so
-    /// there is nothing on screen to flicker.
+    /// The host goes on while the window is built, but panels that open dialogs
+    /// — Settings above all — are built lazily and attached later, so they land
+    /// on top of it. Raising here keeps the rule in one place: nobody attaching
+    /// an overlay later can bury a dialog. Runs while the host is still hidden,
+    /// so there is nothing on screen to flicker.
     fn raise_to_front(&self) {
         let Some(parent) = self
             .inner

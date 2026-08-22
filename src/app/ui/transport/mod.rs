@@ -117,10 +117,9 @@ impl TransportBar {
         &self.inner.sidebar_toggle_btn
     }
 
-    /// Switch between the wide single-row layout and the compact two-row layout.
-    ///
-    /// In compact mode the audio and utility clusters move onto a second row so the
-    /// bar fits a narrow window without clipping.
+    /// Swap between the wide single-row layout and the compact two-row one,
+    /// where the audio and utility clusters drop to row 2 so a narrow window
+    /// doesn't clip the bar.
     pub fn set_compact(&self, compact: bool) {
         if self.inner.compact.get() == compact {
             return;

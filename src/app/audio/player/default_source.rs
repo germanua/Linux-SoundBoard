@@ -6,11 +6,10 @@
 //! default and use it — no per-stream metadata writes, no fight with
 //! WirePlumber's stream-restore module.
 //!
-//! No system config files are written by this module. We only call the
-//! PipeWire/Pulse APIs (`wpctl set-default` and `pactl set-default-source`)
-//! whose persistence is handled internally by WirePlumber's `default-nodes`
-//! module — the same mechanism `pavucontrol` uses when the user picks a
-//! default in the GUI.
+//! No config files are written here. We only call the PipeWire/Pulse APIs
+//! (`wpctl set-default`, `pactl set-default-source`), and WirePlumber's
+//! `default-nodes` module handles persistence — the same path pavucontrol
+//! takes when someone picks a default in the GUI.
 //!
 //! On engine shutdown the default is intentionally NOT reverted. The whole
 //! point of the design is that virtual_mic stays the default across engine
@@ -49,11 +48,10 @@ pub(super) struct DefaultMetadataHandle {
 
 /// Try to bind a registry global as the `default` metadata object.
 ///
-/// Returns `Some(handle)` only when this global is the system's "default"
-/// metadata (the one carrying `default.audio.source`/`default.audio.sink`).
-/// On binding, we install a property-change listener that triggers a re-claim
-/// when the default source drifts away from our virtual mic (matching
-/// EasyEffects' behaviour).
+/// `Some(handle)` only when this global really is the system default metadata,
+/// the one carrying `default.audio.source`/`default.audio.sink`. Binding
+/// installs a property listener that re-claims whenever the default drifts off
+/// our virtual mic, same as EasyEffects does.
 pub(super) fn bind_default_metadata_from_global(
     registry: &pw::registry::RegistryRc,
     global: &GlobalObject<&pw::spa::utils::dict::DictRef>,
@@ -159,9 +157,8 @@ fn already_holds_default(cached_name: Option<&str>, claimed: bool) -> bool {
 /// that no longer exists, and a fresh object replays no properties, so keeping
 /// it would suppress the claim forever.
 pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) {
-    // Both silent failures this behaviour caused were expensive to diagnose
-    // precisely because nothing recorded that the engine had stopped being able
-    // to see the default.
+    // Both silent failures this caused were miserable to diagnose precisely
+    // because nothing logged that the engine had gone blind to the default.
     info!("Default metadata {reason}; re-evaluating the default source");
     state.default_audio_source_name = None;
     state.claimed_default = false;
@@ -227,11 +224,11 @@ fn write_runtime_default_source(state: &LoopState) {
     );
 }
 
-/// Parse the JSON-shaped metadata value into the source's node name.
+/// Pull the source's node name out of the metadata value.
 ///
-/// PipeWire's `default.audio.source` value is a small JSON object like
-/// `{"name":"alsa_input.usb-foo"}`. We avoid pulling a full JSON dependency
-/// just for this single field — a minimal hand parse is fine.
+/// `default.audio.source` is a tiny JSON object like
+/// `{"name":"alsa_input.usb-foo"}`. Not worth a JSON dependency for one field,
+/// so this parses it by hand.
 fn parse_default_source_name(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let needle = "\"name\"";

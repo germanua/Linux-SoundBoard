@@ -220,9 +220,8 @@ pub(super) fn rebuild_sound_folder_rows(
 
 /// Folders the user removed from the sidebar.
 ///
-/// A removal only hides the folder, so it has to be listed somewhere the user
-/// can undo it; without this the operation would be a one-way door. Returns the
-/// group and a callback that reloads it.
+/// Removal only hides them, so they have to surface somewhere undoable or it is
+/// a one-way door. Returns the group plus a callback that reloads it.
 pub(super) fn build_hidden_folders_group(
     state: Arc<AppState>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
@@ -233,8 +232,8 @@ pub(super) fn build_hidden_folders_group(
         .visible(false)
         .build();
     let rows: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::new(RefCell::new(Vec::new()));
-    // The restore button has to trigger the same reload that defines it, so the
-    // callback is published into a holder once it exists.
+    // The restore button triggers the very reload that builds it, so publish
+    // the callback into a holder once it exists.
     let holder: HiddenFolderRefreshHolder = Rc::new(RefCell::new(None));
     let refresh: HiddenFolderRefresh = {
         let group = group.clone();
@@ -281,7 +280,7 @@ pub(super) fn build_hidden_folders_group(
                     for folder in folders {
                         let row = adw::ActionRow::builder().title(&folder.name).build();
                         // A top-level folder's path is just its name, so the
-                        // subtitle would repeat the title for no gain.
+                        // subtitle would only repeat the title.
                         if folder.relative_path != folder.name {
                             row.set_subtitle(&folder.relative_path);
                         }

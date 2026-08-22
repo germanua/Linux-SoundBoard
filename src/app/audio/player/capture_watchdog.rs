@@ -12,15 +12,13 @@ pub(super) fn capture_stream_missing(state: &LoopState) -> bool {
     }
 }
 
-/// Capture-stream watchdog for the mic passthrough capture stream. Fixes two
-/// real-world races:
-///   1. Soundboard launches before the registry reports physical mics, so the
-///      initial `recreate_capture_stream` finds nothing and warns "No physical
-///      microphone source available for passthrough" — before this watchdog
-///      the user had to toggle passthrough off/on to recover.
-///   2. The user's preferred mic source (e.g. EasyEffects) isn't running yet
-///      when the soundboard starts; when it appears later we now wire it up
-///      automatically.
+/// Watchdog for the mic-passthrough capture stream. Covers two races we hit
+/// for real:
+///   1. We start before the registry lists any physical mic, so the first
+///      `recreate_capture_stream` finds nothing. Users used to have to toggle
+///      passthrough off and back on to recover.
+///   2. The preferred source (EasyEffects and friends) comes up after us, and
+///      now gets wired in when it appears.
 pub(super) fn ensure_capture_stream_present(state: &mut LoopState) {
     if !state.runtime.mic_passthrough {
         state.capture_health_miss_ticks = 0;
@@ -65,9 +63,9 @@ pub(super) fn ensure_capture_stream_present(state: &mut LoopState) {
         }
     }
 
-    // Link health can be temporarily wrong while WirePlumber rewires nodes.
-    // Leaving the stream in place avoids clearing soundboard playback queues
-    // and disables passthrough contribution until a valid link appears.
+    // Link health lies while WirePlumber rewires nodes. Keep the stream and
+    // just drop its passthrough contribution until a good link shows up, rather
+    // than tearing down and flushing the playback queues.
 }
 
 pub(super) fn pipewire_capture_stream_healthy(

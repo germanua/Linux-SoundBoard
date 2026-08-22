@@ -16,14 +16,11 @@ pub const X11_BACKEND: &str = "x11";
 pub const LOCAL_PLAYBACK_NODE_NAME: &str = "linuxsoundboard.local_playback";
 pub const MIC_CAPTURE_NODE_NAME: &str = "linuxsoundboard.mic_capture";
 pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
-// Name of our feeder Playback stream that pushes audio into the null-sink.
-// The null-sink itself uses VIRTUAL_SOURCE_NAME; the feeder is a separate
-// PipeWire client stream that targets it.
+// Client stream that pumps audio into the null-sink. The sink itself is
+// VIRTUAL_SOURCE_NAME; this is the thing feeding it.
 pub const VIRTUAL_MIC_FEEDER_NODE_NAME: &str = "linuxsoundboard.virtual_mic_feeder";
 pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
-// Underscores instead of spaces: `pactl load-module sink_properties=…` strips
-// whitespace from the value (pipewire-pulse compat limitation, no quoting
-// escape works), so any space-containing description gets truncated to the
-// first word. Users see this verbatim in mic dropdowns; the underscores are
-// the standard Linux convention for that case.
+// Underscores, not spaces: pipewire-pulse truncates `sink_properties=` values
+// at the first space and no quoting gets around it. Users read this verbatim
+// in mic dropdowns.
 pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";

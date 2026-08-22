@@ -177,15 +177,13 @@ impl SwhkdProcesses {
         })
     }
 
-    /// Forcefully stop any `swhkd`/`swhks` daemons owned by the current user
-    /// before spawning a fresh managed pair.
+    /// Kill any `swhkd`/`swhks` this user already has running, then spawn our
+    /// own pair.
     ///
-    /// A `swhkd` started in a previous session can outlive the app: it is
-    /// setuid-root, so a non-graceful app exit leaves it reparented to
-    /// `systemd --user`. Attaching to such an orphan means relying on it
-    /// honouring config reloads from an unknown state. Restarting it instead
-    /// guarantees every session owns a clean daemon whose config is loaded at
-    /// startup. Best-effort: failures are logged, not fatal.
+    /// swhkd is setuid-root, so a hard app exit leaves it reparented to
+    /// `systemd --user` and still grabbing keys. Adopting an orphan means
+    /// trusting it to reload config from a state we know nothing about, so
+    /// restart instead. Best-effort: failures are logged, not fatal.
     pub fn terminate_stale_daemons() {
         info!("Stopping pre-existing swhkd/swhks daemons before spawning a managed pair");
 
@@ -425,8 +423,8 @@ impl SwhkdProcesses {
         let _ = child.wait();
     }
 
-    /// Remove the swhks socket and swhkd pidfile a killed daemon leaves behind,
-    /// so the freshly spawned swhks can bind its socket without `EADDRINUSE`.
+    /// Clear the swhks socket and swhkd pidfile a killed daemon leaves behind,
+    /// or the new swhks dies binding its socket with `EADDRINUSE`.
     fn remove_stale_runtime_files() {
         let uid = nix::unistd::getuid();
         let runtime_dir = PathBuf::from(format!("/run/user/{}", uid));

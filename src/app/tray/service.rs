@@ -195,16 +195,15 @@ impl TrayService {
             |_, name| log::warn!("Tray: lost {name}"),
         );
 
-        // A watcher can arrive late or restart under us — a panel crash, or a
-        // GNOME extension being toggled — so follow the name rather than
-        // registering once at startup and hoping.
+        // A watcher can show up late or restart under us (panel crash, GNOME
+        // extension toggled), so follow the name instead of registering once at
+        // startup and hoping.
         //
-        // `gio::bus_watch_name_on_connection` would be the obvious tool, but in
-        // gio 0.20 it returns a `WatcherId` from a private module that a second
-        // export of the same name shadows, leaving the type unnameable outside
-        // the crate and the watch impossible to store and cancel. Following
-        // NameOwnerChanged ourselves costs a few lines and hands back a
-        // `SignalSubscriptionId` we can actually unsubscribe.
+        // `gio::bus_watch_name_on_connection` looks like the tool for this, but
+        // in gio 0.20 it hands back a `WatcherId` from a private module that a
+        // second export of the same name shadows — unnameable outside the crate,
+        // so the watch can't be stored or cancelled. Following NameOwnerChanged
+        // by hand costs a few lines and gives us an id we can unsubscribe.
         let registered = Rc::new(Cell::new(false));
         let watcher = connection.signal_subscribe(
             Some("org.freedesktop.DBus"),

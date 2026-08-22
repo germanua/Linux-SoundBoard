@@ -37,11 +37,11 @@ pub struct AppMemoryInventory {
     pub sound_count: usize,
     pub tab_count: usize,
     pub folder_count: usize,
-    /// Strings still held in the settings struct. The library itself lives in
-    /// SQLite, so there is no resident per-sound string cost to report.
+    /// Strings still held by the settings struct. The library is in SQLite, so
+    /// there is no resident per-sound string cost to report.
     pub settings_string_bytes: usize,
-    /// Rows the paged sound model is actually holding. Bounded by its four-page
-    /// / 2 MiB cache, and the only sound-row payload resident in this process.
+    /// Rows the paged sound model is holding. Capped by its four-page / 2 MiB
+    /// cache, and the only sound-row payload resident in this process.
     pub ui_cached_pages: usize,
     pub ui_cached_payload_bytes: usize,
     pub ui_cached_row_count: usize,
@@ -328,8 +328,8 @@ pub fn build_app_inventory(config: &crate::config::Config) -> AppMemoryInventory
     assemble_app_inventory(&runtime, config, thread_count)
 }
 
-/// Assembles the inventory from already-collected numbers. Kept free of global
-/// state so it can be tested without one test's counts leaking into another.
+/// Builds the inventory from numbers already collected. No globals, so one
+/// test's counts can't leak into the next.
 fn assemble_app_inventory(
     runtime: &RuntimeInventory,
     config: &crate::config::Config,
@@ -363,8 +363,8 @@ fn assemble_app_inventory(
         ui_cached_pages: runtime.ui_cached_pages,
         ui_cached_payload_bytes: runtime.ui_cached_payload_bytes,
         ui_cached_row_count: runtime.ui_cached_row_count,
-        // The store counts control bindings alongside live sound bindings, so
-        // the settings copies must not be added on top.
+        // The store already counts control bindings with the sound ones — don't
+        // stack the settings copies on top.
         hotkey_binding_count: runtime.library_hotkey_count,
         validation_batch_size: runtime.validation_batch_size,
         validation_mode: runtime.validation_mode.clone(),
@@ -417,9 +417,9 @@ pub fn set_library_counts(sounds: usize, tabs: usize, folders: usize, hotkeys: u
     runtime.library_hotkey_count = hotkeys;
 }
 
-/// Published by the paged sound model whenever its cache changes. The model is
-/// a GTK object on the main thread, but phases are recorded from workers too,
-/// so the numbers are copied here rather than read back off the widget.
+/// Published by the paged sound model when its cache changes. The model is a
+/// main-thread GTK object but phases get recorded from workers too, so copy
+/// the numbers here instead of reading the widget back.
 pub fn set_ui_row_cache(pages: usize, payload_bytes: usize, row_count: usize) {
     let mut runtime = RUNTIME_INVENTORY.lock();
     runtime.ui_cached_pages = pages;

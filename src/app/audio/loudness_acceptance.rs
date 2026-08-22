@@ -223,8 +223,8 @@ struct RssPeakSampler {
     handle: thread::JoinHandle<()>,
 }
 
-/// Seeds a disposable store with the corpus. The harness measures the fast
-/// first-pass estimate against a full analysis, so every sound starts pending.
+/// Seeds a throwaway store with the corpus. Everything starts pending because
+/// the harness weighs the fast first pass against a full analysis.
 fn build_harness_library(
     corpus_paths: &[String],
 ) -> Result<LibraryStore, crate::audio::LoudnessError> {
@@ -263,8 +263,8 @@ fn build_harness_library(
     Ok(library)
 }
 
-/// Compares each sound's fast first-pass estimate against a full analysis of
-/// the same file, paging the corpus out of the store rather than holding it.
+/// Fast first-pass estimate vs a full analysis, per sound. Pages the corpus
+/// out of the store instead of holding all of it.
 fn compute_fast_vs_full_error_stats(
     library: &LibraryStore,
 ) -> Result<(usize, f64, f64), crate::audio::LoudnessError> {

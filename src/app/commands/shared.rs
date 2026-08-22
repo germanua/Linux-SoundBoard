@@ -222,12 +222,12 @@ fn ui_worker_pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// Dispatch a Send task on a worker thread and run `on_complete` on the GTK main thread
-/// when it finishes. Completion is event-driven via `MainContext::invoke` — there is no
-/// per-call polling timer and no per-call OS thread.
+/// Run a `Send` task on a worker thread, then `on_complete` back on the GTK
+/// main thread. Event-driven through `MainContext::invoke`: no polling timer
+/// and no per-call OS thread.
 ///
-/// Must be called from the GTK main thread (the thread that owns the default `MainContext`),
-/// because `on_complete` is `!Send` and is stashed in a thread-local until the result lands.
+/// Main thread only — `on_complete` is `!Send` and gets parked in a
+/// thread-local until the result lands.
 pub fn dispatch_async_result<T, F, C>(
     task_name: &'static str,
     task: F,

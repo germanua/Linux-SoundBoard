@@ -1,18 +1,18 @@
 //! Opt-in route-decision audit log.
 //!
-//! When `LSB_ROUTE_AUDIT=1` is set in the environment, every PipeWire metadata
-//! write Soundboard makes (per-stream `target.object`/`target.node`) and every
-//! default-source claim/restore command is appended as a JSONL record to
-//! `$XDG_RUNTIME_DIR/linux-soundboard-route-audit.log` (falling back to
-//! `/tmp/linux-soundboard-route-audit.log`).
+//! With `LSB_ROUTE_AUDIT=1` set, every PipeWire metadata write we make
+//! (per-stream `target.object`/`target.node`) and every default-source
+//! claim/restore is appended as JSONL to
+//! `$XDG_RUNTIME_DIR/linux-soundboard-route-audit.log`, or `/tmp` if that is
+//! unset.
 //!
-//! When the env var is not set the audit channel is never initialised and the
-//! `record_*` hot paths short-circuit on a single atomic load (see
-//! `is_enabled()`), so leaving this code in tree carries no runtime cost.
+//! Without the env var the channel is never built and the `record_*` paths
+//! bail on one atomic load (`is_enabled()`), so this costs nothing to leave
+//! in tree.
 //!
-//! The audit log is a debug aid for reproducing the "Auto-route mode breaks
-//! Vesktop screen-share-with-sound" regression — see
-//! `docs/TROUBLESHOOTING.md` "Capturing Auto-route audit data".
+//! Debug aid for the "Auto-route mode breaks Vesktop screen-share-with-sound"
+//! regression — see `docs/TROUBLESHOOTING.md`, "Capturing Auto-route audit
+//! data".
 
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
@@ -59,8 +59,7 @@ pub fn init_from_env() {
     let path = audit_log_path();
     match AuditWriter::open(path.clone()) {
         Ok(writer) => {
-            // Ignore the error from `set` — that just means another thread
-            // got there first, which is fine.
+            // A failed `set` just means another thread beat us to it.
             let _ = AUDIT.set(writer);
             if let Some(writer) = AUDIT.get() {
                 log::info!("Route-audit log enabled at {}", writer.path.display());
@@ -134,11 +133,10 @@ pub fn record_metadata_write(
 }
 
 /// Record a default-source claim or restore (`wpctl set-default` / `pactl
-/// set-default-source`). `kind` is one of `"default_source.claim"` /
-/// `"default_source.restore"` / `"default_source.pulse_claim"` /
-/// `"default_source.pulse_restore"`.
-// Called from #[cfg(not(test))] blocks in source_routing.rs; clippy's test
-// target treats it as dead code but it is live in regular builds.
+/// set-default-source`). `kind` is `"default_source.claim"`, `"...restore"`,
+/// `"...pulse_claim"` or `"...pulse_restore"`.
+// Live in normal builds — only clippy's test target thinks it's dead, because
+// the callers sit in `#[cfg(not(test))]` blocks in source_routing.rs.
 #[allow(dead_code)]
 pub fn record_default_source_command(
     kind: &str,
@@ -295,9 +293,8 @@ mod tests {
     #[test]
     fn is_enabled_is_false_when_env_unset_and_init_skipped() {
         let _guard = ENV_TEST_LOCK.lock().expect("env test lock");
-        // We can't easily unset the global OnceLock, but we can verify the
-        // recorders themselves no-op when AUDIT is unset by writing through
-        // the public API and asserting no file at the audit path was created.
+        // The global OnceLock can't be unset, so drive the public API with
+        // AUDIT unset instead and assert nothing landed at the audit path.
         std::env::remove_var(ENV_VAR);
         let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         let dir = tempdir();

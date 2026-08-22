@@ -90,11 +90,10 @@ pub(super) struct PipeWireBackendState {
     pub(super) _local_stream: Option<StreamHandle>,
     pub(super) virtual_stream: Option<StreamHandle>,
     pub(super) capture_stream: Option<StreamHandle>,
-    // Real null-sink that backs `linuxsoundboard.virtual_mic`. Loaded at
-    // engine start via pactl; unloaded on Drop. Wrapped in Option because
-    // pactl might not be installed on minimal setups — we fail loud in that
-    // case instead of silently falling back to a non-default-eligible
-    // stream proxy.
+    // The real null-sink behind `linuxsoundboard.virtual_mic`: pactl loads it
+    // at engine start, Drop unloads it. Option because pactl may be missing on
+    // a minimal box, and there we fail loud rather than quietly settling for a
+    // stream proxy WirePlumber will never make default.
     pub(super) _virtual_mic_module: Option<virtual_mic_module::NullSinkModule>,
 }
 
@@ -198,15 +197,15 @@ fn create_pipewire_backend(
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
                     if let Some(metadata) = metadata {
-                        // A different object than the one the current belief
-                        // came from, and a fresh one replays no properties, so
-                        // anything remembered about the default is stale and
-                        // would suppress the claim below.
+                        // Different object than the one our belief came from,
+                        // and a fresh one replays no properties, so anything
+                        // remembered is stale and would suppress the claim
+                        // below.
                         forget_default_source_belief(&mut state, "bound");
                         state.default_metadata = Some(metadata);
-                        // The default-metadata listener may have already fired
-                        // with the current default name during binding — re-
-                        // assert our claim if the engine wants to be default.
+                        // The listener may already have fired with the current
+                        // default while binding, so re-assert if the engine
+                        // wants to be default.
                         claim_default_source_if_enabled(&mut state);
                     }
                     if let Some(capture_node_id) = capture_node_id {
@@ -330,11 +329,10 @@ fn create_pipewire_backend(
                     if state.capture_node_id == Some(id) {
                         state.capture_node_id = None;
                     }
-                    // Only reconnect when the removed source is the one we are
-                    // actively capturing from. Spurious reconnects on unrelated
-                    // source removals tear down the capture stream unnecessarily,
-                    // inserting a silence gap every time any Audio/Source leaves
-                    // the graph (e.g. another app's monitor source).
+                    // Only reconnect when the source that left is the one we're
+                    // actually capturing. Reacting to every Audio/Source removal
+                    // (another app's monitor, say) tears the capture stream down
+                    // and punches a silence gap for nothing.
                     let affects_current_capture = removed_source_name
                         .as_deref()
                         .zip(state.active_capture_target.as_deref())
@@ -360,12 +358,11 @@ fn create_pipewire_backend(
     )
     .ok();
 
-    // Load the real null-sink that backs `linuxsoundboard.virtual_mic`. This
-    // MUST happen before the feeder stream is created — the feeder targets
-    // the null-sink by name, so the sink has to exist in the graph first.
-    // We log a warning on failure but continue: the feeder still works as a
-    // fallback in-process source for apps that aren't picky about node type,
-    // even if WirePlumber won't pin it as the system default.
+    // Load the real null-sink behind `linuxsoundboard.virtual_mic`. Has to come
+    // before the feeder stream, which targets the sink by name. On failure we
+    // warn and carry on: the feeder still works as an in-process source for apps
+    // that aren't fussy about node type, WirePlumber just won't pin it as the
+    // system default.
     let virtual_mic_module = match virtual_mic_module::NullSinkModule::load_or_attach() {
         Ok(module) => Some(module),
         Err(err) => {

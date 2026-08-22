@@ -166,8 +166,7 @@ impl HotkeyManager {
         self.disabled_reason.clone()
     }
 
-    /// Tear down the active backend (terminating any spawned daemons) so the
-    /// application does not leave orphaned processes behind on exit.
+    /// Kill the active backend so we don't leave orphan daemons behind.
     pub fn shutdown(&mut self) {
         if let Some(backend) = &self.backend {
             backend.shutdown();

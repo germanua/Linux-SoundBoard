@@ -1,10 +1,9 @@
-//! Pre-schema-8 configuration shape, for building migration fixtures.
+//! Pre-schema-8 config shape, for building migration fixtures.
 //!
-//! The runtime `Config` stopped carrying the library when SQLite became
-//! authoritative, but legacy files on disk still contain `sounds`, `tabs` and
-//! `sound_folders`. Migration tests need to write those files, so the old shape
-//! lives here as a test-only serializable struct rather than in the type the
-//! application loads.
+//! Runtime `Config` dropped the library when SQLite took over, but files on
+//! disk still carry `sounds`, `tabs` and `sound_folders`. Migration tests have
+//! to write those, so the old shape lives here instead of in the type the app
+//! actually loads.
 
 use serde::Serialize;
 

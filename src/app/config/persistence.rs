@@ -235,8 +235,8 @@ impl Config {
         Ok(())
     }
 
-    /// Normalises the persisted settings. The library itself lives in SQLite,
-    /// so there are no sound rows left here to sanitize.
+    /// Tidy the persisted settings. The library lives in SQLite now, so there
+    /// are no sound rows left in here to scrub.
     pub fn sanitize_for_persistence(&mut self) {
         self.settings.normalize_for_persistence();
     }
@@ -266,9 +266,9 @@ mod tests {
         let config = Config::load_from_path(&path).expect("migrate schema 6 fixture");
 
         assert_eq!(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION);
-        // The library itself is no longer carried by this type; the legacy
-        // sounds, tabs and folders are preserved by the exact backup asserted
-        // below and imported by the migration, not by the runtime settings.
+        // This type doesn't carry the library any more: legacy sounds, tabs and
+        // folders survive in the backup asserted below and come back via the
+        // migration, not via runtime settings.
         assert_eq!(
             config.settings.mic_source.as_deref(),
             Some("easyeffects_source")
@@ -354,8 +354,8 @@ mod tests {
         let runtime =
             Config::load_runtime_settings_from_path(&path).expect("load bounded runtime settings");
 
-        // The runtime type no longer models the legacy arrays at all, so a
-        // 2048-sound legacy file costs nothing to load: only settings survive.
+        // The runtime type doesn't model the legacy arrays at all, so a
+        // 2048-sound legacy file is free to load — only settings survive.
         assert_eq!(runtime.settings.local_volume, 37);
         assert_eq!(
             runtime.schema_version,

@@ -1,17 +1,15 @@
 //! A `PlaybackEngine` test double.
 //!
-//! `FakeAudioPlayer` records what the `commands` layer dispatches and keeps just
-//! enough playback state for query-based commands (e.g. `seek_sound`, which
-//! looks up the active play id for a sound). Tests inject it in place of the
-//! real `AudioPlayer` and assert on what was dispatched, with no audio backend.
+//! `FakeAudioPlayer` records what `commands` dispatches and keeps just enough
+//! playback state for query-style commands like `seek_sound`. Drop it in for
+//! the real `AudioPlayer` and assert on the dispatches — no audio backend.
 
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use crate::audio::{EngineError, PlaybackEngine, PlaybackPosition};
 
-/// One `play` dispatch, captured verbatim so tests can assert the engine was
-/// told to play the right sound with the right volume/loudness metadata.
+/// One `play` dispatch, captured verbatim: sound, volume, loudness metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayCall {
     pub sound_id: String,
@@ -43,7 +41,7 @@ impl FakeAudioPlayer {
         }
     }
 
-    // --- assertion / inspection helpers ---
+    // assertion / inspection helpers
 
     pub fn play_calls(&self) -> Vec<PlayCall> {
         self.recorder.lock().plays.clone()

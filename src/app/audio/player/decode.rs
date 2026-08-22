@@ -1,9 +1,8 @@
-/// Initial `SampleBuffer` capacity in frames. Symphonia resizes the buffer on
-/// the first real decode if the actual frame size differs, so this only affects
-/// the pre-allocation for the first packet.
+/// Frames pre-allocated for the first `SampleBuffer`. Symphonia resizes on the
+/// first real decode if the frame size differs, so this only matters for packet one.
 const INITIAL_DECODER_BUFFER_FRAMES: u64 = 4_096;
 
-// ── Audio source abstraction ─────────────────────────────────────────────────
+// Audio source abstraction
 
 pub(crate) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -111,7 +110,7 @@ impl<S: AudioSource> Iterator for ChannelSampleRateConverter<S> {
     }
 }
 
-// ── Decoders ─────────────────────────────────────────────────────────────────
+// Decoders
 
 use log::debug;
 use ogg::PacketReader;
@@ -802,9 +801,9 @@ impl SymphoniaSource {
                     let spec = *decoded.spec();
                     self.spec = spec;
                     if decoded.frames() == 0 {
-                        // Vorbis may emit an empty priming packet before its first PCM frame.
-                        // The packet was consumed successfully, so keep decoding instead of
-                        // exposing the empty buffer as end-of-stream to the source iterator.
+                        // Vorbis can emit an empty priming packet before the first PCM
+                        // frame. It decoded fine, so keep going rather than handing the
+                        // iterator an empty buffer that looks like end-of-stream.
                         continue;
                     }
                     if self.buffer.capacity() < decoded.capacity() {

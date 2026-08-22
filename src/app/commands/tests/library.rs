@@ -246,10 +246,9 @@ fn store_backed_import_is_bounded_and_skips_duplicate_paths() {
 
 #[test]
 fn store_refresh_imports_folders_larger_than_one_scan_batch() {
-    // A scan batch is capped at MAX_BATCH_ROWS rows, where a sound costs two
-    // rows and a folder costs one per path component. A folder holding more
-    // sounds than fit in one batch has to be split across several, and every
-    // batch that follows a flush must re-send the folder row.
+    // A scan batch caps at MAX_BATCH_ROWS: a sound is two rows, a folder one
+    // per path component. A folder with more sounds than fit gets split, and
+    // every batch after a flush has to re-send the folder row.
     let root = std::env::temp_dir().join(format!("lsb-big-folder-{}", uuid::Uuid::new_v4()));
     let disc = root.join("disc");
     fs::create_dir_all(&disc).expect("create scan folder");

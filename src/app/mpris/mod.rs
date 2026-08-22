@@ -5,11 +5,12 @@
 //! protocol from the tray, but served the same way — straight over GIO's GDBus,
 //! with no extra dependency.
 //!
-//! A soundboard is not a music player, and a permanently registered one would
-//! replace Spotify in the panel for the sake of a two-second airhorn and take
-//! the media keys with it. So the bus name is held **only while a sound is
-//! playing** and released the moment it stops. That, plus the setting being off
-//! by default, is what keeps the feature from being a nuisance.
+//! A soundboard is not a music player: while this is on, the desktop treats
+//! us as the active player and the media keys come here instead of to whatever
+//! music was going. That is why the setting is off by default. When it is on,
+//! the bus name is held for as long as the setting is and reports `Stopped`
+//! between sounds — a clip is over in a second, and controls that vanish with
+//! it are no controls at all.
 
 mod metadata;
 
@@ -103,11 +104,10 @@ const INTERFACES_XML: &str = r#"
 
 /// Holds the well-known player name for as long as the feature is on.
 ///
-/// An earlier version claimed the name only while a sound was playing, to hand
-/// the media keys straight back. That made the panel controls useless: a
-/// soundboard clip is a second or two, so the player appeared and vanished
-/// before anyone could press pause. Every real media player keeps its name and
-/// reports `Stopped` when idle, and so does this one.
+/// It used to be claimed only while a sound played, to hand the media keys
+/// straight back. That made the panel controls useless: a clip is a second or
+/// two, so the player appeared and vanished before anyone could hit pause.
+/// Real players keep the name and report `Stopped` when idle, so we do too.
 struct PlayerName {
     connection: gio::DBusConnection,
     owner: RefCell<Option<gio::OwnerId>>,
@@ -139,8 +139,8 @@ impl PlayerName {
     }
 }
 
-/// A media-controls publisher. Exported for the process's lifetime; visible to
-/// the desktop only while a sound is playing.
+/// Media-controls publisher. The objects stay exported for the life of the
+/// process; the desktop sees a player whenever the setting is on.
 pub(crate) struct MprisService {
     connection: gio::DBusConnection,
     registrations: RefCell<Vec<gio::RegistrationId>>,

@@ -33,16 +33,15 @@ pub struct X11Backend {
 #[derive(Debug)]
 struct NonNullXDisplay(*mut xlib::Display);
 
-// SAFETY: Xlib permits a Display pointer to be used from multiple threads as long as only
-// one thread makes Xlib calls on it at a time. Callers enforce that via the surrounding
-// `Mutex<Option<NonNullXDisplay>>` that owns the pointer.
+// SAFETY: Xlib allows a Display pointer across threads as long as only one
+// thread calls into Xlib at a time. The owning `Mutex<Option<..>>` enforces it.
 unsafe impl Send for NonNullXDisplay {}
-// SAFETY: same as the Send impl above — Mutex<Option<NonNullXDisplay>> ensures exclusive access.
+// SAFETY: as above — the Mutex is what makes access exclusive.
 unsafe impl Sync for NonNullXDisplay {}
 
 impl NonNullXDisplay {
-    // SAFETY: caller must guarantee the inner pointer has not already been passed to
-    // XCloseDisplay and that no other thread is making Xlib calls on it.
+    // SAFETY: caller guarantees the pointer was not already closed and that no
+    // other thread is calling Xlib on it.
     unsafe fn close(self) {
         xlib::XCloseDisplay(self.0);
     }
@@ -113,8 +112,8 @@ impl X11Backend {
             ));
         }
 
-        // SAFETY: the display pointer is scoped to this block; XCloseDisplay is called on
-        // every exit path (success and failure) and the pointer is never stored or shared.
+        // SAFETY: the display pointer never leaves this block and XCloseDisplay
+        // runs on every exit path, success or failure.
         unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -158,9 +157,8 @@ impl X11Backend {
         })
     }
 
-    // SAFETY: `display` must be a live Xlib display pointer. XKeysymToString returns a
-    // pointer owned by Xlib; it is read via CStr and copied into an owned String before
-    // this function returns, so no reference outlives the call.
+    // SAFETY: `display` must be live. XKeysymToString hands back Xlib-owned
+    // memory, which we read through CStr and copy before returning.
     unsafe fn keycode_to_name(display: *mut xlib::Display, keycode: u32) -> Option<String> {
         let keysym = xlib::XKeycodeToKeysym(display, keycode as u8, 0);
         if keysym == 0 {
@@ -319,10 +317,9 @@ impl HotkeyBackend for X11Backend {
             return;
         };
 
-        // SAFETY: the spawned thread opens its own Xlib display and is the sole user of
-        // that pointer until it hands ownership to `display_ptr` (mutex-guarded) for Drop
-        // to close. All Xlib/XInput2 calls inside the thread operate on this thread-local
-        // display pointer, which is non-null (checked immediately after XOpenDisplay).
+        // SAFETY: the thread opens its own display and is the only user of that
+        // pointer until it hands it to the mutex-guarded `display_ptr` for Drop
+        // to close. Non-null is checked right after XOpenDisplay.
         thread::spawn(move || unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -354,8 +351,8 @@ impl HotkeyBackend for X11Backend {
 
             let connection_fd = xlib::XConnectionNumber(display);
             loop {
-                // SAFETY: Xlib owns this descriptor for the lifetime of `display`, which
-                // remains open until the listener exits below.
+                // SAFETY: Xlib owns this fd for as long as `display` is open, which
+                // is until the listener below exits.
                 let x_fd = BorrowedFd::borrow_raw(connection_fd);
                 let mut poll_fds = [
                     nix::poll::PollFd::new(x_fd, nix::poll::PollFlags::POLLIN),

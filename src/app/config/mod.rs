@@ -116,9 +116,8 @@ mod tests {
 
     #[test]
     fn legacy_default_source_mode_variants_migrate_to_default() {
-        // Old configs may have any of these legacy names. All migrate to the
-        // single new `Default` variant since they all expressed "soundboard
-        // should be the mic in some way".
+        // These legacy names all meant "make the soundboard the mic somehow",
+        // so they collapse onto `Default`.
         for legacy in [
             r#""auto_route_while_running""#,
             r#""temporary_default_while_running""#,

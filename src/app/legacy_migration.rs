@@ -1068,9 +1068,9 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             crate::library_store::DATABASE_APPLICATION_ID
         )));
     }
-    // This gate runs before the store opens the database, so it has to accept
-    // anything the store can still migrate forward. Demanding the current
-    // version would lock a user out of their library on every schema bump.
+    // Runs before the store opens the database, so it has to accept anything
+    // the store can still migrate forward. Demanding the current version would
+    // lock users out of their library on every schema bump.
     let schema_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if !(1..=crate::library_store::DATABASE_SCHEMA_VERSION).contains(&schema_version) {
         return Err(LegacyMigrationError::Invalid(format!(
@@ -1097,8 +1097,8 @@ pub fn database_identity(path: &Path) -> Result<DatabaseIdentity, LegacyMigratio
             |row| row.get(0),
         )
         .optional()?;
-    // Each schema version carries its own flavor tag, so the expected one
-    // follows the version found above rather than the current release.
+    // The flavor tag is per schema version, so match the version found above,
+    // not the current release.
     let expected_flavor = format!("bounded-generation-v{schema_version}");
     if flavor.as_deref() != Some(expected_flavor.as_str()) {
         return Err(LegacyMigrationError::Invalid(
@@ -2013,9 +2013,9 @@ mod tests {
         let destination = directory.join("library.sqlite3");
         initialize_empty_library(&destination, "library").expect("create database");
 
-        // Stand in for a library written by the previous release. The startup
-        // gate runs before the store migrates, so demanding the current version
-        // there would lock every existing user out of their library.
+        // Stand-in for a library from the previous release. The startup gate
+        // runs before the store migrates, so requiring the current version
+        // there would lock existing users out.
         let previous = crate::library_store::DATABASE_SCHEMA_VERSION - 1;
         let connection = Connection::open(&destination).expect("open database");
         connection

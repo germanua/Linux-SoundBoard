@@ -66,9 +66,8 @@ impl PulseAudioBackend {
         .map_err(|err| format!("PulseAudio local output unavailable: {err}"))
         .ok();
 
-        // Connect into the null-sink loaded by virtual_mic_module::NullSinkModule
-        // so Discord and friends see the soundboard's mixed audio on the
-        // `linuxsoundboard.virtual_mic` source.
+        // Feed the null-sink that virtual_mic_module::NullSinkModule loaded, so
+        // Discord and friends see our mix on `linuxsoundboard.virtual_mic`.
         let virtual_stream = create_playback_stream(
             &mainloop,
             &context,
@@ -212,11 +211,10 @@ fn connect_context(
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
                 // SAFETY: `ml_ref` holds an Rc clone of the mainloop, so the
-                // pointer is valid for the closure's lifetime. `signal()` is
-                // documented by PulseAudio as safe to call from any thread the
-                // threaded mainloop dispatches on; we are inside such a
-                // callback. No aliasing reads occur — only the mainloop itself
-                // accesses its internal state.
+                // pointer stays valid for the closure's life. PulseAudio
+                // documents `signal()` as callable from any thread the threaded
+                // mainloop dispatches on, which is exactly where we are, and
+                // nothing but the mainloop touches its own state.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -287,9 +285,9 @@ fn create_playback_stream(
             })));
     }
 
-    // PulseAudio silently inserts silence on underrun and does NOT surface a
-    // glitch to the consumer; this callback is the only way to count underruns.
-    // Distinguishes upstream bugs from downstream (BT codec / USB DAC re-sync).
+    // PA pads underruns with silence and never tells the consumer, so this
+    // callback is the only way to count them. Also how we tell our own bugs
+    // apart from a downstream re-sync (BT codec, USB DAC).
     {
         let stream_runtime_for_underflow = stream_runtime.clone();
         let name_owned = name.to_string();
@@ -413,11 +411,10 @@ fn playback_buffer_attr(target_samples: usize) -> BufferAttr {
     BufferAttr {
         maxlength: u32::MAX,
         tlength: target_bytes,
-        // prebuf > 0 means: after an underrun, PA will pause playback until
-        // we have re-buffered prebuf bytes. We want a tiny prebuf so the
-        // post-underrun recovery is a short pause rather than a chain of
-        // back-to-back underruns. minreq controls how often PA asks for
-        // more samples; keep that at one mix chunk.
+        // prebuf > 0 means PA pauses after an underrun until that many bytes
+        // are buffered again. Keep it tiny so recovery is one short pause and
+        // not a chain of underruns. minreq is how often PA asks for more:
+        // one mix chunk.
         prebuf: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         minreq: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         fragsize: u32::MAX,

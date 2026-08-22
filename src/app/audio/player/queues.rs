@@ -76,11 +76,10 @@ impl ProcessQueues {
     }
 }
 
-/// Shared-ownership handle to the inter-thread sample queues. Wraps
-/// `Arc<Mutex<ProcessQueues>>` and deliberately exposes only `try_lock` so
-/// production code cannot accidentally block the PipeWire main loop or the
-/// RT callback. The `#[cfg(test)]` `lock()` method exists only for unit tests
-/// that need to inspect queue state after filling them synchronously.
+/// Handle on the inter-thread sample queues. Only `try_lock` is exposed, so
+/// nothing in production can accidentally park the PipeWire loop or the RT
+/// callback. The test-only `lock()` is for filling queues synchronously and
+/// then poking at them.
 #[derive(Clone)]
 pub(super) struct RtSharedQueues(Arc<Mutex<ProcessQueues>>);
 

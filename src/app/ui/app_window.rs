@@ -270,8 +270,9 @@ pub fn build_window(
         dnd_import::build_and_attach_drop_overlay(&window, &toast_overlay, &sound_list, &state);
     drop_overlay.add_overlay(dialog_host.widget());
 
-    // Below a narrow width the sidebar hides and the transport bar reflows.
-    // The same GtkPaned keeps ownership at every size, avoiding reparenting during resize.
+    // Below a narrow width the sidebar hides and the transport reflows. The
+    // same GtkPaned owns the children at every size, so nothing gets
+    // reparented mid-resize.
     let breakpoint_bin = adw::BreakpointBin::new();
     breakpoint_bin.set_size_request(520, 400);
     breakpoint_bin.set_child(Some(&drop_overlay));
@@ -402,10 +403,10 @@ pub fn build_window(
     }
 
     {
-        // The window is shown and hidden by routes the tray never sees — the
+        // The window gets shown and hidden by routes the tray never sees: the
         // close button, and relaunching the binary, which presents the hidden
-        // window through the application's activate handler. Following the
-        // property keeps the menu from claiming the opposite of the truth.
+        // window through the app's activate handler. Follow the property or the
+        // menu ends up claiming the opposite of the truth.
         let state_visible = Arc::clone(&state);
         window.connect_visible_notify(move |window| {
             refresh_tray_menu(&state_visible, window.is_visible());
@@ -416,10 +417,10 @@ pub fn build_window(
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
     window.connect_close_request(move |window| {
-        // The first close-request handler to run, and so the only one that can
-        // stop the teardown before the rest of it starts: bootstrap's handler
-        // shuts the player and the hotkey backends down, which is exactly what
-        // running in the background must not do.
+        // First close-request handler to run, so the only one that can stop
+        // teardown before the rest of it starts: bootstrap's handler kills the
+        // player and the hotkey backends, which is exactly what running in the
+        // background must not do.
         if crate::ui_event_bridge::close_should_hide_to_tray() {
             window.set_visible(false);
             return glib::Propagation::Stop;

@@ -120,9 +120,9 @@ impl V4ToV5Migration {
 }
 
 impl V5ToV6Migration {
-    /// Force auto-gain on and broaden apply-to scope so existing users get
-    /// Soundpad-style normalization across both local preview and mic output.
-    /// Users who prefer it off can toggle in Settings → Loudness.
+    /// Turn auto-gain on and widen its scope to preview + mic, so existing
+    /// users get Soundpad-style normalization. Off-switch lives in
+    /// Settings → Loudness.
     pub fn migrate(config: serde_json::Value) -> Result<serde_json::Value, MigrationError> {
         let mut migrated = config;
         if let Some(obj) = migrated.as_object_mut() {

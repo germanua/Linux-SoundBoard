@@ -1,12 +1,12 @@
 use super::AutoGainDynamicParams;
 
-/// Limiter gain-update cadence in interleaved sample frames. 256 frames ≈ 5.3 ms
-/// at 48 kHz stereo — fast enough to track transients, slow enough that the
-/// per-frame branch overhead is fully amortized.
+/// How often the limiter recomputes gain, in interleaved frames. 256 ≈ 5.3 ms
+/// at 48 kHz stereo: quick enough for transients, slow enough to amortize the
+/// per-frame branch.
 const LIMITER_UPDATE_INTERVAL_FRAMES: usize = 256;
 
-/// Limiter ceiling in linear gain (≈ −0.18 dBFS). Leaves ~2 % headroom for
-/// inter-sample peaks that the digital domain cannot observe directly.
+/// Ceiling in linear gain (≈ −0.18 dBFS). ~2 % headroom for inter-sample peaks
+/// the digital domain can't see.
 const LIMITER_TARGET_PEAK: f32 = 0.98;
 
 pub(super) struct LookAheadLimiter {
@@ -78,7 +78,6 @@ impl LookAheadLimiter {
         sample * self.current_gain
     }
 
-    // No flush(): this limiter is a sliding peak-analysis window, not a delay
-    // line. Every sample is returned immediately by process(), so there is
-    // nothing buffered to drain on source exhaustion.
+    // No flush(): sliding peak window, not a delay line. process() hands back
+    // every sample as it goes, so nothing is left buffered to drain.
 }

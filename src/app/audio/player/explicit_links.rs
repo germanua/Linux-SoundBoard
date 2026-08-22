@@ -1,23 +1,21 @@
-//! Explicit graph-link manager for the virtual-mic feeder.
+//! Explicit graph links for the virtual-mic feeder.
 //!
-//! Background: our feeder is a `Stream/Output/Audio` node. The virtual mic
-//! is a `module-null-sink` with `media.class = Audio/Source/Virtual`.
-//! WirePlumber's session-manager policy refuses to link those two via
-//! AUTOCONNECT — it sees a Playback stream targeting a Source class and
-//! drops the routing decision silently. The plain
-//! `pw::stream::StreamFlags::AUTOCONNECT` path therefore leaves the feeder
-//! dangling and the null-sink dry.
+//! The feeder is a `Stream/Output/Audio` node; the virtual mic is a
+//! `module-null-sink` with `media.class = Audio/Source/Virtual`. WirePlumber's
+//! policy won't link those two over AUTOCONNECT — it sees a Playback stream
+//! aimed at a Source class and silently drops the routing decision, which
+//! leaves the feeder dangling and the null-sink dry.
 //!
-//! Fix: wire the graph ourselves with `core.create_object::<Link>("link-factory", …)`.
-//! That call is the API behind `pw-link`'s CLI — same mechanism, no policy
-//! interference. WirePlumber sees the links exist and lets them be.
+//! So we wire it by hand with
+//! `core.create_object::<Link>("link-factory", …)`, the same API `pw-link`
+//! uses. WirePlumber sees the links already exist and leaves them alone.
 //!
 //! Lifecycle:
-//! - Track the feeder node id + its `output_FL` / `output_FR` port ids.
-//! - Track the virtual-mic node id + its `input_FL` / `input_FR` port ids.
-//! - When all four are visible, create two Links (FL→FL, FR→FR).
-//! - On any of the four going away (PipeWire restart, null-sink reload),
-//!   drop the held Link proxies and recreate when ports reappear.
+//! - track the feeder node id plus its `output_FL` / `output_FR` ports
+//! - track the virtual-mic node id plus its `input_FL` / `input_FR` ports
+//! - once all four are visible, create two links (FL→FL, FR→FR)
+//! - if any of the four disappears (PipeWire restart, null-sink reload), drop
+//!   the link proxies and rebuild when the ports come back
 
 use log::{info, warn};
 use pipewire as pw;
@@ -35,9 +33,8 @@ pub(super) enum AudioChannel {
 }
 
 impl AudioChannel {
-    /// Parse PipeWire's `audio.channel` port property. PipeWire spells front
-    /// channels with hyphenated SPA names — `FL`, `FR` are the short form
-    /// (used in port names and `audio.channel`).
+    /// Parse PipeWire's `audio.channel` port property. `FL`/`FR` are the short
+    /// form it uses in port names and in `audio.channel`.
     pub(super) fn from_prop(value: &str) -> Option<Self> {
         match value.trim() {
             "FL" => Some(Self::FrontLeft),
@@ -52,9 +49,9 @@ pub(super) struct FeederLink {
     _link: pw::link::Link,
 }
 
-/// Idempotent reconciler. Called from registry callbacks any time a Port or
-/// Node global appears or disappears, and when the feeder/null-sink state
-/// changes. Cheap when there's nothing to do.
+/// Idempotent reconciler. Registry callbacks run it whenever a Port or Node
+/// global comes or goes, and when the feeder/null-sink state changes. Cheap
+/// when there is nothing to do.
 pub(super) fn try_link_feeder_to_virtual_mic(state: &mut LoopState) {
     let core_opt = state.backend.as_ref().and_then(|b| b.pipewire_core());
     let Some(core) = core_opt else {
@@ -119,9 +116,9 @@ fn create_link(
         "link.output.port" => output_port.to_string(),
         "link.input.node" => input_node.to_string(),
         "link.input.port" => input_port.to_string(),
-        // We own the link explicitly; it must NOT linger after we drop the
-        // proxy. Without this WirePlumber's session-manager may treat the
-        // link as a persistent user-configured route and keep recreating it.
+        // We own this link, so it must not outlive the proxy. Without the flag
+        // WirePlumber can read it as a persistent user route and keep bringing
+        // it back.
         "object.linger" => "false",
     };
     core.create_object::<pw::link::Link>("link-factory", &props)

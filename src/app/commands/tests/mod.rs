@@ -14,9 +14,8 @@ fn create_test_config() -> Config {
         ),
         ..Config::default()
     };
-    // Disable auto_gain so library commands (add_sound, refresh_sounds, etc.)
-    // do not inadvertently fire the global loudness coordinator. Tests that
-    // exercise loudness-backfill behaviour opt in by setting this explicitly.
+    // auto_gain off so library commands don't accidentally kick the loudness
+    // coordinator. Tests that want backfill behaviour turn it on themselves.
     cfg.settings.auto_gain = false;
     cfg
 }
@@ -36,9 +35,8 @@ fn create_projection_hotkey_manager() -> Arc<Mutex<HotkeyManager>> {
     Arc::new(Mutex::new(HotkeyManager::new_test_noop()))
 }
 
-/// Commits a binding straight to the store. Going through `set_hotkey` would
-/// also try to register with the real backend, which is not available in the
-/// test environment and fails intermittently under load.
+/// Commits a binding straight to the store. `set_hotkey` would also register
+/// with the real backend, which isn't there in tests and flakes under load.
 fn seed_hotkey_binding(
     library: &crate::library_store::LibraryStore,
     owner: crate::library_store::HotkeyBindingOwner,
@@ -64,9 +62,8 @@ fn seed_hotkey_binding(
         .expect("seed hotkey binding");
 }
 
-/// Builds a store fixture directly through the bounded store API. Sounds and
-/// roots are passed in rather than read off a `Config`, which no longer carries
-/// the library.
+/// Store fixture built through the bounded store API. Sounds and roots come in
+/// as arguments, since `Config` no longer carries the library.
 fn create_test_library_with(
     roots: &[String],
     sounds: &[Sound],
@@ -555,8 +552,8 @@ fn test_set_control_hotkey_rejects_duplicate_control_binding() {
     let library = create_test_library_with(&[], &[]);
     let projection =
         crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
-    // The store owns hotkey bindings now, so the conflicting one has to be
-    // committed there rather than set on the settings struct.
+    // The store owns hotkey bindings now, so commit the conflicting one there
+    // instead of setting it on the settings struct.
     seed_hotkey_binding(
         &library,
         crate::library_store::HotkeyBindingOwner::Control(

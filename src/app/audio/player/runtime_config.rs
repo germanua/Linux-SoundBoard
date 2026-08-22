@@ -120,10 +120,9 @@ pub(super) struct StreamRuntimeShared {
     max_virtual_callback_samples: AtomicUsize,
     max_virtual_backlog_samples: AtomicUsize,
     max_mic_backlog_samples: AtomicUsize,
-    // Diagnostic underrun counters. RT callbacks bump these whenever a
-    // callback returns fewer samples than requested (try_lock failed, or the
-    // queue was genuinely empty). The watchdog timer logs cumulative counts at
-    // 10 s cadence so glitch frequency is observable in journalctl.
+    // Underrun counters. RT callbacks bump these when they hand back fewer
+    // samples than asked for: try_lock lost, or the queue really was empty.
+    // The watchdog logs the totals every 10 s so glitches show in journalctl.
     local_underruns: AtomicU64,
     virtual_underruns: AtomicU64,
     lock_contention: AtomicU64,

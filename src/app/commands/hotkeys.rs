@@ -61,10 +61,10 @@ pub fn set_hotkey(
         None => None,
     };
 
-    // A sound holds one binding per tab, so the row to replace is the one for
-    // this tab - not "the" binding for the sound. Ids stay opaque: they are
-    // written into the generated swhkd command, which only accepts
-    // alphanumerics, ':', '-' and '_', and a folder scope contains neither.
+    // A sound holds one binding per tab, so replace the row for *this* tab,
+    // not "the" binding for the sound. Ids stay opaque because they end up in
+    // the generated swhkd command, which only takes alphanumerics, ':', '-'
+    // and '_' — a folder scope has characters outside that set.
     let existing = library
         .hotkey_bindings_for_sound(&id)
         .recv()
@@ -195,10 +195,9 @@ where
     )
 }
 
-/// The binding as stored, so a dialog can open showing what is actually there
-/// rather than a default. Reopening the sound hotkey dialog reads the tab it
-/// is limited to this way, which is what stops a re-save from silently
-/// widening the binding back to every tab.
+/// The binding as stored, so a dialog opens on what is actually there rather
+/// than a default. This is how reopening the sound hotkey dialog knows which
+/// tab the binding is limited to, and why a re-save can't silently widen it.
 pub fn hotkey_binding_async<F>(
     binding_id: String,
     library: LibraryStore,

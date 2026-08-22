@@ -38,8 +38,8 @@ pub enum EngineRequest {
         #[serde(default)]
         sound_true_peak_dbtp: Option<f32>,
     },
-    /// Stop all active sounds then start a new one as a single atomic operation.
-    /// Prevents snapshot polls from observing an intermediate "all stopped" state.
+    /// Stop everything and start the new sound in one shot, so a snapshot poll
+    /// can't catch the "all stopped" gap in between.
     PlayReplace {
         sound_id: String,
         path: String,
@@ -188,9 +188,9 @@ pub fn engine_info_at(path: &Path) -> Result<EngineInfo, EngineIpcError> {
 }
 
 pub fn engine_info_compatible(info: &EngineInfo) -> bool {
-    // The engine deserializes the same config file as the UI, so schema equality
-    // is an intentional compatibility boundary. Schema bumps must deploy and
-    // restart the UI and engine from the same build.
+    // The engine parses the same config file as the UI, so equal schemas is a
+    // deliberate gate: bump the schema and both sides have to come back up from
+    // the same build.
     info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
         && info.config_schema_version == CURRENT_SCHEMA_VERSION
         && info.app_version == APP_VERSION

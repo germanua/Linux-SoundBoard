@@ -1472,18 +1472,17 @@ fn run_idle_optimize_if_due(
 const COUNTS_REPUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Request {
-    /// Whether handling this request can change the counts published to
-    /// diagnostics: live sounds, roots, manual tabs, or active hotkey bindings.
+    /// Whether this request can move the counts diagnostics publishes: live
+    /// sounds, roots, manual tabs, active hotkey bindings.
     ///
-    /// Bulk row writes are deliberately excluded, because a caller that waits on
-    /// each batch drains the queue every time and would recount the whole table
-    /// once per batch — measured at over 30 s for a 156k import that otherwise
-    /// takes about 3 s.
+    /// Bulk row writes are deliberately out. A caller that waits on each batch
+    /// drains the queue every time, so it would recount the whole table once per
+    /// batch — measured at 30 s for a 156k import that otherwise takes ~3 s.
     ///
-    /// `RootScanBatch` rows are staged under a new generation and are not live
-    /// until `FinishRootScan` flips it, so a batch cannot change a count anyway.
-    /// `ApplyBatch` only builds a database offline — legacy migration and
-    /// seeding — and startup publishes the counts once that database is opened.
+    /// `RootScanBatch` rows stage under a new generation and aren't live until
+    /// `FinishRootScan` flips it, so a batch can't change a count anyway.
+    /// `ApplyBatch` only builds a database offline (legacy migration, seeding),
+    /// and startup publishes the counts once that database opens.
     fn changes_library_counts(&self) -> bool {
         match self {
             Request::FinishRootScan { .. }
@@ -1806,25 +1805,24 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     Ok(connection)
 }
 
-/// Created verbatim by both `create_schema` and `migrate_schema_4_to_5`, so a
-/// migrated library and a fresh one are the same database.
+/// Written verbatim by both `create_schema` and `migrate_schema_4_to_5`, so a
+/// migrated library and a fresh one end up the same database.
 ///
-/// A binding owns exactly one of: a sound, a control action, or a tab it
-/// activates. `tab_scope` names the tab a binding is live in, and NULL means
-/// every tab — which is how every binding written before tab scoping is
-/// stored, and why enabling the toggle changes nothing on its own. Scope keys
-/// are `general`, `tab:<public id>`, or `folder:<root>\u{1f}<relative path>`;
-/// the unit separator cannot occur in a path, so the two halves stay
-/// unambiguous.
+/// A binding owns exactly one of: a sound, a control action, or a tab it makes
+/// active. `tab_scope` is the tab it answers in, NULL meaning every tab — which
+/// is how everything written before tab scoping is stored, and why flipping the
+/// toggle on changes nothing by itself. Scope keys are `general`,
+/// `tab:<public id>` or `folder:<root>\u{1f}<relative path>`; the unit separator
+/// can't occur in a path, so the halves stay unambiguous.
 ///
-/// A sound holds at most one binding *per tab*, not one binding: the same
-/// sound shown in two tabs can answer to a different key in each. NULL scopes
+/// A sound holds at most one binding *per tab*, not one binding full stop: the
+/// same sound in two tabs can answer to a different key in each. NULL scopes
 /// compare equal through IFNULL, so "live everywhere" is still one binding.
 ///
-/// There is deliberately no unique index on `normalized`: several sounds may
-/// share one chord. Rejecting a duplicate is a policy decision that depends on
-/// the Settings toggles, so it lives in the command layer, which is also where
-/// the message the user reads comes from.
+/// No unique index on `normalized`, on purpose: several sounds may share a
+/// chord. Whether a duplicate is rejected depends on the Settings toggles, so
+/// that call lives in the command layer — which is also where the message the
+/// user reads comes from.
 const HOTKEY_BINDINGS_SCHEMA: &str = "\
          CREATE TABLE hotkey_bindings(
              binding_id TEXT PRIMARY KEY,
@@ -3478,16 +3476,15 @@ const HIDDEN_FOLDER_FILTER: &str = "EXISTS(
           JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
           WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1)";
 
-/// The sound columns, with the hotkey chosen by `binding_filter`.
+/// The sound columns, with the hotkey picked by `binding_filter`.
 ///
-/// A sound can hold one binding per tab, so which hotkey it "has" depends on
-/// where it is being listed: a binding limited to another tab does not answer
-/// here and must not be shown here either. Callers that list sounds for a tab
-/// pass a filter naming that tab; callers where no tab is in play pass `"1"`
-/// and take whichever binding exists.
+/// A sound holds one binding per tab, so which hotkey it "has" depends on where
+/// it's being listed: a binding limited to another tab doesn't answer here and
+/// must not be shown here either. Listing for a tab means passing a filter that
+/// names it; with no tab in play, pass `"1"` and take whatever binding exists.
 ///
-/// A tab's own binding wins over one that is live everywhere, which is the
-/// same precedence a press resolves with.
+/// A tab's own binding beats one that's live everywhere — same precedence a
+/// press resolves with.
 fn sound_fields(binding_filter: &str) -> String {
     format!(
         "sound.public_id, sound.name, sound.path, sound.source_path,

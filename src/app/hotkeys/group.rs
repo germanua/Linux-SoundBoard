@@ -93,10 +93,10 @@ pub(crate) fn select_from_group(
         return Selection::Inert(InertReason::OutOfScope);
     };
 
-    // Members from different scopes cannot be ranked against each other, and
-    // guessing a winner would make the same key mean different things on
-    // different days. General is the common case: it holds every sound, so a
-    // chord reused in two tabs lands here.
+    // Members from different scopes can't be ranked against each other, and
+    // guessing would make the same key mean different things on different days.
+    // General is the common case — it holds every sound — so a chord reused in
+    // two tabs lands here.
     let scope = members[first].tab_scope.as_deref();
     if candidates
         .iter()
@@ -162,7 +162,7 @@ mod tests {
         select_from_group(members, scope, toggles, mode, last, 0)
     }
 
-    // ── Today's behavior must survive unchanged ─────────────────────────────
+    // Today's behavior must survive unchanged
 
     #[test]
     fn single_unscoped_binding_plays_with_every_toggle_off() {
@@ -190,7 +190,7 @@ mod tests {
         );
     }
 
-    // ── Toggle A: tab scoping ───────────────────────────────────────────────
+    // Toggle A: tab scoping
 
     #[test]
     fn binding_from_another_tab_does_not_fire() {
@@ -246,7 +246,7 @@ mod tests {
         );
     }
 
-    // ── Toggle B: several sounds on one chord ───────────────────────────────
+    // Toggle B: several sounds on one chord
 
     #[test]
     fn group_needs_the_multi_sound_toggle() {
@@ -335,7 +335,7 @@ mod tests {
         }
     }
 
-    // ── Indices refer to the caller's slice, not a filtered copy ────────────
+    // Indices refer to the caller's slice, not a filtered copy
 
     #[test]
     fn returned_index_addresses_the_original_slice() {

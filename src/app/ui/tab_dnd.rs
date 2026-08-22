@@ -53,19 +53,19 @@ pub(super) fn decode_drag_payload(bytes: &Bytes) -> Option<SoundTabDragPayload> 
     payload.normalized()
 }
 
-/// Folder drags use their own MIME type rather than a variant inside the sound
-/// payload. A folder drop reorders or merges whole folders, so mistaking one
-/// for a sound drop would silently rewrite memberships; keeping the types
-/// disjoint makes that impossible rather than merely unlikely.
+/// Folder drags get their own MIME type instead of a flag inside the sound
+/// payload. A folder drop rewrites whole memberships, so mistaking one for a
+/// sound drop would silently scramble the library — disjoint types make that
+/// impossible instead of just unlikely.
 pub(super) const FOLDER_DND_MIME: &str = "application/x-lsb-folder-dnd";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct FolderDragPayload {
     pub root_path: String,
     pub relative_path: String,
-    /// Parent of the dragged folder, `None` for a top-level folder. Reordering
-    /// is only offered among a folder's own siblings, so the drop side compares
-    /// this rather than guessing from the tree.
+    /// Parent of the dragged folder, `None` at top level. Reordering is only
+    /// offered among siblings, so the drop side compares this instead of
+    /// guessing from the tree.
     #[serde(default)]
     pub parent_relative_path: Option<String>,
 }
@@ -94,9 +94,9 @@ pub(super) enum FolderDropZone {
     After,
 }
 
-/// Splits a row into insert / merge / insert bands. The middle half merges and
-/// the outer quarters insert, so a deliberate aim at a row merges while a
-/// pointer resting in the gap between rows reorders.
+/// Splits a row into insert / merge / insert bands: middle half merges, outer
+/// quarters insert. Aim at a row and you merge, hover near the gap and you
+/// reorder.
 pub(super) fn folder_drop_zone(y: f64, height: f64) -> FolderDropZone {
     if height <= 0.0 {
         return FolderDropZone::Into;
@@ -127,9 +127,8 @@ mod tests {
 
     #[test]
     fn the_merge_band_is_the_middle_half() {
-        // A deliberate aim at the row merges; only the edges reorder. Exactly
-        // at the boundaries the row still merges, so a small aim error near the
-        // centre never silently reorders instead.
+        // Aim at the row and it merges; only the edges reorder. The boundaries
+        // themselves still merge, so a slightly off aim never reorders.
         let height = 100.0;
         assert_eq!(folder_drop_zone(25.0, height), FolderDropZone::Into);
         assert_eq!(folder_drop_zone(75.0, height), FolderDropZone::Into);

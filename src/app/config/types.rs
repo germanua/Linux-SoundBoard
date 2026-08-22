@@ -230,29 +230,24 @@ pub enum ListStyle {
     Card,
 }
 
-// Routing mode for the user's microphone.
-//
-// The soundboard works by being the system default microphone — apps (Discord,
-// Arma, OBS, …) just see `linuxsoundboard.virtual_mic` as the default and use
-// it. EasyEffects uses the same pattern (its `easyeffects_source` is the
-// default), and we sit one layer downstream of it: real mic → EE →
-// easyeffects_source → soundboard capture → soundboard mix → virtual_mic =
-// default.
-//
-// `Default` is what users want 99% of the time. `Manual` is an escape hatch
-// for users who set their default source themselves (e.g. via pavucontrol)
-// and don't want us to interfere.
+/// What we do with the user's default microphone.
+///
+/// The soundboard works by *being* the default mic: Discord, Arma, OBS and the
+/// rest just pick up `linuxsoundboard.virtual_mic`. EasyEffects pulls the same
+/// trick, and we sit one layer downstream of it — real mic → EE →
+/// easyeffects_source → soundboard capture → mix → virtual_mic = default.
+///
+/// `Default` is what people want 99% of the time. `Manual` is the escape hatch
+/// for anyone who picks their own default source in pavucontrol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DefaultSourceMode {
-    // Soundboard claims the system default mic at engine start and re-asserts
-    // if something else takes it over (same behaviour as EasyEffects). The
-    // claim is API-level — no config files are written by us; persistence
-    // across reboots is handled automatically by WirePlumber's `default-nodes`
-    // module.
+    /// Claim the default mic at engine start and re-assert if something takes
+    /// it, same as EasyEffects does. API-level only — we write no config files;
+    /// WirePlumber's `default-nodes` module handles surviving a reboot.
     #[default]
     Default,
-    // Soundboard never changes the system default. The user is on their own
-    // for choosing the default mic per-app or via pavucontrol.
+    /// Never touch the system default. The user picks their mic per-app or in
+    /// pavucontrol.
     Manual,
 }
 
@@ -655,9 +650,8 @@ pub struct Settings {
     pub default_source_mode: DefaultSourceMode,
     #[serde(default)]
     pub mic_latency_profile: MicLatencyProfile,
-    /// App-name / process-binary patterns that the autoroute filter must NOT
-    /// touch. Case-insensitive substring match; leading/trailing whitespace is
-    /// trimmed; empty entries are ignored.
+    /// App-name / process-binary patterns the autoroute filter must leave
+    /// alone. Case-insensitive substring match, trimmed, empties ignored.
     #[serde(default)]
     pub excluded_apps: Vec<String>,
     #[serde(default)]

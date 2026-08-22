@@ -115,10 +115,9 @@ impl SwhkdBackend {
 
         let mut config = SwhkdConfig::new(pipe_path.clone())?;
 
-        // Always run a fresh, app-managed swhkd. Any daemon already running is
-        // either an orphan from a previous session or a foreign instance whose
-        // state we cannot trust; restart it so this session owns a clean daemon
-        // that loads our config and is reliably torn down on exit.
+        // Always run our own swhkd. Anything already up is either an orphan from
+        // a previous session or someone else's, and we can't trust its state, so
+        // restart it and own the daemon we later have to kill.
         if SwhkdProcesses::has_running_daemons() {
             warn!("Found pre-existing swhkd/swhks daemons; restarting them under app management");
             SwhkdProcesses::terminate_stale_daemons();

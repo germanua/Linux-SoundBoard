@@ -37,21 +37,19 @@ thread_local! {
     static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
     static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
 
-    /// Answers "should the close button hide the window instead of quitting?".
-    /// Owned by `bootstrap`, which knows both the setting and whether a panel
-    /// is really showing the icon, but consulted from the window's own
-    /// close-request handler — the earliest one to run, and so the only place
-    /// that can stop the teardown before it starts.
+    /// Answers "should close hide the window instead of quitting?". `bootstrap`
+    /// owns it, since it knows the setting and whether a panel is really showing
+    /// the icon, but the window's close-request handler is what asks: it runs
+    /// first and is the only place that can stop teardown.
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
 
     /// Set once when the user asks to quit from the tray. Without it, closing
     /// the window would consult the policy above and hide it again.
     static QUIT_REQUESTED: Cell<bool> = const { Cell::new(false) };
 
-    /// Set to true on the GTK main thread immediately before dispatching a
-    /// user-initiated play request. Prevents Continue-mode auto-advance from
-    /// firing on the transient "all stopped" snapshot that the engine emits
-    /// between stop_all() and the subsequent play() IPC calls.
+    /// Set on the main thread just before a user-initiated play. Stops
+    /// Continue-mode auto-advance firing on the transient "all stopped"
+    /// snapshot the engine emits between stop_all() and play().
     static EXPLICIT_PLAY_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -208,13 +206,13 @@ pub fn post_loudness_status_refresh() {
     });
 }
 
-/// Register the GTK-thread handler that receives snapshots from the audio engine.
-/// Must be called on the GTK main thread.
+/// GTK-thread handler for engine snapshots. Main thread only.
 pub fn set_snapshot_handler(f: impl FnMut(PlayerSnapshot) + 'static) {
     SNAPSHOT_HANDLER.with(|h| *h.borrow_mut() = Some(Box::new(f)));
 }
 
-/// Called by the audio engine (via glib::MainContext::default().invoke()) on the GTK thread.
+/// Called from the audio engine, hopped onto the GTK thread by
+/// `MainContext::invoke`.
 pub fn dispatch_snapshot(snapshot: PlayerSnapshot) {
     SNAPSHOT_HANDLER.with(|h| {
         if let Some(handler) = h.borrow_mut().as_mut() {
@@ -223,8 +221,7 @@ pub fn dispatch_snapshot(snapshot: PlayerSnapshot) {
     });
 }
 
-/// Mark that a user-initiated sound play has just been dispatched.
-/// Must be called on the GTK main thread before `play_sound_async`.
+/// Flag a user-initiated play. Main thread, before `play_sound_async`.
 pub fn mark_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(true));
 }
@@ -235,8 +232,7 @@ pub fn clear_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(false));
 }
 
-/// Returns true if a user-initiated play has been dispatched but the resulting
-/// playback has not yet appeared in a snapshot.
+/// True while a user-initiated play is out but hasn't shown up in a snapshot.
 pub fn is_explicit_play_pending() -> bool {
     EXPLICIT_PLAY_PENDING.with(|p| p.get())
 }

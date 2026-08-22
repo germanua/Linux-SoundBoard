@@ -1599,9 +1599,9 @@ fn benchmark_156k_bounded_store() {
         "manual tab counts took {elapsed:?}"
     );
 
-    // The worker recomputes these counts for diagnostics once its queues drain
-    // after a mutation. It shares the worker with visible page loads, so the
-    // recount has to stay inside the same per-query budget.
+    // The worker recomputes these for diagnostics once its queues drain after a
+    // mutation. It shares that worker with visible page loads, so the recount
+    // has to fit the same per-query budget.
     let stats_started = std::time::Instant::now();
     let stats = wait(store.stats());
     let stats_elapsed = stats_started.elapsed();
@@ -1764,12 +1764,10 @@ fn benchmark_20k_wide_folder_tree_store() {
         );
         assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
     }
-    // `store` (and its worker thread's SQLite connection) is dropped here,
-    // releasing the file so a plain connection can stamp the two meta rows
-    // production startup requires. This mirrors what
-    // legacy_migration::initialize_empty_library does for a fresh database;
-    // that helper itself can't be reused because it refuses to open a path
-    // that already exists.
+    // `store` and its worker's SQLite connection drop here, freeing the file so
+    // a plain connection can stamp the two meta rows production startup wants.
+    // Same thing legacy_migration::initialize_empty_library does for a fresh
+    // database — can't reuse that helper, it refuses an existing path.
     {
         let connection = rusqlite::Connection::open(&db_path).expect("open raw connection");
         connection

@@ -186,12 +186,11 @@ impl PagedSoundModel {
             return;
         };
 
-        // Reserve page 0 up front so the first-page fetch below and the
-        // count fetch that follows race freely: whichever arrives first
-        // publishes readable rows without waiting on the other, and the
-        // reservation makes the scroll-triggered path (`load_position`,
-        // `ensure_page`) treat page 0 as already in flight instead of
-        // issuing a second, redundant request for it.
+        // Reserve page 0 up front so the first-page fetch and the count fetch
+        // below can race freely: whoever lands first publishes readable rows
+        // without waiting on the other, and the reservation makes the scroll
+        // path (`load_position`, `ensure_page`) see page 0 as already in flight
+        // instead of asking for it a second time.
         let placeholders = (0..PAGE_SIZE as u32)
             .map(|offset| self.placeholder(generation, offset))
             .collect();
@@ -606,17 +605,15 @@ impl PagedSoundModel {
         true
     }
 
-    /// Reconciles a provisional total (published from a first page that
-    /// arrived before the exact count) with the exact count once it arrives.
+    /// Reconcile a provisional total — published from a first page that beat
+    /// the exact count — with the real count once it turns up.
     ///
-    /// `total` is always exactly what has been announced to GTK: every site
-    /// that changes it emits the matching `items_changed` in the same
-    /// statement sequence. So the delta against the previous total is
-    /// precisely what GTK still needs to hear. Rows already announced are
-    /// left untouched; only the size delta is announced, which is what keeps
-    /// the already-published first page's row identities intact. When
-    /// nothing has been published yet (previous total 0) this degenerates to
-    /// the plain count-only announcement.
+    /// `total` is always exactly what GTK has been told: every site that
+    /// changes it emits the matching `items_changed` in the same statement
+    /// sequence, so the delta against the old total is precisely what GTK still
+    /// needs to hear. Announcing only the size delta leaves the first page's
+    /// row identities intact. With nothing published yet (previous total 0)
+    /// this degenerates to a plain count announcement.
     fn apply_exact_total(&self, generation: u64, exact_total: u32) -> bool {
         let imp = self.imp();
         if imp.generation.get() != generation {
@@ -636,18 +633,15 @@ impl PagedSoundModel {
     }
 
     fn notify_replacements(&self, generation: u64, start: u32, len: u32, record_first_rows: bool) {
-        // Never report a change for a row past `total`, i.e. past what GTK
-        // has been told exists. `reload` reserves page 0 with a full
-        // PAGE_SIZE of placeholders *before* any count is known, so that
-        // page's vector — unlike every page `ensure_page` builds, which is
-        // sized `min(total - start, PAGE_SIZE)` — is not bounded by `total`.
-        // If the exact count lands first and is smaller than the page query
-        // subsequently returns (the two are independent queries; the store
-        // can gain rows between them), `install_page`/`fail_page` would
-        // otherwise announce replacements for rows beyond `total` and trip
-        // the same list-item-manager assertion. Clamping here covers every
-        // caller at once; the two that already clamp to `total` themselves
-        // are unaffected.
+        // Never report a change past `total`, i.e. past what GTK has been told
+        // exists. `reload` reserves page 0 with a full PAGE_SIZE of placeholders
+        // before any count is known, so unlike the pages `ensure_page` builds
+        // (sized `min(total - start, PAGE_SIZE)`) that vector isn't bounded by
+        // `total`. If the exact count lands first and comes in smaller than what
+        // the page query then returns — independent queries, and the store can
+        // gain rows between them — `install_page`/`fail_page` would announce
+        // rows beyond `total` and trip the list-item-manager assertion. Clamping
+        // here covers every caller; the two that already clamp are unaffected.
         let len = len.min(self.imp().total.get().saturating_sub(start));
         if len == 0 {
             return;
@@ -1091,32 +1085,28 @@ mod tests {
         );
     }
 
-    // Note for anyone adding a test here that needs a scheduled idle
-    // callback (`notify_replacements`, and anything else routed through
-    // `glib::idle_add_local`) to actually *run*: do not pump
+    // Heads up if you add a test here that needs a scheduled idle callback
+    // (`notify_replacements`, or anything else going through
+    // `glib::idle_add_local`) to actually run: do NOT pump
     // `glib::MainContext::default()` from a test in this module.
     //
-    // `glib::idle_add_local`/`idle_add_local_once` always attach to the
-    // global default `MainContext` — verified in the vendored glib 0.20.12
-    // source, where the context is hardcoded rather than taken from the
-    // thread-default, so a test cannot redirect them to a private, isolated
-    // context. Several tests in this module (e.g.
-    // `count_arriving_first_then_page_installs_without_duplicating_rows`,
-    // via `install_page` -> `notify_replacements`) schedule real, non-Send
-    // idle closures on that shared context and never drain them, and each
-    // closure is bound to whichever OS thread the Rust test harness ran its
-    // test on. The first test that pumps the default context can therefore
-    // be handed a leftover closure belonging to a different thread and
-    // aborts the entire test binary with
-    // `thread_guard.rs:54: Value accessed from different thread than where
-    // it was created` (SIGABRT — a non-unwinding panic, so it cannot be
-    // caught).
+    // `idle_add_local`/`idle_add_local_once` always attach to the global
+    // default `MainContext` — hardcoded in the vendored glib 0.20.12 rather
+    // than taken from the thread-default — so a test cannot redirect them to a
+    // private context. Several tests here (e.g.
+    // `count_arriving_first_then_page_installs_without_duplicating_rows`, via
+    // `install_page` -> `notify_replacements`) schedule real non-Send idle
+    // closures on that shared context and never drain them, and each closure is
+    // pinned to whichever OS thread the harness ran its test on. The first test
+    // to pump the default context can pick up a leftover closure from another
+    // thread and take the whole binary down with `thread_guard.rs:54: Value
+    // accessed from different thread than where it was created` — SIGABRT, so
+    // uncatchable.
     //
-    // This was reproduced directly: such a test passed in isolation and
-    // reliably killed the full `cargo test` run when executed after its
-    // siblings. It is a structural property of this test binary (one shared
-    // global `MainContext`, one OS thread per test), not something an
-    // individual test can work around. Assert on state that is set
+    // Reproduced directly: such a test passed in isolation and reliably killed
+    // the full `cargo test` run when it ran after its siblings. Structural to
+    // this binary (one shared global MainContext, one OS thread per test), not
+    // something a single test can work around. Assert on state that is set
     // synchronously instead.
 
     #[test]

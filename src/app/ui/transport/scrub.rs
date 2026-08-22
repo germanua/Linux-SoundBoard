@@ -95,10 +95,10 @@ impl TransportInner {
                 self.is_continue_suppressed(),
             );
             if should_continue {
-                // If a user-initiated play was just dispatched, this empty snapshot
-                // is the transient gap between stop_all() and play() in the worker
-                // thread — not a natural end-of-track.  Skip this cycle; the new
-                // sound will appear in the next snapshot.
+                // A user-initiated play was just dispatched, so this empty
+                // snapshot is the gap between stop_all() and play() in the
+                // worker, not a real end of track. Skip it; the new sound
+                // turns up in the next snapshot.
                 if crate::ui_event_bridge::is_explicit_play_pending() {
                     return;
                 }
@@ -134,7 +134,7 @@ impl TransportInner {
                 interaction.clone()
             };
 
-            // Check cache: only lock config when the play_id changes (new sound started)
+            // Only lock config when the play_id changes, i.e. a new sound started.
             let same_play = self
                 .active_track
                 .borrow()

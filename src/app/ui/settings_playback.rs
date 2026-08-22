@@ -318,8 +318,8 @@ pub(super) fn build_playback_groups(
         {
             let state2 = Arc::clone(&state);
             analyze_btn.connect_clicked(move |btn| {
-                // The in-flight flags live on the coordinators; querying the
-                // library for them blocked this click behind the busy worker.
+                // In-flight lives on the coordinators. Asking the library instead
+                // parked this click behind the busy worker.
                 let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
                     || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
@@ -359,8 +359,8 @@ pub(super) fn build_playback_groups(
         {
             let state2 = Arc::clone(&state);
             refine_btn.connect_clicked(move |btn| {
-                // The in-flight flags live on the coordinators; querying the
-                // library for them blocked this click behind the busy worker.
+                // Same as above: coordinators, not the library, or the click waits
+                // on the busy worker.
                 let in_flight = state2.loudness_coordinators.backfill.is_in_flight()
                     || state2.loudness_coordinators.refinement.is_in_flight();
                 if in_flight {
@@ -404,8 +404,8 @@ pub(super) fn build_playback_groups(
         let refine_btn_weak = refine_btn.downgrade();
 
         // One status query at a time, off the GTK thread. Refinement posts a
-        // refresh every few sounds, and reading the summary synchronously here
-        // blocked the main loop against the busy SQLite worker.
+        // refresh every few sounds, and reading the summary inline here pinned
+        // the main loop to the busy SQLite worker.
         let status_query_in_flight = Rc::new(std::cell::Cell::new(false));
         let status_query_pending = Rc::new(std::cell::Cell::new(false));
         let refresh_loudness_status: Rc<dyn Fn()> = Rc::new({
@@ -471,8 +471,7 @@ pub(super) fn build_playback_groups(
                                 log::warn!("Failed to read loudness status summary: {error}")
                             }
                         }
-                        // A refresh that arrived mid-query is answered once,
-                        // not queued per request.
+                        // Refreshes that land mid-query collapse into one.
                         if pending.replace(false) {
                             crate::ui_event_bridge::post_loudness_status_refresh();
                         }
@@ -492,7 +491,7 @@ pub(super) fn build_playback_groups(
             });
         }
 
-        // Refresh once when the settings overlay opens; completion callbacks refresh explicitly.
+        // Refresh once when the overlay opens; completions refresh themselves.
         {
             let refresh_loudness_status = Rc::clone(&refresh_loudness_status);
             if let Some(visibility_widget) = visibility_weak.upgrade() {

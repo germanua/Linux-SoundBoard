@@ -10,9 +10,8 @@ pub fn default_allow_multiple_playbacks() -> bool {
     false
 }
 
-/// Both tray settings default on. Where a session has no tray the icon simply
-/// never appears and the close button keeps quitting, so defaulting on costs
-/// those users nothing.
+/// Both tray settings default on. With no tray in the session the icon just
+/// never shows and close still quits, so it costs those users nothing.
 pub fn default_tray_setting() -> bool {
     true
 }

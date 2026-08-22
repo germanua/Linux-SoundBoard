@@ -1,15 +1,12 @@
-//! The playback dispatch surface the `commands` layer drives.
+//! The playback surface the `commands` layer drives.
 //!
-//! `commands::playback` does not need a concrete [`AudioPlayer`]; it only needs
-//! something it can tell to play, stop, seek, and query. Depending on this
-//! trait instead of the concrete type lets tests substitute a double and assert
-//! what was dispatched (e.g. "after `play_sound(\"x\")` the engine was told to
-//! play `x`") without a live audio backend.
+//! `commands::playback` doesn't need a concrete [`AudioPlayer`], only something
+//! it can tell to play, stop, seek and query. Going through the trait lets
+//! tests swap in a double and assert on dispatches with no live backend.
 //!
-//! The trait is deliberately narrow: it covers only the playback transport, not
-//! mic/source routing or auto-gain configuration. Those remain on the concrete
-//! `AudioPlayer` because their command handlers are exercised through config
-//! state, not engine dispatch.
+//! Narrow on purpose: transport only, no mic/source routing and no auto-gain.
+//! Those stay on `AudioPlayer`, since their handlers are driven through config
+//! state rather than engine dispatch.
 
 use super::player::{AudioPlayer, EngineError, PlaybackPosition};
 
@@ -32,9 +29,8 @@ pub trait PlaybackEngine: Send + Sync {
     fn get_playback_positions(&self) -> Vec<PlaybackPosition>;
 }
 
-/// The production implementation: forward to the inherent methods on
-/// [`AudioPlayer`]. Kept as thin pass-throughs so the trait adds an injection
-/// seam without changing any runtime behavior.
+/// Production impl: thin pass-throughs to [`AudioPlayer`]'s inherent methods,
+/// so the trait buys an injection seam and nothing else.
 impl PlaybackEngine for AudioPlayer {
     fn play(
         &self,
