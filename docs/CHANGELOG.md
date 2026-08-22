@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Fixed
 
+- **The playing row lost its highlight on every second line:** The alternating row shading and the playing/active row background both target the cell node with the same CSS specificity, so the one declared later won — and that was the shading. A sound on an even row kept its left accent bar but was painted the same colour as an idle row, which made the highlight look like it appeared only half the time. The shading now skips cells that carry a playing or active state, so the highlight no longer depends on where the sound sits in the list.
 - **AppImage showed the desktop's icons instead of its own:** The AppImage generates a hicolor `index.theme` for its bundled application icons, and `AppRun` puts that directory ahead of the host in `XDG_DATA_DIRS`, so it becomes the hicolor index the app itself reads. GTK counts the resource paths registered by the application as part of hicolor and only scans the subdirectories the index declares; the generated file listed the `*/apps` sizes and nothing else, so every bundled symbolic icon in `scalable/actions`, `scalable/devices`, and `scalable/places` was invisible and each toolbar button silently fell back to whatever the desktop icon theme provided. The index now declares those contexts, and `packaging/smoke-check.sh` fails if a new one is added without it.
 
 ### Changed

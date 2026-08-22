@@ -397,7 +397,8 @@ row.appearance-choice-row {
 }
 
 /* Row styling for sound list */
-columnview row:nth-child(even) > cell {
+columnview row:nth-child(even)
+  > cell:not(.sound-cell-playing):not(.sound-cell-active) {
   background-color: rgba(168, 141, 82, 0.03);
 }
 
