@@ -12,13 +12,10 @@ pub(super) fn capture_stream_missing(state: &LoopState) -> bool {
     }
 }
 
-/// Watchdog for the mic-passthrough capture stream. Covers two races we hit
-/// for real:
-///   1. We start before the registry lists any physical mic, so the first
-///      `recreate_capture_stream` finds nothing. Users used to have to toggle
-///      passthrough off and back on to recover.
-///   2. The preferred source (EasyEffects and friends) comes up after us, and
-///      now gets wired in when it appears.
+/// Watchdog for the mic-passthrough capture stream. Two races it covers: we
+/// start before the registry lists any mic, and the preferred source
+/// (EasyEffects and friends) comes up after us. Both used to need a manual
+/// passthrough off/on to recover.
 pub(super) fn ensure_capture_stream_present(state: &mut LoopState) {
     if !state.runtime.mic_passthrough {
         state.capture_health_miss_ticks = 0;

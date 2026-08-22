@@ -218,10 +218,8 @@ pub(super) fn rebuild_sound_folder_rows(
     }
 }
 
-/// Folders the user removed from the sidebar.
-///
-/// Removal only hides them, so they have to surface somewhere undoable or it is
-/// a one-way door. Returns the group plus a callback that reloads it.
+/// Folders the user removed from the sidebar. Removal only hides them, so they
+/// need to surface somewhere undoable. Returns the group and a reload callback.
 pub(super) fn build_hidden_folders_group(
     state: Arc<AppState>,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,

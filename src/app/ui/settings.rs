@@ -182,10 +182,9 @@ pub fn build_settings_overlay(
     overlay
 }
 
-/// Tray icon and what the close button does.
-///
-/// Closing to the tray only ever happens while an icon is really showing, so
-/// leaving both on costs nothing on a desktop that has no tray.
+/// Tray icon and what the close button does. Closing to tray only happens
+/// while an icon is really showing, so both defaulting on costs nothing where
+/// there is no tray.
 fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder()
         .title("System Tray")
@@ -474,9 +473,8 @@ fn build_general_page(
                                         let cancel_done = Rc::clone(&add_folder_cancel3);
                                         let stop_btn_done = scan_stop_btn3.clone();
                                         // Claim the generation before
-                                        // dispatching — the completion runs
-                                        // on this same main loop, so it can't
-                                        // fire before we return.
+                                        // dispatching; the completion is on
+                                        // this main loop and can't beat us.
                                         let scan_id =
                                             scan_generation3.get().wrapping_add(1);
                                         scan_generation3.set(scan_id);
@@ -529,10 +527,10 @@ fn build_general_page(
                                             },
                                         ) {
                                             Ok(cancelled) => {
-                                                // The scan is the slow part.
-                                                // Park Stop beside the row and
-                                                // leave the row free to take
-                                                // another folder.
+                                                // Scanning is the slow part.
+                                                // Stop goes beside the row,
+                                                // row stays free for another
+                                                // folder.
                                                 *add_folder_cancel3.borrow_mut() = Some(cancelled);
                                                 add_folder_row_done
                                                     .set_subtitle("Scanning for audio files…");

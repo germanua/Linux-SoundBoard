@@ -1,9 +1,6 @@
-//! PipeWire registry event parsers and graph-state helpers.
-//!
-//! Called from the `global`/`global_remove` callbacks set up in
-//! `create_pipewire_backend`. Each parser takes a raw `GlobalObject` and hands
-//! back a typed value or `None`; the caller decides which `LoopState` map to
-//! update.
+//! Registry event parsers, called from the `global`/`global_remove` callbacks
+//! in `create_pipewire_backend`. Raw `GlobalObject` in, typed value or `None`
+//! out; the caller picks which `LoopState` map to update.
 
 use super::*;
 
@@ -18,10 +15,9 @@ pub(super) fn source_from_global(
 
     let props = global.props?;
     let media_class = props.get(*pw::keys::MEDIA_CLASS)?;
-    // PipeWire-native virtual sources (EasyEffects, NoiseTorch, our own mic)
-    // advertise Audio/Source/Virtual; physical mics use plain Audio/Source.
-    // Take both, so routing through EasyEffects gives processed mic plus
-    // soundboard in one feed.
+    // Virtual sources (EasyEffects, NoiseTorch, our own mic) advertise
+    // Audio/Source/Virtual, physical mics plain Audio/Source. Take both, so an
+    // EasyEffects chain still gets processed mic + soundboard in one feed.
     if media_class != "Audio/Source" && media_class != "Audio/Source/Virtual" {
         return None;
     }
@@ -40,14 +36,11 @@ pub(super) fn source_from_global(
         .get("object.serial")
         .and_then(|value| value.parse::<u64>().ok());
     let is_virtual = media_class == "Audio/Source/Virtual";
-    // device.id is the real hardware signal here. The registry `global` event
-    // carries neither device.api nor factory.name — those only exist in bound
-    // node info, which is what `pw-dump` prints — but it does expose device.id
-    // for anything backed by a Device (alsa/bluez/usb capture and playback).
-    // Software sources (null sinks, loopbacks, filter chains, EasyEffects,
-    // screenshare mics) have none. The device.api list stays as a fallback for
-    // the rare setups that do surface it, and is an allow-list rather than "any
-    // device.api" so an exotic software node can't slip through.
+    // device.id is the hardware signal: the registry `global` event has no
+    // device.api or factory.name (those live in bound node info, what `pw-dump`
+    // prints) but does carry device.id for anything behind a Device. Software
+    // sources have none. The device.api list is a fallback for setups that do
+    // surface it, allow-listed so an exotic software node can't slip through.
     let is_hardware_backed = props.get("device.id").is_some()
         || matches!(
             props.get(*pw::keys::DEVICE_API),

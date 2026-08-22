@@ -1,7 +1,5 @@
-//! The `Metadata` map a media-control widget reads.
-//!
-//! Pure `glib::Variant` construction so the shapes can be pinned by unit tests;
-//! the D-Bus side lives in the parent module.
+//! The `Metadata` map a media-control widget reads. Pure `glib::Variant`
+//! building so unit tests can pin the shapes; D-Bus lives in the parent.
 
 use glib::prelude::ToVariant;
 use glib::variant::{DictEntry, Variant};
@@ -28,11 +26,9 @@ pub(crate) fn playback_status(now: Option<&NowPlaying>) -> &'static str {
     }
 }
 
-/// A track path built from a sound id.
-///
-/// D-Bus object paths allow only `[A-Za-z0-9_]` between slashes, and the app's
-/// ids are UUIDs, so the hyphens have to go. Anything else unexpected is
-/// replaced too rather than producing a path that fails to serialise.
+/// Track path from a sound id. D-Bus object paths only allow `[A-Za-z0-9_]`
+/// between slashes and our ids are UUIDs, so the hyphens go. Anything else odd
+/// gets replaced too, rather than emit a path that won't serialise.
 pub(crate) fn track_id(sound_id: &str) -> glib::variant::ObjectPath {
     let mut path = String::with_capacity(sound_id.len() + 24);
     path.push_str("/com/linuxsoundboard/track/");
@@ -50,10 +46,8 @@ pub(crate) fn track_id(sound_id: &str) -> glib::variant::ObjectPath {
         .expect("every character is sanitised to an object-path character")
 }
 
-/// The `a{sv}` a host reads to draw the now-playing card.
-///
-/// With nothing playing this is deliberately empty: that is how a player says
-/// "no track" rather than leaving stale text on screen.
+/// The `a{sv}` a host reads to draw the now-playing card. Empty when nothing is
+/// playing — that's how a player says "no track" instead of leaving stale text.
 pub(crate) fn build(now: Option<&NowPlaying>) -> Variant {
     let Some(now) = now else {
         return Variant::array_from_iter::<DictEntry<String, Variant>>(Vec::<Variant>::new());

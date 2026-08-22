@@ -1,15 +1,10 @@
 //! Typed error for the command layer.
 //!
 //! [`CommandError::SourceUnavailable`] replaced the old
-//! `SOURCE_UNAVAILABLE_ERROR_PREFIX` + `starts_with` sniffing the sound list
-//! used to do.
-//!
-//! Engine/IPC, loudness and hotkey failures are still `String` at their source,
-//! so they get wrapped in named variants here instead of leaking a bare String
-//! upward.
-//!
-//! `Display` keeps the old wording on purpose, so toasts and log lines read the
-//! same as before.
+//! `SOURCE_UNAVAILABLE_ERROR_PREFIX` + `starts_with` sniffing. Engine, loudness
+//! and hotkey failures are still `String` at the source and get wrapped in
+//! named variants here rather than leaking upward. `Display` keeps the old
+//! wording so toasts and log lines don't change.
 
 /// An error returned by a command-layer function.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

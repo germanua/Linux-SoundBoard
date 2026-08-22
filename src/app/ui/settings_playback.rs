@@ -9,11 +9,9 @@ use crate::app_state::AppState;
 use crate::commands;
 use crate::config::{AutoGainApplyTo, AutoGainMode};
 
-/// Both loudness buttons double as Stop while a run is going. `true` means the
-/// click was spent cancelling and the caller should not start anything.
-///
-/// In-flight is read off the coordinators rather than the library: asking the
-/// library parked the click behind the busy worker.
+/// Both loudness buttons double as Stop while a run is going; `true` means the
+/// click was spent cancelling. In-flight comes off the coordinators, not the
+/// library — asking the library parked the click behind the busy worker.
 fn cancelled_running_analysis(state: &AppState) -> bool {
     let in_flight = state.loudness_coordinators.backfill.is_in_flight()
         || state.loudness_coordinators.refinement.is_in_flight();

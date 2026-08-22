@@ -1,19 +1,13 @@
-//! `LoopState` — everything the PipeWire engine loop thread owns.
+//! `LoopState` — everything the PipeWire loop thread owns.
 //!
-//! The fields split into five groups and the split is load-bearing: each group
-//! has exactly one writer. A new field that fits none of them probably wants a
-//! sub-struct of its own.
+//! Five field groups, one writer each. That is load-bearing; a new field
+//! fitting none of them probably wants its own sub-struct.
 //!
-//! - config (`runtime`): written once at init, read by everyone
-//! - registry mirror (`sources` .. `default_source_command_in_flight`): written
-//!   only by the `global`/`global_remove` callbacks, read by command handlers
-//!   and the capture watchdog
-//! - playback (`active_playback` .. `next_playback_order`): mix tick and
-//!   command handlers write, snapshot publish reads
-//! - RT shared (`queues` .. `mic_scratch_buffer`): mix tick writes on the main
-//!   loop, the process callback reads from the RT side through `try_lock`
-//! - UI publish (`snapshot` .. `last_had_active`): `publish_snapshot` writes,
-//!   the UI thread reads the `Arc<RwLock>`
+//! - config: written at init, read by everyone
+//! - registry mirror: the `global`/`global_remove` callbacks only
+//! - playback: mix tick and command handlers write, snapshot publish reads
+//! - RT shared: mix tick writes, the process callback `try_lock`s from the RT side
+//! - UI publish: `publish_snapshot` writes, the UI thread reads the `RwLock`
 
 use super::*;
 
@@ -28,10 +22,8 @@ pub(super) struct LoopState {
     pub(super) backend: Option<BackendState>,
     pub(super) sources: HashMap<u32, SourceDescriptor>,
     pub(super) sinks: HashMap<u32, SinkDescriptor>,
-    // Explicit-link state, filled by the registry callback as Node and Port
-    // globals turn up. Once all four ids are known — feeder node plus its two
-    // output ports, virtual mic plus its two input ports —
-    // `try_link_feeder_to_virtual_mic` builds the FL/FR links.
+    // Explicit-link state, filled in as Node and Port globals turn up. All four
+    // ids known -> `try_link_feeder_to_virtual_mic` builds the FL/FR links.
     pub(super) feeder_node_id: Option<u32>,
     pub(super) feeder_output_ports: HashMap<AudioChannel, u32>,
     pub(super) virtual_mic_node_id: Option<u32>,
@@ -55,10 +47,9 @@ pub(super) struct LoopState {
     pub(super) finished_playbacks: HashMap<String, PlaybackSnapshot>,
     pub(super) next_playback_order: u64,
 
-    // RT shared. `queues` goes to the PipeWire process callback, which only
-    // ever `try_lock`s it, never blocks. The three buffers are main-loop
-    // scratch for the mix tick, pre-allocated so the tick never reaches the
-    // allocator while holding the queues lock.
+    // RT shared. The process callback only ever `try_lock`s `queues`, never
+    // blocks. The three buffers are mix-tick scratch, pre-allocated so the tick
+    // never hits the allocator while holding the lock.
     pub(super) queues: RtSharedQueues,
     pub(super) stream_runtime: std::sync::Arc<StreamRuntimeShared>,
     pub(super) ultra_starvation_ticks: u32,

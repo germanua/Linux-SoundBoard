@@ -176,10 +176,8 @@ impl FromStr for PlayMode {
 }
 impl_string_serde_enum!(PlayMode);
 
-/// How a hotkey shared by several sounds picks which one to play.
-///
-/// Deliberately separate from [`PlayMode`]: that one decides what happens when
-/// a sound *finishes*, this one decides what a *press* selects.
+/// How a hotkey shared by several sounds picks which one to play. Not
+/// [`PlayMode`] — that one is about what happens when a sound *finishes*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GroupMode {
     /// Replay whichever member was played last.
@@ -232,13 +230,13 @@ pub enum ListStyle {
 
 /// What we do with the user's default microphone.
 ///
-/// The soundboard works by *being* the default mic: Discord, Arma, OBS and the
-/// rest just pick up `linuxsoundboard.virtual_mic`. EasyEffects pulls the same
-/// trick, and we sit one layer downstream of it — real mic → EE →
-/// easyeffects_source → soundboard capture → mix → virtual_mic = default.
+/// The soundboard works by *being* the default mic — Discord, Arma and OBS just
+/// pick up `linuxsoundboard.virtual_mic`. Same trick EasyEffects uses, and we
+/// sit downstream: real mic → EE → easyeffects_source → capture → mix →
+/// virtual_mic = default.
 ///
-/// `Default` is what people want 99% of the time. `Manual` is the escape hatch
-/// for anyone who picks their own default source in pavucontrol.
+/// `Manual` is the escape hatch for anyone who sets their own default in
+/// pavucontrol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DefaultSourceMode {
     /// Claim the default mic at engine start and re-assert if something takes
@@ -699,9 +697,8 @@ pub struct Settings {
     #[serde(default = "default_tray_setting")]
     pub close_to_tray: bool,
     /// Publish the playing sound to the desktop's media controls. Off by
-    /// default: while a sound plays this app becomes the active media player,
-    /// which takes the media keys and the now-playing card away from whatever
-    /// music the user actually had going.
+    /// default — while it is on we are the active media player, so the media
+    /// keys and the now-playing card come here instead of to their music.
     #[serde(default)]
     pub mpris_enabled: bool,
 }

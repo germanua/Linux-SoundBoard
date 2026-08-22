@@ -138,10 +138,9 @@ pub struct HotkeyBindingRecord {
     pub tab_scope: Option<String>,
 }
 
-/// The key a hotkey binding is scoped by. Covers all three kinds of tab: the
-/// General tab, a manual tab, and a folder tab, which has no id of its own.
-/// The unit separator cannot appear in a path, so the two halves of a folder
-/// key stay unambiguous.
+/// Scope key for a hotkey binding. Covers General, a manual tab, and a folder
+/// tab, which has no id of its own — hence the unit separator, which can't
+/// appear in a path, keeping the two halves unambiguous.
 pub fn scope_key(scope: &LibraryScope) -> String {
     match scope {
         LibraryScope::General => crate::app_meta::GENERAL_TAB_ID.to_string(),
@@ -1046,10 +1045,10 @@ impl LibraryStore {
         )
     }
 
-    /// The binding already holding `normalized`, described for the user, or
-    /// `None` when the chord is free. With `sounds_may_share` a sound binding
-    /// is not a conflict but a group to join; a control action or a tab hotkey
-    /// still is, because those cannot share a chord with anything.
+    /// Who already holds `normalized`, described for the user, or `None` if the
+    /// chord is free. With `sounds_may_share` a sound binding is a group to
+    /// join, not a conflict; control actions and tab hotkeys still are, since
+    /// they can't share a chord with anything.
     pub fn hotkey_conflict(
         &self,
         binding_id: &str,
@@ -1472,17 +1471,14 @@ fn run_idle_optimize_if_due(
 const COUNTS_REPUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Request {
-    /// Whether this request can move the counts diagnostics publishes: live
-    /// sounds, roots, manual tabs, active hotkey bindings.
+    /// Can this request move the published counts — live sounds, roots, manual
+    /// tabs, active bindings?
     ///
-    /// Bulk row writes are deliberately out. A caller that waits on each batch
-    /// drains the queue every time, so it would recount the whole table once per
-    /// batch — measured at 30 s for a 156k import that otherwise takes ~3 s.
-    ///
-    /// `RootScanBatch` rows stage under a new generation and aren't live until
-    /// `FinishRootScan` flips it, so a batch can't change a count anyway.
-    /// `ApplyBatch` only builds a database offline (legacy migration, seeding),
-    /// and startup publishes the counts once that database opens.
+    /// Bulk row writes are out. A caller waiting on each batch drains the queue
+    /// every time, so it would recount the whole table per batch: 30 s for a
+    /// 156k import that otherwise takes ~3 s. They can't change a count anyway —
+    /// `RootScanBatch` stages under a new generation until `FinishRootScan`, and
+    /// `ApplyBatch` only builds a database offline that startup counts later.
     fn changes_library_counts(&self) -> bool {
         match self {
             Request::FinishRootScan { .. }
@@ -1521,10 +1517,9 @@ impl Request {
     }
 }
 
-/// Recomputes and publishes the library counts diagnostics reports, but only
-/// when a mutation has landed since the last publication. Called from the store
-/// worker once its queues drain, so a busy import pays nothing and a burst of
-/// edits collapses into a single recount.
+/// Recount and republish, but only if a mutation landed since last time. Runs
+/// on the store worker once its queues drain, so an import pays nothing and a
+/// burst of edits collapses into one recount.
 fn publish_library_counts_if_dirty(
     connection: &Connection,
     dirty: &mut bool,
@@ -1533,10 +1528,9 @@ fn publish_library_counts_if_dirty(
     if !*dirty {
         return None;
     }
-    // A bulk caller that waits on each write drains the queue between every
-    // batch. Recounting each time made a 156k import take over 30 s instead of
-    // about 3 s, so republishing is rate limited. The flag stays set, and the
-    // next drain after the interval publishes the settled numbers.
+    // A bulk caller waiting on each write drains the queue between batches, and
+    // recounting every time took a 156k import from ~3 s to over 30 s. Rate limited;
+    // the flag stays set and the next drain past the interval publishes.
     if published_at.is_some_and(|at| at.elapsed() < COUNTS_REPUBLISH_INTERVAL) {
         return None;
     }
@@ -1805,24 +1799,18 @@ fn open_connection(path: &Path) -> Result<Connection, LibraryError> {
     Ok(connection)
 }
 
-/// Written verbatim by both `create_schema` and `migrate_schema_4_to_5`, so a
-/// migrated library and a fresh one end up the same database.
+/// Written verbatim by `create_schema` and `migrate_schema_4_to_5`, so a
+/// migrated library and a fresh one are the same database.
 ///
-/// A binding owns exactly one of: a sound, a control action, or a tab it makes
-/// active. `tab_scope` is the tab it answers in, NULL meaning every tab — which
-/// is how everything written before tab scoping is stored, and why flipping the
-/// toggle on changes nothing by itself. Scope keys are `general`,
-/// `tab:<public id>` or `folder:<root>\u{1f}<relative path>`; the unit separator
-/// can't occur in a path, so the halves stay unambiguous.
+/// A binding owns exactly one of a sound, a control action, or a tab. Keys:
+/// `general`, `tab:<public id>`, `folder:<root>\u{1f}<relative path>`; NULL
+/// `tab_scope` means every tab, which is how everything predating tab scoping
+/// is stored.
 ///
-/// A sound holds at most one binding *per tab*, not one binding full stop: the
-/// same sound in two tabs can answer to a different key in each. NULL scopes
-/// compare equal through IFNULL, so "live everywhere" is still one binding.
-///
-/// No unique index on `normalized`, on purpose: several sounds may share a
-/// chord. Whether a duplicate is rejected depends on the Settings toggles, so
-/// that call lives in the command layer — which is also where the message the
-/// user reads comes from.
+/// One binding *per tab*, so a sound in two tabs can take a different key in
+/// each; NULL scopes compare equal through IFNULL. No unique index on
+/// `normalized` — sounds may share a chord, and rejecting a duplicate depends
+/// on the Settings toggles, so that call lives in the command layer.
 const HOTKEY_BINDINGS_SCHEMA: &str = "\
          CREATE TABLE hotkey_bindings(
              binding_id TEXT PRIMARY KEY,
@@ -2104,14 +2092,10 @@ fn migrate_schema_4_to_5(connection: &Connection) -> Result<(), LibraryError> {
             "library metadata does not match schema 4".to_string(),
         ));
     }
-    // The table is rebuilt rather than altered: SQLite cannot change a CHECK
-    // constraint in place, and the old one allowed only a sound or a control
-    // action.
-    //
-    // The shape is spelled out here rather than shared with create_schema: a
-    // migration has to produce the schema of its own version, and the shared
-    // definition moves on with every later one. Schema 6 follows this and
-    // rebuilds again.
+    // Rebuilt, not altered: SQLite can't change a CHECK in place and the old one
+    // only allowed a sound or a control action. Spelled out rather than shared
+    // with create_schema — a migration has to emit the schema of its own
+    // version, and the shared one moves on. Schema 6 rebuilds again.
     connection.execute_batch(
         "BEGIN IMMEDIATE;
          ALTER TABLE hotkey_bindings RENAME TO hotkey_bindings_v4;
@@ -2963,11 +2947,9 @@ fn apply_edit(connection: &mut Connection, edit: LibraryEdit) -> Result<bool, Li
     Ok(changed != 0)
 }
 
-/// Places a folder at `target_index` among its siblings, renumbering the whole
-/// sibling run so the result is a dense 0..n ordering.
-///
-/// Only `sibling_position` is written. A drag must not disturb a folder's
-/// display name or its expanded flag, which is why this does not go through
+/// Move a folder to `target_index`, renumbering its siblings to a dense 0..n.
+/// Writes `sibling_position` and nothing else — a drag must not touch the
+/// display name or expanded flag, hence not going through
 /// `set_folder_preferences`.
 fn reorder_folder(
     connection: &mut Connection,
@@ -3476,15 +3458,13 @@ const HIDDEN_FOLDER_FILTER: &str = "EXISTS(
           JOIN folder_prefs AS hidden_pref ON hidden_pref.folder_id = hidden_closure.ancestor_id
           WHERE hidden_closure.descendant_id = folder.id AND hidden_pref.hidden = 1)";
 
-/// The sound columns, with the hotkey picked by `binding_filter`.
+/// The sound columns, hotkey picked by `binding_filter`.
 ///
-/// A sound holds one binding per tab, so which hotkey it "has" depends on where
-/// it's being listed: a binding limited to another tab doesn't answer here and
-/// must not be shown here either. Listing for a tab means passing a filter that
-/// names it; with no tab in play, pass `"1"` and take whatever binding exists.
-///
-/// A tab's own binding beats one that's live everywhere — same precedence a
-/// press resolves with.
+/// One binding per tab, so which hotkey a sound "has" depends where it's listed
+/// — a binding limited to another tab doesn't answer here and must not show
+/// here. Listing for a tab passes a filter naming it; with no tab in play pass
+/// `"1"` and take whatever exists. A tab's own binding beats a global one, same
+/// precedence a press resolves with.
 fn sound_fields(binding_filter: &str) -> String {
     format!(
         "sound.public_id, sound.name, sound.path, sound.source_path,
@@ -3995,11 +3975,9 @@ fn load_folder_children(
         .ok_or_else(|| LibraryError::InvalidData("page offset overflow".to_string()))?;
     let limit = usize_to_i64(PAGE_SIZE)?;
     let offset = usize_to_i64(offset)?;
-    // `child.root_id = root.id` is redundant for correctness (children always
-    // share their parent's root) but required for performance: it lets the
-    // EXISTS use `folders_parent_order`, whose leading column is `root_id`.
-    // Without it SQLite scans every folder in the active generation once per
-    // output row.
+    // `child.root_id = root.id` is redundant — children always share a root —
+    // but it puts the EXISTS on `folders_parent_order`, whose leading column is
+    // root_id. Without it SQLite scans every folder in the generation per row.
     let fields = "folder.id, folder.relative_path,
                   COALESCE(pref.display_name, folder.name), COALESCE(pref.expanded, 0),
                   EXISTS(SELECT 1 FROM folders AS child
@@ -4180,11 +4158,10 @@ fn load_hotkey_page(connection: &Connection, page: usize) -> Result<SoundPage, L
     Ok(SoundPage { sounds })
 }
 
-/// One row per chord: a chord several bindings share is projected under one of
-/// them, because the backends can only be told about it once. Control actions
-/// and tab hotkeys take that slot ahead of sounds — a press carrying a sound's
-/// id can still be resolved back to its chord, while a control action reached
-/// under another binding's id would simply never run.
+/// One row per chord — the backends can only be told about it once, so a shared
+/// chord is projected under a single binding. Control actions and tab hotkeys
+/// win that slot: a press carrying a sound id can still be resolved back to its
+/// chord, but a control action reached under someone else's id never runs.
 fn load_hotkey_bindings_after(
     connection: &Connection,
     after: Option<&str>,
@@ -4280,10 +4257,9 @@ fn load_hotkey_group(
     connection: &Connection,
     binding_id: &str,
 ) -> Result<Vec<HotkeyGroupMember>, LibraryError> {
-    // Keyed by the chord rather than by the binding, so every member of a
-    // shared chord resolves to the same group no matter which binding the
-    // backend reported. An unknown binding, or one still needing attention,
-    // has a NULL accelerator here and matches nothing.
+    // Keyed by chord, not binding, so every member resolves to the same group
+    // whichever binding the backend reported. Unknown or needs-attention
+    // bindings have a NULL accelerator and match nothing.
     let sql = format!(
         "SELECT binding.binding_id, sound.public_id, binding.tab_scope
          FROM hotkey_bindings AS binding

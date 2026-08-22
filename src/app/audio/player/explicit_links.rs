@@ -1,21 +1,14 @@
 //! Explicit graph links for the virtual-mic feeder.
 //!
-//! The feeder is a `Stream/Output/Audio` node; the virtual mic is a
-//! `module-null-sink` with `media.class = Audio/Source/Virtual`. WirePlumber's
-//! policy won't link those two over AUTOCONNECT — it sees a Playback stream
-//! aimed at a Source class and silently drops the routing decision, which
-//! leaves the feeder dangling and the null-sink dry.
+//! AUTOCONNECT can't link our `Stream/Output/Audio` feeder to an
+//! `Audio/Source/Virtual` null-sink: WirePlumber sees a Playback stream aimed
+//! at a Source class and silently drops it, leaving the feeder dangling and the
+//! sink dry. So we wire it ourselves through link-factory, the same API
+//! `pw-link` uses, and WirePlumber leaves existing links alone.
 //!
-//! So we wire it by hand with
-//! `core.create_object::<Link>("link-factory", …)`, the same API `pw-link`
-//! uses. WirePlumber sees the links already exist and leaves them alone.
-//!
-//! Lifecycle:
-//! - track the feeder node id plus its `output_FL` / `output_FR` ports
-//! - track the virtual-mic node id plus its `input_FL` / `input_FR` ports
-//! - once all four are visible, create two links (FL→FL, FR→FR)
-//! - if any of the four disappears (PipeWire restart, null-sink reload), drop
-//!   the link proxies and rebuild when the ports come back
+//! Track four ids (feeder node + its two output ports, mic node + its two
+//! input ports), create FL→FL and FR→FR once all four are up, and drop the
+//! proxies when any of them goes (PipeWire restart, null-sink reload).
 
 use log::{info, warn};
 use pipewire as pw;

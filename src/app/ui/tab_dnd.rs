@@ -53,10 +53,9 @@ pub(super) fn decode_drag_payload(bytes: &Bytes) -> Option<SoundTabDragPayload> 
     payload.normalized()
 }
 
-/// Folder drags get their own MIME type instead of a flag inside the sound
-/// payload. A folder drop rewrites whole memberships, so mistaking one for a
-/// sound drop would silently scramble the library — disjoint types make that
-/// impossible instead of just unlikely.
+/// Folder drags get their own MIME type rather than a flag in the sound
+/// payload. A folder drop rewrites whole memberships, so disjoint types make
+/// confusing the two impossible instead of merely unlikely.
 pub(super) const FOLDER_DND_MIME: &str = "application/x-lsb-folder-dnd";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

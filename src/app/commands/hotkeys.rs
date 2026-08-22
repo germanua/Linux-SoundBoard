@@ -40,11 +40,9 @@ fn ensure_store_hotkey_available(
     }
 }
 
-/// Write the binding, or clear it when `canonical` is `None`, then push the
-/// change out to the hotkey backends.
-///
-/// Sound, control and tab hotkeys all land here; they differ only in who owns
-/// the binding and whether it is limited to one tab.
+/// Write the binding, or clear it when `canonical` is `None`, then push it out
+/// to the backends. Sound, control and tab hotkeys all land here — they differ
+/// only in owner and tab scope.
 fn commit_hotkey_binding(
     library: &LibraryStore,
     projection: &HotkeyProjectionCoordinator,
@@ -72,11 +70,9 @@ fn commit_hotkey_binding(
         .map_err(CommandError::HotkeyProjection)
 }
 
-/// `multi_sound_hotkeys` is the Settings toggle: with it on, a chord another
-/// sound already answers to is a group to join rather than a conflict.
-///
-/// `tab_scope` is the tab the binding answers in. `None` means every tab,
-/// which is where bindings stay until tab hotkeys are turned on.
+/// `multi_sound_hotkeys` on: a chord another sound already answers to is a
+/// group to join, not a conflict. `tab_scope` is the tab it answers in, `None`
+/// meaning all of them — where bindings stay until tab hotkeys are enabled.
 pub fn set_hotkey(
     id: String,
     hotkey: Option<String>,
@@ -93,10 +89,9 @@ pub fn set_hotkey(
         None => None,
     };
 
-    // A sound holds one binding per tab, so replace the row for *this* tab,
-    // not "the" binding for the sound. Ids stay opaque because they end up in
-    // the generated swhkd command, which only takes alphanumerics, ':', '-'
-    // and '_' — a folder scope has characters outside that set.
+    // One binding per tab, so replace the row for *this* tab, not "the" binding
+    // for the sound. Ids stay opaque: they end up in the swhkd command, which
+    // only takes alphanumerics, ':', '-' and '_', and a folder scope has more.
     let existing = library
         .hotkey_bindings_for_sound(&id)
         .recv()

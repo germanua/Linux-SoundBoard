@@ -1739,10 +1739,9 @@ fn benchmark_20k_wide_folder_tree_store() {
         let tail = wait(store.folder_children(ROOT_PATH, None, last_page));
         assert_eq!(tail.folders.len(), last_page_rows);
 
-        // Deep-page regression gate: the `has_children` EXISTS subquery must
-        // stay on the `folders_parent_order` index. If it loses that index,
-        // SQLite scans every folder in the active generation per output row
-        // and this page goes from ~12ms to multiple seconds.
+        // Regression gate: the `has_children` EXISTS must stay on
+        // `folders_parent_order`. Lose the index and SQLite scans every folder
+        // in the generation per row — this page goes ~12 ms to seconds.
         let deep_page_started = std::time::Instant::now();
         let deep_page = wait(store.folder_children(ROOT_PATH, None, last_page));
         let deep_page_elapsed = deep_page_started.elapsed();
@@ -1764,10 +1763,10 @@ fn benchmark_20k_wide_folder_tree_store() {
         );
         assert!(pss_kib < 102_400, "store process PSS was {pss_kib} KiB");
     }
-    // `store` and its worker's SQLite connection drop here, freeing the file so
-    // a plain connection can stamp the two meta rows production startup wants.
-    // Same thing legacy_migration::initialize_empty_library does for a fresh
-    // database — can't reuse that helper, it refuses an existing path.
+    // `store` and its worker connection drop here, freeing the file so a plain
+    // connection can stamp the two meta rows startup wants. Same as
+    // legacy_migration::initialize_empty_library, which won't take an existing
+    // path.
     {
         let connection = rusqlite::Connection::open(&db_path).expect("open raw connection");
         connection

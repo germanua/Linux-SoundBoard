@@ -33,15 +33,15 @@ pub struct X11Backend {
 #[derive(Debug)]
 struct NonNullXDisplay(*mut xlib::Display);
 
-// SAFETY: Xlib allows a Display pointer across threads as long as only one
-// thread calls into Xlib at a time. The owning `Mutex<Option<..>>` enforces it.
+// SAFETY: Xlib tolerates one thread in it at a time; the owning Mutex is what
+// guarantees that.
 unsafe impl Send for NonNullXDisplay {}
-// SAFETY: as above — the Mutex is what makes access exclusive.
+// SAFETY: same Mutex, same reason.
 unsafe impl Sync for NonNullXDisplay {}
 
 impl NonNullXDisplay {
-    // SAFETY: caller guarantees the pointer was not already closed and that no
-    // other thread is calling Xlib on it.
+    // SAFETY: caller guarantees it isn't already closed and nobody else is in
+    // Xlib right now.
     unsafe fn close(self) {
         xlib::XCloseDisplay(self.0);
     }
@@ -112,8 +112,8 @@ impl X11Backend {
             ));
         }
 
-        // SAFETY: the display pointer never leaves this block and XCloseDisplay
-        // runs on every exit path, success or failure.
+        // SAFETY: the display never leaves this block; XCloseDisplay on every
+        // exit path.
         unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -157,8 +157,8 @@ impl X11Backend {
         })
     }
 
-    // SAFETY: `display` must be live. XKeysymToString hands back Xlib-owned
-    // memory, which we read through CStr and copy before returning.
+    // SAFETY: caller keeps `display` live. XKeysymToString's memory is Xlib's;
+    // copied out through CStr before we return.
     unsafe fn keycode_to_name(display: *mut xlib::Display, keycode: u32) -> Option<String> {
         let keysym = xlib::XKeycodeToKeysym(display, keycode as u8, 0);
         if keysym == 0 {
@@ -317,9 +317,8 @@ impl HotkeyBackend for X11Backend {
             return;
         };
 
-        // SAFETY: the thread opens its own display and is the only user of that
-        // pointer until it hands it to the mutex-guarded `display_ptr` for Drop
-        // to close. Non-null is checked right after XOpenDisplay.
+        // SAFETY: this thread owns the display until it hands it to the
+        // mutex-guarded `display_ptr` for Drop. Null-checked below.
         thread::spawn(move || unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -351,8 +350,8 @@ impl HotkeyBackend for X11Backend {
 
             let connection_fd = xlib::XConnectionNumber(display);
             loop {
-                // SAFETY: Xlib owns this fd for as long as `display` is open, which
-                // is until the listener below exits.
+                // SAFETY: Xlib owns the fd while `display` is open, which
+                // outlives this loop.
                 let x_fd = BorrowedFd::borrow_raw(connection_fd);
                 let mut poll_fds = [
                     nix::poll::PollFd::new(x_fd, nix::poll::PollFlags::POLLIN),

@@ -86,9 +86,8 @@ fn missing_loudness_analysis_force_mode_bypasses_auto_gain_setting() {
 }
 
 /// Dispatch coverage, moved here when the Config-based `play_sound` went away.
-/// `play_resolved_sound` is the live path and keeps the same guards: disabled
-/// sounds and missing files never reach the engine, and everything stops before
-/// a new clip starts.
+/// Same guards on the live path: disabled sounds and missing files never reach
+/// the engine, and everything stops before a new clip starts.
 mod dispatch {
     use std::sync::Arc;
 

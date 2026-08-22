@@ -71,15 +71,13 @@ impl DialogHostWeak {
     }
 }
 
-/// Dismiss an overlay panel when the pointer is pressed anywhere outside it.
+/// Dismiss an overlay panel on a press outside it.
 ///
-/// The panel sits in an `AdwClamp` that fills the overlay, so the empty area
-/// beside it belongs to the clamp and a press there never reaches the backdrop
-/// button underneath. Hit-testing the panel's own bounds sidesteps that: it
-/// doesn't care which widget got the press, only whether the point is inside.
-///
-/// Capture phase, and it claims the press, so a dismissing click can't also
-/// activate whatever was under it.
+/// The panel sits in an `AdwClamp` filling the overlay, so the empty area
+/// beside it belongs to the clamp and never reaches the backdrop button.
+/// Hit-testing the panel's own bounds sidesteps that — the widget doesn't
+/// matter, only whether the point is inside. Capture phase, and it claims the
+/// press so the dismissing click can't also activate what was underneath.
 pub(super) fn dismiss_on_press_outside<F>(
     overlay: &gtk4::Overlay,
     panel: &impl IsA<gtk4::Widget>,
@@ -781,14 +779,13 @@ impl DialogHost {
         }
     }
 
-    /// Move this host to the end of its parent overlay's children, which is the
-    /// top of the paint order.
+    /// Move this host to the end of the overlay's children, i.e. the top of the
+    /// paint order.
     ///
-    /// The host goes on while the window is built, but panels that open dialogs
-    /// — Settings above all — are built lazily and attached later, so they land
-    /// on top of it. Raising here keeps the rule in one place: nobody attaching
-    /// an overlay later can bury a dialog. Runs while the host is still hidden,
-    /// so there is nothing on screen to flicker.
+    /// The host is attached while the window is built, but panels that open
+    /// dialogs (Settings above all) are lazy and land on top of it. Raising here
+    /// keeps the rule in one place, and runs while the host is hidden so nothing
+    /// flickers.
     fn raise_to_front(&self) {
         let Some(parent) = self
             .inner

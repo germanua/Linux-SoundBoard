@@ -95,10 +95,9 @@ impl TransportInner {
                 self.is_continue_suppressed(),
             );
             if should_continue {
-                // A user-initiated play was just dispatched, so this empty
-                // snapshot is the gap between stop_all() and play() in the
-                // worker, not a real end of track. Skip it; the new sound
-                // turns up in the next snapshot.
+                // A play was just dispatched, so this empty snapshot is the
+                // stop_all()/play() gap in the worker, not an end of track.
+                // Skip; the new sound shows up next snapshot.
                 if crate::ui_event_bridge::is_explicit_play_pending() {
                     return;
                 }
@@ -253,11 +252,9 @@ impl TransportInner {
     }
 }
 
-/// What the tray tooltip and the media controls should be showing.
-///
-/// `None` until the sound's name is known: a card titled with a uuid is worse
-/// than no card, and the name arrives a moment later from
-/// `resolve_track_name_async`, which announces it then.
+/// What the tray tooltip and media controls should show. `None` until the name
+/// is known — a card titled with a uuid is worse than no card, and
+/// `resolve_track_name_async` announces it a moment later.
 fn now_playing_for(
     position: &crate::audio::PlaybackPosition,
     duration_ms: u64,
@@ -280,10 +277,9 @@ fn publish_now_playing(
     duration_ms: u64,
     active: &Option<super::ActiveTrack>,
 ) {
-    // A sound whose name has not come back from the library yet is not a sound
-    // that stopped. Saying nothing leaves the previous announcement standing;
-    // reporting `None` here would tear the media player down and rebuild it at
-    // the start of every single sound.
+    // A name that hasn't come back yet is not a sound that stopped. Saying
+    // nothing leaves the last announcement standing; `None` would tear the
+    // media player down and rebuild it on every sound.
     if let Some(now) = now_playing_for(position, duration_ms, active) {
         crate::ui_event_bridge::post_now_playing(Some(now));
     }

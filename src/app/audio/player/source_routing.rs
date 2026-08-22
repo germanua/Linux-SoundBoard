@@ -7,10 +7,9 @@ const PACTL_COMMAND_TIMEOUT: Duration = Duration::from_millis(900);
 #[cfg(not(test))]
 const WPCTL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-// Virtual upstream-mic processors we prefer over a raw physical mic.
-// Case-insensitive substring match on node.name and node.description. If the
-// user picks one of these as `mic_source` and it happens to be offline, we
-// refuse to quietly fall back to the raw mic — they picked it for a reason.
+// Upstream mic processors we prefer over a raw mic. Case-insensitive substring
+// match on node.name and node.description. Picked as `mic_source` and offline,
+// we refuse to fall back quietly — they chose it for a reason.
 const ENHANCEMENT_SOURCE_PATTERNS: &[&str] = &[
     "easyeffects",
     "easy effects",
@@ -51,10 +50,8 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Engin
     let Some(target) = target else {
         if let Some(requested) = state.runtime.mic_source.as_deref() {
             if name_looks_like_enhancement_source(requested) {
-                // They asked for an enhancement source (EasyEffects, NoiseTorch,
-                // RNNoise, …), so falling back to the raw mic behind their back
-                // is not an option. Say it loudly instead, so they know to start
-                // the upstream processor.
+                // They asked for an enhancement source, so no silent fallback
+                // to the raw mic. Say it loudly and let them start it.
                 warn!(
                     "Selected mic source '{}' is currently absent. Soundboard will NOT \
                      fall back to the raw microphone — start the upstream processor \
@@ -110,10 +107,8 @@ pub(super) fn resolve_capture_target_from_default(
             .map(|candidate| candidate.node_name.clone());
     }
 
-    // Nothing explicit, so let best_upstream_mic_source_name rank it: known
-    // enhancement chains beat raw hardware mics, so a processed feed someone
-    // deliberately set up wins. Checking default_source first would hand back
-    // the raw mic and quietly bypass their processing.
+    // Nothing explicit: rank it, so a processed feed beats a raw mic. Checking
+    // default_source first would return the raw mic and bypass their chain.
     if let Some(best) = best_upstream_mic_source_name(&state.sources) {
         return Some(best);
     }
@@ -132,25 +127,21 @@ pub(super) fn resolve_capture_target_from_default(
         .filter(|source_name| is_upstream_mic_source(source_name, &state.sources))
 }
 
-// True when `source_name` is a tracked Audio/Source auto-detect is allowed to
-// fall back to: a known enhancement chain or real hardware. Only used on the
-// default / previous-default paths, and it must not resurrect a screenshare or
-// other virtual source the ranking already threw out.
+// A tracked Audio/Source auto-detect may fall back to: known enhancement chain
+// or real hardware. Default / previous-default paths only, and it must not
+// resurrect a screenshare source the ranking already rejected.
 fn is_upstream_mic_source(source_name: &str, sources: &HashMap<u32, SourceDescriptor>) -> bool {
     sources
         .values()
         .any(|candidate| candidate.node_name == source_name && auto_detect_eligible(candidate))
 }
 
-// Best source for auto-detect. Only two kinds ever get picked automatically:
-// a recognised mic-enhancement chain (EasyEffects, NoiseTorch, RNNoise —
-// preferred, since someone deployed it on purpose) and a real hardware mic.
-// Everything else — screenshare null sinks, OBS virtual audio, loopback
-// cables, unnamed custom virtual sources — needs explicit selection.
+// Auto-detect picks exactly two kinds: a known mic-enhancement chain
+// (preferred — someone deployed it on purpose) or a real hardware mic.
+// Screenshare null sinks, OBS virtual audio, loopback cables and custom virtual
+// sources need explicit selection.
 //
-// Only uses what the registry `global` event actually carries: node name for
-// enhancement matching, device.id for hardware. device.api and factory.name
-// live in bound node info, so they can't feed this decision.
+// Uses only what the registry `global` event carries: node name and device.id.
 pub(super) fn best_upstream_mic_source_name(
     sources: &HashMap<u32, SourceDescriptor>,
 ) -> Option<String> {
@@ -242,23 +233,21 @@ pub(super) fn restore_default_source_for_transient_shutdown(state: &mut LoopStat
     state.claimed_default = false;
 }
 
-// Excludes monitor sources (sink monitors aren't real mics) and Soundboard's
-// own virtual mic (would create a feedback loop). Used for EXPLICIT selection —
-// the user may deliberately pick any non-monitor, non-own source.
+// For explicit selection: anything but a sink monitor (not a real mic) and our
+// own virtual mic (feedback loop).
 fn upstream_source_allowed(source: &SourceDescriptor) -> bool {
     !source.is_monitor && !source.is_our_virtual_mic
 }
 
-// True when a source may be chosen by AUTO-detect: a recognised enhancement chain
-// or a real hardware mic, and not a monitor / our own virtual mic.
+// Auto-detect may pick this: a known enhancement chain or real hardware, and
+// not a monitor or our own mic.
 fn auto_detect_eligible(source: &SourceDescriptor) -> bool {
     upstream_source_allowed(source)
         && (is_named_enhancement_source(source) || source.is_hardware_backed)
 }
 
-// Rank among auto-detect-eligible sources: a recognised enhancement chain
-// outranks a raw hardware mic so a deliberately-deployed processed-mic feed wins.
-// (Only meaningful for sources that already passed auto_detect_eligible.)
+// Ranks sources that already passed auto_detect_eligible; an enhancement chain
+// beats a raw hardware mic.
 fn auto_detect_rank(source: &SourceDescriptor) -> u8 {
     if is_named_enhancement_source(source) {
         2

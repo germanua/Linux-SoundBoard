@@ -41,20 +41,17 @@ struct FolderNode {
     children: RefCell<Option<gio::ListStore>>,
     children_requested: Rc<Cell<bool>>,
     expanded: Rc<Cell<bool>>,
-    /// The expansion handler hangs off a `TreeListRow`, and the virtualized
-    /// tree creates and destroys those as it scrolls, rebinding this node onto
-    /// a different row each time. Keeping `(row, handler)` here — same trick as
-    /// `disclosure_handlers` below — lets `connect_unbind` disconnect from the
-    /// exact row it was attached to, so a stale handler can't keep poking this
-    /// node after a rebind.
+    /// The handler hangs off a `TreeListRow`, and the virtualized tree destroys
+    /// those as it scrolls, rebinding this node onto a different row. Keeping
+    /// `(row, handler)` — same trick as `disclosure_handlers` — lets
+    /// `connect_unbind` disconnect from the exact row it was attached to.
     expanded_handler: RefCell<Option<(TreeListRow, glib::SignalHandlerId)>>,
-    /// Set on the node's first bind, never cleared. Writing `set_expanded` from
-    /// `connect_bind` on *every* bind re-expands rows during GTK's own collapse
-    /// propagation: `gtk_tree_list_row_set_expanded()` emits `items-changed`
-    /// before the `expanded` notify, so a collapse click can rebind this node
-    /// onto a visible row before `connect_expanded_notify` has updated
-    /// `expanded` — and re-applying the stale `true` re-opens the row the user
-    /// just closed.
+    /// Set on first bind, never cleared. `set_expanded` from `connect_bind` on
+    /// *every* bind re-expands rows mid-collapse:
+    /// `gtk_tree_list_row_set_expanded()` emits `items-changed` before the
+    /// `expanded` notify, so a collapse click rebinds this node before
+    /// `connect_expanded_notify` runs, and the stale `true` reopens the row the
+    /// user just closed.
     expansion_restored: Cell<bool>,
     disclosure_handlers: RefCell<Option<(Image, GestureClick, TreeListRow, glib::SignalHandlerId)>>,
     context_gesture: RefCell<Option<GestureClick>>,
@@ -63,11 +60,10 @@ struct FolderNode {
     /// Where this node sits among its loaded siblings. Tells us when scrolling
     /// has gotten close enough to the end to prefetch.
     sibling_index: usize,
-    /// Pager for more of this node's siblings. `None` for roots — there are
-    /// few of them, so they stay eager. Weak because the pager's `children`
-    /// store holds this node, and a strong ref here would close a
-    /// pager -> children -> node -> pager cycle that never frees. The parent's
-    /// `children_pager` is the only strong owner.
+    /// Pager for more of this node's siblings. `None` for roots, few enough to
+    /// stay eager. Weak because the pager's `children` store holds this node —
+    /// a strong ref closes a pager -> children -> node -> pager cycle. The
+    /// parent's `children_pager` is the only strong owner.
     sibling_pager: Option<std::rc::Weak<SiblingPager>>,
     /// Pager that loads this node's own children, one page at a time.
     /// Created lazily on first expand and cleared on collapse.
@@ -93,8 +89,8 @@ struct SiblingPager {
     focus_page: Cell<usize>,
     /// Pages asked for while another load was in flight. Fast scrolling binds
     /// placeholders faster than the store answers, and a dropped request leaves
-    /// those rows blank for good since nothing rebinds them. A set, not one
-    /// page: a viewport straddling a boundary asks for two.
+    /// those rows blank forever. A set, not one page — a viewport straddling a
+    /// boundary asks for two.
     pending_pages: RefCell<std::collections::BTreeSet<usize>>,
     /// The owning node's "children already requested" latch. Held so a failed
     /// page load can clear it; see [`SiblingPager::mark_reloadable`].
@@ -105,10 +101,9 @@ struct SiblingPager {
 const TAB_NAME_LABEL: &str = "tab-name-label";
 
 impl SiblingPager {
-    /// A failed page load must not poison the node. The `TreeListModel` create
-    /// closure only starts a pager while the request latch is clear, so leaving
-    /// it set after a failure means the folder stays empty for the rest of the
-    /// session however often you expand it.
+    /// A failed load must not poison the node. The create closure only starts a
+    /// pager while the latch is clear, so leaving it set after a failure means
+    /// the folder stays empty for the session no matter how often you expand.
     fn mark_reloadable(&self) {
         self.children_requested.set(false);
     }
@@ -134,17 +129,15 @@ fn should_restore_expansion(node_expanded: bool, already_restored: bool) -> bool
     node_expanded && !already_restored
 }
 
-/// Ceiling on folder child rows kept loaded across the whole sidebar.
-/// Collapsing normally keeps its children so re-expanding costs no query; past
-/// this, collapsing lets them go instead. 4096 rows is ~3 MB at the measured
-/// ~750 bytes each — same ballpark as the sound model's 2 MiB bound.
+/// Ceiling on child rows kept loaded sidebar-wide. Collapsing normally keeps
+/// its children so re-expanding costs no query; past this it releases them.
+/// 4096 rows is ~3 MB at the measured ~750 bytes each.
 const MAX_RETAINED_CHILD_ROWS: usize = 4_096;
 
-/// Total loaded child rows under `store`, nested expanded folders included.
-/// Walked rather than counted, because rows leave in ways a counter can't see:
-/// a tree rebuild drops every node, and releasing one node drops its
-/// descendants' rows too. Bounded by `MAX_RETAINED_CHILD_ROWS`, and only runs
-/// when the user collapses something.
+/// Loaded child rows under `store`, nested folders included. Walked, not
+/// counted: rows leave in ways a counter can't see — a tree rebuild drops every
+/// node, and releasing one drops its descendants. Bounded by
+/// `MAX_RETAINED_CHILD_ROWS`, and only runs on a collapse.
 fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
     let mut total = 0usize;
     for item in store.iter::<BoxedAnyObject>().flatten() {
@@ -162,10 +155,9 @@ fn count_loaded_child_rows(store: &gio::ListStore) -> usize {
     total
 }
 
-/// Stands in for a row whose page was evicted. Deliberately tiny — a full
-/// `FolderNode` placeholder measured 598 bytes between its four `Rc` boxes and
-/// the GObject wrapper, which defeats the point of evicting anything. Binding
-/// one re-reads its page from SQLite.
+/// Stands in for a row whose page was evicted. Tiny on purpose: a `FolderNode`
+/// placeholder measured 598 bytes across its four `Rc` boxes and the GObject
+/// wrapper, which defeats the point. Binding one re-reads its page.
 struct PlaceholderRow {
     sibling_index: usize,
     pager: std::rc::Weak<SiblingPager>,
@@ -176,10 +168,9 @@ struct PlaceholderRow {
 /// back to, which costs one bounded page query (~12 ms).
 const MAX_LOADED_SIBLING_PAGES: usize = 6;
 
-/// Which page to drop when a folder holds more than `max_pages`. Farthest from
-/// what's being looked at loses, so scrolling back a little never throws away
-/// what's about to come into view. Ties drop the lower page — forward is the
-/// common direction, so keep what's ahead.
+/// Which page to drop past `max_pages`. Farthest from what's on screen loses,
+/// so scrolling back a little doesn't discard what's about to appear. Ties drop
+/// the lower page — forward is the common direction.
 fn page_to_evict(
     loaded_pages: &std::collections::BTreeSet<usize>,
     keep_near: usize,
@@ -198,19 +189,17 @@ fn should_release_collapsed_children(total_retained_rows: usize, cap: usize) -> 
     total_retained_rows > cap
 }
 
-/// Collapsing a folder makes GTK fire `expanded` notifications for every loaded
-/// descendant as it tears them down, even though none of those changed state.
-/// Acting on each one cost a database write and a full tree walk, which
-/// saturated the library worker and made the collapsing folder's own reload
-/// fail.
+/// Collapsing fires `expanded` notifications for every loaded descendant as GTK
+/// tears them down, though none of them changed. Acting on each cost a database
+/// write and a tree walk, saturating the library worker and failing the
+/// collapsing folder's own reload.
 fn should_handle_expansion_change(previous: bool, next: bool) -> bool {
     previous != next
 }
 
-/// Rebuilding the tree drops every row and GTK notifies `expanded = false` for
-/// each. Those look exactly like a user collapsing the folder, so persisting
-/// them overwrites what the user actually chose — a reorder or a refresh would
-/// silently flatten the tree, with nothing left to restore from.
+/// Rebuilding drops every row and GTK notifies `expanded = false` for each.
+/// Indistinguishable from a user collapse, so persisting them would let a
+/// reorder or refresh flatten the whole tree with nothing to restore from.
 fn should_persist_expansion_change(changed: bool, rebuilding: bool) -> bool {
     changed && !rebuilding
 }
@@ -225,11 +214,9 @@ fn folder_parent_relative_path(relative_path: &str) -> Option<String> {
         .map(|parent| parent.to_string_lossy().into_owned())
 }
 
-/// Where a dragged folder should land, given the row it was dropped against.
-///
-/// The folder is removed before being re-inserted, which shifts every later
-/// slot down one — so dropping below a row that already sits after it has to
-/// skip the usual +1 or the folder overshoots by one place.
+/// Where a dragged folder lands, given the row it was dropped against. It is
+/// removed before re-insert, shifting every later slot down one, so dropping
+/// below a row already after it must skip the usual +1 or it overshoots.
 fn folder_reorder_target_index(dragged_index: usize, target_index: usize, after: bool) -> usize {
     let raw = if after {
         target_index + 1
@@ -447,10 +434,9 @@ fn install_folder_drag_source(
             parent_relative_path: folder_parent_relative_path(&relative_path),
         };
         let bytes = tab_dnd::encode_folder_drag(&payload)?;
-        // The value half is what `read_value_async::<Bytes>` negotiates
-        // against; the mime half is how a drop target tells a folder drag from
-        // a sound drag. Advertise only the mime and the reader finds no format
-        // it can match.
+        // The value half is what `read_value_async::<Bytes>` negotiates against,
+        // the mime half is how a drop target tells folder from sound. Mime alone
+        // and the reader matches no format.
         let providers = [
             gtk4::gdk::ContentProvider::for_value(&bytes.to_value()),
             gtk4::gdk::ContentProvider::for_bytes(tab_dnd::FOLDER_DND_MIME, &bytes),
@@ -469,12 +455,10 @@ struct FolderMergeRequest {
     destination_relative_path: String,
 }
 
-/// Validates a folder-onto-folder drop.
-///
-/// Combining works across parents, unlike reordering, because the user aimed at
-/// a row instead of a gap. Never into the dragged folder's own subtree though:
-/// those sounds are already there, so the move would include and exclude the
-/// same sound.
+/// Validates a folder-onto-folder drop. Combining works across parents, unlike
+/// reordering, since the user aimed at a row rather than a gap. Never into the
+/// dragged folder's own subtree — the move would include and exclude the same
+/// sound.
 fn folder_merge_request(
     payload: &tab_dnd::FolderDragPayload,
     target_root_path: &str,
@@ -496,7 +480,7 @@ fn folder_merge_request(
     })
 }
 
-/// Last path component, which is what the sidebar shows for a folder.
+/// Last path component — what the sidebar shows for a folder.
 fn folder_display_label(relative_path: &str) -> &str {
     relative_path
         .rsplit('/')
@@ -531,11 +515,9 @@ struct FolderDropTargetRow<'a> {
     sibling_index: usize,
 }
 
-/// Applies a folder-on-folder drop.
-///
-/// Only reordering among a folder's own siblings is accepted. A drop into a gap
-/// belonging to another parent would be a reparent — different operation, and
-/// far too easy to hit by mis-aiming on a deep tree.
+/// Applies a folder-on-folder drop. Siblings only: a gap belonging to another
+/// parent would be a reparent, which is a different operation and far too easy
+/// to hit by mis-aiming on a deep tree.
 fn handle_folder_drop(
     bytes: &glib::Bytes,
     library: &crate::library_store::LibraryStore,
@@ -1052,12 +1034,10 @@ impl TabsSidebar {
                     if !should_handle_expansion_change(expanded.replace(is_expanded), is_expanded) {
                         return;
                     }
-                    // Collapsed children normally stay loaded: GtkTreeListModel
-                    // only hides them, and keeping them (~750 bytes a row, see
-                    // `measure_retained_folder_child_row_cost`) beats re-querying
-                    // a page on every re-expand. Only past
-                    // MAX_RETAINED_CHILD_ROWS does collapsing hand rows back, and
-                    // the create-closure reloads them on the next expand.
+                    // Collapsed children stay loaded — GtkTreeListModel only
+                    // hides them, and ~750 bytes a row beats re-querying on
+                    // every re-expand. Past MAX_RETAINED_CHILD_ROWS collapsing
+                    // releases instead, and the create-closure reloads.
                     if !is_expanded
                         && should_release_collapsed_children(
                             count_loaded_child_rows(&loaded_tree),
@@ -1439,9 +1419,8 @@ impl TabsSidebar {
         }
         {
             // Removing a folder takes the row, its sounds and part of the
-            // General total with it, so tree, sound list and tab counts all need
-            // refreshing. Keep the selected tab so the user isn't yanked back to
-            // General.
+            // General total, so tree, list and counts all refresh. Keep the
+            // selected tab or the user gets yanked back to General.
             let inner_weak = Arc::downgrade(&inner);
             folder_removed.borrow_mut().replace(Box::new(move || {
                 if let Some(inner) = inner_weak.upgrade() {
@@ -1479,11 +1458,10 @@ impl TabsSidebar {
                     return;
                 };
                 let Some(relative_path) = node.relative_path.clone() else {
-                    // Root rows aren't a selectable scope. Don't toggle expansion
-                    // here: the click that selected the row already ran the
-                    // disclosure gesture's toggle, so a second one flips it right
-                    // back and throws away the children the collapse branch just
-                    // released.
+                    // Root rows aren't a selectable scope, and don't toggle
+                    // expansion here — the selecting click already ran the
+                    // disclosure toggle, so a second flips it right back and
+                    // discards the children the collapse just released.
                     return;
                 };
                 let root_path = node.root_path.clone();
@@ -1544,10 +1522,9 @@ impl TabsSidebar {
         Self { inner }
     }
 
-    /// Make the tab a hotkey scope key names active, as if its row had been
-    /// clicked, so selection goes down the same path either way. False when the
-    /// tab isn't in the list — folder tabs live in the tree, not the list box,
-    /// and can't be bound yet.
+    /// Activate the tab a scope key names, as if its row were clicked, so
+    /// selection takes one path either way. False when it isn't in the list —
+    /// folder tabs live in the tree and can't be bound yet.
     pub fn activate_tab(&self, scope_key: &str) -> bool {
         let identity = match scope_key {
             GENERAL_TAB_ID => GENERAL_TAB_ID,
@@ -3196,10 +3173,9 @@ mod tests {
 
     #[test]
     fn tearing_the_tree_down_does_not_persist_collapse() {
-        // Rebuilding the model drops every row, and GTK notifies `expanded =
-        // false` for each one on the way out. Persisting that would overwrite
-        // the folder expansion the user actually chose, so a refresh or a
-        // reorder would silently flatten their tree.
+        // Rebuilding drops every row and GTK notifies `expanded = false` on the
+        // way out. Persist that and a refresh or reorder flattens the tree the
+        // user set up.
         assert!(
             !should_persist_expansion_change(true, true),
             "a collapse caused by rebuilding the tree is not user intent"
@@ -3245,13 +3221,12 @@ mod tests {
         done()
     }
 
-    /// Reproduces the sidebar's real expansion wiring: a `TreeListModel` whose
-    /// create-closure starts a pager the first time a node's children are
-    /// requested, exactly as `TabsInner::build` does.
+    /// The sidebar's real expansion wiring: a `TreeListModel` whose
+    /// create-closure starts a pager on first request, same as `TabsInner::build`.
     ///
-    /// This must stay the only test that calls `gtk4::init`. The harness runs
-    /// each test on its own thread even under `--test-threads=1`, and GTK
-    /// panics if a second thread initializes it.
+    /// Keep this the only test calling `gtk4::init` — the harness gives each
+    /// test its own thread even under `--test-threads=1`, and GTK panics if a
+    /// second one initializes it.
     #[test]
     #[ignore = "drives the shared GTK main context: needs a display and must \
                 run alone, e.g. cargo test --lib -- --ignored --exact \

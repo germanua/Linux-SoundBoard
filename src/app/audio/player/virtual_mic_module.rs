@@ -1,16 +1,13 @@
 //! Runtime null-sink behind the virtual microphone.
 //!
-//! EasyEffects, pavucontrol's "Create Virtual Source", NoiseTorch — they all
-//! build their source from `module-null-sink` with `media.class` overridden to
-//! `Audio/Source/Virtual`. That gives a real adapter/driver node, which
-//! WirePlumber will accept as the system default source. A plain
-//! `pw::stream::StreamRc` proxy will not: WirePlumber refuses to pin a
-//! stream-proxy as the resolved `default.audio.source` even when
-//! `default.configured.audio.source` names it (checked live).
+//! EasyEffects, pavucontrol and NoiseTorch all do the same thing:
+//! `module-null-sink` with `media.class` overridden to `Audio/Source/Virtual`,
+//! which yields a real driver node WirePlumber will accept as the default
+//! source. A `pw::stream::StreamRc` proxy will not — checked live, WirePlumber
+//! refuses to resolve one as `default.audio.source` even when
+//! `default.configured.audio.source` names it.
 //!
-//! Loaded at engine start with `pactl load-module`, unloaded at shutdown. No
-//! system config files are touched — it is a runtime side effect of the running
-//! engine, the same way pavucontrol or NoiseTorch loads one from a GUI.
+//! `pactl load-module` at start, unload at shutdown. No config files touched.
 
 #[cfg(not(test))]
 use std::process::Command;

@@ -1,17 +1,15 @@
-//! The StatusNotifierItem and its dbusmenu, served over GIO's GDBus.
+//! The StatusNotifierItem and its dbusmenu, over GIO's GDBus.
 //!
-//! GTK4 has no tray API — `GtkStatusIcon` was removed — so a panel icon means
-//! speaking StatusNotifierItem over D-Bus. The two obvious crates do not fit:
-//! `tray-icon` wraps libappindicator and would pull GTK 3 into a GTK 4
-//! process, and `ksni` brings a Tokio runtime into a codebase that has no
-//! async runtime at all. `gio` is already a dependency and serves both
-//! interfaces directly, with every callback arriving on the GTK main thread —
-//! which is where the menu actions have to run anyway.
+//! GTK4 dropped `GtkStatusIcon`, so a panel icon means speaking
+//! StatusNotifierItem ourselves. Neither obvious crate fits: `tray-icon` pulls
+//! GTK 3 into a GTK 4 process, `ksni` pulls in Tokio for a codebase with no
+//! async runtime. `gio` is already a dependency, serves both interfaces, and
+//! delivers callbacks on the GTK main thread where the actions have to run.
 //!
-//! `ItemIsMenu` is left false: left-click toggles the window and right-click
-//! opens the menu, the way Steam and Discord behave. `ContextMenu` is
-//! deliberately unimplemented — it asks the application to draw a menu at
-//! absolute screen coordinates, which GTK4 cannot do under Wayland.
+//! `ItemIsMenu` stays false — left-click toggles the window, right-click opens
+//! the menu, same as Steam and Discord. `ContextMenu` is unimplemented: it
+//! wants the app to draw a menu at absolute screen coordinates, which GTK4
+//! can't do on Wayland.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -137,12 +135,9 @@ struct TrayState {
     tooltip: String,
 }
 
-/// A live tray icon.
-///
-/// Dropping this does not remove the icon — none of the ids GIO hands back
-/// release anything on drop — so the owning code calls [`Self::shutdown`]. They
-/// are held behind `Cell`s because releasing consumes them while the service
-/// itself is shared.
+/// A live tray icon. Dropping it does NOT remove the icon: none of GIO's ids
+/// release on drop, so the owner calls [`Self::shutdown`]. They sit behind
+/// `Cell`s because releasing consumes them while the service is shared.
 pub(crate) struct TrayService {
     connection: gio::DBusConnection,
     bus_name: String,
@@ -156,11 +151,9 @@ pub(crate) struct TrayService {
 }
 
 impl TrayService {
-    /// Export the item and ask the watcher to show it.
-    ///
-    /// Returns `Err` only when the objects cannot be exported. A missing
-    /// watcher is not an error: several desktops have none until an extension
-    /// or panel starts, so the item waits and registers when one appears.
+    /// Export the item and ask the watcher to show it. `Err` only if the export
+    /// itself fails — a missing watcher is normal on desktops where a panel or
+    /// extension provides one later, and the item waits for it.
     pub(crate) fn start(
         connection: &gio::DBusConnection,
         items: Vec<MenuItem>,
@@ -195,15 +188,13 @@ impl TrayService {
             |_, name| log::warn!("Tray: lost {name}"),
         );
 
-        // A watcher can show up late or restart under us (panel crash, GNOME
-        // extension toggled), so follow the name instead of registering once at
-        // startup and hoping.
+        // Watchers show up late and restart under us (panel crash, extension
+        // toggled), so follow the name rather than register once and hope.
         //
-        // `gio::bus_watch_name_on_connection` looks like the tool for this, but
-        // in gio 0.20 it hands back a `WatcherId` from a private module that a
-        // second export of the same name shadows — unnameable outside the crate,
-        // so the watch can't be stored or cancelled. Following NameOwnerChanged
-        // by hand costs a few lines and gives us an id we can unsubscribe.
+        // `gio::bus_watch_name_on_connection` would be the tool, but in gio 0.20
+        // its `WatcherId` comes from a private module shadowed by a second
+        // export of the same name — unnameable, so the watch can't be stored or
+        // cancelled. NameOwnerChanged by hand gives us an id we can unsubscribe.
         let registered = Rc::new(Cell::new(false));
         let watcher = connection.signal_subscribe(
             Some("org.freedesktop.DBus"),
@@ -226,10 +217,9 @@ impl TrayService {
             },
         );
 
-        // The watcher is usually already running by the time we start, in which
-        // case no NameOwnerChanged is coming and this first attempt is the one
-        // that counts. It failing is not an error: several desktops have no
-        // watcher until a panel or extension provides one.
+        // Usually the watcher is already up, so no NameOwnerChanged is coming
+        // and this attempt is the one that counts. Failing is fine — plenty of
+        // desktops have no watcher until a panel starts.
         register_with_watcher(connection, &bus_name, &registered);
 
         Ok(Self {
@@ -271,11 +261,9 @@ impl TrayService {
         );
     }
 
-    /// Set the text shown when the pointer rests on the icon.
-    ///
-    /// This is where the playing sound belongs: hovering the icon is the first
-    /// thing anyone tries, and unlike the media controls it works on every
-    /// desktop that can show a tray icon at all.
+    /// Tooltip text. Where the playing sound belongs — hovering is the first
+    /// thing anyone tries, and unlike the media controls it works anywhere a
+    /// tray icon does.
     pub(crate) fn set_tooltip(&self, description: &str) {
         if self.state.borrow().tooltip == description {
             return;
@@ -488,10 +476,8 @@ fn register_menu(
         .build()
 }
 
-/// The id of a row the user clicked, or `None` for any other event.
-///
-/// Hosts also send `hovered`, `opened` and `closed` through this method; only
-/// `clicked` should fire an action.
+/// Id of a clicked row, `None` for anything else. Hosts push `hovered`,
+/// `opened` and `closed` through the same method.
 fn clicked_id(params: &Variant) -> Option<i32> {
     let event = params.try_child_get::<String>(1).ok().flatten()?;
     if event != "clicked" {
@@ -598,13 +584,11 @@ mod tests {
         assert!(!watcher_appeared(&name_owner_changed(":1.42", "")));
     }
 
-    /// Exports a real item on the session bus and checks that the desktop's
-    /// watcher takes it. Ignored by default because it needs a session bus with
-    /// a running watcher, which CI does not have; run it on a desktop with
+    /// Exports a real item and checks the desktop's watcher takes it. Needs a
+    /// session bus with a running watcher, which CI hasn't got:
     /// `cargo test -- --ignored registers_with_a_real_watcher --nocapture`.
-    ///
-    /// Run the live tests one at a time (`--test-threads=1`): they share the
-    /// process-wide session bus connection and export the same object paths.
+    /// One at a time (`--test-threads=1`) — the live tests share a connection
+    /// and export the same object paths.
     #[test]
     #[ignore = "needs a session bus with a StatusNotifierWatcher"]
     fn registers_with_a_real_watcher() {

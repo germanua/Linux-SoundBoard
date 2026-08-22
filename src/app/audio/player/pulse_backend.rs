@@ -210,11 +210,8 @@ fn connect_context(
         context
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
-                // SAFETY: `ml_ref` holds an Rc clone of the mainloop, so the
-                // pointer stays valid for the closure's life. PulseAudio
-                // documents `signal()` as callable from any thread the threaded
-                // mainloop dispatches on, which is exactly where we are, and
-                // nothing but the mainloop touches its own state.
+                // SAFETY: `ml_ref` keeps the mainloop alive for this closure,
+                // and signal() is documented callable from its dispatch thread.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -382,9 +379,7 @@ fn wait_for_stream_ready(
         stream
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
-                // SAFETY: same as connect_context — `ml_ref` outlives the
-                // closure, and `signal()` is safe to call from the PulseAudio
-                // mainloop dispatch thread with the mainloop lock held.
+                // SAFETY: as in connect_context, with the mainloop lock held.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -411,10 +406,9 @@ fn playback_buffer_attr(target_samples: usize) -> BufferAttr {
     BufferAttr {
         maxlength: u32::MAX,
         tlength: target_bytes,
-        // prebuf > 0 means PA pauses after an underrun until that many bytes
-        // are buffered again. Keep it tiny so recovery is one short pause and
-        // not a chain of underruns. minreq is how often PA asks for more:
-        // one mix chunk.
+        // prebuf: how much PA re-buffers after an underrun before resuming.
+        // Keep it tiny or recovery turns into a chain of underruns. minreq is
+        // how often it asks for more — one mix chunk.
         prebuf: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         minreq: samples_to_bytes(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize),
         fragsize: u32::MAX,

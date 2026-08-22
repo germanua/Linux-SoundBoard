@@ -1,11 +1,7 @@
-//! PipeWire and PulseAudio backend types and initialization.
-//!
-//! Owns the lifecycle of the in-process audio backend:
-//! - `BackendState` wraps either the PipeWire or PulseAudio backend.
-//! - `PipeWireBackendState` holds the live PipeWire connection handles.
-//! - `create_backend` / `create_pipewire_backend` build a backend from `RuntimeConfig`.
-//! - `remote_ok` / `remote_play` send a request to the out-of-process engine
-//!   and map its reply onto `EngineError`.
+//! Lifecycle of the in-process audio backend: `BackendState` wraps PipeWire or
+//! PulseAudio, `PipeWireBackendState` holds the live connection handles, and
+//! `create_backend` builds one from `RuntimeConfig`. `remote_ok`/`remote_play`
+//! are the out-of-process engine's side, mapping replies onto `EngineError`.
 
 use super::*;
 
@@ -109,10 +105,9 @@ pub(super) struct PipeWireBackendState {
     pub(super) _local_stream: Option<StreamHandle>,
     pub(super) virtual_stream: Option<StreamHandle>,
     pub(super) capture_stream: Option<StreamHandle>,
-    // The real null-sink behind `linuxsoundboard.virtual_mic`: pactl loads it
-    // at engine start, Drop unloads it. Option because pactl may be missing on
-    // a minimal box, and there we fail loud rather than quietly settling for a
-    // stream proxy WirePlumber will never make default.
+    // The real null-sink behind `linuxsoundboard.virtual_mic`; pactl loads it at
+    // start, Drop unloads it. Option because pactl may be missing, and there we
+    // fail loud rather than settle for a proxy that can never be default.
     pub(super) _virtual_mic_module: Option<virtual_mic_module::NullSinkModule>,
 }
 
@@ -216,10 +211,9 @@ fn create_pipewire_backend(
                 if let Some(state) = weak_state.upgrade() {
                     let mut state = state.borrow_mut();
                     if let Some(metadata) = metadata {
-                        // Different object than the one our belief came from,
-                        // and a fresh one replays no properties, so anything
-                        // remembered is stale and would suppress the claim
-                        // below.
+                        // Different object, and a fresh one replays no
+                        // properties, so the old belief would only suppress
+                        // the claim below.
                         forget_default_source_belief(&mut state, "bound");
                         state.default_metadata = Some(metadata);
                         // The listener may already have fired with the current
@@ -348,10 +342,9 @@ fn create_pipewire_backend(
                     if state.capture_node_id == Some(id) {
                         state.capture_node_id = None;
                     }
-                    // Only reconnect when the source that left is the one we're
-                    // actually capturing. Reacting to every Audio/Source removal
-                    // (another app's monitor, say) tears the capture stream down
-                    // and punches a silence gap for nothing.
+                    // Only reconnect if the source that left is the one we're
+                    // capturing. Reacting to every Audio/Source removal punches
+                    // a silence gap for nothing.
                     let affects_current_capture = removed_source_name
                         .as_deref()
                         .zip(state.active_capture_target.as_deref())
@@ -377,11 +370,9 @@ fn create_pipewire_backend(
     )
     .ok();
 
-    // Load the real null-sink behind `linuxsoundboard.virtual_mic`. Has to come
-    // before the feeder stream, which targets the sink by name. On failure we
-    // warn and carry on: the feeder still works as an in-process source for apps
-    // that aren't fussy about node type, WirePlumber just won't pin it as the
-    // system default.
+    // Must come before the feeder stream, which targets the sink by name. On
+    // failure warn and carry on: the feeder still serves apps that aren't fussy
+    // about node type, it just can't be the system default.
     let virtual_mic_module = match virtual_mic_module::NullSinkModule::load_or_attach() {
         Ok(module) => Some(module),
         Err(err) => {

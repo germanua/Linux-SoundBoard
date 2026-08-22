@@ -21,14 +21,12 @@ impl SoundListInner {
         self.col_view.append_column(&self.build_hotkey_column());
     }
 
-    /// The index, duration and hotkey columns are the same cell: one label in a
-    /// `sound-cell` box, with the context menu, the drag source and the
-    /// playing/active classes wired up. Only the label's styling and what it
-    /// says differ, so those come in as `new_label` and `bind_label`.
+    /// Index, duration and hotkey are the same cell: one label in a `sound-cell`
+    /// box with the context menu, drag source and state classes wired up. Only
+    /// the label differs, hence `new_label` and `bind_label`.
     ///
-    /// `pager` is `Some` for exactly one column. Binding a row asks the model to
-    /// load that row's page, and every column of a row binds together, so one
-    /// column asking is enough.
+    /// `pager` is `Some` for exactly one column — every column of a row binds
+    /// together, so one of them asking for the page is enough.
     fn build_label_column(
         self: &Rc<Self>,
         title: Option<&str>,

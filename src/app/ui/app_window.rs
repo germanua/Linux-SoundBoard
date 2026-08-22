@@ -348,10 +348,9 @@ pub fn build_window(
                     Some(Rc::clone(&on_library_changed)),
                     Some(Rc::clone(&on_list_style_changed)),
                 );
-                // This panel is attached after the dialog host, so it sits above
-                // it in the overlay's paint order. `DialogHost::present` raises
-                // itself before showing, which is what keeps dialogs opened from
-                // here on top.
+                // Attached after the dialog host, so it paints above it.
+                // `DialogHost::present` raises itself before showing, which is
+                // what keeps dialogs opened from here on top.
                 drop_overlay.add_overlay(&overlay);
                 overlay
             });
@@ -403,10 +402,9 @@ pub fn build_window(
     }
 
     {
-        // The window gets shown and hidden by routes the tray never sees: the
-        // close button, and relaunching the binary, which presents the hidden
-        // window through the app's activate handler. Follow the property or the
-        // menu ends up claiming the opposite of the truth.
+        // The tray never sees the close button, or a relaunch presenting the
+        // hidden window through activate. Follow the property or the menu says
+        // the opposite of the truth.
         let state_visible = Arc::clone(&state);
         window.connect_visible_notify(move |window| {
             refresh_tray_menu(&state_visible, window.is_visible());
@@ -417,10 +415,9 @@ pub fn build_window(
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
     window.connect_close_request(move |window| {
-        // First close-request handler to run, so the only one that can stop
-        // teardown before the rest of it starts: bootstrap's handler kills the
-        // player and the hotkey backends, which is exactly what running in the
-        // background must not do.
+        // First close-request handler, so the only one that can stop teardown
+        // before it starts. bootstrap's kills the player and hotkey backends,
+        // which is exactly what running in the background must not do.
         if crate::ui_event_bridge::close_should_hide_to_tray() {
             window.set_visible(false);
             return glib::Propagation::Stop;
@@ -501,11 +498,9 @@ pub fn handle_hotkey(
     }
 }
 
-/// Send the tray a menu that matches the state the app is in now.
-///
-/// `window_visible` is passed in rather than read back off the window: the
-/// close handler runs before the hide takes effect, so asking the widget there
-/// would report the value that is about to change.
+/// Send the tray a menu matching the current state. `window_visible` is passed
+/// in, not read off the widget — the close handler runs before the hide lands,
+/// so the widget would report the value that's about to change.
 fn refresh_tray_menu(state: &Arc<AppState>, window_visible: bool) {
     let real_mic_muted = !state.config.lock().settings.mic_passthrough;
     crate::ui_event_bridge::post_tray_menu(crate::tray::menu::build(
@@ -554,10 +549,9 @@ fn handle_tray_action(
     }
 }
 
-/// Act on a button pressed in the desktop's media controls.
-///
-/// Everything except Raise and Quit lands on the same dispatcher the control
-/// hotkeys use, so a panel button and a shortcut always do the same thing.
+/// Act on a media-controls button. Everything but Raise and Quit goes through
+/// the control-hotkey dispatcher, so a panel button and a shortcut can't
+/// diverge.
 fn handle_mpris_command(
     window: &ApplicationWindow,
     state: &Arc<AppState>,

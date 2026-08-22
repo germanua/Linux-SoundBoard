@@ -1,18 +1,13 @@
 //! Opt-in route-decision audit log.
 //!
-//! With `LSB_ROUTE_AUDIT=1` set, every PipeWire metadata write we make
-//! (per-stream `target.object`/`target.node`) and every default-source
-//! claim/restore is appended as JSONL to
-//! `$XDG_RUNTIME_DIR/linux-soundboard-route-audit.log`, or `/tmp` if that is
-//! unset.
+//! `LSB_ROUTE_AUDIT=1` appends every metadata write and default-source
+//! claim/restore as JSONL to
+//! `$XDG_RUNTIME_DIR/linux-soundboard-route-audit.log`, `/tmp` if unset.
+//! Without it the channel is never built and `record_*` bails on one atomic
+//! load, so this is free to leave in tree.
 //!
-//! Without the env var the channel is never built and the `record_*` paths
-//! bail on one atomic load (`is_enabled()`), so this costs nothing to leave
-//! in tree.
-//!
-//! Debug aid for the "Auto-route mode breaks Vesktop screen-share-with-sound"
-//! regression — see `docs/TROUBLESHOOTING.md`, "Capturing Auto-route audit
-//! data".
+//! Written for the "Auto-route breaks Vesktop screen-share-with-sound"
+//! regression — see `docs/TROUBLESHOOTING.md`.
 
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
@@ -132,11 +127,11 @@ pub fn record_metadata_write(
     );
 }
 
-/// Record a default-source claim or restore (`wpctl set-default` / `pactl
-/// set-default-source`). `kind` is `"default_source.claim"`, `"...restore"`,
-/// `"...pulse_claim"` or `"...pulse_restore"`.
-// Live in normal builds — only clippy's test target thinks it's dead, because
-// the callers sit in `#[cfg(not(test))]` blocks in source_routing.rs.
+/// Record a default-source claim or restore. `kind` is
+/// `"default_source.claim"`, `"...restore"`, `"...pulse_claim"` or
+/// `"...pulse_restore"`.
+// Callers are in `#[cfg(not(test))]` blocks, so only clippy's test target
+// thinks this is dead.
 #[allow(dead_code)]
 pub fn record_default_source_command(
     kind: &str,

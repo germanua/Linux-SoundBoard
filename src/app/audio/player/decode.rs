@@ -841,11 +841,9 @@ fn is_audio_track(track: &Track) -> bool {
     track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
 }
 
-/// The audio track to read, or `None` when the container holds nothing usable.
-///
-/// A strict audio container (aac/m4a/mp4) only ever yields a track that is
-/// really audio; anything else may fall back to the default or first non-null
-/// track, which is how odd containers with a mislabelled stream still play.
+/// The track to read, `None` if the container has nothing usable. aac/m4a/mp4
+/// must yield real audio; everything else may fall back to the default or first
+/// non-null track, which is how a mislabelled stream still plays.
 pub(crate) fn select_audio_track(
     format: &dyn FormatReader,
     strict_audio_container: bool,

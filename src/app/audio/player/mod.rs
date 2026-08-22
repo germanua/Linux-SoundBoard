@@ -90,10 +90,9 @@ const TARGET_OUTPUT_CHANNELS: u32 = 2;
 // tick faster than the quantum keeps the producer from starving under load.
 const MIX_INTERVAL_MS: u64 = 2;
 const MIX_CHUNK_FRAMES: usize = 512;
-// 3 x 1024-frame quantum. Three quanta is PipeWire's recommended floor for a
-// non-RT producer feeding an RT consumer; the third absorbs a missed mix tick
-// (Opus seek scanning frames, WirePlumber reshuffling the graph) without
-// audible silence.
+// 3 x 1024-frame quantum — PipeWire's recommended floor for a non-RT producer
+// feeding an RT consumer. The headroom absorbs a missed mix tick (Opus seek,
+// WirePlumber reshuffling) without audible silence.
 const LOCAL_OUTPUT_QUEUE_TARGET_FRAMES: usize = 3_072;
 const BALANCED_VIRTUAL_QUEUE_TARGET_FRAMES: usize = 2_048;
 const LOW_VIRTUAL_QUEUE_TARGET_FRAMES: usize = 1_024;
@@ -178,11 +177,10 @@ struct SourceDescriptor {
     // (EasyEffects, NoiseTorch, most filter chains). Some modules let the user
     // set it, so treat it as one signal among several, not gospel.
     is_virtual: bool,
-    // Backed by a real hardware Device. The registry `global` event exposes
-    // device.id for alsa/bluez/usb nodes but not device.api or factory.name
-    // (those live in bound node info). Software sources — null sinks,
-    // loopbacks, filter chains, EasyEffects, screenshare mics — have no
-    // device.id. See registry_handlers.
+    // Backed by a real Device. device.id is the only hardware signal the
+    // registry `global` event carries, and software sources (null sinks,
+    // loopbacks, filter chains, screenshare mics) have none. See
+    // registry_handlers.
     is_hardware_backed: bool,
 }
 

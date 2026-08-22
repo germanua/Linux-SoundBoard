@@ -1,12 +1,9 @@
 //! The `com.canonical.dbusmenu` wire shapes.
 //!
-//! A tray host does not read a GTK menu model; it asks over D-Bus for a
-//! `(ia{sv}av)` tree and a bag of properties per row. This module turns a flat
-//! list of rows into exactly those `glib::Variant` payloads and nothing else —
-//! no D-Bus, no GTK — so the shapes can be pinned by ordinary unit tests.
-//!
-//! The menu is deliberately flat: every row is a child of the root, and no row
-//! has children of its own.
+//! A tray host doesn't read a GTK menu model — it asks over D-Bus for a
+//! `(ia{sv}av)` tree plus properties per row. This turns a flat row list into
+//! those `glib::Variant` payloads and nothing else, no D-Bus and no GTK, so
+//! unit tests can pin the shapes. Flat: every row is a child of the root.
 
 use glib::prelude::ToVariant;
 use glib::variant::{DictEntry, Variant};
@@ -62,10 +59,9 @@ impl MenuItem {
     }
 }
 
-/// The properties a host may ask for, in the order we report them.
-///
-/// A row only reports the ones its kind actually has: a separator has no label
-/// and no toggle, a plain command has no toggle.
+/// The properties a host may ask for, in the order we report them. A row only
+/// reports what its kind has — a separator has no label or toggle, a plain
+/// command no toggle.
 fn properties_of(item: &MenuItem) -> Vec<(&'static str, Variant)> {
     match item.kind {
         ItemKind::Separator => vec![("type", "separator".to_variant())],
@@ -82,11 +78,9 @@ fn properties_of(item: &MenuItem) -> Vec<(&'static str, Variant)> {
     }
 }
 
-/// Build an `a{sv}` from name/value pairs.
-///
-/// The value slot of `a{sv}` already has type `v`, so each value goes in as the
-/// `Variant` it is. Calling `to_variant()` on it again would box it twice and
-/// send `<<'x'>>` where the host expects `<'x'>`.
+/// Build an `a{sv}` from name/value pairs. The value slot is already type `v`,
+/// so values go in as-is — a second `to_variant()` double-boxes and sends
+/// `<<'x'>>` where the host wants `<'x'>`.
 fn dict(pairs: impl IntoIterator<Item = (&'static str, Variant)>) -> Variant {
     Variant::array_from_iter::<DictEntry<String, Variant>>(
         pairs
@@ -95,10 +89,9 @@ fn dict(pairs: impl IntoIterator<Item = (&'static str, Variant)>) -> Variant {
     )
 }
 
-/// The properties of one row as `a{sv}`.
-///
-/// An empty `filter` means the host wants everything; otherwise it wants only
-/// the names it listed, and names the row does not have are simply absent.
+/// One row's properties as `a{sv}`. Empty `filter` means the host wants
+/// everything; otherwise only what it listed, and names the row lacks are
+/// just absent.
 pub(crate) fn item_properties(item: &MenuItem, filter: &[String]) -> Variant {
     dict(
         properties_of(item)
@@ -107,10 +100,8 @@ pub(crate) fn item_properties(item: &MenuItem, filter: &[String]) -> Variant {
     )
 }
 
-/// The whole menu as the `(ia{sv}av)` tree `GetLayout` returns.
-///
-/// The revision that accompanies it belongs to the service, not to the shape,
-/// so it is not added here.
+/// The whole menu as the `(ia{sv}av)` tree `GetLayout` returns. The revision
+/// that goes with it belongs to the service, not the shape.
 pub(crate) fn layout(items: &[MenuItem], filter: &[String]) -> Variant {
     let children = items.iter().map(|item| {
         Variant::tuple_from_iter([

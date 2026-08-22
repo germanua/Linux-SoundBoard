@@ -273,9 +273,8 @@ fn play_sound_from_library(
 /// Turn the binding a press arrived as into the one sound to play.
 ///
 /// A chord reaches the backends once, so the press names whichever binding
-/// stands for it and every sound on that chord is a candidate. One query more
-/// than the old single-binding lookup, which is invisible next to the press
-/// itself — fold the sound rows into the group query if that ever changes.
+/// stands for it and every sound on that chord is a candidate. Costs one extra
+/// query — fold the sound rows into the group query if that ever shows up.
 fn resolve_hotkey_press(
     binding_id: &str,
     press: &HotkeyPress,

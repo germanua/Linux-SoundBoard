@@ -57,22 +57,18 @@ pub(super) fn create_local_output_stream(
     Ok(StreamHandle::new(stream, listener, stream_state))
 }
 
-/// Feeder Playback stream that pushes our mix into the real virtual-mic
-/// null-sink (loaded separately with `pactl load-module`).
+/// Feeder stream pushing our mix into the virtual-mic null-sink that
+/// `pactl load-module` set up.
 ///
-/// Apps see that null-sink as `linuxsoundboard.virtual_mic`: a real driver node
-/// eligible to be the system default. The feeder connects **without**
-/// AUTOCONNECT, because WirePlumber's policy won't link a Stream/Output/Audio
-/// to an Audio/Source/Virtual node and silently drops it from the policy graph.
-/// explicit_links.rs wires it with link-factory instead — the same thing
-/// `pw-link` does on the CLI.
+/// No AUTOCONNECT: WirePlumber won't link a Stream/Output/Audio to an
+/// Audio/Source/Virtual node and drops it from the policy graph, so
+/// explicit_links.rs wires it with link-factory instead.
 ///
-/// `node.always-process=true` is mandatory and `node.passive` must stay unset:
-/// the feeder has to run every quantum and produce a buffer (silence when the
-/// queue is dry) or the explicit link stops being `active`. Without it the
-/// feeder sleeps with its driver, the cold wake-up handshake on a hand-made
-/// link is unreliable, and the first consumer after engine start gets a burst
-/// of zero/stale buffer fragments — audible as a harsh whizzling noise.
+/// `node.always-process=true` is mandatory, `node.passive` must stay unset. The
+/// feeder has to produce a buffer every quantum, silence included, or the
+/// explicit link goes inactive — then the cold wake-up handshake misfires and
+/// the first consumer after start hears a burst of stale buffer, a harsh
+/// whizzling noise.
 pub(super) fn create_runtime_virtual_source_stream(
     core: pw::core::CoreRc,
     queues: RtSharedQueues,
@@ -92,10 +88,9 @@ pub(super) fn create_runtime_virtual_source_stream(
             // AUTOCONNECT is never set on its connect() call below; the graph
             // is wired explicitly via link-factory in explicit_links.rs.
             "node.dont-reconnect" => "true",
-            // Always run the process callback, even when no consumer is
-            // currently reading from the null-sink. Keeps the explicit links
-            // in `active` state and prevents the cold wake-up burst that
-            // produces a "whizzling" sound on first capture after start.
+            // Run the callback even with no consumer reading. Keeps the
+            // explicit links `active` and avoids the cold wake-up whizzle on
+            // first capture.
             "node.always-process" => "true",
             // Pin to the soundboard driver group so Discord opening a second
             // consumer does not pull the feeder into a competing driver.
@@ -154,10 +149,9 @@ pub(super) fn create_capture_stream(
             "node.dont-reconnect" => "true",
             "state.restore-target" => "false",
             "node.latency" => latency_hint,
-            // Pin to the soundboard driver group so capture stays on the same
-            // clock as local + feeder; otherwise a separate driver introduces
-            // a clock-domain bridge that the audioadapter would have to
-            // resample over, producing micro-glitches.
+            // Same driver group as local + feeder, so capture stays on one
+            // clock. A second driver means the audioadapter resamples across
+            // clock domains and you hear micro-glitches.
             "node.group" => SOUNDBOARD_NODE_GROUP,
             "node.always-process" => "true",
             "node.lock-quantum" => "true",
@@ -246,10 +240,9 @@ fn build_audio_format_pod() -> Result<Vec<u8>, EngineError> {
         })
 }
 
-/// PipeWire `node.group` value shared by all three of our streams. Keeps the
-/// soundboard's local output, virtual-mic feeder, and capture stream pinned
-/// to the same driver so cross-clock-domain resampling never creeps in when
-/// other clients (Discord, browsers) join the graph.
+/// `node.group` for all three streams. Local output, feeder and capture stay on
+/// one driver, so cross-clock resampling can't creep in when Discord or a
+/// browser joins the graph.
 const SOUNDBOARD_NODE_GROUP: &str = "linuxsoundboard.engine";
 
 #[derive(Clone, Copy)]

@@ -37,10 +37,10 @@ thread_local! {
     static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
     static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
 
-    /// Answers "should close hide the window instead of quitting?". `bootstrap`
-    /// owns it, since it knows the setting and whether a panel is really showing
-    /// the icon, but the window's close-request handler is what asks: it runs
-    /// first and is the only place that can stop teardown.
+    /// Should close hide the window instead of quitting? `bootstrap` owns it —
+    /// it knows the setting and whether a panel really shows the icon — but the
+    /// window's close handler asks, since that runs first and is the only place
+    /// that can stop teardown.
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
 
     /// Set once when the user asks to quit from the tray. Without it, closing

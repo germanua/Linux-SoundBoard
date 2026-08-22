@@ -1,12 +1,8 @@
-//! The playback surface the `commands` layer drives.
+//! The playback surface `commands` drives.
 //!
-//! `commands::playback` doesn't need a concrete [`AudioPlayer`], only something
-//! it can tell to play, stop, seek and query. Going through the trait lets
-//! tests swap in a double and assert on dispatches with no live backend.
-//!
-//! Narrow on purpose: transport only, no mic/source routing and no auto-gain.
-//! Those stay on `AudioPlayer`, since their handlers are driven through config
-//! state rather than engine dispatch.
+//! A trait, not the concrete [`AudioPlayer`], so tests can swap in a double and
+//! assert on dispatches without a live backend. Transport only — routing and
+//! auto-gain stay on `AudioPlayer`, driven through config state instead.
 
 use super::player::{AudioPlayer, EngineError, PlaybackPosition};
 

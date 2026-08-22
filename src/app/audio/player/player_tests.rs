@@ -445,11 +445,9 @@ fn auto_capture_falls_back_to_physical_mic_when_no_enhancement_source() {
 
 #[test]
 fn auto_capture_ignores_unrecognized_virtual_source_in_favor_of_hardware_mic() {
-    // Auto-detect must never take an unrecognised virtual source — a
-    // Vencord/Discord screenshare null sink, say — over a real mic. It is
-    // neither a known enhancement chain nor hardware-backed (no device.id), so
-    // only explicit selection reaches it. A high priority.session must not
-    // rescue it.
+    // An unrecognised virtual source (Vencord screenshare null sink) is neither
+    // a known enhancement chain nor hardware-backed, so auto-detect must skip it
+    // for a real mic. A high priority.session must not rescue it.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
         1,
@@ -529,9 +527,8 @@ fn auto_capture_trusts_named_enhancement_over_hardware_mic() {
 
 #[test]
 fn auto_capture_returns_none_when_only_unrecognized_virtual_source_present() {
-    // Nothing registered but an unrecognised virtual source (screenshare null
-    // sink): auto-detect picks nothing and passthrough waits for a real mic
-    // instead of piping app audio into the virtual mic. The default/previous
+    // Only a screenshare null sink registered: pick nothing and wait for a real
+    // mic rather than pipe app audio into the virtual mic. The default/previous
     // fallback must not resurrect it either.
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.sources.insert(
