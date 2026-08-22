@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.3.2
+Version:        2.3.3
 Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -146,6 +146,9 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Sun Aug 23 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.3.3-1
+- A notification is replaced by the next one instead of queueing behind it
+
 * Sat Aug 22 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.3.2-1
 - Consistent, denser interface
 - Toasts ignored the theme

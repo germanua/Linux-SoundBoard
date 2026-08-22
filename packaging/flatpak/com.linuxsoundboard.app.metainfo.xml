@@ -67,6 +67,14 @@
   </keywords>
   
   <releases>
+    <release version="2.3.3" date="2026-08-23">
+      <description>
+        <p>Linux Soundboard 2.3.3:</p>
+        <ul>
+          <li>A notification is replaced by the next one instead of queueing behind it</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.2" date="2026-08-22">
       <description>
         <p>Linux Soundboard 2.3.2:</p>

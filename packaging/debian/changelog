@@ -1,3 +1,9 @@
+linux-soundboard (2.3.3-1) unstable; urgency=medium
+
+  * A notification is replaced by the next one instead of queueing behind it
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 23 Aug 2026 00:10:16 +0300
+
 linux-soundboard (2.3.2-1) unstable; urgency=medium
 
   * Consistent, denser interface
