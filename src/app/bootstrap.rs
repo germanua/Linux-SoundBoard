@@ -1225,7 +1225,8 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
     }
 
     let tray = install_tray(app, &state);
-    let mpris = install_mpris(app, &state);
+    let mpris = install_mpris(app);
+    install_now_playing(&tray, &mpris, &state);
 
     let state_close = Arc::clone(&state);
     let timers_close = timer_registry.clone();
@@ -1377,10 +1378,7 @@ fn install_tray(app: &Application, state: &Arc<AppState>) -> TraySlot {
 /// Exported for the whole session but visible only while a sound plays and
 /// only while the setting is on, so the app does not sit in the panel's media
 /// controls holding the media keys when it has nothing to say.
-fn install_mpris(
-    app: &Application,
-    state: &Arc<AppState>,
-) -> Option<Rc<crate::mpris::MprisService>> {
+fn install_mpris(app: &Application) -> Option<Rc<crate::mpris::MprisService>> {
     let connection = app.dbus_connection()?;
     let service = match crate::mpris::MprisService::start(
         &connection,
@@ -1393,16 +1391,37 @@ fn install_mpris(
         }
     };
 
-    let service_now = Rc::clone(&service);
-    let state_now = Arc::clone(state);
-    crate::ui_event_bridge::set_now_playing_handler(move |now| {
-        // Checked here rather than at the call site so turning the setting off
-        // clears the card on the next snapshot instead of leaving it stuck.
-        let enabled = state_now.config.lock().settings.mpris_enabled;
-        service_now.set_now_playing(if enabled { now } else { None });
-    });
-
     Some(service)
+}
+
+/// Route the playing sound to both places that show it.
+///
+/// The tray tooltip is not part of the media-controls feature and is not gated
+/// on its setting: hovering the icon is the first thing anyone tries, and it
+/// works on every desktop that can show a tray icon at all.
+fn install_now_playing(
+    tray: &TraySlot,
+    mpris: &Option<Rc<crate::mpris::MprisService>>,
+    state: &Arc<AppState>,
+) {
+    let tray = Rc::clone(tray);
+    let mpris = mpris.clone();
+    let state = Arc::clone(state);
+    crate::ui_event_bridge::set_now_playing_handler(move |now| {
+        if let Some(tray) = tray.borrow().as_ref() {
+            tray.set_tooltip(&match now.as_ref() {
+                Some(now) if now.paused => format!("Paused: {}", now.title),
+                Some(now) => format!("Playing: {}", now.title),
+                None => String::new(),
+            });
+        }
+        if let Some(mpris) = mpris.as_ref() {
+            // Read here rather than at the call site so turning the setting off
+            // clears the card on the next snapshot instead of leaving it stuck.
+            let enabled = state.config.lock().settings.mpris_enabled;
+            mpris.set_now_playing(if enabled { now } else { None });
+        }
+    });
 }
 
 fn start_tray_service(

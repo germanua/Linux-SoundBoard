@@ -351,6 +351,13 @@ mod tests {
         main_loop.run();
 
         let reply = reply.borrow_mut().take().expect("a reply arrived");
+
+        // The player has to be findable under its well-known name; on its
+        // unique name alone no panel would ever show it.
+        let owned_while_playing = name_has_owner(&connection);
+        service.set_now_playing(None);
+        let owned_when_stopped = name_has_owner(&connection);
+
         service.shutdown();
 
         let rendered = reply
@@ -364,6 +371,51 @@ mod tests {
             rendered.contains("'xesam:title': <'airhorn.mp3'>"),
             "{rendered}"
         );
+        assert!(
+            owned_while_playing,
+            "no player name was claimed while a sound was playing"
+        );
+        assert!(
+            !owned_when_stopped,
+            "the player name was still held after playback stopped, so the media keys stay captured"
+        );
+    }
+
+    fn name_has_owner(connection: &gio::DBusConnection) -> bool {
+        let answer = Rc::new(Cell::new(false));
+        let main_loop = glib::MainLoop::new(None, false);
+        connection.call(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            Some(&Variant::tuple_from_iter([format!(
+                "org.mpris.MediaPlayer2.{APP_BINARY}"
+            )
+            .to_variant()])),
+            None,
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            {
+                let answer = Rc::clone(&answer);
+                let main_loop = main_loop.clone();
+                move |result| {
+                    if let Ok(reply) = result {
+                        answer.set(
+                            reply
+                                .try_child_get::<bool>(0)
+                                .ok()
+                                .flatten()
+                                .unwrap_or(false),
+                        );
+                    }
+                    main_loop.quit();
+                }
+            },
+        );
+        main_loop.run();
+        answer.get()
     }
 
     #[test]

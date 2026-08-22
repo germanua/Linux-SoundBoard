@@ -260,24 +260,103 @@ impl TransportInner {
     }
 }
 
-/// Tell the desktop's media controls what is playing.
+/// What the tray tooltip and the media controls should be showing.
 ///
-/// Sends nothing at all until the sound's name is known: a card titled with a
-/// uuid is worse than no card, and the name arrives a moment later from
-/// `resolve_track_name_async`.
+/// `None` until the sound's name is known: a card titled with a uuid is worse
+/// than no card, and the name arrives a moment later from
+/// `resolve_track_name_async`, which announces it then.
+fn now_playing_for(
+    position: &crate::audio::PlaybackPosition,
+    duration_ms: u64,
+    active: &Option<super::ActiveTrack>,
+) -> Option<crate::mpris::NowPlaying> {
+    let title = active
+        .as_ref()
+        .filter(|track| track.play_id == position.play_id)
+        .and_then(|track| track.sound_name.clone())?;
+    Some(crate::mpris::NowPlaying {
+        id: position.sound_id.clone(),
+        title,
+        duration_ms: Some(duration_ms),
+        paused: position.paused,
+    })
+}
+
 fn publish_now_playing(
     position: &crate::audio::PlaybackPosition,
     duration_ms: u64,
     active: &Option<super::ActiveTrack>,
 ) {
-    let title = active
-        .as_ref()
-        .filter(|track| track.play_id == position.play_id)
-        .and_then(|track| track.sound_name.clone());
-    crate::ui_event_bridge::post_now_playing(title.map(|title| crate::mpris::NowPlaying {
-        id: position.sound_id.clone(),
-        title,
-        duration_ms: Some(duration_ms),
-        paused: position.paused,
-    }));
+    crate::ui_event_bridge::post_now_playing(now_playing_for(position, duration_ms, active));
+}
+
+#[cfg(test)]
+mod now_playing_tests {
+    use super::*;
+    use crate::audio::PlaybackPosition;
+
+    fn position(paused: bool) -> PlaybackPosition {
+        PlaybackPosition {
+            play_id: "play-1".to_string(),
+            sound_id: "sound-1".to_string(),
+            position_ms: 500,
+            paused,
+            finished: false,
+            duration_ms: Some(2_500),
+        }
+    }
+
+    fn track(name: Option<&str>, play_id: &str) -> Option<super::super::ActiveTrack> {
+        Some(super::super::ActiveTrack {
+            sound_id: "sound-1".to_string(),
+            sound_name: name.map(str::to_string),
+            sound_duration_ms: Some(2_500),
+            play_id: play_id.to_string(),
+        })
+    }
+
+    #[test]
+    fn a_named_sound_is_announced_with_its_name_and_length() {
+        let now = now_playing_for(
+            &position(false),
+            2_500,
+            &track(Some("airhorn.mp3"), "play-1"),
+        )
+        .expect("a named sound is announced");
+        assert_eq!(now.title, "airhorn.mp3");
+        assert_eq!(now.id, "sound-1");
+        assert_eq!(now.duration_ms, Some(2_500));
+        assert!(!now.paused);
+    }
+
+    #[test]
+    fn a_paused_sound_says_so() {
+        let now = now_playing_for(
+            &position(true),
+            2_500,
+            &track(Some("airhorn.mp3"), "play-1"),
+        )
+        .expect("a paused sound is still announced");
+        assert!(now.paused);
+    }
+
+    /// The name is resolved asynchronously, so the first snapshot for a sound
+    /// has none yet.
+    #[test]
+    fn a_sound_whose_name_is_not_known_yet_announces_nothing() {
+        assert_eq!(
+            now_playing_for(&position(false), 2_500, &track(None, "play-1")),
+            None
+        );
+        assert_eq!(now_playing_for(&position(false), 2_500, &None), None);
+    }
+
+    /// Guards against announcing the previous sound's name over the new one.
+    #[test]
+    fn a_name_left_over_from_another_playback_is_not_used() {
+        assert_eq!(
+            now_playing_for(&position(false), 2_500, &track(Some("stale.mp3"), "play-0")),
+            None
+        );
+    }
 }

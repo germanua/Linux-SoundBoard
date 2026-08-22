@@ -272,6 +272,19 @@ impl TrayService {
         );
     }
 
+    /// Set the text shown when the pointer rests on the icon.
+    ///
+    /// This is where the playing sound belongs: hovering the icon is the first
+    /// thing anyone tries, and unlike the media controls it works on every
+    /// desktop that can show a tray icon at all.
+    pub(crate) fn set_tooltip(&self, description: &str) {
+        if self.state.borrow().tooltip == description {
+            return;
+        }
+        self.state.borrow_mut().tooltip = description.to_string();
+        self.emit(ITEM_PATH, ITEM_INTERFACE, "NewToolTip", None);
+    }
+
     /// Remove the icon and release the bus name. Doing nothing on a second
     /// call, so quitting by more than one route stays safe.
     pub(crate) fn shutdown(&self) {
@@ -611,6 +624,7 @@ mod tests {
         main_loop.run();
 
         let registered = tray.is_live();
+        tray.set_tooltip("Playing: airhorn.mp3");
 
         // Ask our own dbusmenu for its layout the way a panel does. The call
         // has to be asynchronous: a blocking one would stop the main context
@@ -643,12 +657,48 @@ mod tests {
         main_loop.run();
 
         let layout = layout.borrow_mut().take().expect("a reply arrived");
+
+        // And read the tooltip back the way a panel does when the pointer
+        // rests on the icon.
+        let tooltip = Rc::new(RefCell::new(None));
+        let main_loop = glib::MainLoop::new(None, false);
+        connection.call(
+            Some(&item_bus_name(std::process::id())),
+            ITEM_PATH,
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&Variant::tuple_from_iter([
+                ITEM_INTERFACE.to_variant(),
+                "ToolTip".to_variant(),
+            ])),
+            None,
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            {
+                let tooltip = Rc::clone(&tooltip);
+                let main_loop = main_loop.clone();
+                move |result| {
+                    *tooltip.borrow_mut() = Some(result);
+                    main_loop.quit();
+                }
+            },
+        );
+        main_loop.run();
+
+        let tooltip = tooltip.borrow_mut().take().expect("a reply arrived");
         tray.shutdown();
 
         assert!(
             registered,
             "the watcher did not accept the item; is a panel running?"
         );
+        assert_eq!(
+            tooltip.expect("the tooltip was readable").print(false),
+            "(<('', @a(iiay) [], 'Linux Soundboard', 'Playing: airhorn.mp3')>,)",
+            "hovering the icon has to show what is playing"
+        );
+
         let layout = layout.expect("GetLayout answered without an error");
         let rendered = layout.print(false);
         assert!(

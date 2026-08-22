@@ -401,10 +401,20 @@ pub fn build_window(
         });
     }
 
+    {
+        // The window is shown and hidden by routes the tray never sees — the
+        // close button, and relaunching the binary, which presents the hidden
+        // window through the application's activate handler. Following the
+        // property keeps the menu from claiming the opposite of the truth.
+        let state_visible = Arc::clone(&state);
+        window.connect_visible_notify(move |window| {
+            refresh_tray_menu(&state_visible, window.is_visible());
+        });
+    }
+
     let transport_cleanup = transport.clone();
     let tabs_cleanup = tabs.clone();
     let sound_list_cleanup = sound_list.clone();
-    let state_cleanup = Arc::clone(&state);
     window.connect_close_request(move |window| {
         // The first close-request handler to run, and so the only one that can
         // stop the teardown before the rest of it starts: bootstrap's handler
@@ -412,7 +422,6 @@ pub fn build_window(
         // running in the background must not do.
         if crate::ui_event_bridge::close_should_hide_to_tray() {
             window.set_visible(false);
-            refresh_tray_menu(&state_cleanup, false);
             return glib::Propagation::Stop;
         }
         transport_cleanup.cleanup();
@@ -525,13 +534,11 @@ fn handle_tray_action(
 
     match action {
         MenuAction::ToggleWindow => {
-            let showing = window.is_visible();
-            if showing {
+            if window.is_visible() {
                 window.set_visible(false);
             } else {
                 window.present();
             }
-            refresh_tray_menu(state, !showing);
         }
         MenuAction::Control(control) => {
             handle_control_hotkey(state, transport, control);
@@ -566,7 +573,6 @@ fn handle_mpris_command(
         MprisCommand::Previous => ControlHotkeyAction::PreviousSound,
         MprisCommand::Raise => {
             window.present();
-            refresh_tray_menu(state, true);
             return;
         }
         MprisCommand::Quit => {
