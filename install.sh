@@ -266,7 +266,8 @@ download_and_extract_tarball() {
 
     require_cmd tar "to unpack the release tarball"
 
-    local tarball="$WORK_DIR/$(basename "$url")"
+    local tarball
+    tarball="$WORK_DIR/$(basename "$url")"
     info "Downloading $url ..." >&2
     fetch_progress "$url" "$tarball"
     verify_download "$tarball" "$tag" >&2
@@ -493,7 +494,8 @@ download_appimage() {
     fi
     [[ -n "$url" ]] || fail "No release AppImage for $arch${tag:+ at $tag}. See https://github.com/$APP_REPO/releases"
 
-    local image="$WORK_DIR/$(basename "$url")"
+    local image
+    image="$WORK_DIR/$(basename "$url")"
     info "Downloading $url ..." >&2
     fetch_progress "$url" "$image"
     verify_download "$image" "$tag" >&2

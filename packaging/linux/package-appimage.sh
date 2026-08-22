@@ -341,11 +341,11 @@ HOOK
 
 # Shipping the checker without a caller is exactly the bug this replaced, so
 # check both halves: the hook still holds the call, and AppRun still sources it.
-grep -q 'appimage-preflight-check' "$gtk_hook" \
-    && grep -q "apprun-hooks/\"linuxdeploy-plugin-gtk.sh\"" "$APPDIR/AppRun" || {
+if ! grep -q 'appimage-preflight-check' "$gtk_hook" \
+    || ! grep -q "apprun-hooks/\"linuxdeploy-plugin-gtk.sh\"" "$APPDIR/AppRun"; then
     echo "the preflight check is not reachable from AppRun; it would never run" >&2
     exit 1
-}
+fi
 echo "✓ Preflight checker wired into AppRun"
 
 cp "$versioned_path" "$stable_path"
