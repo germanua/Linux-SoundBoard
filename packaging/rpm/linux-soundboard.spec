@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.3.0
+Version:        2.3.1
 Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -146,6 +146,10 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Sat Aug 22 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.3.1-1
+- Native and tarball dependencies
+- Release icon churn
+
 * Sat Aug 22 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.3.0-1
 - System tray and background running
 - Show the playing sound in the desktop's media controls

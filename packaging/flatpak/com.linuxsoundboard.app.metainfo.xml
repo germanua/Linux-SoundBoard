@@ -67,6 +67,15 @@
   </keywords>
   
   <releases>
+    <release version="2.3.1" date="2026-08-22">
+      <description>
+        <p>Linux Soundboard 2.3.1:</p>
+        <ul>
+          <li>Native and tarball dependencies</li>
+          <li>Release icon churn</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.0" date="2026-08-22">
       <description>
         <p>Linux Soundboard 2.3.0:</p>

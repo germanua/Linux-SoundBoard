@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-08-22
+
 ### Fixed
 
 - **Native and tarball dependencies:** Package metadata and installers now include the PulseAudio and PipeWire command providers the app invokes, package builds use the locked Rust graph, and distro-selected Rust packages are no longer constrained by duplicated version literals. Stale ALSA build dependencies were removed.

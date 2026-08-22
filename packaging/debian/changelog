@@ -1,3 +1,10 @@
+linux-soundboard (2.3.1-1) unstable; urgency=medium
+
+  * Native and tarball dependencies
+  * Release icon churn
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sat, 22 Aug 2026 20:32:47 +0300
+
 linux-soundboard (2.3.0-1) unstable; urgency=medium
 
   * System tray and background running
