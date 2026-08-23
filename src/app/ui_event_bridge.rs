@@ -12,6 +12,7 @@ type TrayActionHandler = RefCell<Option<Box<dyn FnMut(TrayAction)>>>;
 type TrayMenuHandler = RefCell<Option<Box<dyn FnMut(Vec<MenuItem>)>>>;
 type TrayEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 type NowPlayingHandler = RefCell<Option<Box<dyn FnMut(Option<NowPlaying>)>>>;
+type MprisEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 type MprisCommandHandler = RefCell<Option<Box<dyn FnMut(MprisCommand)>>>;
 
 thread_local! {
@@ -27,6 +28,7 @@ thread_local! {
     static TRAY_ENABLED_HANDLER: TrayEnabledHandler = RefCell::new(None);
 
     static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
+    static MPRIS_ENABLED_HANDLER: MprisEnabledHandler = RefCell::new(None);
     static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
 
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
@@ -131,6 +133,20 @@ pub fn post_now_playing(now: Option<NowPlaying>) {
         NOW_PLAYING_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(now.clone());
+            }
+        });
+    });
+}
+
+pub fn set_mpris_enabled_handler(f: impl FnMut(bool) + 'static) {
+    MPRIS_ENABLED_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_mpris_enabled(enabled: bool) {
+    glib::MainContext::default().invoke(move || {
+        MPRIS_ENABLED_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(enabled);
             }
         });
     });

@@ -240,7 +240,7 @@ fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
                 log::warn!("Could not save the media controls setting: {error}");
                 return;
             }
-            crate::ui_event_bridge::post_now_playing(None);
+            crate::ui_event_bridge::post_mpris_enabled(row.is_active());
         });
     }
 

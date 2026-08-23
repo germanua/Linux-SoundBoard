@@ -168,7 +168,6 @@ impl MprisService {
         }
     }
 
-    /// Announce the sound that started, or that playback stopped.
     pub(crate) fn set_now_playing(&self, now: Option<NowPlaying>) {
         if *self.now.borrow() == now {
             return;
@@ -188,6 +187,9 @@ impl MprisService {
     }
 
     fn announce(&self) {
+        if !self.name.is_held() {
+            return;
+        }
         let now = self.now.borrow();
         let changed = [
             (
@@ -481,6 +483,73 @@ mod tests {
             !once_switched_off,
             "switching the setting off must hand the media keys back"
         );
+    }
+
+    #[test]
+    #[ignore = "needs a session bus"]
+    fn switching_the_setting_on_mid_sound_publishes_that_sound_at_once() {
+        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+            .expect("a session bus");
+        let service = MprisService::start(&connection, |_| {}).expect("the objects export");
+
+        service.set_now_playing(Some(NowPlaying {
+            id: "3f2504e0-4f89-41d3-9a0c-0305e82c3301".to_string(),
+            title: "airhorn.mp3".to_string(),
+            duration_ms: Some(2_500),
+            paused: false,
+        }));
+        settle();
+        let owned_while_switched_off = name_has_owner(&connection);
+
+        service.set_enabled(true);
+        settle();
+        let published = player_properties(&connection);
+
+        service.shutdown();
+
+        assert!(
+            !owned_while_switched_off,
+            "a sound must not claim the player name while the setting is off"
+        );
+        assert!(
+            published.contains("'PlaybackStatus': <'Playing'>"),
+            "the panel saw a stopped player instead of the sound already playing: {published}"
+        );
+        assert!(
+            published.contains("'xesam:title': <'airhorn.mp3'>"),
+            "the panel saw no track for the sound already playing: {published}"
+        );
+    }
+
+    fn player_properties(connection: &gio::DBusConnection) -> String {
+        let reply = Rc::new(RefCell::new(None));
+        let main_loop = glib::MainLoop::new(None, false);
+        connection.call(
+            Some(&format!("org.mpris.MediaPlayer2.{APP_BINARY}")),
+            OBJECT_PATH,
+            PROPERTIES_INTERFACE,
+            "GetAll",
+            Some(&Variant::tuple_from_iter([PLAYER_INTERFACE.to_variant()])),
+            None,
+            gio::DBusCallFlags::NONE,
+            2000,
+            gio::Cancellable::NONE,
+            {
+                let reply = Rc::clone(&reply);
+                let main_loop = main_loop.clone();
+                move |result| {
+                    *reply.borrow_mut() = Some(result);
+                    main_loop.quit();
+                }
+            },
+        );
+        main_loop.run();
+        let properties = reply
+            .borrow_mut()
+            .take()
+            .expect("a reply arrived")
+            .expect("GetAll answered without an error");
+        properties.print(false).to_string()
     }
 
     #[test]

@@ -1223,7 +1223,7 @@ fn finish_application_ready(app: &Application, prepared: PreparedApplication) {
 
     let tray = install_tray(app, &state);
     let mpris = install_mpris(app);
-    install_now_playing(&tray, &mpris, &state);
+    install_now_playing(&tray, &mpris);
     if let Some(mpris) = mpris.as_ref() {
         mpris.set_enabled(state.config.lock().settings.mpris_enabled);
     }
@@ -1374,14 +1374,9 @@ fn install_mpris(app: &Application) -> Option<Rc<crate::mpris::MprisService>> {
     Some(service)
 }
 
-fn install_now_playing(
-    tray: &TraySlot,
-    mpris: &Option<Rc<crate::mpris::MprisService>>,
-    state: &Arc<AppState>,
-) {
+fn install_now_playing(tray: &TraySlot, mpris: &Option<Rc<crate::mpris::MprisService>>) {
     let tray = Rc::clone(tray);
-    let mpris = mpris.clone();
-    let state = Arc::clone(state);
+    let now_playing = mpris.clone();
     crate::ui_event_bridge::set_now_playing_handler(move |now| {
         if let Some(tray) = tray.borrow().as_ref() {
             tray.set_tooltip(&match now.as_ref() {
@@ -1390,11 +1385,15 @@ fn install_now_playing(
                 None => String::new(),
             });
         }
+        if let Some(mpris) = now_playing.as_ref() {
+            mpris.set_now_playing(now);
+        }
+    });
+
+    let mpris = mpris.clone();
+    crate::ui_event_bridge::set_mpris_enabled_handler(move |enabled| {
         if let Some(mpris) = mpris.as_ref() {
-            // Read on demand so toggling needs no restart.
-            let enabled = state.config.lock().settings.mpris_enabled;
             mpris.set_enabled(enabled);
-            mpris.set_now_playing(if enabled { now } else { None });
         }
     });
 }
