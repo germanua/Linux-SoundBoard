@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-08-23
+
 ### Added
 
 - **Audio settings category:** LUFS normalization and Loudness Boost now have a dedicated Audio category with a speaker icon, while General keeps folders, microphone source, tray, appearance, removal behavior, and About settings.
