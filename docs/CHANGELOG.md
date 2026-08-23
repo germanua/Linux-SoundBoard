@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Auto-gain stepper buttons are compact instead of oversized pills.
+
+### Fixed
+
+- Show In Media Controls now takes effect immediately, including during playback.
+- Container builds can replace a running AppImage instead of failing with `Text file busy`.
+
 ## [2.3.3] - 2026-08-23
 
 ### Changed
