@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-#
-# Packaging smoke checks for Linux Soundboard.
-#
-# These checks verify the packaging artifacts are internally consistent and
-# structurally valid without requiring build tooling (rpmbuild, dpkg, flatpak-
-# builder) or a running audio session. Checks that require build tools are
-# noted in the output but skipped automatically when the tool is absent.
-#
-# Exit codes: 0 = all checks pass, 1 = one or more failures.
+# Offline packaging consistency checks.
 
 # shellcheck disable=SC2016
 
@@ -25,7 +17,7 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 skip() { printf '[SKIP] %s\n' "$1"; SKIP=$((SKIP + 1)); }
 note() { printf '[NOTE] %s\n' "$1"; }
 
-# ── 1. Metadata consistency ──────────────────────────────────────────────────
+# 1. Metadata consistency
 
 echo "==> Metadata consistency"
 vm_ec=0
@@ -39,7 +31,7 @@ fi
 
 echo ""
 
-# ── 1a. Legal and dependency notices ───────────────────────────────────────
+# 1a. Legal and dependency notices
 
 echo "==> Legal and dependency notices"
 LEGAL_FILES=(
@@ -210,7 +202,7 @@ fi
 
 echo ""
 
-# ── 1b. Stable AUR default ──────────────────────────────────────────────────
+# 1b. Stable AUR default
 
 echo "==> Stable AUR default"
 if grep -qF 'APP_AUR_PACKAGE="linux-soundboard"' "$REPO_ROOT/install.sh"; then
@@ -241,7 +233,7 @@ fi
 
 echo ""
 
-# ── 2. Desktop file validation ───────────────────────────────────────────────
+# 2. Desktop file validation
 
 echo "==> Desktop file validation"
 DESKTOP_FILES=(
@@ -272,7 +264,7 @@ fi
 
 echo ""
 
-# ── 3. AppStream metadata validation ─────────────────────────────────────────
+# 3. AppStream metadata validation
 
 echo "==> AppStream metadata validation"
 METAINFO="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.metainfo.xml"
@@ -303,7 +295,7 @@ fi
 
 echo ""
 
-# ── 4. Service file ───────────────────────────────────────────────────────────
+# 4. Service file
 
 echo "==> Systemd service file"
 SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
@@ -339,7 +331,7 @@ fi
 
 echo ""
 
-# ── 5. install-user.sh subcommand coverage ────────────────────────────────────
+# 5. install-user.sh subcommand coverage
 
 echo "==> install-user.sh subcommands"
 INSTALLER="$REPO_ROOT/packaging/linux/install-user.sh"
@@ -367,7 +359,7 @@ fi
 
 echo ""
 
-# ── 5a. install.sh wrapper subcommand coverage ───────────────────────────────
+# 5a. install.sh wrapper subcommand coverage
 
 echo "==> install.sh wrapper subcommands"
 WRAPPER="$REPO_ROOT/install.sh"
@@ -386,8 +378,7 @@ else
     else
         fail "install.sh: --keep-package option missing"
     fi
-    # The one-liner pipes the script into bash, so prompts must come from the
-    # terminal rather than stdin.
+    # Read piped-install prompts from the terminal.
     if grep -q "ensure_tty" "$WRAPPER" && grep -q "exec </dev/tty" "$WRAPPER"; then
         pass "install.sh: menu reads prompts from the terminal when piped"
     else
@@ -402,7 +393,7 @@ fi
 
 echo ""
 
-# ── 6. Flatpak manifest: forbidden finish-args check ─────────────────────────
+# 6. Flatpak manifest: forbidden finish-args check
 
 echo "==> Flatpak manifest permission audit"
 MANIFEST="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.yml"
@@ -438,7 +429,7 @@ fi
 
 echo ""
 
-# ── 7. AppImage preflight script ──────────────────────────────────────────────
+# 7. AppImage preflight script
 
 echo "==> AppImage preflight check script"
 PREFLIGHT="$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
@@ -512,7 +503,7 @@ fi
 
 echo ""
 
-# ── 8. Shell script syntax checks ────────────────────────────────────────────
+# 8. Shell script syntax checks
 
 echo "==> Shell script syntax"
 SHELL_SCRIPTS=(
@@ -545,7 +536,7 @@ done
 
 echo ""
 
-# ── 9. install.sh (top-level installer) ──────────────────────────────────────
+# 9. install.sh (top-level installer)
 
 echo "==> Top-level install.sh"
 TOP_INSTALL="$REPO_ROOT/install.sh"
@@ -561,7 +552,7 @@ fi
 
 echo ""
 
-# ── 10. Build tool availability notes ────────────────────────────────────────
+# 10. Build tool availability notes
 
 echo "==> Build tool availability (informational)"
 for tool_label in \
@@ -583,7 +574,7 @@ done
 
 echo ""
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+# Summary
 
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
 if [[ "$FAIL" -gt 0 ]]; then

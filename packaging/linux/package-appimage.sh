@@ -151,11 +151,9 @@ if grep -Fq 'done < <(find "$directory" \( -type l -o -type f \) -name "$library
     sed -i '/done < <(find "\$directory" \\( -type l -o -type f \\) -name "\$library" -print0)/c\    done < <(find "$directory" \\( -type l -o -type f \\) ! -path "/usr/lib/vmware/*" ! -path "/usr/lib/vmware/**" -name "$library" -print0)' "$GTK_PLUGIN_BIN"
 fi
 
-# Patch GTK plugin for Wayland support.
 echo "Patching GTK plugin for Wayland support..."
 if grep -q 'export GDK_BACKEND=x11' "$GTK_PLUGIN_BIN"; then
     sed -i 's/export GDK_BACKEND=x11.*/# Prefer Wayland when available; fall back to X11 if needed/' "$GTK_PLUGIN_BIN"
-    # Insert backend detection after the marker.
     # shellcheck disable=SC2016
     sed -i '/# Prefer Wayland when available; fall back to X11 if needed/a \
 \
@@ -239,11 +237,7 @@ while IFS= read -r icon_path; do
     install -Dm644 "$icon_path" "$APPDIR/usr/libexec/linux-soundboard/installer/icons/$relative_path"
 done < <(find "$ICON_SOURCE_ROOT" -type f | sort)
 
-# A directory of PNGs is not an icon theme without this: the spec makes
-# index.theme the thing that marks one, and hosts that lack the
-# hicolor-icon-theme package have no other copy to merge ours with. Cheap
-# insurance for in-process lookups; the desktop panel resolves the window icon
-# from an installed .desktop instead and never sees the AppDir at all.
+# Supply the hicolor index used for in-process icon lookups.
 APP_ICON_SIZES=(16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512)
 SYMBOLIC_CONTEXTS=(actions:Actions devices:Devices places:Places)
 {
@@ -304,10 +298,9 @@ fi
 # The AppImage uses the host audio server tools for live setup and diagnostics.
 echo "Skipping pactl/wpctl bundling; the runtime uses host PipeWire/PulseAudio services."
 
-# Trim unused libraries to keep the AppImage small.
 echo "Removing unnecessary libraries..."
 
-# Drop codecs and image loaders the app does not use.
+# Unused media libraries.
 rm -f "$APPDIR/usr/lib"/libopenraw* 2>/dev/null || true      # RAW image support
 rm -f "$APPDIR/usr/lib"/libglycin* 2>/dev/null || true       # Image loader
 rm -f "$APPDIR/usr/lib"/libdav1d* 2>/dev/null || true        # AV1 video codec
@@ -323,18 +316,10 @@ rm -f "$APPDIR/usr/lib"/librav1e* 2>/dev/null || true        # AV1 encoder
 
 echo "Library cleanup complete"
 
-# Add startup dependency checks.
 echo "Adding preflight dependency checker..."
 install -Dm755 "$SCRIPT_DIR/appimage-preflight-check.sh" "$APPDIR/usr/bin/appimage-preflight-check"
 
-# Wire the preflight check into the gtk plugin's AppRun hook.
-#
-# Not into AppRun itself: linuxdeploy rewrites that on the packaging run below
-# ("Found an AppRun file/symlink, possibly due to re-run of linuxdeploy,
-# overwriting"), and it regenerates the source lines from the hooks its own
-# plugins registered — a file dropped into apprun-hooks/ by hand is ignored.
-# Editing a registered hook is what survives, which is the same thing the
-# GTK_THEME rewrite above relies on.
+# Patch the registered hook; linuxdeploy overwrites AppRun.
 [ -f "$gtk_hook" ] || { echo "no $gtk_hook to hang the preflight check on" >&2; exit 1; }
 cat >>"$gtk_hook" <<'HOOK'
 
@@ -352,8 +337,7 @@ HOOK
         --output appimage
 )
 
-# Shipping the checker without a caller is exactly the bug this replaced, so
-# check both halves: the hook still holds the call, and AppRun still sources it.
+# Verify AppRun reaches the checker.
 if ! grep -q 'appimage-preflight-check' "$gtk_hook" \
     || ! grep -q "apprun-hooks/\"linuxdeploy-plugin-gtk.sh\"" "$APPDIR/AppRun"; then
     echo "the preflight check is not reachable from AppRun; it would never run" >&2

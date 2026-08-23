@@ -166,10 +166,6 @@ headerbar:backdrop,
   border: 1px solid transparent;
 }
 
-.transport-playback-btn {
-  /* Uses .transport-btn dimensions (31x31) */
-}
-
 /* Symbolic icon coloring in transport bar */
 .transport-bar button image {
   color: #dfd0b8;
