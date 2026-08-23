@@ -1542,6 +1542,81 @@ fn dynamic_apply_to_switch_rebuilds_live_limiter_scope() {
 }
 
 #[test]
+fn loudness_boost_is_mic_only_and_enables_peak_protection_without_auto_gain() {
+    let audio_path = create_test_audio_file("wav");
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = false;
+    runtime.loudness_boost_enabled = true;
+    runtime.loudness_boost_db = 6.0;
+
+    assert_eq!(runtime.loudness_boost_gain(false), 1.0);
+    let expected = 10.0_f32.powf(6.0 / 20.0);
+    assert!((runtime.loudness_boost_gain(true) - expected).abs() < 0.001);
+
+    let mut playback = ActivePlayback::new(
+        "play-boost".to_string(),
+        "sound-boost".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        Some(-14.0),
+        None,
+        &runtime,
+    )
+    .expect("create boosted playback");
+
+    assert!(playback.local_limiter.is_none());
+    assert!(playback.virtual_limiter.is_some());
+
+    let mut local = vec![0.0; 1_024];
+    let mut virtual_out = vec![0.0; 1_024];
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+    let local_peak = local.iter().copied().map(f32::abs).fold(0.0, f32::max);
+    let virtual_peak = virtual_out
+        .iter()
+        .copied()
+        .map(f32::abs)
+        .fold(0.0, f32::max);
+    assert!((virtual_peak / local_peak - expected).abs() < 0.01);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn loudness_boost_combines_with_lufs_without_exceeding_full_scale() {
+    let audio_path = create_test_audio_file("wav");
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = true;
+    runtime.auto_gain.mode = AutoGainMode::Static;
+    runtime.auto_gain.apply_to = AutoGainApplyTo::Both;
+    runtime.auto_gain.target_lufs = -14.0;
+    runtime.loudness_boost_enabled = true;
+    runtime.loudness_boost_db = 150.0;
+
+    let mut playback = ActivePlayback::new(
+        "play-combined-boost".to_string(),
+        "sound-combined-boost".to_string(),
+        audio_path.to_string_lossy().to_string(),
+        0,
+        1.0,
+        Some(-20.0),
+        None,
+        &runtime,
+    )
+    .expect("create boosted playback");
+    let mut local = vec![0.0; 4_096];
+    let mut virtual_out = vec![0.0; 4_096];
+
+    playback.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(local.iter().all(|sample| sample.abs() <= 1.0));
+    assert!(virtual_out.iter().all(|sample| sample.abs() <= 1.0));
+    assert!(virtual_out.iter().any(|sample| sample.abs() > 0.0));
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
 fn loop_state_trim_finished_playbacks_discards_oldest_entries() {
     let mut state = LoopState::new(test_runtime_config(), test_player_snapshot_store());
     state.finished_playbacks.insert(

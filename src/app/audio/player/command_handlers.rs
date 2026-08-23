@@ -15,6 +15,8 @@ pub(super) fn audio_command_kind(cmd: &AudioCommand) -> &'static str {
         AudioCommand::SetAutoGainMode { .. } => "SetAutoGainMode",
         AudioCommand::SetAutoGainApplyTo { .. } => "SetAutoGainApplyTo",
         AudioCommand::SetAutoGainDynamicSettings { .. } => "SetAutoGainDynamicSettings",
+        AudioCommand::SetLoudnessBoostEnabled { .. } => "SetLoudnessBoostEnabled",
+        AudioCommand::SetLoudnessBoostDb { .. } => "SetLoudnessBoostDb",
         AudioCommand::SetLooping { .. } => "SetLooping",
         AudioCommand::SetMicPassthrough { .. } => "SetMicPassthrough",
         AudioCommand::SetMicSource { .. } => "SetMicSource",
@@ -172,6 +174,16 @@ pub(super) fn handle_audio_command(
             if let Some(playback) = state.active_playback.as_mut() {
                 playback.reset_limiters(&runtime);
             }
+        }
+        AudioCommand::SetLoudnessBoostEnabled { enabled } => {
+            state.runtime.loudness_boost_enabled = enabled;
+            let runtime = state.runtime.clone();
+            if let Some(playback) = state.active_playback.as_mut() {
+                playback.reset_limiters(&runtime);
+            }
+        }
+        AudioCommand::SetLoudnessBoostDb { boost_db } => {
+            state.runtime.loudness_boost_db = crate::config::normalize_loudness_boost_db(boost_db);
         }
         AudioCommand::SetLooping { enabled } => state.runtime.looping = enabled,
         AudioCommand::SetMicPassthrough { enabled, response } => {

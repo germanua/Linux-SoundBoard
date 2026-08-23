@@ -25,6 +25,25 @@ mod tests {
     }
 
     #[test]
+    fn loudness_boost_defaults_off_and_clamps_to_safe_range() {
+        let mut cfg = Config::default();
+        assert!(!cfg.settings.loudness_boost);
+        assert_eq!(cfg.settings.loudness_boost_db, 0.0);
+
+        cfg.settings.loudness_boost_db = 200.0;
+        cfg.sanitize_for_persistence();
+        assert_eq!(cfg.settings.loudness_boost_db, 150.0);
+
+        cfg.settings.loudness_boost_db = -1.0;
+        cfg.sanitize_for_persistence();
+        assert_eq!(cfg.settings.loudness_boost_db, 0.0);
+
+        cfg.settings.loudness_boost_db = f64::NAN;
+        cfg.sanitize_for_persistence();
+        assert_eq!(cfg.settings.loudness_boost_db, 0.0);
+    }
+
+    #[test]
     fn sanitize_for_persistence_disables_multiple_playback() {
         let mut cfg = Config::default();
         cfg.settings.allow_multiple_playbacks = true;

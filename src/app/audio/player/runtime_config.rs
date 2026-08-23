@@ -9,6 +9,8 @@ pub(super) struct RuntimeConfig {
     pub(super) default_source_mode: DefaultSourceMode,
     pub(super) mic_latency_profile: MicLatencyProfile,
     pub(super) auto_gain: AutoGainState,
+    pub(super) loudness_boost_enabled: bool,
+    pub(super) loudness_boost_db: f64,
     pub(super) looping: bool,
     pub(super) audio_backend: AudioBackendKind,
 }
@@ -30,9 +32,21 @@ impl RuntimeConfig {
             default_source_mode: routing.default_source_mode,
             mic_latency_profile: routing.mic_latency_profile,
             auto_gain: AutoGainState::from_config(config),
+            loudness_boost_enabled: config.settings.loudness_boost,
+            loudness_boost_db: crate::config::normalize_loudness_boost_db(
+                config.settings.loudness_boost_db,
+            ),
             looping: playback.play_mode.should_loop(),
             audio_backend: AudioBackendKind::PipeWire,
         }
+    }
+
+    pub(super) fn loudness_boost_gain(&self, is_virtual_output: bool) -> f32 {
+        if !self.loudness_boost_enabled || !is_virtual_output {
+            return 1.0;
+        }
+        let boost_db = crate::config::normalize_loudness_boost_db(self.loudness_boost_db);
+        10.0_f64.powf(boost_db / 20.0) as f32
     }
 
     pub(super) fn latency_tuning(&self) -> LatencyTuning {

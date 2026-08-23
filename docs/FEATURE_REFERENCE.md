@@ -541,6 +541,20 @@ Open via the settings button in the transport bar.
 
 ---
 
+#### Loudness Boost
+
+- **Path:** `Settings` → `General` → `Playback` → `Loudness Boost`
+- **What it does:** Adds `0–150 dB` of gain to sounds sent to the virtual microphone
+
+> **Notes:**
+>
+> - Loudness Boost works whether LUFS normalization is enabled or disabled
+> - When both are enabled, normalization is applied first and boost is applied before peak protection
+> - Local headphones and speakers are never boosted
+> - Extreme values are heavily limited and distorted; the value is digital gain, not physical sound-pressure level
+
+---
+
 #### Never Ask to Confirm Removal
 
 - **Path:** `Settings` → `General` → `Playback` → `Never Ask to Confirm Removal`
@@ -574,6 +588,16 @@ _These controls appear only when auto-gain is enabled._
 - **What it does:** Runs full loudness analysis for sounds that currently use an estimate
 
 > **Note:** The same live status counts and `Stop` control are available while refinement runs.
+
+---
+
+### General → Loudness Boost
+
+_These controls appear only when Loudness Boost is enabled._
+
+| Setting        | What it does                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| **Boost (dB)** | Adds `0–150 dB` of virtual-microphone gain before mandatory peak limiting; extreme values distort |
 
 ---
 

@@ -22,7 +22,7 @@ pub enum EngineIpcError {
 const IPC_TIMEOUT: Duration = Duration::from_secs(3);
 const ENGINE_DIR_NAME: &str = "linux-soundboard";
 const ENGINE_SOCKET_NAME: &str = "engine.sock";
-pub const ENGINE_PROTOCOL_VERSION: u32 = 1;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -83,6 +83,12 @@ pub enum EngineRequest {
         lookahead_ms: u32,
         attack_ms: u32,
         release_ms: u32,
+    },
+    SetLoudnessBoostEnabled {
+        enabled: bool,
+    },
+    SetLoudnessBoostDb {
+        boost_db: f64,
     },
     SetLooping {
         enabled: bool,
@@ -422,6 +428,23 @@ mod tests {
 
         let err = parse_request(r#"{"type":"not_real"}"#).unwrap_err();
         assert!(err.to_string().contains("Invalid engine request"));
+    }
+
+    #[test]
+    fn parses_loudness_boost_requests() {
+        let enabled = parse_request(r#"{"type":"set_loudness_boost_enabled","enabled":true}"#)
+            .expect("parse loudness boost toggle");
+        assert!(matches!(
+            enabled,
+            EngineRequest::SetLoudnessBoostEnabled { enabled: true }
+        ));
+
+        let level = parse_request(r#"{"type":"set_loudness_boost_db","boost_db":150.0}"#)
+            .expect("parse loudness boost level");
+        assert!(matches!(
+            level,
+            EngineRequest::SetLoudnessBoostDb { boost_db } if boost_db == 150.0
+        ));
     }
 
     #[test]

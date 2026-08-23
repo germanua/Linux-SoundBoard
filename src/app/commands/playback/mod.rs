@@ -510,6 +510,33 @@ pub fn set_auto_gain_target(
     )
 }
 
+pub fn set_loudness_boost_enabled(
+    enabled: bool,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), CommandError> {
+    save_config_and_notify_player(
+        &config,
+        &player,
+        |cfg| cfg.settings.loudness_boost = enabled,
+        |player| player.set_loudness_boost_enabled(enabled),
+    )
+}
+
+pub fn set_loudness_boost_db(
+    boost_db: f64,
+    config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
+) -> Result<(), CommandError> {
+    let boost_db = crate::config::normalize_loudness_boost_db(boost_db);
+    save_config_and_notify_player(
+        &config,
+        &player,
+        |cfg| cfg.settings.loudness_boost_db = boost_db,
+        |player| player.set_loudness_boost_db(boost_db),
+    )
+}
+
 pub fn set_auto_gain_mode(
     mode: String,
     config: Arc<Mutex<Config>>,

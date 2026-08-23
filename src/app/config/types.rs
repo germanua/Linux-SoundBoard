@@ -5,7 +5,8 @@ use uuid::Uuid;
 
 use crate::config::defaults::{
     default_allow_multiple_playbacks, default_auto_gain_attack_ms, default_auto_gain_lookahead_ms,
-    default_auto_gain_release_ms, default_auto_gain_target, default_tray_setting,
+    default_auto_gain_release_ms, default_auto_gain_target, default_loudness_boost_db,
+    default_tray_setting, normalize_loudness_boost_db,
 };
 
 macro_rules! impl_string_serde_enum {
@@ -652,6 +653,10 @@ pub struct Settings {
     #[serde(default = "default_auto_gain_release_ms")]
     pub auto_gain_release_ms: u32,
     #[serde(default)]
+    pub loudness_boost: bool,
+    #[serde(default = "default_loudness_boost_db")]
+    pub loudness_boost_db: f64,
+    #[serde(default)]
     pub control_hotkeys: ControlHotkeys,
     #[serde(default)]
     pub play_mode: PlayMode,
@@ -760,6 +765,7 @@ impl Settings {
             self.auto_gain_target_lufs = default_auto_gain_target();
         }
         self.auto_gain_target_lufs = self.auto_gain_target_lufs.clamp(-24.0, 0.0);
+        self.loudness_boost_db = normalize_loudness_boost_db(self.loudness_boost_db);
         self.allow_multiple_playbacks = false;
     }
 }
@@ -785,6 +791,8 @@ impl Default for Settings {
             auto_gain_lookahead_ms: default_auto_gain_lookahead_ms(),
             auto_gain_attack_ms: default_auto_gain_attack_ms(),
             auto_gain_release_ms: default_auto_gain_release_ms(),
+            loudness_boost: false,
+            loudness_boost_db: default_loudness_boost_db(),
             control_hotkeys: ControlHotkeys::default(),
             tab_hotkeys: false,
             multi_sound_hotkeys: false,

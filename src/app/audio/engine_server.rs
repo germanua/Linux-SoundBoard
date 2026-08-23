@@ -253,6 +253,14 @@ fn handle_request(
             player.set_auto_gain_dynamic_settings(lookahead_ms, attack_ms, release_ms);
             EngineResponse::Ok
         }
+        EngineRequest::SetLoudnessBoostEnabled { enabled } => {
+            player.set_loudness_boost_enabled(enabled);
+            EngineResponse::Ok
+        }
+        EngineRequest::SetLoudnessBoostDb { boost_db } => {
+            player.set_loudness_boost_db(boost_db);
+            EngineResponse::Ok
+        }
         EngineRequest::SetLooping { enabled } => {
             player.set_looping(enabled);
             EngineResponse::Ok

@@ -307,6 +307,21 @@ fn test_set_auto_gain_target_clamp() {
 }
 
 #[test]
+fn loudness_boost_is_independent_and_clamped() {
+    let config = create_test_config_state();
+    let player = create_test_audio_player();
+
+    commands::set_loudness_boost_enabled(true, config.clone(), player.clone())
+        .expect("enable loudness boost");
+    commands::set_loudness_boost_db(200.0, config.clone(), player).expect("set loudness boost");
+
+    let cfg = config.lock();
+    assert!(!cfg.settings.auto_gain);
+    assert!(cfg.settings.loudness_boost);
+    assert_eq!(cfg.settings.loudness_boost_db, 150.0);
+}
+
+#[test]
 fn test_set_auto_gain_mode_static() {
     let config = create_test_config_state();
     let player = create_test_audio_player();

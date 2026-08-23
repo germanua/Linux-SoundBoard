@@ -83,12 +83,21 @@ fn apply_loudness_status_summary(
 pub(super) fn build_playback_groups(
     state: Arc<AppState>,
     visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
-) -> (adw::PreferencesGroup, adw::PreferencesGroup) {
+) -> (
+    adw::PreferencesGroup,
+    adw::PreferencesGroup,
+    adw::PreferencesGroup,
+) {
     let playback_group = adw::PreferencesGroup::builder().title("Playback").build();
 
     let auto_gain_group = adw::PreferencesGroup::builder()
         .title("Auto-Gain Normalization")
         .description("Fine-tune loudness normalization")
+        .build();
+
+    let loudness_boost_group = adw::PreferencesGroup::builder()
+        .title("Loudness Boost")
+        .description("Advanced virtual-microphone amplification with peak protection")
         .build();
 
     let lookahead_row = adw::SpinRow::with_range(5.0, 200.0, 1.0);
@@ -105,6 +114,8 @@ pub(super) fn build_playback_groups(
             lookahead_ms,
             attack_ms,
             release_ms,
+            loudness_boost,
+            loudness_boost_db,
         ) = {
             let cfg = state.config.lock();
             let s = &cfg.settings;
@@ -117,6 +128,8 @@ pub(super) fn build_playback_groups(
                 s.auto_gain_lookahead_ms,
                 s.auto_gain_attack_ms,
                 s.auto_gain_release_ms,
+                s.loudness_boost,
+                s.loudness_boost_db,
             )
         };
 
@@ -143,6 +156,27 @@ pub(super) fn build_playback_groups(
         }
         playback_group.add(&auto_gain_row);
 
+        let loudness_boost_row = adw::SwitchRow::builder()
+            .title("Loudness Boost")
+            .subtitle("Amplify sounds sent to the virtual microphone")
+            .active(loudness_boost)
+            .build();
+        {
+            let state2 = Arc::clone(&state);
+            let boost_group = loudness_boost_group.downgrade();
+            loudness_boost_row.connect_active_notify(move |row| {
+                let _ = commands::set_loudness_boost_enabled(
+                    row.is_active(),
+                    Arc::clone(&state2.config),
+                    Arc::clone(&state2.player),
+                );
+                if let Some(boost_group) = boost_group.upgrade() {
+                    boost_group.set_visible(row.is_active());
+                }
+            });
+        }
+        playback_group.add(&loudness_boost_row);
+
         let skip_del_row = adw::SwitchRow::builder()
             .title("Never Ask to Confirm Removal")
             .subtitle("Skip the confirmation dialog when removing sounds")
@@ -153,6 +187,22 @@ pub(super) fn build_playback_groups(
             let _ = commands::set_skip_delete_confirm(row.is_active(), Arc::clone(&state2.config));
         });
         playback_group.add(&skip_del_row);
+
+        let boost_row = adw::SpinRow::with_range(0.0, crate::config::MAX_LOUDNESS_BOOST_DB, 1.0);
+        boost_row.set_title("Boost (dB)");
+        boost_row.set_subtitle("Extreme values heavily limit and distort audio");
+        boost_row.set_value(loudness_boost_db);
+        {
+            let state2 = Arc::clone(&state);
+            boost_row.connect_value_notify(move |row| {
+                let _ = commands::set_loudness_boost_db(
+                    row.value(),
+                    Arc::clone(&state2.config),
+                    Arc::clone(&state2.player),
+                );
+            });
+        }
+        loudness_boost_group.add(&boost_row);
 
         let target_row = adw::SpinRow::with_range(-24.0, 0.0, 0.5);
         target_row.set_title("Target Volume (LUFS)");
@@ -499,7 +549,8 @@ pub(super) fn build_playback_groups(
         }
 
         auto_gain_group.set_visible(auto_gain);
+        loudness_boost_group.set_visible(loudness_boost);
     }
 
-    (playback_group, auto_gain_group)
+    (playback_group, auto_gain_group, loudness_boost_group)
 }

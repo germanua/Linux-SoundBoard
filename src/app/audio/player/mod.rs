@@ -501,6 +501,41 @@ impl AudioPlayer {
         }
     }
 
+    pub fn set_loudness_boost_enabled(&self, enabled: bool) {
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetLoudnessBoostEnabled { enabled });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetLoudnessBoostEnabled { enabled },
+                );
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
+        }
+    }
+
+    pub fn set_loudness_boost_db(&self, boost_db: f64) {
+        let boost_db = crate::config::normalize_loudness_boost_db(boost_db);
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetLoudnessBoostDb { boost_db });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetLoudnessBoostDb { boost_db },
+                );
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
+        }
+    }
+
     pub fn set_looping(&self, enabled: bool) {
         match &self.backend {
             AudioPlayerBackend::Local(local) => {
@@ -1045,6 +1080,8 @@ fn test_runtime_config_with_mode(mode: DefaultSourceMode) -> RuntimeConfig {
                 release_ms: 150,
             },
         },
+        loudness_boost_enabled: false,
+        loudness_boost_db: 0.0,
         looping: false,
         audio_backend: AudioBackendKind::PipeWire,
     }

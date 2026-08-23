@@ -548,10 +548,11 @@ fn build_general_page(
     }
     page.add(&hidden_folders_group);
 
-    let (playback_group, auto_gain_group) =
+    let (playback_group, auto_gain_group, loudness_boost_group) =
         super::settings_playback::build_playback_groups(Arc::clone(&state), visibility_weak);
     page.add(&playback_group);
     page.add(&auto_gain_group);
+    page.add(&loudness_boost_group);
 
     let mic_group = super::settings_mic::build_mic_group(Arc::clone(&state));
     page.add(&mic_group);

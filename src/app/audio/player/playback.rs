@@ -23,6 +23,7 @@ pub(super) struct ActivePlayback {
     pub(super) last_dynamic_mode: AutoGainMode,
     pub(super) last_dynamic_apply_to: AutoGainApplyTo,
     pub(super) last_dynamic_params: AutoGainDynamicParams,
+    pub(super) last_loudness_boost_enabled: bool,
 }
 
 impl ActivePlayback {
@@ -54,16 +55,18 @@ impl ActivePlayback {
             } else {
                 None
             };
-        let virtual_limiter =
-            if local_dynamic_enabled && config.auto_gain.apply_to.applies_to_output(true) {
-                Some(LookAheadLimiter::new(
-                    TARGET_OUTPUT_SAMPLE_RATE,
-                    TARGET_OUTPUT_CHANNELS as u16,
-                    config.auto_gain.dynamic,
-                ))
-            } else {
-                None
-            };
+        let virtual_limiter = if (local_dynamic_enabled
+            && config.auto_gain.apply_to.applies_to_output(true))
+            || config.loudness_boost_enabled
+        {
+            Some(LookAheadLimiter::new(
+                TARGET_OUTPUT_SAMPLE_RATE,
+                TARGET_OUTPUT_CHANNELS as u16,
+                config.auto_gain.dynamic,
+            ))
+        } else {
+            None
+        };
 
         Ok(Self {
             play_id,
@@ -85,6 +88,7 @@ impl ActivePlayback {
             last_dynamic_mode: config.auto_gain.mode,
             last_dynamic_apply_to: config.auto_gain.apply_to,
             last_dynamic_params: config.auto_gain.dynamic,
+            last_loudness_boost_enabled: config.loudness_boost_enabled,
         })
     }
 
@@ -101,20 +105,23 @@ impl ActivePlayback {
             } else {
                 None
             };
-        self.virtual_limiter =
-            if dynamic_enabled && config.auto_gain.apply_to.applies_to_output(true) {
-                Some(LookAheadLimiter::new(
-                    TARGET_OUTPUT_SAMPLE_RATE,
-                    TARGET_OUTPUT_CHANNELS as u16,
-                    config.auto_gain.dynamic,
-                ))
-            } else {
-                None
-            };
+        self.virtual_limiter = if (dynamic_enabled
+            && config.auto_gain.apply_to.applies_to_output(true))
+            || config.loudness_boost_enabled
+        {
+            Some(LookAheadLimiter::new(
+                TARGET_OUTPUT_SAMPLE_RATE,
+                TARGET_OUTPUT_CHANNELS as u16,
+                config.auto_gain.dynamic,
+            ))
+        } else {
+            None
+        };
         self.last_dynamic_enabled = config.auto_gain.enabled;
         self.last_dynamic_mode = config.auto_gain.mode;
         self.last_dynamic_apply_to = config.auto_gain.apply_to;
         self.last_dynamic_params = config.auto_gain.dynamic;
+        self.last_loudness_boost_enabled = config.loudness_boost_enabled;
     }
 
     pub(super) fn seek(
@@ -153,6 +160,7 @@ impl ActivePlayback {
             || self.last_dynamic_mode != config.auto_gain.mode
             || self.last_dynamic_apply_to != config.auto_gain.apply_to
             || self.last_dynamic_params != config.auto_gain.dynamic
+            || self.last_loudness_boost_enabled != config.loudness_boost_enabled
         {
             self.reset_limiters(config);
         }
@@ -165,6 +173,7 @@ impl ActivePlayback {
             config
                 .auto_gain
                 .gain_for(self.sound_lufs, self.sound_true_peak_dbtp, true);
+        let virtual_boost_gain = config.loudness_boost_gain(true);
         let mut index = 0usize;
 
         while index < wanted_samples {
@@ -184,7 +193,11 @@ impl ActivePlayback {
             self.fallback_samples_written = self.fallback_samples_written.saturating_add(1);
             let normalized = sample as f32 / 32768.0 * self.source.output_gain_factor();
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
-            let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
+            let virtual_scaled = normalized
+                * self.base_volume
+                * config.mic_volume
+                * virtual_gain
+                * virtual_boost_gain;
 
             // Fade in to avoid a cold-start click.
             const FADE_IN_SAMPLES: u64 = 480; // ~5 ms at 48 kHz stereo

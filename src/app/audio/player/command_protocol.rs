@@ -48,6 +48,12 @@ pub(super) enum AudioCommand {
         attack_ms: u32,
         release_ms: u32,
     },
+    SetLoudnessBoostEnabled {
+        enabled: bool,
+    },
+    SetLoudnessBoostDb {
+        boost_db: f64,
+    },
     SetLooping {
         enabled: bool,
     },

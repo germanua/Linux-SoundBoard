@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Independent loudness boost:** Sounds sent to the virtual microphone can be amplified by up to 150 dB with or without LUFS normalization. Boost defaults off, never affects local playback, and uses peak limiting before the final output clamp; extreme values intentionally produce heavy limiting and distortion.
+
 ## [2.3.4] - 2026-08-23
 
 ### Changed
