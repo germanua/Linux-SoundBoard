@@ -1542,7 +1542,7 @@ fn dynamic_apply_to_switch_rebuilds_live_limiter_scope() {
 }
 
 #[test]
-fn loudness_boost_is_mic_only_and_enables_peak_protection_without_auto_gain() {
+fn loudness_boost_is_mic_only_and_does_not_enable_peak_limiting() {
     let audio_path = create_test_audio_file("wav");
     let mut runtime = test_runtime_config();
     runtime.auto_gain.enabled = false;
@@ -1566,7 +1566,7 @@ fn loudness_boost_is_mic_only_and_enables_peak_protection_without_auto_gain() {
     .expect("create boosted playback");
 
     assert!(playback.local_limiter.is_none());
-    assert!(playback.virtual_limiter.is_some());
+    assert!(playback.virtual_limiter.is_none());
 
     let mut local = vec![0.0; 1_024];
     let mut virtual_out = vec![0.0; 1_024];
@@ -1583,15 +1583,20 @@ fn loudness_boost_is_mic_only_and_enables_peak_protection_without_auto_gain() {
 }
 
 #[test]
-fn loudness_boost_combines_with_lufs_without_exceeding_full_scale() {
+fn loudness_boost_runs_after_dynamic_lufs_limiting_and_hard_clips() {
     let audio_path = create_test_audio_file("wav");
     let mut runtime = test_runtime_config();
     runtime.auto_gain.enabled = true;
-    runtime.auto_gain.mode = AutoGainMode::Static;
+    runtime.auto_gain.mode = AutoGainMode::DynamicLookAhead;
     runtime.auto_gain.apply_to = AutoGainApplyTo::Both;
     runtime.auto_gain.target_lufs = -14.0;
+    runtime.auto_gain.dynamic = AutoGainDynamicParams {
+        lookahead_ms: 5,
+        attack_ms: 1,
+        release_ms: 50,
+    };
     runtime.loudness_boost_enabled = true;
-    runtime.loudness_boost_db = 150.0;
+    runtime.loudness_boost_db = 20.0;
 
     let mut playback = ActivePlayback::new(
         "play-combined-boost".to_string(),
@@ -1604,14 +1609,23 @@ fn loudness_boost_combines_with_lufs_without_exceeding_full_scale() {
         &runtime,
     )
     .expect("create boosted playback");
-    let mut local = vec![0.0; 4_096];
-    let mut virtual_out = vec![0.0; 4_096];
+    let mut local = vec![0.0; 8_192];
+    let mut virtual_out = vec![0.0; 8_192];
 
     playback.render_into(&mut local, &mut virtual_out, &runtime);
 
+    assert!(playback.local_limiter.is_some());
+    assert!(playback.virtual_limiter.is_some());
     assert!(local.iter().all(|sample| sample.abs() <= 1.0));
     assert!(virtual_out.iter().all(|sample| sample.abs() <= 1.0));
-    assert!(virtual_out.iter().any(|sample| sample.abs() > 0.0));
+    assert_eq!(
+        virtual_out[6_144..]
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0, f32::max),
+        1.0
+    );
 
     cleanup_test_audio_path(&audio_path);
 }

@@ -97,7 +97,7 @@ pub(super) fn build_playback_groups(
 
     let loudness_boost_group = adw::PreferencesGroup::builder()
         .title("Loudness Boost")
-        .description("Advanced virtual-microphone amplification with peak protection")
+        .description("Raw virtual-microphone amplification")
         .build();
 
     let lookahead_row = adw::SpinRow::with_range(5.0, 200.0, 1.0);
@@ -190,7 +190,7 @@ pub(super) fn build_playback_groups(
 
         let boost_row = adw::SpinRow::with_range(0.0, crate::config::MAX_LOUDNESS_BOOST_DB, 1.0);
         boost_row.set_title("Boost (dB)");
-        boost_row.set_subtitle("Extreme values heavily limit and distort audio");
+        boost_row.set_subtitle("Extreme values hard-clip and heavily distort audio");
         boost_row.set_value(loudness_boost_db);
         {
             let state2 = Arc::clone(&state);

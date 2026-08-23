@@ -549,9 +549,9 @@ Open via the settings button in the transport bar.
 > **Notes:**
 >
 > - Loudness Boost works whether LUFS normalization is enabled or disabled
-> - When both are enabled, normalization is applied first and boost is applied before peak protection
+> - When both are enabled, normalization and its optional limiter run before the raw boost
 > - Local headphones and speakers are never boosted
-> - Extreme values are heavily limited and distorted; the value is digital gain, not physical sound-pressure level
+> - Extreme values hard-clip and distort; the value is digital gain, not physical sound-pressure level
 
 ---
 
@@ -595,9 +595,9 @@ _These controls appear only when auto-gain is enabled._
 
 _These controls appear only when Loudness Boost is enabled._
 
-| Setting        | What it does                                                                                       |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| **Boost (dB)** | Adds `0–150 dB` of virtual-microphone gain before mandatory peak limiting; extreme values distort |
+| Setting        | What it does                                                                                         |
+| -------------- | ---------------------------------------------------------------------------------------------------- |
+| **Boost (dB)** | Adds `0–150 dB` of raw virtual-microphone gain before the final hard clamp; extreme values distort |
 
 ---
 

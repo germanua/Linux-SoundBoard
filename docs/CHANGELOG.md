@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Independent loudness boost:** Raw boost now runs after optional LUFS limiting and hard-clips at the output boundary instead of automatically enabling peak limiting.
+
 ## [2.4.0] - 2026-08-23
 
 ### Added

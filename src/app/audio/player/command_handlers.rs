@@ -177,10 +177,6 @@ pub(super) fn handle_audio_command(
         }
         AudioCommand::SetLoudnessBoostEnabled { enabled } => {
             state.runtime.loudness_boost_enabled = enabled;
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state.active_playback.as_mut() {
-                playback.reset_limiters(&runtime);
-            }
         }
         AudioCommand::SetLoudnessBoostDb { boost_db } => {
             state.runtime.loudness_boost_db = crate::config::normalize_loudness_boost_db(boost_db);
