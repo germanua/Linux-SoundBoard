@@ -316,7 +316,7 @@ Right-click any row in the sound list to open the context menu.
 - **Trigger:** Right-click → `Remove` (single), `Remove Selected` (multi-selection), or press `Delete`
 - **What it does:** Removes sound(s) from the library, removes all tab memberships, and unregisters associated hotkeys
 
-> **Note:** Source audio files remain on disk. A confirmation dialog appears by default; disable it in `Settings` → `General` → `Never Ask to Confirm Removal`.
+> **Note:** Source audio files remain on disk. A confirmation dialog appears by default; disable it in `Settings` → `General` → `Behavior` → `Never Ask to Confirm Removal`.
 
 ---
 
@@ -530,11 +530,20 @@ Open via the settings button in the transport bar.
 
 ---
 
-### General → Playback
+### General → Behavior
+
+#### Never Ask to Confirm Removal
+
+- **Path:** `Settings` → `General` → `Behavior` → `Never Ask to Confirm Removal`
+- **What it does:** Skips the confirmation dialog when removing sounds from the soundboard
+
+---
+
+### Audio → Playback
 
 #### Auto-Gain Normalization
 
-- **Path:** `Settings` → `General` → `Playback` → `Auto-Gain Normalization`
+- **Path:** `Settings` → `Audio` → `Playback` → `Auto-Gain Normalization`
 - **What it does:** Enables or disables loudness normalization across sounds
 
 > **Note:** Enabling this may trigger background loudness analysis for sounds that lack LUFS data.
@@ -543,7 +552,7 @@ Open via the settings button in the transport bar.
 
 #### Loudness Boost
 
-- **Path:** `Settings` → `General` → `Playback` → `Loudness Boost`
+- **Path:** `Settings` → `Audio` → `Playback` → `Loudness Boost`
 - **What it does:** Adds `0–150 dB` of gain to sounds sent to the virtual microphone
 
 > **Notes:**
@@ -555,14 +564,7 @@ Open via the settings button in the transport bar.
 
 ---
 
-#### Never Ask to Confirm Removal
-
-- **Path:** `Settings` → `General` → `Playback` → `Never Ask to Confirm Removal`
-- **What it does:** Skips the confirmation dialog when removing sounds from the soundboard
-
----
-
-### General → Auto-Gain Normalization
+### Audio → Auto-Gain Normalization
 
 _These controls appear only when auto-gain is enabled._
 
@@ -591,7 +593,7 @@ _These controls appear only when auto-gain is enabled._
 
 ---
 
-### General → Loudness Boost
+### Audio → Loudness Boost
 
 _These controls appear only when Loudness Boost is enabled._
 

@@ -77,9 +77,12 @@ pub fn build_settings_overlay(
         .css_classes(vec!["settings-overlay-switcher"])
         .build();
     let general_tab = build_settings_selector_button(icons::SETTINGS, "General");
+    let audio_tab = build_settings_selector_button(icons::LOCAL_AUDIO, "Audio");
     let hotkeys_tab = build_settings_selector_button(icons::KEYBOARD, "Control Hotkeys");
+    audio_tab.set_group(Some(&general_tab));
     hotkeys_tab.set_group(Some(&general_tab));
     selector.append(&general_tab);
+    selector.append(&audio_tab);
     selector.append(&hotkeys_tab);
 
     let header_start = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
@@ -116,6 +119,14 @@ pub fn build_settings_overlay(
         general_tab.connect_toggled(move |button| {
             if button.is_active() {
                 stack.set_visible_child_name("general");
+            }
+        });
+    }
+    {
+        let stack = stack.clone();
+        audio_tab.connect_toggled(move |button| {
+            if button.is_active() {
+                stack.set_visible_child_name("audio");
             }
         });
     }
@@ -250,6 +261,20 @@ fn build_tray_group(state: Arc<AppState>) -> adw::PreferencesGroup {
     group
 }
 
+fn build_behavior_group(state: Arc<AppState>) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder().title("Behavior").build();
+    let skip_del_row = adw::SwitchRow::builder()
+        .title("Never Ask to Confirm Removal")
+        .subtitle("Skip the confirmation dialog when removing sounds")
+        .active(state.config.lock().settings.skip_delete_confirm)
+        .build();
+    skip_del_row.connect_active_notify(move |row| {
+        let _ = commands::set_skip_delete_confirm(row.is_active(), Arc::clone(&state.config));
+    });
+    group.add(&skip_del_row);
+    group
+}
+
 fn build_settings_selector_button(icon: icons::IconPair, label: &str) -> gtk4::ToggleButton {
     let button = gtk4::ToggleButton::builder()
         .tooltip_text(label)
@@ -285,7 +310,6 @@ fn build_settings_content(
         parent,
         on_library_changed,
         on_list_style_changed,
-        visibility_weak.clone(),
     );
     let general_scroll = gtk4::ScrolledWindow::builder()
         .hexpand(true)
@@ -298,6 +322,19 @@ fn build_settings_content(
     general_scroll.set_child(Some(&general_page));
     let general_stack_page = stack.add_titled(&general_scroll, Some("general"), "General");
     general_stack_page.set_icon_name(icons::name(icons::SETTINGS));
+
+    let audio_page = build_audio_page(Arc::clone(&state), visibility_weak.clone());
+    let audio_scroll = gtk4::ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .max_content_height(600)
+        .build();
+    audio_scroll.set_child(Some(&audio_page));
+    let audio_stack_page = stack.add_titled(&audio_scroll, Some("audio"), "Audio");
+    audio_stack_page.set_icon_name(icons::name(icons::LOCAL_AUDIO));
 
     let hotkeys_page = settings_hotkeys::build_hotkeys_page(Arc::clone(&state), dialog_host);
     let hotkeys_scroll = gtk4::ScrolledWindow::builder()
@@ -322,6 +359,9 @@ fn build_settings_content(
                 if general_scroll.max_content_height() != max {
                     general_scroll.set_max_content_height(max);
                 }
+                if audio_scroll.max_content_height() != max {
+                    audio_scroll.set_max_content_height(max);
+                }
                 if hotkeys_scroll.max_content_height() != max {
                     hotkeys_scroll.set_max_content_height(max);
                 }
@@ -333,12 +373,27 @@ fn build_settings_content(
     content
 }
 
+fn build_audio_page(
+    state: Arc<AppState>,
+    visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
+) -> adw::PreferencesPage {
+    let page = adw::PreferencesPage::builder()
+        .title("Audio")
+        .icon_name(icons::name(icons::LOCAL_AUDIO))
+        .build();
+    let (playback_group, auto_gain_group, loudness_boost_group) =
+        super::settings_playback::build_playback_groups(state, visibility_weak);
+    page.add(&playback_group);
+    page.add(&auto_gain_group);
+    page.add(&loudness_boost_group);
+    page
+}
+
 fn build_general_page(
     state: Arc<AppState>,
     parent: &Window,
     on_library_changed: Option<Rc<dyn Fn() + 'static>>,
     on_list_style_changed: Option<Rc<dyn Fn(String) + 'static>>,
-    visibility_weak: gtk4::glib::WeakRef<gtk4::Widget>,
 ) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::builder()
         .title("General")
@@ -548,16 +603,11 @@ fn build_general_page(
     }
     page.add(&hidden_folders_group);
 
-    let (playback_group, auto_gain_group, loudness_boost_group) =
-        super::settings_playback::build_playback_groups(Arc::clone(&state), visibility_weak);
-    page.add(&playback_group);
-    page.add(&auto_gain_group);
-    page.add(&loudness_boost_group);
-
     let mic_group = super::settings_mic::build_mic_group(Arc::clone(&state));
     page.add(&mic_group);
 
     page.add(&build_tray_group(Arc::clone(&state)));
+    page.add(&build_behavior_group(Arc::clone(&state)));
 
     let theme_group = adw::PreferencesGroup::builder().title("Appearance").build();
 
@@ -787,5 +837,24 @@ mod tests {
             crate::ui::dnd_import::supported_audio_formats(),
             "WAV, MP3, OGG, OPUS, FLAC, M4A, AAC, MP4"
         );
+    }
+
+    #[test]
+    fn settings_header_places_audio_between_general_and_hotkeys() {
+        let source = include_str!("settings.rs");
+        let selector = |icon: &str, label: &str| {
+            format!("build_settings_selector_button(icons::{icon}, \"{label}\")")
+        };
+        let general = source
+            .find(&selector("SETTINGS", "General"))
+            .expect("General selector");
+        let audio = source
+            .find(&selector("LOCAL_AUDIO", "Audio"))
+            .expect("Audio selector");
+        let hotkeys = source
+            .find(&selector("KEYBOARD", "Control Hotkeys"))
+            .expect("Control Hotkeys selector");
+
+        assert!(general < audio && audio < hotkeys);
     }
 }

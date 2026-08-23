@@ -107,7 +107,6 @@ pub(super) fn build_playback_groups(
     {
         let (
             auto_gain,
-            skip_del,
             target_lufs,
             ag_mode,
             ag_apply_to,
@@ -121,7 +120,6 @@ pub(super) fn build_playback_groups(
             let s = &cfg.settings;
             (
                 s.auto_gain,
-                s.skip_delete_confirm,
                 s.auto_gain_target_lufs,
                 s.auto_gain_mode,
                 s.auto_gain_apply_to,
@@ -176,17 +174,6 @@ pub(super) fn build_playback_groups(
             });
         }
         playback_group.add(&loudness_boost_row);
-
-        let skip_del_row = adw::SwitchRow::builder()
-            .title("Never Ask to Confirm Removal")
-            .subtitle("Skip the confirmation dialog when removing sounds")
-            .active(skip_del)
-            .build();
-        let state2 = Arc::clone(&state);
-        skip_del_row.connect_active_notify(move |row| {
-            let _ = commands::set_skip_delete_confirm(row.is_active(), Arc::clone(&state2.config));
-        });
-        playback_group.add(&skip_del_row);
 
         let boost_row = adw::SpinRow::with_range(0.0, crate::config::MAX_LOUDNESS_BOOST_DB, 1.0);
         boost_row.set_title("Boost (dB)");
