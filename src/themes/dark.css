@@ -521,6 +521,13 @@ columnview header button:checked {
   padding: 2px 10px;
 }
 
+.lsb-settings-dialog row.spin button {
+  min-width: 32px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 8px;
+}
+
 .dialog-host-panel {
   min-width: 280px;
 }
