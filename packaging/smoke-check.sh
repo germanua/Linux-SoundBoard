@@ -131,6 +131,12 @@ if grep -Eq '(rust|Rust|cargo).*(1\.85|1\.85\.0)|(1\.85|1\.85\.0).*(rust|Rust|ca
 else
     pass "Build workflows take the Rust version from project metadata"
 fi
+if grep -qF 'cp --remove-destination "$CTX"/dist/*.deb "$CTX"/dist/*.AppImage "$REPO_ROOT/dist/' \
+    "$REPO_ROOT/packaging/docker/build-deb-appimage.sh"; then
+    pass "Container build replaces AppImages that are currently running"
+else
+    fail "Container build cannot replace an AppImage that is currently running"
+fi
 if grep -qF '%global debug_package %{nil}' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
     pass "RPM: empty remapped debug packages are disabled"
 else

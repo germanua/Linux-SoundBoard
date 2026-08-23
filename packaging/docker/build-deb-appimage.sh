@@ -89,7 +89,7 @@ docker run --rm \
     "$IMAGE" bash /src/packaging/docker/build-deb-appimage.sh --in-container
 
 mkdir -p "$REPO_ROOT/dist"
-cp "$CTX"/dist/*.deb "$CTX"/dist/*.AppImage "$REPO_ROOT/dist/"
+cp --remove-destination "$CTX"/dist/*.deb "$CTX"/dist/*.AppImage "$REPO_ROOT/dist/"
 "$REPO_ROOT/packaging/generate-checksums.sh" "$REPO_ROOT/dist" >/dev/null
 
 echo "==> Done. Artifacts in $REPO_ROOT/dist:"
