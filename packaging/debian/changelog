@@ -1,3 +1,9 @@
+linux-soundboard (2.4.1-1) unstable; urgency=medium
+
+  * Independent loudness boost
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 23 Aug 2026 16:04:10 +0300
+
 linux-soundboard (2.4.0-1) unstable; urgency=medium
 
   * Independent loudness boost
