@@ -138,7 +138,6 @@ pub(super) fn build_playback_groups(
             .build();
         {
             let state3 = Arc::clone(&state);
-            let ag_group = auto_gain_group.downgrade();
             auto_gain_row.connect_active_notify(move |row| {
                 let _ = commands::set_auto_gain(
                     row.is_active(),
@@ -147,9 +146,6 @@ pub(super) fn build_playback_groups(
                     Arc::clone(&state3.player),
                     &state3.loudness_coordinators,
                 );
-                if let Some(ag_group) = ag_group.upgrade() {
-                    ag_group.set_visible(row.is_active());
-                }
             });
         }
         playback_group.add(&auto_gain_row);
@@ -161,16 +157,12 @@ pub(super) fn build_playback_groups(
             .build();
         {
             let state2 = Arc::clone(&state);
-            let boost_group = loudness_boost_group.downgrade();
             loudness_boost_row.connect_active_notify(move |row| {
                 let _ = commands::set_loudness_boost_enabled(
                     row.is_active(),
                     Arc::clone(&state2.config),
                     Arc::clone(&state2.player),
                 );
-                if let Some(boost_group) = boost_group.upgrade() {
-                    boost_group.set_visible(row.is_active());
-                }
             });
         }
         playback_group.add(&loudness_boost_row);
@@ -534,10 +526,27 @@ pub(super) fn build_playback_groups(
                 });
             }
         }
-
-        auto_gain_group.set_visible(auto_gain);
-        loudness_boost_group.set_visible(loudness_boost);
     }
 
     (playback_group, auto_gain_group, loudness_boost_group)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn feature_toggles_do_not_hide_their_settings_groups() {
+        let source = include_str!("settings_playback.rs");
+        for (group, condition) in [
+            ("ag_group", "row.is_active()"),
+            ("boost_group", "row.is_active()"),
+            ("auto_gain_group", "auto_gain"),
+            ("loudness_boost_group", "loudness_boost"),
+        ] {
+            let visibility_call = format!("{group}.set_visible({condition})");
+            assert!(
+                !source.contains(&visibility_call),
+                "feature toggle must not hide its settings group: {visibility_call}"
+            );
+        }
+    }
 }

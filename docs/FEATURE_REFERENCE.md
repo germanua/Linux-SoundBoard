@@ -566,7 +566,7 @@ Open via the settings button in the transport bar.
 
 ### Audio → Auto-Gain Normalization
 
-_These controls appear only when auto-gain is enabled._
+_These controls remain visible and can be configured while auto-gain is disabled._
 
 | Setting                  | What it does                                                                                             |
 | ------------------------ | -------------------------------------------------------------------------------------------------------- |
@@ -595,7 +595,7 @@ _These controls appear only when auto-gain is enabled._
 
 ### Audio → Loudness Boost
 
-_These controls appear only when Loudness Boost is enabled._
+_These controls remain visible and can be configured while Loudness Boost is disabled._
 
 | Setting        | What it does                                                                                         |
 | -------------- | ---------------------------------------------------------------------------------------------------- |
