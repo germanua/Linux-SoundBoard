@@ -1,3 +1,11 @@
+linux-soundboard (2.3.4-1) unstable; urgency=medium
+
+  * Auto-gain stepper buttons are compact instead of oversized pills
+  * Show In Media Controls now takes effect immediately, including during playback
+  * Container builds can replace a running AppImage instead of failing with `Text file busy`
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 23 Aug 2026 12:29:18 +0300
+
 linux-soundboard (2.3.3-1) unstable; urgency=medium
 
   * A notification is replaced by the next one instead of queueing behind it

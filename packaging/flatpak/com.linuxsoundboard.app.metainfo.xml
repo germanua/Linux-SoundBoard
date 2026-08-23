@@ -67,6 +67,16 @@
   </keywords>
   
   <releases>
+    <release version="2.3.4" date="2026-08-23">
+      <description>
+        <p>Linux Soundboard 2.3.4:</p>
+        <ul>
+          <li>Auto-gain stepper buttons are compact instead of oversized pills</li>
+          <li>Show In Media Controls now takes effect immediately, including during playback</li>
+          <li>Container builds can replace a running AppImage instead of failing with `Text file busy`</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.3" date="2026-08-23">
       <description>
         <p>Linux Soundboard 2.3.3:</p>
