@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.3.4
+Version:        2.4.0
 Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -146,6 +146,9 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Sun Aug 23 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.4.0-1
+- Independent loudness boost
+
 * Sun Aug 23 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.3.4-1
 - Auto-gain stepper buttons are compact instead of oversized pills
 - Show In Media Controls now takes effect immediately, including during playback

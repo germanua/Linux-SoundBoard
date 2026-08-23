@@ -67,6 +67,14 @@
   </keywords>
   
   <releases>
+    <release version="2.4.0" date="2026-08-23">
+      <description>
+        <p>Linux Soundboard 2.4.0:</p>
+        <ul>
+          <li>Independent loudness boost</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.3.4" date="2026-08-23">
       <description>
         <p>Linux Soundboard 2.3.4:</p>
