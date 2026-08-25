@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-08-25
+
 ### Changed
 
 - **Audio settings controls:** LUFS and Loudness Boost options remain visible while their processing switches are off.

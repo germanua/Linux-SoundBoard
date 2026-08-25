@@ -1,3 +1,10 @@
+linux-soundboard (2.4.3-1) unstable; urgency=medium
+
+  * Audio settings controls
+  * Wi-Fi and Bluetooth disruption from Wayland hotkeys
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Tue, 25 Aug 2026 18:39:47 +0300
+
 linux-soundboard (2.4.2-1) unstable; urgency=medium
 
   * Audio settings category

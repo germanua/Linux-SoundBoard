@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           linux-soundboard
-Version:        2.4.2
+Version:        2.4.3
 Release:        1
 Summary:        Native Linux soundboard with virtual microphone support
 
@@ -146,6 +146,10 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 %changelog
+* Tue Aug 25 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.4.3-1
+- Audio settings controls
+- Wi-Fi and Bluetooth disruption from Wayland hotkeys
+
 * Sun Aug 23 2026 germanua <114772595+germanua@users.noreply.github.com> - 2.4.2-1
 - Audio settings category
 
