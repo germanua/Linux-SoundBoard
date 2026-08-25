@@ -16,6 +16,7 @@ APP_BINARY="linux-soundboard"
 APP_AUR_PACKAGE="linux-soundboard"
 APP_AUR_LEGACY_PACKAGE="linux-soundboard-git"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
+SWHKD_UPSTREAM_COMMIT="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
 ISSUE_URL="https://github.com/$APP_REPO/issues/new"
 
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -771,12 +772,16 @@ print_status() {
 
 build_swhkd_from_source() {
     local src="$WORK_DIR/swhkd"
-    git clone --depth 1 "$SWHKD_REPO_URL" "$src"
+    git init "$src"
+    git -C "$src" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"
+    git -C "$src" checkout --detach "$SWHKD_UPSTREAM_COMMIT"
     (
         cd "$src"
         make clean 2>/dev/null || true
-        make
+        make NO_RFKILL_SW_SUPPORT=1
     )
+    swhkd_binary_is_safe "$src/target/release/swhkd" \
+        || fail "Built swhkd still contains rfkill support; refusing to install it."
     as_root install -Dm755 "$src/target/release/swhkd" /usr/bin/swhkd
     as_root install -Dm755 "$src/target/release/swhks" /usr/bin/swhks
     for f in "$src"/docs/*.gz; do
@@ -787,6 +792,16 @@ build_swhkd_from_source() {
         esac
     done
     [[ -f /etc/swhkd/swhkdrc ]] || as_root install -Dm644 /dev/null /etc/swhkd/swhkdrc
+}
+
+swhkd_binary_is_safe() {
+    local binary="$1"
+    [[ -r "$binary" ]] || return 1
+    if LC_ALL=C grep -aF -e '/dev/rfkill' -e 'SW_RFKILL_ALL' "$binary" >/dev/null 2>&1; then
+        return 1
+    else
+        [[ $? -eq 1 ]]
+    fi
 }
 
 configure_swhkd_permissions() {
@@ -928,10 +943,16 @@ swhkd_requires_pkexec() {
 
 install_swhkd() {
     if command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
-        info "swhkd already installed; checking permissions."
-        configure_swhkd_permissions
-        if ! swhkd_requires_pkexec; then
-            return
+        local swhkd_path
+        swhkd_path="$(command -v swhkd)"
+        if swhkd_binary_is_safe "$swhkd_path"; then
+            info "swhkd already installed; checking permissions."
+            configure_swhkd_permissions
+            if ! swhkd_requires_pkexec; then
+                return
+            fi
+        else
+            warn "Installed swhkd contains rfkill support or could not be verified; rebuilding it safely before launch."
         fi
     fi
 
@@ -969,7 +990,13 @@ repair_swhkd_if_needed() {
     if is_wayland; then
         install_swhkd
     elif command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
-        configure_swhkd_permissions
+        local swhkd_path
+        swhkd_path="$(command -v swhkd)"
+        if swhkd_binary_is_safe "$swhkd_path"; then
+            configure_swhkd_permissions
+        else
+            warn "Installed swhkd contains rfkill support or could not be verified; leaving it unchanged."
+        fi
     fi
 }
 

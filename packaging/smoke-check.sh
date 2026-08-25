@@ -558,7 +558,32 @@ fi
 
 echo ""
 
-# 10. Build tool availability notes
+# 10. swhkd build safety
+
+echo "==> swhkd build safety"
+SWHKD_PIN="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
+SWHKD_HELPER="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
+if grep -qF "SWHKD_UPSTREAM_COMMIT=\"$SWHKD_PIN\"" "$SWHKD_HELPER" \
+    && grep -qF 'git -C "$work_dir/swhkd" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"' "$SWHKD_HELPER" \
+    && grep -qF 'make NO_RFKILL_SW_SUPPORT=1' "$SWHKD_HELPER" \
+    && grep -qF 'swhkd_binary_is_safe "$work_dir/swhkd/target/release/swhkd"' "$SWHKD_HELPER"; then
+    pass "swhkd helper pins and verifies an rfkill-free build"
+else
+    fail "swhkd helper does not pin and verify an rfkill-free build"
+fi
+
+if grep -qF "SWHKD_UPSTREAM_COMMIT=\"$SWHKD_PIN\"" "$TOP_INSTALL" \
+    && grep -qF 'git -C "$src" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"' "$TOP_INSTALL" \
+    && grep -qF 'make NO_RFKILL_SW_SUPPORT=1' "$TOP_INSTALL" \
+    && grep -qF 'if swhkd_binary_is_safe "$swhkd_path"; then' "$TOP_INSTALL"; then
+    pass "install.sh pins and verifies rfkill-free swhkd before launch"
+else
+    fail "install.sh does not pin and verify rfkill-free swhkd before launch"
+fi
+
+echo ""
+
+# 11. Build tool availability notes
 
 echo "==> Build tool availability (informational)"
 for tool_label in \

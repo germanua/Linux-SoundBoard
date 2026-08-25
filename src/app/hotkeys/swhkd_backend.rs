@@ -14,7 +14,7 @@ use super::backend_runtime::{try_dispatch_hotkey, HotkeyBackend};
 use super::error::{unsupported_key_for_backend, HotkeyError};
 use super::parse_hotkey_spec;
 use super::swhkd_config::SwhkdConfig;
-use super::swhkd_install::missing_swhkd_message;
+use super::swhkd_install::{ensure_swhkd_binary_is_safe, missing_swhkd_message};
 use super::swhkd_process::SwhkdProcesses;
 use super::{
     SWHKD_PIPE_OPEN_RETRY_SECS, SWHKD_PIPE_REOPEN_DELAY_MS, SWHKD_RELOAD_POST_SIGNAL_WAIT_MS,
@@ -99,11 +99,9 @@ impl SwhkdBackend {
     pub fn new() -> Result<Self, HotkeyError> {
         info!("Initializing swhkd backend");
 
-        if which::which("swhkd").is_err() {
-            return Err(HotkeyError::BackendUnavailable(missing_swhkd_message(
-                "swhkd",
-            )));
-        }
+        let swhkd_path = which::which("swhkd")
+            .map_err(|_| HotkeyError::BackendUnavailable(missing_swhkd_message("swhkd")))?;
+        ensure_swhkd_binary_is_safe(&swhkd_path).map_err(HotkeyError::BackendUnavailable)?;
 
         if which::which("swhks").is_err() {
             return Err(HotkeyError::BackendUnavailable(missing_swhkd_message(

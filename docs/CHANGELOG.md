@@ -10,6 +10,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 - **Audio settings controls:** LUFS and Loudness Boost options remain visible while their processing switches are off.
 
+### Fixed
+
+- **Wi-Fi and Bluetooth disruption from Wayland hotkeys:** swhkd is now built from a pinned reviewed commit with rfkill switch support disabled. Linux Soundboard refuses to start an installed swhkd binary that still contains rfkill support and offers to rebuild it safely instead.
+
 ## [2.4.2] - 2026-08-23
 
 ### Added

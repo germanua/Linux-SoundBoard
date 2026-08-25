@@ -6,8 +6,10 @@ use log::{info, warn};
 
 pub const SWHKD_UPSTREAM_INSTALL_URL: &str =
     "https://github.com/waycrate/swhkd/blob/main/INSTALL.md";
+const SWHKD_UPSTREAM_COMMIT: &str = "cbbfc4a981aa263155e3216a42549c9a3ae645fe";
 pub const INSTALLED_SWHKD_HELPER_PATH: &str =
     "/usr/libexec/linux-soundboard/install-swhkd-helper.sh";
+const SWHKD_RFKILL_MARKERS: [&[u8]; 2] = [b"/dev/rfkill", b"SW_RFKILL_ALL"];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SwhkdInstallState {
@@ -122,7 +124,31 @@ pub fn should_offer_swhkd_install(raw_error: &str) -> bool {
         || normalized.contains("no wayland hotkey backend available")
         || normalized.contains("swhkd requires setuid bit")
         || normalized.contains("swhkd exited immediately")
+        || normalized.contains("unsafe rfkill support")
+        || normalized.contains("could not verify installed swhkd")
         || normalized.contains("working setuid swhkd binary")
+}
+
+pub(super) fn binary_has_rfkill_support(binary: &[u8]) -> bool {
+    SWHKD_RFKILL_MARKERS
+        .iter()
+        .any(|marker| binary.windows(marker.len()).any(|window| window == *marker))
+}
+
+pub(super) fn ensure_swhkd_binary_is_safe(path: &Path) -> Result<(), String> {
+    let binary = fs::read(path).map_err(|error| {
+        format!(
+            "Could not verify installed swhkd binary at {}: {error}. Linux Soundboard will not start it. Use Install swhkd to rebuild and reinstall it safely.",
+            path.display()
+        )
+    })?;
+    if binary_has_rfkill_support(&binary) {
+        return Err(
+            "Installed swhkd has unsafe rfkill support enabled. Linux Soundboard will not start it because it can disable Wi-Fi or Bluetooth. Use Install swhkd to rebuild and reinstall it safely."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 pub fn manual_swhkd_install_commands() -> String {
@@ -163,7 +189,7 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
     };
 
     format!(
-        "# 1) Install pkexec (polkit)\n{}\n\n# 2) Install build dependencies\n{}\n\n# 3) Build and install swhkd\nrm -rf /tmp/swhkd-build && git clone --depth 1 https://github.com/waycrate/swhkd.git /tmp/swhkd-build\ncd /tmp/swhkd-build\nmake clean || true\nmake\nsudo install -Dm755 target/release/swhkd /usr/bin/swhkd\nsudo install -Dm755 target/release/swhks /usr/bin/swhks\nsudo install -Dm644 /dev/null /etc/swhkd/swhkdrc\nsudo chown root:root /usr/bin/swhkd\nsudo chmod u+s /usr/bin/swhkd\nsudo chmod +x /usr/bin/swhks\n\n# 4) Load the uinput module swhkd needs, now and at every boot\nsudo modprobe uinput\necho uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
+        "# 1) Install pkexec (polkit)\n{}\n\n# 2) Install build dependencies\n{}\n\n# 3) Build and install swhkd\nrm -rf /tmp/swhkd-build\ngit init /tmp/swhkd-build\ngit -C /tmp/swhkd-build fetch --depth 1 https://github.com/waycrate/swhkd.git {SWHKD_UPSTREAM_COMMIT}\ngit -C /tmp/swhkd-build checkout --detach {SWHKD_UPSTREAM_COMMIT}\ncd /tmp/swhkd-build\nmake clean || true\nmake NO_RFKILL_SW_SUPPORT=1\nsudo install -Dm755 target/release/swhkd /usr/bin/swhkd\nsudo install -Dm755 target/release/swhks /usr/bin/swhks\nsudo install -Dm644 /dev/null /etc/swhkd/swhkdrc\nsudo chown root:root /usr/bin/swhkd\nsudo chmod u+s /usr/bin/swhkd\nsudo chmod +x /usr/bin/swhks\n\n# 4) Load the uinput module swhkd needs, now and at every boot\nsudo modprobe uinput\necho uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
         polkit_install, build_deps_install
     )
 }
@@ -394,6 +420,9 @@ fn has_healthy_swhkd_install() -> bool {
     let Ok(swhkd_path) = which::which("swhkd") else {
         return false;
     };
+    if ensure_swhkd_binary_is_safe(&swhkd_path).is_err() {
+        return false;
+    }
     if which::which("swhks").is_err() {
         return false;
     }
@@ -466,9 +495,11 @@ pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_distro_family_from_os_release, distro_id, manual_install_commands_for,
-        should_offer_swhkd_install, DistroFamily, SwhkdInstallState,
+        binary_has_rfkill_support, detect_distro_family_from_os_release, distro_id,
+        ensure_swhkd_binary_is_safe, manual_install_commands_for, should_offer_swhkd_install,
+        DistroFamily, SwhkdInstallState,
     };
+    use std::fs;
 
     #[test]
     fn detects_arch_family() {
@@ -518,6 +549,9 @@ mod tests {
         assert!(should_offer_swhkd_install(
             "swhkd exited immediately after startup"
         ));
+        assert!(should_offer_swhkd_install(
+            "Installed swhkd has unsafe rfkill support enabled"
+        ));
     }
 
     #[test]
@@ -540,11 +574,41 @@ mod tests {
     fn manual_install_commands_include_polkit_and_build_steps() {
         let debian = manual_install_commands_for(DistroFamily::Debian);
         assert!(debian.contains("policykit-1"));
-        assert!(debian.contains("git clone --depth 1"));
+        assert!(debian.contains("cbbfc4a981aa263155e3216a42549c9a3ae645fe"));
+        assert!(!debian.contains("git clone"));
+        assert!(debian.contains("make NO_RFKILL_SW_SUPPORT=1"));
         assert!(debian.contains("chmod u+s /usr/bin/swhkd"));
 
         let arch = manual_install_commands_for(DistroFamily::Arch);
         assert!(arch.contains("pacman -S --needed polkit"));
+    }
+
+    #[test]
+    fn detects_rfkill_markers_in_swhkd_binary() {
+        assert!(binary_has_rfkill_support(b"prefix/dev/rfkill suffix"));
+        assert!(binary_has_rfkill_support(b"prefix SW_RFKILL_ALL suffix"));
+        assert!(!binary_has_rfkill_support(b"safe swhkd binary"));
+    }
+
+    #[test]
+    fn refuses_unsafe_or_unreadable_swhkd_binaries() {
+        let directory =
+            std::env::temp_dir().join(format!("lsb-swhkd-rfkill-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        let unsafe_binary = directory.join("unsafe-swhkd");
+        fs::write(&unsafe_binary, b"binary with /dev/rfkill support").unwrap();
+        let error = ensure_swhkd_binary_is_safe(&unsafe_binary).unwrap_err();
+        assert!(error.contains("unsafe rfkill support"));
+
+        let safe_binary = directory.join("safe-swhkd");
+        fs::write(&safe_binary, b"safe swhkd binary").unwrap();
+        assert!(ensure_swhkd_binary_is_safe(&safe_binary).is_ok());
+
+        let error = ensure_swhkd_binary_is_safe(&directory.join("missing-swhkd")).unwrap_err();
+        assert!(error.contains("Could not verify installed swhkd"));
+
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

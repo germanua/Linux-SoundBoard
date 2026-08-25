@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
+SWHKD_UPSTREAM_COMMIT="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
 
 # Only set by --enable-uinput: the caller asks the user first.
 ENABLE_UINPUT=0
@@ -13,6 +14,16 @@ log() {
 fail() {
   log "ERROR: $1" >&2
   exit 1
+}
+
+swhkd_binary_is_safe() {
+  local binary="$1"
+  [ -r "$binary" ] || return 1
+  if LC_ALL=C grep -aF -e '/dev/rfkill' -e 'SW_RFKILL_ALL' "$binary" >/dev/null 2>&1; then
+    return 1
+  else
+    [ "$?" -eq 1 ]
+  fi
 }
 
 require_root() {
@@ -106,15 +117,19 @@ build_and_install_swhkd() {
   work_dir="$(mktemp -d /tmp/linux-soundboard-swhkd.XXXXXX)"
   trap 'rm -rf "$work_dir"' EXIT
 
-  log "Cloning swhkd sources"
-  git clone --depth 1 "$SWHKD_REPO_URL" "$work_dir/swhkd"
+  log "Fetching pinned swhkd sources"
+  git init "$work_dir/swhkd"
+  git -C "$work_dir/swhkd" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"
+  git -C "$work_dir/swhkd" checkout --detach "$SWHKD_UPSTREAM_COMMIT"
 
   log "Building swhkd"
   (
     cd "$work_dir/swhkd"
     make clean || true
-    make
+    make NO_RFKILL_SW_SUPPORT=1
   )
+  swhkd_binary_is_safe "$work_dir/swhkd/target/release/swhkd" \
+    || fail "Built swhkd still contains rfkill support; refusing to install it."
 
   log "Installing binaries"
   install -Dm755 "$work_dir/swhkd/target/release/swhkd" /usr/bin/swhkd

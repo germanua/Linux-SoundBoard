@@ -311,7 +311,12 @@ sudo zypper install fuse
 
 On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
 
-**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button. Clicking it runs a PolicyKit-authorized build and install flow entirely within the app. No terminal required.
+**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button. Clicking it runs a PolicyKit-authorized build and install flow entirely within the app. No terminal required. The installer fetches a pinned reviewed swhkd commit and builds it with `NO_RFKILL_SW_SUPPORT=1`.
+
+Linux Soundboard checks the installed daemon before starting it. If the binary
+contains swhkd's rfkill support, or cannot be inspected, it is not launched; the
+same banner offers to rebuild and reinstall it safely. This also handles unsafe
+`/usr/bin/swhkd` binaries left behind when Linux Soundboard itself is updated.
 
 swhkd grabs your keyboards directly and re-emits the keys it does not claim
 through a virtual keyboard, which the kernel's `uinput` module provides. Almost
@@ -326,10 +331,11 @@ Requirements for the in-app install:
 
 - Native install (DEB / RPM / AUR / AppImage on host), not a Flatpak sandbox
 - `pkexec` available (provided by `pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, or `polkit` on Fedora/Arch)
-- Network access to clone `swhkd` sources from GitHub
+- Network access to fetch the pinned `swhkd` source commit from GitHub
 
 **Manual install:**
 
+- Source builds must use `make NO_RFKILL_SW_SUPPORT=1`.
 - Arch family: `yay -S swhkd-bin` or `yay -S swhkd-git`
 - Other distros: see [upstream install notes](https://github.com/waycrate/swhkd/blob/main/INSTALL.md)
 

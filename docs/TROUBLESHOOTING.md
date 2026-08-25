@@ -526,25 +526,18 @@ Check the setuid bit on the installed binary:
 ls -l "$(command -v swhkd)"
 ```
 
-If `swhkd` prints `Make sure to launch the binary with pkexec`, or the
-permissions do not show an `s` bit on the owner execute field, repair the
-install:
+If `swhkd` prints `Make sure to launch the binary with pkexec`, the permissions
+do not show an `s` bit on the owner execute field, or Linux Soundboard reports
+unsafe rfkill support, rebuild it with the app's safe installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
 ```
 
-Or apply the permission fix directly:
-
-```bash
-sudo chown root:root "$(command -v swhkd)"
-sudo chmod u+s "$(command -v swhkd)"
-```
-
 If one-click install fails:
 
 - Ensure PolicyKit is installed (`pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, `polkit` on Fedora/Arch/openSUSE).
-- Ensure network access is available (installer clones upstream `swhkd` sources).
+- Ensure network access is available (the installer fetches a pinned upstream `swhkd` commit).
 - Retry from the app and review the detailed failure output shown in the dialog.
 
 Installation paths:
