@@ -47,201 +47,231 @@ Sets up the runtime audio engine, desktop entry, and icons automatically, and re
 
 ---
 
-![Linux Soundboard main window](assets/screenshots/Main_dark.png)
+## What it does
 
-Linux Soundboard plays audio clips to your speakers and to a virtual microphone
-named `Linux_Soundboard_Mic`. Select that input in Discord, OBS, Zoom, games,
-or any other application that lets you choose a microphone.
+Linux Soundboard sends audio clips to your speakers and to a PipeWire virtual
+microphone named `Linux_Soundboard_Mic`. Select that input in Discord, OBS,
+Zoom, games, or any other application with a microphone selector.
 
-The UI is written in Rust with GTK4 and libadwaita. Audio runs in a separate
-user service, so the virtual microphone and microphone passthrough can remain
-available when the window is closed.
+Microphone passthrough mixes your voice with soundboard playback. The GTK4
+window and audio engine run as separate processes, so the virtual microphone
+can remain available after the window closes.
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshots/Main_dark.png" alt="Main window in dark mode" width="880">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/Main_light.png" alt="Main window in light mode" width="880">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/Settings_dark1.png" alt="Settings in dark mode" width="420">
+  <img src="assets/screenshots/Settings_hotkeys_dark.png" alt="Hotkey settings in dark mode" width="420">
+</p>
+
+<p align="center">
+  <a href="docs/SCREENSHOTS.md"><strong>View the full screenshot gallery</strong></a>
+</p>
+
+---
 
 ## Install
 
-The installer supports Arch-based distributions, Debian/Ubuntu, Fedora, and
-other Linux distributions.
-
-The installer tells you before an action needs elevated privileges. Native
-packages and the Wayland hotkey helper may require your password; per-user
-AppImage and tarball installs under `~/.local` do not.
+The command at the top of this page detects the distribution and uses the
+matching install path.
 
 | Distribution | Default install method |
 | --- | --- |
-| Arch / CachyOS / EndeavourOS | Stable AUR package through `yay` or `paru` |
+| Arch / CachyOS / EndeavourOS | Stable `linux-soundboard` AUR package through `yay` or `paru` |
 | Debian / Ubuntu | Native `.deb` package |
 | Fedora | Native `.rpm` package |
 | Other distributions | Release tarball with the per-user installer |
 
-When `install.sh` downloads a GitHub release asset, it accepts it only when its
-SHA-256 matches the release's `SHA256SUMS.txt`.
+> **Privileges:** Native packages and the Wayland hotkey helper may ask for
+> your password. Per-user AppImage and tarball installs under `~/.local` do
+> not.
 
-Full installer options are documented in [docs/INSTALL.md](docs/INSTALL.md).
+> **Download integrity:** `install.sh` rejects a GitHub release asset unless
+> its SHA-256 matches a valid entry in the release's `SHA256SUMS.txt`.
 
-### Prefer not to use the one-line installer?
-
-Download a package or AppImage from the
-[Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest),
-or download
-[`install.sh`](https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
-first and inspect it before running it.
-
-For AppImage:
+### AppImage
 
 ```bash
 chmod +x linux-soundboard-x86_64.AppImage
 ./linux-soundboard-x86_64.AppImage
 ```
 
-On first launch, the AppImage can run temporarily or install itself under your
-user account with the persistent audio engine.
+On first launch, choose **Install for persistent virtual mic**, **Run
+temporarily**, or **Exit**. A persistent install keeps the AppImage under your
+user account and starts the audio engine as a systemd user service.
+
+### Inspect before running
+
+Download a package or AppImage from the
+[Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest),
+or download
+[`install.sh`](https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
+and inspect it first.
+
+See [docs/INSTALL.md](docs/INSTALL.md) for version selection, repair, status,
+uninstall, AppImage, and source-install commands.
+
+---
 
 ## Quick start
 
-1. Install Linux Soundboard and launch it.
-2. Add a folder containing your sound files, or drag files into the window.
-3. In Discord, OBS, Zoom, or another application, select
-   `Linux_Soundboard_Mic` as the input device.
-4. Enable microphone passthrough if you want your real microphone mixed with
-   soundboard playback.
-5. Assign hotkeys to sounds if you want to trigger them outside the
-   application.
+1. Install and launch Linux Soundboard.
+2. Add a sound folder, or drag files into the window.
+3. Select `Linux_Soundboard_Mic` as the input in Discord, OBS, Zoom, or your
+   game.
+4. Enable microphone passthrough to mix your real microphone with playback.
+5. Assign hotkeys if you want to trigger sounds outside the window.
 
-If automatic microphone routing does not fit your setup, switch
-**Microphone Routing** to **Manual** and manage the active input yourself.
+**Microphone Routing** defaults to automatic routing. Switch it to **Manual**
+if you manage the default input with pavucontrol or another audio tool.
 
-## Features
-
-### Audio
-
-- Runtime PipeWire virtual microphone
-- Microphone passthrough
-- Independent speaker and virtual-microphone volume
-- Per-sound LUFS normalization
-- Optional microphone loudness boost
-- Play, pause, stop, seek, previous, and next controls
-- Play once, loop, and continue-to-next playback modes
-- EasyEffects-aware microphone routing
-
-### Library
-
-- Folder-based sound library
-- Tabs
-- Search
-- Drag and drop
-- Folder rescan and sync
-- SQLite-backed library
-- Per-sound and shared hotkeys
-- Bounded paging for large libraries
-
-### Desktop integration
-
-- Wayland global hotkeys through `swhkd`
-- Native XInput2 hotkeys on X11 and XWayland
-- System tray support through `StatusNotifierItem`
-- Optional MPRIS media controls
-- Persistent audio engine through a systemd user service
-
-### Audio formats
-
-Supported:
-
-- MP3
-- Ogg Vorbis
-- Ogg Opus, mono or stereo
-- FLAC
-- AAC-LC
-- M4A with AAC-LC or ALAC
-- MP4 audio tracks with AAC-LC, ALAC, or mono/stereo Opus
-
-Not currently supported:
-
-- WebM
-- Multichannel Opus
-
-See [docs/FEATURE_REFERENCE.md](docs/FEATURE_REFERENCE.md) for the complete UI
-and feature reference.
-
-## Known limitations
-
-- Wayland global hotkeys require direct keyboard access through `swhkd`.
-  Linux Soundboard installs it through PolicyKit when needed. The installer
-  uses a pinned upstream revision with rfkill handling disabled.
-- GNOME does not provide a tray by default. Install an AppIndicator-compatible
-  extension if you want the tray icon.
-- Automatic AppImage replacement applies only when the AppImage is kept as the
-  persistent installed executable.
-- Microphone passthrough, PipeWire/WirePlumber configuration, EasyEffects,
-  Bluetooth audio profiles, and application-specific routing can affect
-  microphone behavior.
-- The project is source-available under a noncommercial license. It is not
-  OSI-approved open-source software.
-
-If audio routing behaves unexpectedly, start with
-[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+---
 
 ## How it works
 
-The window and the audio engine are separate processes:
-
 ```text
-GTK4 UI ── Unix socket ──> systemd user audio engine
-                              ├─> speakers
-                              └─> Linux_Soundboard_Mic
+┌─────────────────────────────────────────────────────┐
+│  GTK4 UI                                            │
+│  Library, search, transport, settings, hotkeys      │
+└──────────────────────────┬──────────────────────────┘
+                           │ Unix socket IPC
+┌──────────────────────────▼──────────────────────────┐
+│  linux-soundboard-engine.service                    │
+│  Playback, mic mixing, volume, seeking, looping     │
+└──────────────────────┬───────────────────────┬──────┘
+                       │                       │
+                   Speakers          Linux_Soundboard_Mic
 ```
 
-The audio engine owns the runtime audio streams and virtual microphone. The GTK
-process is responsible for the interface and sends commands to the engine over
-a Unix socket.
+The engine owns the audio streams and runtime virtual microphone. The UI sends
+commands over a Unix socket. Closing the UI stops active sounds, but the engine
+service and virtual microphone can stay running.
 
-Closing the window does not have to stop the engine. Whether the application
-stays available in the background depends on your tray and background settings.
+---
+
+## Features
+
+### Playback
+
+- **Normalization:** Per-sound LUFS gain across every supported format
+- **Play modes:** Play once, loop, or continue to the next sound
+- **Transport:** Play, pause, stop, previous, next, and seek
+- **Output levels:** Separate speaker and virtual-microphone volume
+- **Microphone boost:** Optional loudness gain for mic passthrough
+
+### Audio routing
+
+- **Runtime virtual mic:** Created by the audio engine, not a permanent
+  PipeWire configuration
+- **Mic passthrough:** Mixes the selected real microphone with sound playback
+- **Default mode:** Sets `Linux_Soundboard_Mic` as the default recording input
+- **Manual mode:** Leaves default-source selection to the user
+- **EasyEffects:** Can capture the processed microphone source
+
+### Library
+
+- **Folders:** Add, remove, reorder, combine, restore, and rescan folders
+- **Tabs:** Organize sounds without moving source files
+- **SQLite storage:** Sounds, folders, tabs, and hotkeys live in
+  `library.sqlite3`
+- **Large libraries:** Loaded in bounded pages
+- **Drag and drop:** Add files or folders from a file manager
+- **Search:** Filter the visible sound list
+- **Hotkeys:** Per-sound bindings and shared playback controls
+
+### Desktop
+
+- **Wayland hotkeys:** `swhkd`
+- **X11 and XWayland hotkeys:** Native XInput2
+- **System tray:** `StatusNotifierItem`
+- **Media controls:** Optional MPRIS integration
+- **Background audio:** systemd user service
+
+### Audio formats
+
+| Format | Support |
+| --- | --- |
+| MP3 | Yes |
+| Ogg Vorbis | Yes |
+| Ogg Opus | Mono and stereo |
+| FLAC | Yes |
+| AAC | AAC-LC |
+| M4A | AAC-LC and ALAC |
+| MP4 audio | AAC-LC, ALAC, mono Opus, and stereo Opus |
+| WebM | No |
+| Multichannel Opus | No |
+
+See [docs/FEATURE_REFERENCE.md](docs/FEATURE_REFERENCE.md) for every control,
+setting, and menu.
+
+---
 
 ## Global hotkeys
 
-| Session | Backend | Extra setup |
+| Session | Backend | Setup |
 | --- | --- | --- |
 | Wayland | `swhkd` | Installed through the app or installer |
-| X11 | XInput2 | None |
-| XWayland | XInput2 | None when the X11 backend is used |
+| X11 | Native XInput2 | None |
+| XWayland | Native XInput2 | None when the X11 backend is used |
 
-Wayland hotkeys require direct keyboard access. If you do not want the helper
-installed, the soundboard itself still works without Wayland global hotkeys.
+Wayland hotkeys require direct keyboard access. Linux Soundboard still works
+without `swhkd`; only Wayland global hotkeys are unavailable.
+
+---
+
+## Known limitations
+
+- **Wayland hotkeys:** The installer builds a pinned `swhkd` revision with
+  rfkill handling disabled. Installation uses PolicyKit.
+- **GNOME tray:** GNOME needs an AppIndicator-compatible extension for the tray
+  icon.
+- **AppImage updates:** Automatic replacement applies only to the AppImage kept
+  as the persistent installed executable.
+- **Microphone routing:** EasyEffects, Bluetooth profiles, PipeWire and
+  WirePlumber configuration, and application-specific routing can change the
+  result.
+
+Start with [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) when audio routing
+does not match the selected mode.
+
+---
 
 ## Configuration and data
 
-User settings are stored in:
-
-```text
-~/.config/linux-soundboard/config.json
-```
-
-The sound library is stored in:
-
-```text
-~/.config/linux-soundboard/library.sqlite3
-```
-
-The per-user installer keeps managed-file records, backups, and the
-pre-installation audio snapshot under:
-
-```text
-~/.local/state/linux-soundboard/install-user/
-```
+| Data | Path |
+| --- | --- |
+| Settings | `~/.config/linux-soundboard/config.json` |
+| Sound library | `~/.config/linux-soundboard/library.sqlite3` |
+| Installer state and backups | `~/.local/state/linux-soundboard/install-user/` |
+| Engine socket | `$XDG_RUNTIME_DIR/linux-soundboard/engine.sock` |
 
 Removing a sound from the library does not delete the original audio file.
 
+---
+
 ## Build from source
 
-Install the build dependencies for your distribution.
-
-### Arch
+<details>
+<summary><strong>Arch Linux</strong></summary>
 
 ```bash
 sudo pacman -S cargo rust pkgconf clang gtk4 libadwaita libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber
 ```
 
-### Debian / Ubuntu
+</details>
+
+<details>
+<summary><strong>Debian / Ubuntu</strong></summary>
 
 ```bash
 sudo apt install build-essential cargo rustc pkg-config \
@@ -249,7 +279,10 @@ sudo apt install build-essential cargo rustc pkg-config \
   libx11-dev libxi-dev libclang-dev pipewire pipewire-pulse wireplumber pulseaudio-utils
 ```
 
-### Fedora
+</details>
+
+<details>
+<summary><strong>Fedora</strong></summary>
 
 ```bash
 sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
@@ -257,7 +290,7 @@ sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
   libXi-devel pipewire-devel pipewire pipewire-utils pipewire-pulseaudio wireplumber pulseaudio-utils
 ```
 
-Build and install for your user:
+</details>
 
 ```bash
 git clone https://github.com/germanua/Linux-SoundBoard.git
@@ -266,52 +299,73 @@ cargo build --release
 ./packaging/linux/install-user.sh install ./target/release/linux-soundboard
 ```
 
-See [docs/INSTALL.md](docs/INSTALL.md) for source-build and installer details.
+See [docs/INSTALL.md](docs/INSTALL.md) for the full source-build notes.
+
+---
 
 ## Reporting bugs
-
-Before opening an issue, run:
 
 ```bash
 ./install.sh report
 ```
 
-You can also use the application's diagnostics where available.
+Attach the generated report. Include the distribution, desktop environment,
+Wayland or X11 session, and PipeWire/WirePlumber versions.
 
-Include your distribution, desktop environment, Wayland/X11 session,
-PipeWire/WirePlumber versions, and the generated report when they are relevant
-to the problem.
+[Open an issue](https://github.com/germanua/Linux-SoundBoard/issues) ·
+[Start a discussion](https://github.com/germanua/Linux-SoundBoard/discussions) ·
+[Bug reporting guide](docs/BUG_REPORTS.md)
 
-See [docs/BUG_REPORTS.md](docs/BUG_REPORTS.md).
-
-Issues: <https://github.com/germanua/Linux-SoundBoard/issues>
-
-Discussions: <https://github.com/germanua/Linux-SoundBoard/discussions>
+---
 
 ## Documentation
 
-| Document | Purpose |
+| Document | Contents |
 | --- | --- |
 | [Installation guide](docs/INSTALL.md) | Install, downgrade, repair, uninstall, and source builds |
-| [Feature reference](docs/FEATURE_REFERENCE.md) | UI behavior, controls, settings, and hotkeys |
+| [Feature reference](docs/FEATURE_REFERENCE.md) | Controls, settings, menus, and hotkeys |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Audio, PipeWire, hotkey, renderer, and packaging problems |
-| [Bug reporting](docs/BUG_REPORTS.md) | Information to include in a useful report |
-| [Screenshots](docs/SCREENSHOTS.md) | Additional screenshots |
+| [Bug reporting](docs/BUG_REPORTS.md) | Details to include in a report |
+| [Screenshots](docs/SCREENSHOTS.md) | Full screenshot gallery |
 | [Changelog](docs/CHANGELOG.md) | Release history |
-| [Legal](docs/LEGAL.md) | License model and redistribution rules |
+| [Legal](docs/LEGAL.md) | License and redistribution rules |
 | [Contributing](CONTRIBUTING.md) | Contribution guidelines |
+
+---
+
+## Contributing
+
+Bug reports and focused pull requests are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before submitting code.
+
+For audio routing, installation, packaging, or hotkey changes, include the test
+environment and validation steps.
+
+---
+
+## Support
+
+Linux Soundboard is free for noncommercial use under its license.
+
+[Ko-fi](https://ko-fi.com/sherpi) ·
+[Donations and sponsorship terms](DONATIONS.md)
+
+---
 
 ## License
 
 Linux Soundboard is source-available under the
 [PolyForm Noncommercial License 1.0.0](LICENSE).
 
-Noncommercial use, modification, forks, and redistribution are allowed under
-the license terms. Commercial use, paid redistribution, resale, commercial
-bundling, or use in a commercial product or service requires a separate written
-commercial license.
+- SPDX identifier: `PolyForm-Noncommercial-1.0.0`
+- Required notice: `Required Notice: Copyright (c) 2026 germanua`
+- Noncommercial use, modification, forks, and redistribution are allowed under
+  the license terms.
+- Commercial use, paid redistribution, resale, commercial bundling, or use in
+  a commercial product or service requires a separate written commercial
+  license.
 
-This project should not be described as OSI-approved open-source software.
+This project is not OSI-approved open-source software.
 
 Third-party components keep their own licenses:
 
@@ -321,27 +375,12 @@ Third-party components keep their own licenses:
 Commercial licensing details are in
 [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
 
-## Contributing
-
-Bug reports and focused pull requests are welcome. Read
-[CONTRIBUTING.md](CONTRIBUTING.md) before submitting code.
-
-For changes that affect audio routing, installation, packaging, or hotkeys,
-include the environment you tested and the relevant validation steps.
-
-## Support
-
-Linux Soundboard is free to use for noncommercial purposes under its license.
-
-If the project is useful to you and you want to support its maintenance:
-
-- Ko-fi: <https://ko-fi.com/sherpi>
-- [Donations and sponsorship terms](DONATIONS.md)
+---
 
 ## Credits
 
 Linux Soundboard uses Rust, GTK4, libadwaita, PipeWire, WirePlumber, PulseAudio
-compatibility APIs, Symphonia, and other Rust and Linux ecosystem libraries.
+compatibility APIs, Symphonia, and other Rust and Linux libraries.
 
 See [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md) for the dependency overview
 and [THIRD_PARTY_NOTICES.html](THIRD_PARTY_NOTICES.html) for generated Rust
