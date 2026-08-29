@@ -372,7 +372,7 @@ WRAPPER="$REPO_ROOT/install.sh"
 if [[ ! -f "$WRAPPER" ]]; then
     fail "install.sh not found: $WRAPPER"
 else
-    for subcmd in "install" "repair" "remove" "uninstall" "status" "menu" "versions" "report" "fix"; do
+    for subcmd in "install" "verify" "repair" "remove" "uninstall" "status" "menu" "versions" "report" "fix"; do
         if grep -qw "$subcmd" "$WRAPPER"; then
             pass "install.sh: '$subcmd' subcommand present"
         else
@@ -555,7 +555,15 @@ else
         fail "install.sh: syntax errors detected"
     fi
 
-    check_installer_checksum_case() {
+    installer_public_key="$(sed -n 's/^MINISIGN_PUBLIC_KEY="\([^"]*\)"$/\1/p' "$TOP_INSTALL")"
+    repository_public_key="$(tail -n 1 "$REPO_ROOT/release.pub" 2>/dev/null || true)"
+    if [[ -n "$installer_public_key" && "$installer_public_key" == "$repository_public_key" ]]; then
+        pass "install.sh: pinned Minisign key matches release.pub"
+    else
+        fail "install.sh: pinned Minisign key does not match release.pub"
+    fi
+
+    check_installer_download_verification_case() {
         local scenario=$1
         local expected_status=$2
         local expected_text=$3
@@ -572,39 +580,94 @@ else
             printf "payload\n" > "$asset"
             good=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             other=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            test_release_tag=v9.9.9
             tag=""
 
-            find_asset_url() { printf "%s\n" "https://example.invalid/SHA256SUMS.txt"; }
+            test_dir="$WORK_DIR/minisign-test"
+            mkdir -p "$test_dir"
+            installed_minisign="$(command -v minisign)"
+            minisign -G -W -p "$test_dir/release.pub" -s "$test_dir/release.key" >/dev/null
+            MINISIGN_PUBLIC_KEY="$(tail -n 1 "$test_dir/release.pub")"
+            sums_source="$test_dir/SHA256SUMS.txt"
+            signature_source="$test_dir/SHA256SUMS.txt.minisig"
+            mkdir -p "$test_dir/bootstrap/minisign-linux/x86_64"
+            cp "$installed_minisign" "$test_dir/bootstrap/minisign-linux/x86_64/minisign"
+            tar -czf "$test_dir/minisign-linux.tar.gz" -C "$test_dir/bootstrap" minisign-linux
+
+            get_release_json() { printf "{\"tag_name\":\"%s\"}\n" "$test_release_tag"; }
+            release_json_for_tag() { get_release_json; }
+            find_asset_url_in() {
+                case "$1" in
+                    *minisig*)
+                        [[ "$scenario" == missing-signature ]] && return 1
+                        printf "%s\n" "https://example.invalid/SHA256SUMS.txt.minisig"
+                        ;;
+                    *)
+                        if [[ "$scenario" == missing-latest || "$scenario" == missing-tagged ]]; then
+                            return 1
+                        fi
+                        printf "%s\n" "https://example.invalid/SHA256SUMS.txt"
+                        ;;
+                esac
+            }
+            find_asset_url() { find_asset_url_in "$1"; }
             sha256_of() { printf "%s\n" "$good"; }
-            fetch() { printf "%s  %s\n" "$good" "$(basename "$asset")" > "$2"; }
 
             case "$scenario" in
-                missing-latest)
-                    find_asset_url() { return 1; }
-                    ;;
                 missing-tagged)
-                    release_json_for_tag() { printf "{}\n"; }
                     tag=v9.9.9
-                    ;;
-                unreachable)
-                    fetch() { return 1; }
+                    printf "%s  %s\n" "$good" "$(basename "$asset")" > "$sums_source"
                     ;;
                 not-listed)
-                    fetch() { printf "%s  other-file\n" "$good" > "$2"; }
+                    printf "%s  other-file\n" "$good" > "$sums_source"
                     ;;
                 invalid-hash)
-                    fetch() { printf "not-a-hash  %s\n" "$(basename "$asset")" > "$2"; }
+                    printf "not-a-hash  %s\n" "$(basename "$asset")" > "$sums_source"
                     sha256_of() { printf "not-a-hash\n"; }
                     ;;
                 no-tool)
+                    printf "%s  %s\n" "$good" "$(basename "$asset")" > "$sums_source"
                     sha256_of() { return 1; }
                     ;;
                 mismatch)
-                    fetch() { printf "%s  %s\n" "$other" "$(basename "$asset")" > "$2"; }
+                    printf "%s  %s\n" "$other" "$(basename "$asset")" > "$sums_source"
                     ;;
-                valid)
+                *)
+                    printf "%s  %s\n" "$good" "$(basename "$asset")" > "$sums_source"
                     ;;
             esac
+
+            trusted_tag="$test_release_tag"
+            [[ "$scenario" == wrong-release ]] && trusted_tag=v8.8.8
+            minisign -S -s "$test_dir/release.key" -m "$sums_source" \
+                -x "$signature_source" -t "Linux Soundboard release $trusted_tag" >/dev/null
+            [[ "$scenario" == invalid-signature ]] && printf "invalid\n" > "$signature_source"
+
+            fetch() {
+                case "$1" in
+                    *minisign-0.12-linux.tar.gz)
+                        [[ "$scenario" == bootstrap-unreachable ]] && return 1
+                        cp "$test_dir/minisign-linux.tar.gz" "$2"
+                        ;;
+                    *.minisig)
+                        [[ "$scenario" == unreachable-signature ]] && return 1
+                        cp "$signature_source" "$2"
+                        ;;
+                    *)
+                        [[ "$scenario" == unreachable ]] && return 1
+                        cp "$sums_source" "$2"
+                        ;;
+                esac
+            }
+
+            if [[ "$scenario" == bootstrap-* ]]; then
+                MINISIGN_BOOTSTRAP_SHA256="$good"
+                [[ "$scenario" == bootstrap-hash-mismatch ]] && MINISIGN_BOOTSTRAP_SHA256="$other"
+                command() {
+                    if [[ "$1" == -v && "$2" == minisign ]]; then return 1; fi
+                    builtin command "$@"
+                }
+            fi
 
             verify_download "$asset" "$tag"
         ' _ "$TOP_INSTALL" "$scenario" 2>&1)" || status=$?
@@ -622,14 +685,54 @@ else
         fi
     }
 
-    check_installer_checksum_case missing-latest failure "Could not download SHA256SUMS.txt"
-    check_installer_checksum_case missing-tagged failure "Could not download SHA256SUMS.txt"
-    check_installer_checksum_case unreachable failure "Could not download SHA256SUMS.txt"
-    check_installer_checksum_case not-listed failure "is not listed in SHA256SUMS.txt"
-    check_installer_checksum_case invalid-hash failure "Invalid SHA-256"
-    check_installer_checksum_case no-tool failure "No SHA-256 tool found"
-    check_installer_checksum_case mismatch failure "Checksum mismatch"
-    check_installer_checksum_case valid success "Checksum verified"
+    check_installer_download_verification_case missing-latest failure "Could not download SHA256SUMS.txt"
+    check_installer_download_verification_case missing-tagged failure "Could not download SHA256SUMS.txt"
+    check_installer_download_verification_case unreachable failure "Could not download SHA256SUMS.txt"
+    check_installer_download_verification_case missing-signature failure "Could not download SHA256SUMS.txt.minisig"
+    check_installer_download_verification_case unreachable-signature failure "Could not download SHA256SUMS.txt.minisig"
+    check_installer_download_verification_case bootstrap-unreachable failure "Could not obtain a trusted Minisign verifier"
+    check_installer_download_verification_case bootstrap-hash-mismatch failure "Minisign verifier checksum mismatch"
+    check_installer_download_verification_case bootstrap-valid success "Signature and checksum verified"
+    check_installer_download_verification_case invalid-signature failure "Invalid signature"
+    check_installer_download_verification_case wrong-release failure "does not match release"
+    check_installer_download_verification_case not-listed failure "is not listed in SHA256SUMS.txt"
+    check_installer_download_verification_case invalid-hash failure "Invalid SHA-256"
+    check_installer_download_verification_case no-tool failure "No SHA-256 tool found"
+    check_installer_download_verification_case mismatch failure "Checksum mismatch"
+    check_installer_download_verification_case valid success "Signature and checksum verified"
+fi
+
+echo ""
+
+# 9a. Signed release manifest generation
+
+echo "==> Signed release manifest generation"
+SIGNING_TEST_DIR="$(mktemp -d)"
+trap 'rm -rf "$SIGNING_TEST_DIR"' EXIT
+mkdir -p "$SIGNING_TEST_DIR/dist"
+printf 'artifact\n' > "$SIGNING_TEST_DIR/dist/linux-soundboard-test.tar.gz"
+minisign -G -W -p "$SIGNING_TEST_DIR/release.pub" -s "$SIGNING_TEST_DIR/release.key" >/dev/null
+
+signing_output=""
+signing_status=0
+signing_output="$(
+    LSB_RELEASE_SIGNING_KEY="$SIGNING_TEST_DIR/release.key" \
+    LSB_RELEASE_PUBLIC_KEY="$SIGNING_TEST_DIR/release.pub" \
+    LSB_RELEASE_TAG=v9.9.9 \
+        bash "$REPO_ROOT/packaging/generate-checksums.sh" "$SIGNING_TEST_DIR/dist" 2>&1
+)" || signing_status=$?
+
+trusted_comment=""
+if [[ $signing_status -eq 0 && -s "$SIGNING_TEST_DIR/dist/SHA256SUMS.txt.minisig" ]]; then
+    trusted_comment="$(minisign -V -H -Q -p "$SIGNING_TEST_DIR/release.pub" \
+        -m "$SIGNING_TEST_DIR/dist/SHA256SUMS.txt" \
+        -x "$SIGNING_TEST_DIR/dist/SHA256SUMS.txt.minisig" 2>/dev/null)" || true
+fi
+
+if [[ "$trusted_comment" == "Linux Soundboard release v9.9.9" ]]; then
+    pass "generate-checksums.sh signs the manifest and binds it to the release tag"
+else
+    fail "generate-checksums.sh did not create a valid release-bound signature (status $signing_status, output: $signing_output)"
 fi
 
 echo ""

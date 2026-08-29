@@ -1,5 +1,36 @@
 # Installation Guide
 
+## Release download verification
+
+`install.sh` verifies `SHA256SUMS.txt.minisig` with the pinned
+[`release.pub`](../release.pub) key before it trusts the SHA-256 manifest. If
+Minisign is not installed, the script downloads a hash-pinned official build to
+its temporary directory and removes it when the command finishes. It does not
+install a verifier or need root.
+
+The stable AUR package builds the tagged source archive and does not download a
+GitHub release binary through `install.sh`. For `.deb`, `.rpm`, AppImage, and
+tarball downloads, any missing file, invalid signature, malformed hash, or
+checksum mismatch stops the install.
+
+If you download a file directly from the Releases page, verify that local file
+without installing it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh \
+  | bash -s -- verify ./DOWNLOADED_FILE
+```
+
+For an older release, name its tag:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh \
+  | bash -s -- verify ./DOWNLOADED_FILE --version v2.4.3
+```
+
+A downloaded executable cannot verify itself before it runs. Use this command
+before opening an AppImage or installing a downloaded package.
+
 ## Quick install — one command
 
 ```bash
@@ -84,6 +115,7 @@ Every menu action has a command, so nothing here needs an interactive shell:
 ./install.sh install --method native    # force the .deb, .rpm, or AUR package
 ./install.sh install --version v2.1.2   # a specific published release
 ./install.sh versions                   # list published releases
+./install.sh verify ./DOWNLOADED_FILE   # verify a release download without installing it
 ./install.sh fix                        # guided repair
 ./install.sh report --output report.txt # bug report file
 ./install.sh status
@@ -146,7 +178,8 @@ You can inspect this at any time without uninstalling:
 
 ## Manual install (tarball)
 
-For source builds or when you want to manage the download yourself:
+For source builds or when you want to manage the download yourself, verify the
+release file with the command above before extracting it.
 
 ### Step-by-step install
 

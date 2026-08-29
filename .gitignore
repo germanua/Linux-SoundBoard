@@ -42,6 +42,8 @@
 .env
 .env.local
 .env.*.local
+/release.key
+/minisign.key
 
 # Local tooling state
 aur-linux-soundboard-git/

@@ -15,6 +15,9 @@ APP_PACKAGE="linux-soundboard"
 APP_BINARY="linux-soundboard"
 APP_AUR_PACKAGE="linux-soundboard"
 APP_AUR_LEGACY_PACKAGE="linux-soundboard-git"
+MINISIGN_PUBLIC_KEY="RWTEtl8HnYs8Fg7BOmAXxuC9PUxqlamX5+C0w4FgUUxXGB6DipbZl8tY"
+MINISIGN_BOOTSTRAP_URL="https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
+MINISIGN_BOOTSTRAP_SHA256="9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
 SWHKD_UPSTREAM_COMMIT="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
 ISSUE_URL="https://github.com/$APP_REPO/issues/new"
@@ -49,6 +52,7 @@ Usage:
   ./install.sh install [--method auto|appimage|tarball|native]
   ./install.sh install --version vX.Y.Z [--method auto|appimage|tarball]
   ./install.sh versions
+  ./install.sh verify FILE [--version vX.Y.Z]
   ./install.sh repair [binary]
   ./install.sh fix
   ./install.sh report [--output PATH]
@@ -65,6 +69,7 @@ install            detects your distro and installs via a native package when av
                    ~/.local without root; native forces the distro package
 install --version  installs that published release into ~/.local, from its tarball or,
                    with --method appimage, from its AppImage
+verify             verifies a manually downloaded release file without installing it
 fix                repairs the install step by step and prints what failed
 report             writes a bug report file with system state, app state, and a blank to fill in
 remove/uninstall   removes per-user files and the native package unless --keep-package,
@@ -102,23 +107,81 @@ sha256_of() {
     fi
 }
 
-# Releases publish SHA256SUMS.txt covering every asset. Refuse any download that
-# cannot be checked against a valid entry in that manifest.
+minisign_verifier() {
+    if command -v minisign >/dev/null 2>&1; then
+        command -v minisign
+        return 0
+    fi
+
+    local arch archive actual verifier
+    case "$(uname -m)" in
+        x86_64|amd64) arch="x86_64" ;;
+        aarch64|arm64) arch="aarch64" ;;
+        *) warn "No trusted Minisign verifier is available for $(uname -m)."; return 1 ;;
+    esac
+
+    archive="$WORK_DIR/minisign-0.12-linux.tar.gz"
+    verifier="$WORK_DIR/minisign-linux/$arch/minisign"
+    info "Downloading the pinned Minisign verifier..." >&2
+    if ! fetch "$MINISIGN_BOOTSTRAP_URL" "$archive" 2>/dev/null; then
+        warn "Could not download the pinned Minisign verifier."
+        return 1
+    fi
+    if ! actual="$(sha256_of "$archive")"; then
+        warn "No SHA-256 tool found for the Minisign verifier bootstrap."
+        return 1
+    fi
+    if [[ "${actual,,}" != "$MINISIGN_BOOTSTRAP_SHA256" ]]; then
+        warn "Minisign verifier checksum mismatch."
+        return 1
+    fi
+    if ! tar -xzf "$archive" -C "$WORK_DIR" "minisign-linux/$arch/minisign" 2>/dev/null; then
+        warn "Could not unpack the pinned Minisign verifier."
+        return 1
+    fi
+    chmod 700 "$verifier"
+    printf '%s\n' "$verifier"
+}
+
+# Releases publish a signed SHA256SUMS.txt covering every asset. Verify the
+# signature before trusting any hash from the manifest.
 verify_download() {
     local file=$1
     local tag=${2:-}
     local sums="$WORK_DIR/SHA256SUMS.txt"
-    local url expected actual
+    local signature="$WORK_DIR/SHA256SUMS.txt.minisig"
+    local release_json release_tag sums_url signature_url verifier trusted_comment expected actual
 
     if [[ -n "$tag" ]]; then
-        url="$(release_json_for_tag "$tag" | find_asset_url_in "SHA256SUMS\\.txt$" || true)"
+        release_json="$(release_json_for_tag "$tag")"
     else
-        url="$(find_asset_url "SHA256SUMS\\.txt$" || true)"
+        release_json="$(get_release_json)"
     fi
 
-    if [[ -z "$url" ]] || ! fetch "$url" "$sums" 2>/dev/null; then
+    release_tag="$(printf '%s' "$release_json" | release_tag_in || true)"
+    [[ -n "$release_tag" ]] || fail "Could not identify the release tag; refusing to verify $(basename "$file")."
+    if [[ -n "$tag" && "$release_tag" != "$tag" ]]; then
+        fail "GitHub returned release $release_tag while $tag was requested; refusing to continue."
+    fi
+
+    sums_url="$(printf '%s' "$release_json" | find_asset_url_in "SHA256SUMS\\.txt$" || true)"
+    if [[ -z "$sums_url" ]] || ! fetch "$sums_url" "$sums" 2>/dev/null; then
         fail "Could not download SHA256SUMS.txt; refusing to install unverified $(basename "$file")."
     fi
+
+    signature_url="$(printf '%s' "$release_json" | find_asset_url_in "SHA256SUMS\\.txt\\.minisig$" || true)"
+    if [[ -z "$signature_url" ]] || ! fetch "$signature_url" "$signature" 2>/dev/null; then
+        fail "Could not download SHA256SUMS.txt.minisig; refusing to trust the checksum manifest."
+    fi
+
+    verifier="$(minisign_verifier)" \
+        || fail "Could not obtain a trusted Minisign verifier; download aborted."
+    if ! trusted_comment="$("$verifier" -V -H -Q -P "$MINISIGN_PUBLIC_KEY" \
+        -m "$sums" -x "$signature" 2>/dev/null)"; then
+        fail "Invalid signature for SHA256SUMS.txt; download aborted."
+    fi
+    [[ "$trusted_comment" == "Linux Soundboard release $release_tag" ]] \
+        || fail "Checksum signature does not match release $release_tag; download aborted."
 
     expected="$(awk -v name="$(basename "$file")" '$2 == name || $2 == "*" name { print $1; exit }' "$sums")"
     if [[ -z "$expected" ]]; then
@@ -134,7 +197,36 @@ verify_download() {
     [[ "${actual,,}" == "${expected,,}" ]] \
         || fail "Checksum mismatch for $(basename "$file"). Expected $expected, got $actual. Download aborted."
 
-    info "Checksum verified."
+    info "Signature and checksum verified."
+}
+
+verify_local_download() {
+    local file=""
+    local tag=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --version)
+                [[ -n "${2:-}" ]] || fail "--version needs a tag, for example v2.4.3."
+                tag="$2"; shift 2
+                ;;
+            --version=*)
+                tag="${1#--version=}"; shift
+                ;;
+            --*)
+                fail "Unknown verify option: $1. See --help."
+                ;;
+            *)
+                [[ -z "$file" ]] || fail "verify accepts one file."
+                file="$1"; shift
+                ;;
+        esac
+    done
+
+    [[ -n "$file" ]] || fail "verify needs a downloaded release file."
+    [[ -f "$file" ]] || fail "File not found: $file"
+    verify_download "$file" "$tag"
+    info "Verified $(basename "$file")."
 }
 
 get_release_json() {
@@ -164,6 +256,11 @@ list_release_tags() {
     get_release_list_json \
         | grep -oE '"tag_name":[[:space:]]*"[^"]+"' \
         | sed -E 's/.*"([^"]+)"/\1/'
+}
+
+release_tag_in() {
+    grep -oE '"tag_name":[[:space:]]*"[^"]+"' \
+        | head -1 | sed -E 's/.*"([^"]+)"/\1/'
 }
 
 # Reads asset URLs out of release JSON on stdin so the same matcher serves the
@@ -1631,6 +1728,10 @@ main() {
             ;;
         versions)
             list_release_tags
+            ;;
+        verify)
+            [[ $# -gt 0 ]] && shift
+            verify_local_download "$@"
             ;;
         repair|fix)
             [[ $# -gt 0 ]] && shift

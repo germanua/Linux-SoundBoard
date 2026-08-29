@@ -92,12 +92,15 @@ matching install path.
 | Fedora | Native `.rpm` package |
 | Other distributions | Release tarball with the per-user installer |
 
-> **Privileges:** Native packages and the Wayland hotkey helper may ask for
-> your password. Per-user AppImage and tarball installs under `~/.local` do
-> not.
+> **Privileges:** Native packages and the Wayland hotkey helper may require your
+> package manager and password. AppImage and tarball installs stay under
+> `~/.local`.
 
-> **Download integrity:** `install.sh` rejects a GitHub release asset unless
-> its SHA-256 matches a valid entry in the release's `SHA256SUMS.txt`.
+> **Download verification:** `install.sh` verifies `SHA256SUMS.txt.minisig`
+> against the pinned [`release.pub`](release.pub) key before it trusts the
+> asset's SHA-256. If Minisign is not installed, the script uses a temporary,
+> hash-pinned copy; it does not install anything. Missing files, invalid
+> signatures, and checksum mismatches stop the install.
 
 ### AppImage
 
@@ -114,9 +117,17 @@ user account and starts the audio engine as a systemd user service.
 
 Download a package or AppImage from the
 [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest),
-or download
+then verify the downloaded file without installing it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- verify ./DOWNLOADED_FILE
+```
+
+For an older release, add its tag, for example `--version v2.4.3`. The verifier
+does not need root and does not install Linux Soundboard or Minisign. You can
+also download
 [`install.sh`](https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
-and inspect it first.
+and inspect it before running the same command locally.
 
 See [docs/INSTALL.md](docs/INSTALL.md) for version selection, repair, status,
 uninstall, AppImage, and source-install commands.

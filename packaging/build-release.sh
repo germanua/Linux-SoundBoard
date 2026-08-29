@@ -78,6 +78,7 @@ OPT_SKIP_TESTS="${LSB_RELEASE_SKIP_TESTS:-0}"
 OPT_SMOKE_FIX_SYSTEMD=0
 OPT_KEEP_DIST="${LSB_RELEASE_KEEP_DIST:-0}"
 OPT_CLEAN_DIST="${LSB_RELEASE_CLEAN_DIST:-0}"
+SIGNING_KEY="${LSB_RELEASE_SIGNING_KEY:-}"
 OPT_FINISH_AUR=0
 OPT_TAG_NAME=""
 OPT_PRUNE_LEGACY=0
@@ -396,6 +397,13 @@ phase_preflight() {
     done
     command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
         || fail "sha256sum or shasum is required"
+    if [[ "$OPT_DRY_RUN" -ne 1 ]]; then
+        require_cmd minisign || exit 1
+        [[ -n "$SIGNING_KEY" ]] \
+            || fail "LSB_RELEASE_SIGNING_KEY must point to the private minisign release key"
+        [[ -r "$SIGNING_KEY" ]] || fail "release signing key is not readable: $SIGNING_KEY"
+        [[ -r "$REPO_ROOT/release.pub" ]] || fail "release.pub is missing or unreadable"
+    fi
 
     local script
     for script in \
@@ -1534,7 +1542,10 @@ phase_build() {
 
 phase_checksums() {
     heading "Checksums"
-    bash "$SCRIPT_DIR/generate-checksums.sh" "$DIST_ROOT" \
+    LSB_RELEASE_SIGNING_KEY="$SIGNING_KEY" \
+    LSB_RELEASE_PUBLIC_KEY="$REPO_ROOT/release.pub" \
+    LSB_RELEASE_TAG="$TAG_NAME" \
+        bash "$SCRIPT_DIR/generate-checksums.sh" "$DIST_ROOT" \
         || fail "generate-checksums.sh failed"
 }
 
@@ -1700,8 +1711,22 @@ phase_verify() {
     ( cd "$DIST_ROOT" && sha256sum -c --quiet SHA256SUMS.txt ) \
         || { printf '[FAIL] sha256sum -c failed\n' >&2; failures=$((failures + 1)); }
 
+    local signature="$DIST_ROOT/SHA256SUMS.txt.minisig"
+    local trusted_comment=""
+    if [[ ! -f "$signature" ]]; then
+        printf '[FAIL] SHA256SUMS.txt.minisig is missing\n' >&2
+        failures=$((failures + 1))
+    elif ! trusted_comment="$(minisign -V -H -Q -p "$REPO_ROOT/release.pub" \
+        -m "$sums" -x "$signature" 2>/dev/null)"; then
+        printf '[FAIL] SHA256SUMS.txt.minisig is invalid\n' >&2
+        failures=$((failures + 1))
+    elif [[ "$trusted_comment" != "Linux Soundboard release $TAG_NAME" ]]; then
+        printf '[FAIL] checksum signature is not bound to %s\n' "$TAG_NAME" >&2
+        failures=$((failures + 1))
+    fi
+
     [[ "$failures" -eq 0 ]] || fail "$failures verification failure(s); refusing to tag"
-    pass "all artifacts present, named, sized, typed and checksummed"
+    pass "all artifacts present, named, sized, typed, checksummed and signed"
 
     write_manifest
 }
@@ -1914,6 +1939,10 @@ phase_summary() {
         printf '  %-46s %8s  %s\n' "SHA256SUMS.txt" \
             "$(grep -c . "$DIST_ROOT/SHA256SUMS.txt" || true) rows" "ok"
     fi
+    if [[ -f "$DIST_ROOT/SHA256SUMS.txt.minisig" ]]; then
+        printf '  %-46s %8s  %s\n' "SHA256SUMS.txt.minisig" \
+            "$(stat -c%s "$DIST_ROOT/SHA256SUMS.txt.minisig") B" "ok"
+    fi
 
     # Everything below hangs off the tag: the AUR archive URL, the push, and the
     # release itself. Without one there is nothing here a reader could run.
@@ -1953,7 +1982,8 @@ phase_summary() {
     while IFS= read -r name; do
         [[ -f "$DIST_ROOT/$name" ]] && printf '      dist/%s \\\n' "$name"
     done < <(expected_artifacts)
-    printf '      dist/SHA256SUMS.txt\n'
+    printf '      dist/SHA256SUMS.txt \\\n'
+    printf '      dist/SHA256SUMS.txt.minisig\n'
 
     # The AUR lives in its own git remote, so nothing this script does reaches
     # it. It is still part of the release; see packaging/aur/README.md.
@@ -2022,13 +2052,15 @@ do_self_test() {
     # one this test must not depend on or inherit.
     git -C "$clone" config user.name "release self-test"
     git -C "$clone" config user.email "self-test@localhost"
+    minisign -G -W -f -p "$clone/release.pub" -s "$SELF_TEST_DIR/release.key" >/dev/null
     git -C "$clone" add -A
     git -C "$clone" commit -q -m "self-test baseline" 2>/dev/null || true
 
     # Everything runs for real on the throwaway copy; this repository is never
     # touched. Artifacts are fabricated so the run does not wait on a full build.
     local rc=0
-    ( cd "$clone" && bash packaging/build-release.sh \
+    ( cd "$clone" && LSB_RELEASE_SIGNING_KEY="$SELF_TEST_DIR/release.key" \
+        bash packaging/build-release.sh \
         --bump patch --yes --no-review --summaries-auto \
         --fake-containers --skip-tests ) || rc=$?
 
@@ -2096,6 +2128,9 @@ Behaviour
                              running the real packagers
   --self-test                run the whole pipeline against a scratch clone
   -h, --help
+
+Signing
+  LSB_RELEASE_SIGNING_KEY    private minisign key; required except for --dry-run
 
 Exit codes
   0  every requested phase completed
