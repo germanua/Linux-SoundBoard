@@ -554,6 +554,82 @@ else
     else
         fail "install.sh: syntax errors detected"
     fi
+
+    check_installer_checksum_case() {
+        local scenario=$1
+        local expected_status=$2
+        local expected_text=$3
+        local output=""
+        local status=0
+
+        output="$(bash -c '
+            installer=$1
+            scenario=$2
+            set -- --help
+            source "$installer" >/dev/null
+
+            asset="$WORK_DIR/linux-soundboard-test.tar.gz"
+            printf "payload\n" > "$asset"
+            good=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            other=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            tag=""
+
+            find_asset_url() { printf "%s\n" "https://example.invalid/SHA256SUMS.txt"; }
+            sha256_of() { printf "%s\n" "$good"; }
+            fetch() { printf "%s  %s\n" "$good" "$(basename "$asset")" > "$2"; }
+
+            case "$scenario" in
+                missing-latest)
+                    find_asset_url() { return 1; }
+                    ;;
+                missing-tagged)
+                    release_json_for_tag() { printf "{}\n"; }
+                    tag=v9.9.9
+                    ;;
+                unreachable)
+                    fetch() { return 1; }
+                    ;;
+                not-listed)
+                    fetch() { printf "%s  other-file\n" "$good" > "$2"; }
+                    ;;
+                invalid-hash)
+                    fetch() { printf "not-a-hash  %s\n" "$(basename "$asset")" > "$2"; }
+                    sha256_of() { printf "not-a-hash\n"; }
+                    ;;
+                no-tool)
+                    sha256_of() { return 1; }
+                    ;;
+                mismatch)
+                    fetch() { printf "%s  %s\n" "$other" "$(basename "$asset")" > "$2"; }
+                    ;;
+                valid)
+                    ;;
+            esac
+
+            verify_download "$asset" "$tag"
+        ' _ "$TOP_INSTALL" "$scenario" 2>&1)" || status=$?
+
+        if [[ "$expected_status" == success ]]; then
+            if [[ $status -eq 0 && "$output" == *"$expected_text"* ]]; then
+                pass "install.sh checksum verification: $scenario"
+            else
+                fail "install.sh checksum verification: $scenario (status $status, output: $output)"
+            fi
+        elif [[ $status -ne 0 && "$output" == *"$expected_text"* ]]; then
+            pass "install.sh checksum verification: $scenario"
+        else
+            fail "install.sh checksum verification: $scenario (status $status, output: $output)"
+        fi
+    }
+
+    check_installer_checksum_case missing-latest failure "Could not download SHA256SUMS.txt"
+    check_installer_checksum_case missing-tagged failure "Could not download SHA256SUMS.txt"
+    check_installer_checksum_case unreachable failure "Could not download SHA256SUMS.txt"
+    check_installer_checksum_case not-listed failure "is not listed in SHA256SUMS.txt"
+    check_installer_checksum_case invalid-hash failure "Invalid SHA-256"
+    check_installer_checksum_case no-tool failure "No SHA-256 tool found"
+    check_installer_checksum_case mismatch failure "Checksum mismatch"
+    check_installer_checksum_case valid success "Checksum verified"
 fi
 
 echo ""

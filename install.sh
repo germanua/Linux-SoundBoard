@@ -102,8 +102,8 @@ sha256_of() {
     fi
 }
 
-# Releases publish SHA256SUMS.txt covering every asset. A missing list is only a
-# warning so older releases stay installable; a mismatch always stops the install.
+# Releases publish SHA256SUMS.txt covering every asset. Refuse any download that
+# cannot be checked against a valid entry in that manifest.
 verify_download() {
     local file=$1
     local tag=${2:-}
@@ -111,28 +111,27 @@ verify_download() {
     local url expected actual
 
     if [[ -n "$tag" ]]; then
-        url="$(release_json_for_tag "$tag" | find_asset_url_in "SHA256SUMS\\.txt$")"
+        url="$(release_json_for_tag "$tag" | find_asset_url_in "SHA256SUMS\\.txt$" || true)"
     else
         url="$(find_asset_url "SHA256SUMS\\.txt$" || true)"
     fi
 
     if [[ -z "$url" ]] || ! fetch "$url" "$sums" 2>/dev/null; then
-        warn "This release publishes no checksum list; skipping verification."
-        return 0
+        fail "Could not download SHA256SUMS.txt; refusing to install unverified $(basename "$file")."
     fi
 
     expected="$(awk -v name="$(basename "$file")" '$2 == name || $2 == "*" name { print $1; exit }' "$sums")"
     if [[ -z "$expected" ]]; then
-        warn "$(basename "$file") is not listed in SHA256SUMS.txt; skipping verification."
-        return 0
+        fail "$(basename "$file") is not listed in SHA256SUMS.txt; refusing to install it."
     fi
+    [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || fail "Invalid SHA-256 for $(basename "$file") in SHA256SUMS.txt; refusing to install it."
 
     if ! actual="$(sha256_of "$file")"; then
-        warn "No sha256 tool found; skipping verification."
-        return 0
+        fail "No SHA-256 tool found; install sha256sum, shasum, or openssl."
     fi
 
-    [[ "$actual" == "$expected" ]] \
+    [[ "${actual,,}" == "${expected,,}" ]] \
         || fail "Checksum mismatch for $(basename "$file"). Expected $expected, got $actual. Download aborted."
 
     info "Checksum verified."
