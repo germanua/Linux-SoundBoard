@@ -1,13 +1,51 @@
-# Linux Soundboard
+<h1 align="center">Linux Soundboard</h1>
 
-Native Linux soundboard with a PipeWire virtual microphone, microphone
-passthrough, LUFS normalization, and global hotkeys.
+<p align="center">
+  Native Linux soundboard with PipeWire virtual microphone, microphone passthrough, LUFS normalization, and global hotkeys for Wayland and X11.
+</p>
 
-[Latest release](https://github.com/germanua/Linux-SoundBoard/releases/latest) ·
-[AUR](https://aur.archlinux.org/packages/linux-soundboard) ·
-[Install guide](docs/INSTALL.md) ·
-[Troubleshooting](docs/TROUBLESHOOTING.md) ·
-[Changelog](docs/CHANGELOG.md)
+<p align="center">
+  <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest">
+    <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github" alt="Latest Release">
+  </a>
+  <a href="https://aur.archlinux.org/packages/linux-soundboard">
+    <img src="https://img.shields.io/aur/version/linux-soundboard?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://ko-fi.com/sherpi">
+    <img src="https://img.shields.io/badge/Support%20the%20project-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Support Linux Soundboard on Ko-fi">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest"><strong>Download</strong></a>
+  ·
+  <a href="docs/INSTALL.md"><strong>Install Guide</strong></a>
+  ·
+  <a href="docs/FEATURE_REFERENCE.md"><strong>Feature Reference</strong></a>
+  ·
+  <a href="docs/SCREENSHOTS.md"><strong>Screenshots</strong></a>
+  ·
+  <a href="docs/TROUBLESHOOTING.md"><strong>Troubleshooting</strong></a>
+  ·
+  <a href="docs/LEGAL.md"><strong>Legal</strong></a>
+</p>
+
+<p align="center"><b>Install with one command:</b></p>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+```
+
+<p align="center">Opens a menu: install, install a previous version, repair, uninstall, check status, or generate a bug report.<br>
+Sets up the runtime audio engine, desktop entry, and icons automatically, and records your audio setup first so uninstalling can put it back.</p>
+
+---
 
 ![Linux Soundboard main window](assets/screenshots/Main_dark.png)
 
@@ -22,14 +60,7 @@ available when the window is closed.
 ## Install
 
 The installer supports Arch-based distributions, Debian/Ubuntu, Fedora, and
-other Linux distributions:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
-```
-
-Run it in a terminal to open an interactive menu for installing, downgrading,
-repairing, uninstalling, checking status, or generating a bug report.
+other Linux distributions.
 
 The installer tells you before an action needs elevated privileges. Native
 packages and the Wayland hotkey helper may require your password; per-user
