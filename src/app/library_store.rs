@@ -1577,12 +1577,7 @@ fn handle_request(connection: &mut Connection, request: Request) {
             sound_id,
             reply,
         } => {
-            let _ = reply.send(load_sound_position(
-                connection,
-                &scope,
-                &search,
-                &sound_id,
-            ));
+            let _ = reply.send(load_sound_position(connection, &scope, &search, &sound_id));
         }
         Request::HotkeyPage { page, reply } => {
             let _ = reply.send(load_hotkey_page(connection, page));
@@ -4551,9 +4546,7 @@ fn load_sound_position(
     position
         .map(|value| {
             usize::try_from(value).map_err(|_| {
-                LibraryError::InvalidData(
-                    "negative sound position returned by library".to_string(),
-                )
+                LibraryError::InvalidData("negative sound position returned by library".to_string())
             })
         })
         .transpose()
