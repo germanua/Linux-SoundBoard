@@ -71,5 +71,6 @@ fi
 
 printf 'Wrote %s over %d artifact(s):\n' "$DIST_ROOT/$SUMS_NAME" "${#assets[@]}"
 printf '  %s\n' "${assets[@]}"
-[[ -f "$DIST_ROOT/$SIGNATURE_NAME" ]] \
-    && printf 'Signed %s as %s\n' "$SUMS_NAME" "$DIST_ROOT/$SIGNATURE_NAME"
+if [[ -f "$DIST_ROOT/$SIGNATURE_NAME" ]]; then
+    printf 'Signed %s as %s\n' "$SUMS_NAME" "$DIST_ROOT/$SIGNATURE_NAME"
+fi

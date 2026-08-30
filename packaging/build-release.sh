@@ -1476,6 +1476,10 @@ fake_artifacts_for() {
             ;;
         flatpak) : ;;
     esac
+
+    if [[ "$target" != "flatpak" ]]; then
+        bash "$SCRIPT_DIR/generate-checksums.sh" "$DIST_ROOT" >/dev/null || return 1
+    fi
 }
 
 run_target() {
@@ -1483,7 +1487,7 @@ run_target() {
 
     if [[ "$OPT_FAKE_CONTAINERS" -eq 1 ]]; then
         warn "$(target_label "$target"): fabricating artifacts (--fake-containers)"
-        fake_artifacts_for "$target"
+        fake_artifacts_for "$target" || return 1
         BUILT+=("$target")
         return 0
     fi
@@ -1508,6 +1512,9 @@ run_target() {
 
 phase_build() {
     heading "Build"
+
+    # Target helpers write interim checksum lists; sign only the final complete set.
+    unset LSB_RELEASE_SIGNING_KEY LSB_RELEASE_PUBLIC_KEY LSB_RELEASE_TAG
     sweep_dist
     mkdir -p "$DIST_ROOT"
 
@@ -2038,6 +2045,7 @@ do_self_test() {
     SELF_TEST_DIR="$(mktemp -d)"
 
     local clone="$SELF_TEST_DIR/repo"
+    local notes="$SELF_TEST_DIR/notes.md"
 
     heading "Self test"
     info "cloning into $clone"
@@ -2053,6 +2061,9 @@ do_self_test() {
     git -C "$clone" config user.name "release self-test"
     git -C "$clone" config user.email "self-test@localhost"
     minisign -G -W -f -p "$clone/release.pub" -s "$SELF_TEST_DIR/release.key" >/dev/null
+    sed -i "s|^MINISIGN_PUBLIC_KEY=.*|MINISIGN_PUBLIC_KEY=\"$(tail -n 1 "$clone/release.pub")\"|" \
+        "$clone/install.sh"
+    printf '%s\n' '### Fixed' '- Exercise the release pipeline.' >"$notes"
     git -C "$clone" add -A
     git -C "$clone" commit -q -m "self-test baseline" 2>/dev/null || true
 
@@ -2062,6 +2073,7 @@ do_self_test() {
     ( cd "$clone" && LSB_RELEASE_SIGNING_KEY="$SELF_TEST_DIR/release.key" \
         bash packaging/build-release.sh \
         --bump patch --yes --no-review --summaries-auto \
+        --notes-file "$notes" \
         --fake-containers --skip-tests ) || rc=$?
 
     # 2 means "completed with something outstanding" - here, the AUR hash that
