@@ -25,6 +25,6 @@ pkgbase = linux-soundboard
 	conflicts = linux-soundboard-git
 	options = !lto
 	source = linux-soundboard-2.4.4.tar.gz::https://github.com/germanua/Linux-SoundBoard/archive/refs/tags/v2.4.4.tar.gz
-	sha256sums = SKIP
+	sha256sums = 6a9d674e20fa4faf74eb0a12362e253a4d6e7a2846a0f3d3e0014309c63a3402
 
 pkgname = linux-soundboard

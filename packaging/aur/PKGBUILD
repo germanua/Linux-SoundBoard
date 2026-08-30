@@ -37,7 +37,7 @@ options=('!lto')
 source=(
   "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
 )
-sha256sums=('SKIP')
+sha256sums=('6a9d674e20fa4faf74eb0a12362e253a4d6e7a2846a0f3d3e0014309c63a3402')
 install="${pkgname}.install"
 
 prepare() {
