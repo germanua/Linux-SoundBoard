@@ -8,9 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [2.4.4] - 2026-08-30
 
+### Changed
+
+- Reworked the README so installation, features, and configuration are easier to find.
+
+### Fixed
+
+- Continue mode now advances from the sound that finished, even after switching tabs or changing the search during playback.
+
 ### Security
 
-- **Signed release manifests:** `install.sh` now verifies the Minisign signature and release tag on `SHA256SUMS.txt` before trusting any asset hash. It can verify a manually downloaded file without installing the app or Minisign. Release builds require the private signing key and publish `SHA256SUMS.txt.minisig`; only `release.pub` is stored in the repository.
+- Release downloads now verify a signed checksum list before installing.
 
 ## [2.4.3] - 2026-08-25
 
