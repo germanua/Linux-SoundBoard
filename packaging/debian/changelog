@@ -1,3 +1,9 @@
+linux-soundboard (2.4.4-1) unstable; urgency=medium
+
+  * Signed release manifests
+
+ -- germanua <114772595+germanua@users.noreply.github.com>  Sun, 30 Aug 2026 19:03:02 +0300
+
 linux-soundboard (2.4.3-1) unstable; urgency=medium
 
   * Audio settings controls

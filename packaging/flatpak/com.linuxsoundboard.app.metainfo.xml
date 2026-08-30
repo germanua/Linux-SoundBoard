@@ -67,6 +67,14 @@
   </keywords>
   
   <releases>
+    <release version="2.4.4" date="2026-08-30">
+      <description>
+        <p>Linux Soundboard 2.4.4:</p>
+        <ul>
+          <li>Signed release manifests</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.4.3" date="2026-08-25">
       <description>
         <p>Linux Soundboard 2.4.3:</p>

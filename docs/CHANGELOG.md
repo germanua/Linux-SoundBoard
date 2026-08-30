@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-08-30
+
 ### Security
 
 - **Signed release manifests:** `install.sh` now verifies the Minisign signature and release tag on `SHA256SUMS.txt` before trusting any asset hash. It can verify a manually downloaded file without installing the app or Minisign. Release builds require the private signing key and publish `SHA256SUMS.txt.minisig`; only `release.pub` is stored in the repository.
