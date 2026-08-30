@@ -330,6 +330,23 @@ fn play_adjacent_from_library(
     play_resolved_sound(sound.ok_or(CommandError::SoundNotFound)?, player)
 }
 
+fn play_adjacent_from_sound_id_from_library(
+    scope: crate::library_store::LibraryScope,
+    search: &str,
+    sound_id: &str,
+    offset: i32,
+    library: &crate::library_store::LibraryStore,
+    player: Arc<dyn PlaybackEngine>,
+) -> Result<String, CommandError> {
+    let position = library
+        .position_for_sound(scope.clone(), search, sound_id)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?
+        .ok_or(CommandError::SoundNotFound)?;
+
+    play_adjacent_from_library(scope, search, Some(position), offset, library, player)
+}
+
 pub fn play_sound_async<F>(
     id: String,
     state: Arc<AppState>,
@@ -374,6 +391,30 @@ where
     dispatch_async_result(
         "play_adjacent_sound",
         move || play_adjacent_from_library(scope, &search, position, offset, &library, player),
+        on_complete,
+    )
+}
+
+pub fn play_adjacent_sound_from_id_async<F>(
+    scope: crate::library_store::LibraryScope,
+    search: String,
+    sound_id: String,
+    offset: i32,
+    state: Arc<AppState>,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<String, CommandError>) + 'static,
+{
+    let library = state.library.clone();
+    let player = Arc::clone(&state.player);
+    dispatch_async_result(
+        "play_adjacent_sound_from_id",
+        move || {
+            play_adjacent_from_sound_id_from_library(
+                scope, &search, &sound_id, offset, &library, player,
+            )
+        },
         on_complete,
     )
 }

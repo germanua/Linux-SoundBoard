@@ -32,6 +32,13 @@ struct ActiveTrack {
     play_id: String,
 }
 
+#[derive(Clone, Debug)]
+struct ContinueCursor {
+    sound_id: String,
+    scope: crate::library_store::LibraryScope,
+    search: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScrubInput {
     Pointer,
@@ -95,7 +102,8 @@ struct TransportInner {
     suppress_headphones_toggle: Cell<bool>,
     suppress_mic_toggle: Cell<bool>,
     continue_suppressed_play_id: RefCell<Option<String>>,
-    last_track_sound_id: RefCell<Option<String>>,
+    continue_cursor: RefCell<Option<ContinueCursor>>,
+    continue_advance_pending: Cell<bool>,
     refresh_cancel: RefCell<Option<Arc<AtomicBool>>>,
     state: Arc<AppState>,
     has_sound_list_provider: Cell<bool>,

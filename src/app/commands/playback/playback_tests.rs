@@ -91,7 +91,9 @@ mod dispatch {
     use crate::audio::PlaybackEngine;
     use crate::commands::CommandError;
     use crate::config::{LoudnessAnalysisState, Sound};
-    use crate::library_store::{LibraryBatch, LibraryStore, LoudnessUpdate, SoundRecord};
+    use crate::library_store::{
+        LibraryBatch, LibraryScope, LibraryStore, LoudnessUpdate, SoundRecord,
+    };
     use crate::test_support::audio_mock::FakeAudioPlayer;
 
     struct ClipOnDisk(std::path::PathBuf);
@@ -228,6 +230,102 @@ mod dispatch {
             .map(|call| call.sound_id)
             .collect();
         assert_eq!(played, [first_id, second_id]);
+    }
+
+    #[test]
+    fn continue_from_sound_id_plays_the_following_sound() {
+        let (first, dir, _first_path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let (third, _third_dir, _third_path) = sound_on_disk("Third");
+        let second_id = second.id.clone();
+        let third_id = third.id.clone();
+        let store = LibraryStore::open(dir.0.join("library.sqlite3")).expect("open library");
+        store
+            .apply_batch(LibraryBatch::Sounds(vec![
+                SoundRecord {
+                    sound: first,
+                    general_position: 0,
+                    locations: Vec::new(),
+                },
+                SoundRecord {
+                    sound: second,
+                    general_position: 1,
+                    locations: Vec::new(),
+                },
+                SoundRecord {
+                    sound: third,
+                    general_position: 2,
+                    locations: Vec::new(),
+                },
+            ]))
+            .recv()
+            .expect("seed sounds");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        super::super::play_adjacent_from_sound_id_from_library(
+            LibraryScope::General,
+            "",
+            &second_id,
+            1,
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("continue from second sound");
+
+        let played: Vec<String> = fake
+            .play_calls()
+            .into_iter()
+            .map(|call| call.sound_id)
+            .collect();
+        assert_eq!(played, [third_id]);
+    }
+
+    #[test]
+    fn continue_from_last_sound_wraps_to_first_sound() {
+        let (first, dir, _first_path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let (third, _third_dir, _third_path) = sound_on_disk("Third");
+        let first_id = first.id.clone();
+        let third_id = third.id.clone();
+        let store = LibraryStore::open(dir.0.join("library.sqlite3")).expect("open library");
+        store
+            .apply_batch(LibraryBatch::Sounds(vec![
+                SoundRecord {
+                    sound: first,
+                    general_position: 0,
+                    locations: Vec::new(),
+                },
+                SoundRecord {
+                    sound: second,
+                    general_position: 1,
+                    locations: Vec::new(),
+                },
+                SoundRecord {
+                    sound: third,
+                    general_position: 2,
+                    locations: Vec::new(),
+                },
+            ]))
+            .recv()
+            .expect("seed sounds");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        super::super::play_adjacent_from_sound_id_from_library(
+            LibraryScope::General,
+            "",
+            &third_id,
+            1,
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("wrap Continue playback");
+
+        let played: Vec<String> = fake
+            .play_calls()
+            .into_iter()
+            .map(|call| call.sound_id)
+            .collect();
+        assert_eq!(played, [first_id]);
     }
 
     #[test]

@@ -395,6 +395,12 @@ enum Request {
         offset: i32,
         reply: mpsc::SyncSender<Result<Option<Sound>, LibraryError>>,
     },
+    PositionForSound {
+        scope: LibraryScope,
+        search: String,
+        sound_id: String,
+        reply: mpsc::SyncSender<Result<Option<usize>, LibraryError>>,
+    },
     HotkeyPage {
         page: usize,
         reply: mpsc::SyncSender<Result<SoundPage, LibraryError>>,
@@ -579,6 +585,7 @@ impl RequestQueue {
             | Request::SoundByPath { .. }
             | Request::SoundForBinding { .. }
             | Request::Adjacent { .. }
+            | Request::PositionForSound { .. }
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
@@ -953,6 +960,24 @@ impl LibraryStore {
                 search: search.to_lowercase(),
                 position,
                 offset,
+                reply,
+            },
+            response,
+        )
+    }
+
+    pub fn position_for_sound(
+        &self,
+        scope: LibraryScope,
+        search: &str,
+        sound_id: &str,
+    ) -> LibraryResponse<Option<usize>> {
+        let (reply, response) = mpsc::sync_channel(1);
+        self.enqueue(
+            Request::PositionForSound {
+                scope,
+                search: search.to_lowercase(),
+                sound_id: sound_id.to_string(),
                 reply,
             },
             response,
@@ -1453,6 +1478,7 @@ impl Request {
             | Request::SoundByPath { .. }
             | Request::SoundForBinding { .. }
             | Request::Adjacent { .. }
+            | Request::PositionForSound { .. }
             | Request::HotkeyPage { .. }
             | Request::HotkeyBindingsAfter { .. }
             | Request::HotkeyBinding { .. }
@@ -1543,6 +1569,19 @@ fn handle_request(connection: &mut Connection, request: Request) {
         } => {
             let _ = reply.send(load_adjacent_sound(
                 connection, &scope, &search, position, offset,
+            ));
+        }
+        Request::PositionForSound {
+            scope,
+            search,
+            sound_id,
+            reply,
+        } => {
+            let _ = reply.send(load_sound_position(
+                connection,
+                &scope,
+                &search,
+                &sound_id,
             ));
         }
         Request::HotkeyPage { page, reply } => {
@@ -4395,6 +4434,129 @@ fn delete_hotkey_binding(connection: &Connection, binding_id: &str) -> Result<bo
         "DELETE FROM hotkey_bindings WHERE binding_id = ?1",
         [binding_id],
     )? == 1)
+}
+
+fn load_sound_position(
+    connection: &Connection,
+    scope: &LibraryScope,
+    search: &str,
+    sound_id: &str,
+) -> Result<Option<usize>, LibraryError> {
+    let fts = search_query(search);
+    let position: Option<i64> = match scope {
+        LibraryScope::General => connection
+            .query_row(
+                &format!(
+                    "WITH anchor(position, public_id) AS (
+                         SELECT sound.general_position, sound.public_id
+                         FROM sounds AS sound
+                         WHERE sound.public_id = ?3
+                           AND {LIVE_SOUND_FILTER}
+                           AND {SEARCH_FILTER}
+                     )
+                     SELECT (
+                         SELECT COUNT(*)
+                         FROM sounds AS sound
+                         WHERE {LIVE_SOUND_FILTER}
+                           AND {SEARCH_FILTER}
+                           AND (sound.general_position < anchor.position
+                                OR (sound.general_position = anchor.position
+                                    AND sound.public_id < anchor.public_id))
+                     )
+                     FROM anchor"
+                ),
+                params![search, fts, sound_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        LibraryScope::ManualTab(tab_id) => connection
+            .query_row(
+                &format!(
+                    "WITH anchor(position, public_id) AS (
+                         SELECT membership.position, sound.public_id
+                         FROM manual_memberships AS membership
+                         JOIN manual_tabs AS tab ON tab.id = membership.tab_id
+                         JOIN sounds AS sound ON sound.rowid = membership.sound_id
+                         WHERE tab.public_id = ?3
+                           AND sound.public_id = ?4
+                           AND {SEARCH_FILTER}
+                     )
+                     SELECT (
+                         SELECT COUNT(*)
+                         FROM manual_memberships AS membership
+                         JOIN manual_tabs AS tab ON tab.id = membership.tab_id
+                         JOIN sounds AS sound ON sound.rowid = membership.sound_id
+                         WHERE tab.public_id = ?3
+                           AND {SEARCH_FILTER}
+                           AND (membership.position < anchor.position
+                                OR (membership.position = anchor.position
+                                    AND sound.public_id < anchor.public_id))
+                     )
+                     FROM anchor"
+                ),
+                params![search, fts, tab_id, sound_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+        LibraryScope::Folder {
+            root_path,
+            relative_path,
+        } => connection
+            .query_row(
+                &format!(
+                    "WITH selected(folder_id, root_id, generation) AS (
+                         SELECT folder.id, root.id, root.active_generation
+                         FROM folders AS folder
+                         JOIN roots AS root ON root.id = folder.root_id
+                         JOIN folder_presence AS presence ON presence.folder_id = folder.id
+                             AND presence.generation = root.active_generation
+                         WHERE root.path = ?3 AND folder.relative_path = ?4
+                     ), effective(sound_id) AS (
+                         SELECT location.sound_id FROM selected
+                         JOIN folder_closure AS closure ON closure.ancestor_id = selected.folder_id
+                         JOIN sound_locations AS location ON location.folder_id = closure.descendant_id
+                             AND location.root_id = selected.root_id
+                             AND location.generation = selected.generation
+                         UNION
+                         SELECT override.sound_id FROM selected
+                         JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                         WHERE override.action = 'include'
+                         EXCEPT
+                         SELECT override.sound_id FROM selected
+                         JOIN folder_overrides AS override ON override.folder_id = selected.folder_id
+                         WHERE override.action = 'exclude'
+                     ), anchor(position, public_id) AS (
+                         SELECT sound.general_position, sound.public_id
+                         FROM effective
+                         JOIN sounds AS sound ON sound.rowid = effective.sound_id
+                         WHERE sound.public_id = ?5 AND {SEARCH_FILTER}
+                     )
+                     SELECT (
+                         SELECT COUNT(*)
+                         FROM effective
+                         JOIN sounds AS sound ON sound.rowid = effective.sound_id
+                         WHERE {SEARCH_FILTER}
+                           AND (sound.general_position < anchor.position
+                                OR (sound.general_position = anchor.position
+                                    AND sound.public_id < anchor.public_id))
+                     )
+                     FROM anchor"
+                ),
+                params![search, fts, root_path, relative_path, sound_id],
+                |row| row.get(0),
+            )
+            .optional()?,
+    };
+
+    position
+        .map(|value| {
+            usize::try_from(value).map_err(|_| {
+                LibraryError::InvalidData(
+                    "negative sound position returned by library".to_string(),
+                )
+            })
+        })
+        .transpose()
 }
 
 fn load_adjacent_sound(

@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gtk4::prelude::*;
@@ -7,7 +8,7 @@ use crate::commands;
 use crate::config::PlayMode;
 
 use super::helpers::should_clear_continue_suppression;
-use super::{TransportBar, TransportInner};
+use super::{ContinueCursor, TransportBar, TransportInner};
 use crate::ui::icons;
 
 fn set_active_if_changed(button: &ToggleButton, active: bool) {
@@ -221,6 +222,57 @@ impl TransportInner {
         }
     }
 
+    pub(super) fn remember_continue_cursor(&self, sound_id: &str) {
+        let provider = self.sound_list_provider.borrow();
+        let cursor = provider.as_ref().map(|provider| {
+            let context = provider();
+            ContinueCursor {
+                sound_id: sound_id.to_string(),
+                scope: context.scope,
+                search: context.search,
+            }
+        });
+        *self.continue_cursor.borrow_mut() = cursor;
+    }
+
+    pub(super) fn continue_to_next_sound(self: &Rc<Self>) -> bool {
+        if self.continue_advance_pending.get() {
+            return true;
+        }
+        let Some(cursor) = self.continue_cursor.borrow().clone() else {
+            return false;
+        };
+
+        self.clear_continue_suppression();
+        self.continue_advance_pending.set(true);
+        commands::stop_all(self.state.player.clone());
+
+        let weak = Rc::downgrade(self);
+        match commands::play_adjacent_sound_from_id_async(
+            cursor.scope,
+            cursor.search,
+            cursor.sound_id,
+            1,
+            Arc::clone(&self.state),
+            move |result| {
+                let Some(inner) = weak.upgrade() else {
+                    return;
+                };
+                if let Err(error) = result {
+                    log::warn!("Continue playback failed: {error}");
+                    inner.reset_idle_playback_ui();
+                }
+            },
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                self.continue_advance_pending.set(false);
+                log::warn!("Failed to dispatch Continue playback: {error}");
+                false
+            }
+        }
+    }
+
     pub(super) fn stop_all_playback(&self) {
         *self.continue_suppressed_play_id.borrow_mut() = self
             .active_track
@@ -257,7 +309,8 @@ impl TransportInner {
         self.scrub.set_sensitive(false);
         self.track_name_label.set_visible(false);
         *self.active_track.borrow_mut() = None;
-        *self.last_track_sound_id.borrow_mut() = None;
+        *self.continue_cursor.borrow_mut() = None;
+        self.continue_advance_pending.set(false);
         self.time_label.set_text("0:00");
         self.dur_label.set_text("0:00");
         crate::ui_event_bridge::post_now_playing(None);

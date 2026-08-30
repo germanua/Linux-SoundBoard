@@ -89,7 +89,7 @@ impl TransportInner {
             let play_mode = { self.state.config.lock().settings.play_mode };
             let has_navigation_sounds = self.has_navigation_sounds();
             let should_continue = should_continue_playback(
-                self.last_track_sound_id.borrow().is_some(),
+                self.continue_cursor.borrow().is_some(),
                 play_mode,
                 has_navigation_sounds,
                 self.is_continue_suppressed(),
@@ -98,8 +98,12 @@ impl TransportInner {
                 if crate::ui_event_bridge::is_explicit_play_pending() {
                     return;
                 }
-                self.play_adjacent_sound(1);
-                return;
+                if self.continue_advance_pending.get() {
+                    return;
+                }
+                if self.continue_to_next_sound() {
+                    return;
+                }
             }
 
             crate::ui_event_bridge::clear_explicit_play_pending();
@@ -113,6 +117,7 @@ impl TransportInner {
         self.next_btn.set_sensitive(has_provider);
 
         if let Some(position) = positions.iter().find(|position| !position.finished) {
+            self.continue_advance_pending.set(false);
             // New sound is active — any pending explicit play has now landed.
             crate::ui_event_bridge::clear_explicit_play_pending();
             self.clear_continue_suppression_for_playback(&position.play_id);
@@ -169,7 +174,7 @@ impl TransportInner {
                         self.resolve_track_name_async(&position.sound_id, &position.play_id);
                     }
                 }
-                *self.last_track_sound_id.borrow_mut() = Some(position.sound_id.clone());
+                self.remember_continue_cursor(&position.sound_id);
                 *self.active_track.borrow_mut() = Some(super::ActiveTrack {
                     sound_id: position.sound_id.clone(),
                     sound_name: sound_name.clone(),
@@ -183,7 +188,7 @@ impl TransportInner {
             let play_mode = { self.state.config.lock().settings.play_mode };
             let has_navigation_sounds = self.has_navigation_sounds();
             if should_continue_playback(
-                self.last_track_sound_id.borrow().is_some(),
+                self.continue_cursor.borrow().is_some(),
                 play_mode,
                 has_navigation_sounds,
                 self.is_continue_suppressed(),
@@ -191,12 +196,17 @@ impl TransportInner {
                 if crate::ui_event_bridge::is_explicit_play_pending() {
                     return;
                 }
-                self.play_adjacent_sound(1);
-            } else {
-                crate::ui_event_bridge::clear_explicit_play_pending();
-                self.clear_continue_suppression();
-                self.reset_idle_playback_ui();
+                if self.continue_advance_pending.get() {
+                    return;
+                }
+                if self.continue_to_next_sound() {
+                    return;
+                }
             }
+
+            crate::ui_event_bridge::clear_explicit_play_pending();
+            self.clear_continue_suppression();
+            self.reset_idle_playback_ui();
         }
     }
 

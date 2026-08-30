@@ -704,6 +704,46 @@ fn adjacent_lookup_respects_scope_search_order_and_boundaries() {
 }
 
 #[test]
+fn sound_position_respects_scope_search_and_stable_order() {
+    let temp = TestDir::new();
+    let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
+    wait(store.apply_batch(LibraryBatch::Sounds(vec![
+        SoundRecord {
+            sound: sound("third", "Match Three", "/music/three.flac"),
+            general_position: 2,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("first", "Match One", "/music/one.flac"),
+            general_position: 0,
+            locations: Vec::new(),
+        },
+        SoundRecord {
+            sound: sound("second", "Skip Two", "/music/two.flac"),
+            general_position: 1,
+            locations: Vec::new(),
+        },
+    ])));
+
+    assert_eq!(
+        wait(store.position_for_sound(LibraryScope::General, "match", "first")),
+        Some(0)
+    );
+    assert_eq!(
+        wait(store.position_for_sound(LibraryScope::General, "match", "third")),
+        Some(1)
+    );
+    assert_eq!(
+        wait(store.position_for_sound(LibraryScope::General, "match", "second")),
+        None
+    );
+    assert_eq!(
+        wait(store.position_for_sound(LibraryScope::General, "match", "missing")),
+        None
+    );
+}
+
+#[test]
 fn folder_navigation_pages_only_direct_children_at_arbitrary_depth() {
     let temp = TestDir::new();
     let store = LibraryStore::open(temp.path().join("library.sqlite3")).expect("open store");
