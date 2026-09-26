@@ -19,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Changed
 
+- **Project licensing:** Linux Soundboard 2.4.7 moves the project's original code and materials to the Linux Soundboard Source-Available License 1.0. Official unmodified releases remain available for personal noncommercial use and source inspection, while code reuse, redistribution, derivative publication, rebranding, resale, and commercial exploitation require prior written permission. Third-party components retain their upstream licenses.
 - **AppImage-only distribution:** This release moves the supported public distribution path to x86_64 AppImage. Legacy AUR/DEB/RPM/tarball files remain for history and migration support but are not release artifacts for this version. The AppImage baseline requires glibc 2.39 or newer.
 - **Now Playing layout:** Per-playback controls live with the sound library rather than inside the global transport bar, preserving the Tabs/Folders sidebar and using the library width more efficiently.
 - **Shared-hotkey selection:** Shared hotkeys skip sounds that already have a live voice instead of immediately selecting an already-playing member again.

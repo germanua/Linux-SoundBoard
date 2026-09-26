@@ -1,64 +1,59 @@
 # Legal and Licensing
 
-This document summarizes the licensing model for Linux Soundboard.
-
-This is an informational project document, not legal advice and not a separate license.
+This document summarizes the licensing model for Linux Soundboard. It is informational and does not replace the license text in `LICENSE`.
 
 ## Project license
 
-Linux Soundboard's original source code and original project materials are licensed under the PolyForm Noncommercial License 1.0.0. Third-party components and third-party-derived assets are excluded from that grant and retain their own upstream licenses.
+Linux Soundboard's original code and original project materials are licensed under the **Linux Soundboard Source-Available License 1.0**.
 
-- SPDX identifier: `PolyForm-Noncommercial-1.0.0`
+- Project license reference: `LicenseRef-Linux-Soundboard-Source-Available-1.0`
 - License file: `LICENSE`
-- Required notice: `Required Notice: Copyright (c) 2026 germanua`
+- Copyright: `Copyright (c) 2026 germanua. All rights reserved.`
+- Applies to: version 2.4.7 and later public releases that include this license
 
-## What the public license allows
+Earlier releases remain governed by the license distributed with those releases.
 
-The public repository license allows noncommercial use, study, copying, modification, and redistribution, subject to the license terms.
+## What the license allows
 
-Forks are allowed for noncommercial purposes if the fork keeps the license terms and required notice.
+Without a separate written license, users may:
 
-Free redistribution is allowed when it is for a noncommercial purpose and follows the public license. Requiring or expecting payment for a copy, build, bundle, or related commercial service requires separate written permission from the project owner.
+- download, install, and use official unmodified releases for personal, noncommercial purposes;
+- make copies reasonably necessary for installation, execution, backup, and recovery;
+- view publicly available source code for personal evaluation, learning, interoperability analysis, and good-faith security review;
+- prepare modifications solely for submission to the official project under `CONTRIBUTING.md`;
+- exercise rights that applicable law or a third-party component license independently requires.
 
-## What the public license does not allow
+## What the license does not allow
 
-The public repository license does not allow third parties to:
+Without prior written permission from the project owner, users may not:
 
-- sell Linux Soundboard or a modified version of it;
-- distribute paid builds;
-- include the project in a commercial product or service;
-- remove the required copyright notice;
-- claim that a fork is an official release;
-- sublicense the project as if they owned it.
+- reuse Linux Soundboard source code or substantial portions of it in another project;
+- publish or redistribute Linux Soundboard source code or compiled binaries;
+- publish or distribute modified, renamed, rebranded, or derivative versions;
+- publish a fork as a separately distributed application;
+- sell, sublicense, bundle, monetize, or commercially exploit Linux Soundboard;
+- include Linux Soundboard code in another product or service;
+- remove or obscure copyright, license, attribution, provenance, or proprietary notices;
+- rely on superficial code, UI, symbol, or name changes to avoid these restrictions.
 
-Commercial use requires a separate written commercial license from the project owner.
-
-## Official paid builds
-
-The project owner may distribute official commercial builds, including builds published through Steam or other software stores.
-
-Those official builds may use separate store terms, EULA terms, or commercial-license terms. The public repository license still controls third-party use of the public source code.
-
-## Forks
-
-Forks must preserve the project license and required notice. Noncommercial forks should clearly state that they are unofficial and not endorsed by the project owner.
-
-A fork may not be sold, packaged into a paid product, or distributed through a paid software store without a separate written commercial license from the project owner.
+The exact controlling language is in `LICENSE`.
 
 ## Third-party components
 
-Third-party dependencies and third-party-derived assets keep their own licenses. They are not relicensed under the Linux Soundboard project license. Their human-readable notices and source references are documented in `THIRDPARTY_LICENSES.md`.
+Third-party dependencies and third-party-derived assets are excluded from the Linux Soundboard project license and retain their upstream licenses. Their notices and source references are documented in `THIRDPARTY_LICENSES.md` and `THIRD_PARTY_NOTICES.html`.
 
-The current AppImage bundles selected native shared libraries for portability. Those libraries remain under their upstream licenses, including LGPL, MIT, BSD, and other applicable terms. The AppImage retains applicable package copyright/license files, and required rights for those components are not restricted by the Linux Soundboard project license.
+The AppImage bundles selected native shared libraries for portability. Those libraries retain all rights required by their own licenses, including applicable replacement, modification, relinking, debugging, and reverse-engineering rights.
 
-The generated notices for the current locked Rust dependency graph are in `THIRD_PARTY_NOTICES.html`. MPL-covered Rust packages remain under MPL-2.0, and third-party UI glyphs identified in `THIRDPARTY_LICENSES.md` remain under their upstream Apache-2.0, MIT, or ISC terms.
+## Commercial licensing
+
+Commercial use, redistribution, resale, commercial bundling, paid hosting, or incorporation into a commercial product or service requires a separate written license from the project owner.
+
+See `COMMERCIAL-LICENSE.md` for the commercial licensing policy.
 
 ## Contributions
 
-The project is currently solo-maintained. External contributions are governed by `CONTRIBUTING.md`.
-
-Do not accept external pull requests into commercial/store-bound code unless the contribution terms are clear enough to allow official commercial distribution.
+External contributions are governed by `CONTRIBUTING.md`. Contributors grant the project owner the rights needed to include accepted contributions in public source-available releases and separately licensed commercial releases.
 
 ## Branding
 
-The public code license does not grant permission to use the project's name, logos, screenshots, or branding in a way that suggests an unofficial fork is official or endorsed.
+The source-available license does not grant a trademark or branding license. The project name, logos, screenshots, and other distinctive identity may not be used to make an unofficial application appear official, endorsed, or affiliated with the project owner.

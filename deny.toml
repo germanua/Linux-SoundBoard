@@ -13,12 +13,12 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
-    "PolyForm-Noncommercial-1.0.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
 ]
 confidence-threshold = 0.8
+private = { ignore = true }
 
 [bans]
 multiple-versions = "allow"

@@ -9,7 +9,7 @@
     <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github" alt="Latest Release">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
+    <img src="https://img.shields.io/badge/license-Source--Available%201.0-3c8d40?style=for-the-badge" alt="License">
   </a>
 </p>
 
@@ -65,9 +65,9 @@ Bug reports and focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRI
 
 ## License
 
-Linux Soundboard is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+Linux Soundboard is source-available under the [Linux Soundboard Source-Available License 1.0](LICENSE).
 
-Noncommercial use, modification, forks, and redistribution are allowed under the license terms. Commercial use, paid redistribution, resale, commercial bundling, or use in a commercial product or service requires a separate written commercial license.
+Official unmodified releases may be used for personal, noncommercial purposes. Reuse of the project code, redistribution, publication of modified or rebranded versions, resale, and commercial use require prior written permission. Third-party components keep their own licenses.
 
 - [Legal overview](docs/LEGAL.md)
 - [Commercial licensing](COMMERCIAL-LICENSE.md)
