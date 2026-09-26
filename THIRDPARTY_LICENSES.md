@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Linux Soundboard's own source code is licensed separately under the PolyForm Noncommercial 1.0.0 license. This file is the human-readable overview of major third-party components and release obligations.
+Linux Soundboard's original project code and materials are licensed separately under the project license in `LICENSE`. Third-party code, libraries, tools, codecs, bindings, and assets are not relicensed under the Linux Soundboard project license; they retain their original upstream licenses.
 
 The exact generated notices for Rust packages in the locked Linux release dependency graph, including package versions and full detected license texts, are in `THIRD_PARTY_NOTICES.html`. That generated file is authoritative for the corresponding `Cargo.lock` and must be regenerated whenever dependencies change:
 
@@ -11,28 +11,36 @@ cargo about generate --config about.toml --manifest-path Cargo.toml --workspace 
 
 Binary release artifacts must include `LICENSE`, `NOTICE.md`, this overview, and `THIRD_PARTY_NOTICES.html`.
 
-The package links in the generated notices identify the exact published source versions used by the locked build, including MPL-covered packages.
+The package links in the generated notices identify the exact published source versions used by the locked build. Any future change to the Linux Soundboard project license does not remove or narrow rights granted by a third-party component's own license.
 
-## MPL-2.0 Component
+## MPL-2.0 Components
 
-### Symphonia
+### Symphonia family
 
-- Component: `symphonia` 0.5.5
+- Components: `symphonia` 0.5.5 and the `symphonia-*` 0.5.5 packages present in `Cargo.lock`
 - License: Mozilla Public License 2.0 (MPL-2.0)
 - Upstream source code: https://github.com/pdeljanov/Symphonia
 
-Linux Soundboard uses Symphonia for media demuxing and audio decoding. The corresponding source code for Symphonia is available from the upstream repository linked above.
+Linux Soundboard uses Symphonia for media demuxing and audio decoding. The Symphonia files remain under MPL-2.0. If Linux Soundboard distributes modified MPL-covered Symphonia files, those covered files and modifications must remain available under the MPL terms.
+
+### option-ext
+
+- Component: `option-ext` 0.2.0
+- License: Mozilla Public License 2.0 (MPL-2.0)
+- Upstream source code: https://github.com/soc/option-ext
+
+`option-ext` remains under MPL-2.0 independently of the Linux Soundboard project license.
 
 ## BSD-3-Clause Components
 
 ### Opus codec library
 
-- Component: `libopus` (system library)
+- Component: `libopus` native shared library
 - License: BSD 3-Clause
 - Project page: https://opus-codec.org/
 - Source code: https://gitlab.xiph.org/xiph/opus
 
-Linux Soundboard links against the system-provided `libopus` library at runtime for decoding Opus audio streams. The library is not included in this distribution; users can replace it with a compatible version. The BSD 3-Clause license requires that the following notice be preserved in distributions that include the library:
+Linux Soundboard dynamically links to `libopus`. AppImage releases may bundle a compatible `libopus.so.0` for portability. The bundled library remains under the BSD 3-Clause license and is not covered by the Linux Soundboard project license. The BSD 3-Clause license requires that the following notice be preserved in distributions that include the library:
 
 ```text
 Copyright 2001-2011 Xiph.Org, Skype Technologies, Octasic, Jean-Marc Valin,
@@ -82,18 +90,56 @@ Linux Soundboard compiles the upstream SQLite amalgamation into the application
 through `rusqlite`'s `bundled` feature, so installations do not depend on a
 distribution-provided SQLite library.
 
-## LGPL Components Dynamically Linked At Runtime
+## Native Libraries and AppImage Bundling
 
-Linux Soundboard dynamically links against system-provided libraries on Linux. Those libraries are not relicensed under the project's PolyForm license. They remain available under their upstream LGPL terms, and users may replace those shared libraries with compatible modified versions as permitted by the LGPL.
+Linux Soundboard dynamically links to several native Linux libraries. AppImage releases are built in a pinned Ubuntu 24.04 environment and bundle selected shared libraries for portability. Bundled third-party libraries keep their own licenses and are not relicensed under the Linux Soundboard project license.
 
-- GTK 4 native library: LGPL-2.1-or-later. Project page: https://www.gtk.org/ . Source code: https://gitlab.gnome.org/GNOME/gtk
-- Libadwaita native library: LGPL-2.1-or-later. Source code: https://gitlab.gnome.org/GNOME/libadwaita
-- PipeWire native library: LGPL-2.1-or-later. Project page: https://pipewire.org/ . Source code: https://gitlab.freedesktop.org/pipewire/pipewire
-- PulseAudio libpulse native library: LGPL-2.1-or-later. Project page: https://www.freedesktop.org/wiki/Software/PulseAudio/ . Source code: https://gitlab.freedesktop.org/pulseaudio/pulseaudio
+The AppImage carries the applicable distribution copyright/license files under `usr/share/doc/.../copyright` together with Linux Soundboard's own legal files. Corresponding source for bundled libraries is available from the upstream projects and the matching Ubuntu source packages. Users retain all replacement, modification, reverse-engineering, and relinking rights that the applicable third-party licenses require.
 
-Notes:
+Important native components include:
 
-- The Rust crates `gtk4`, `libadwaita`, `pipewire`, and `libpulse-binding` are separate bindings/wrappers with their own crate licenses listed below.
+- GTK 4: LGPL-2.1-or-later. Project page: https://www.gtk.org/ . Source code: https://gitlab.gnome.org/GNOME/gtk
+- Libadwaita: LGPL-2.1-or-later. Source code: https://gitlab.gnome.org/GNOME/libadwaita
+- GLib/GIO/GObject: LGPL-2.1-or-later. Source code: https://gitlab.gnome.org/GNOME/glib
+- Pango: LGPL-2.1-or-later. Source code: https://gitlab.gnome.org/GNOME/pango
+- PulseAudio `libpulse`: LGPL-2.1-or-later. Source code: https://gitlab.freedesktop.org/pulseaudio/pulseaudio
+- PipeWire: primarily MIT-licensed, with separately licensed files identified upstream. Source code and license: https://gitlab.freedesktop.org/pipewire/pipewire
+- Opus: BSD 3-Clause. Source code: https://gitlab.xiph.org/xiph/opus
+
+The Rust crates `gtk4`, `libadwaita`, `pipewire`, and `libpulse-binding` are separate bindings/wrappers with their own crate licenses listed below.
+
+## Third-Party UI Assets
+
+Some SVG glyphs in `src/resources/icons/` are adapted from established open-source icon sets and remain under their upstream licenses rather than the Linux Soundboard project license.
+
+Confirmed examples include:
+
+- `lsb-refresh-symbolic.svg`: Google Material Design Icons refresh glyph, Apache-2.0. Source: https://github.com/google/material-design-icons
+- `lsb-settings-symbolic.svg`: Google Material Design settings glyph, Apache-2.0. Source: https://github.com/google/material-design-icons
+- `lsb-drop-zone-symbolic.svg`: Feather upload glyph, MIT. Copyright (c) 2013-2023 Cole Bemis. Source: https://github.com/feathericons/feather
+- `lsb-check-symbolic.svg`: Feather/Lucide check glyph. The original Feather glyph is MIT-licensed; current Lucide distributions preserve the applicable Feather/Lucide license terms. Sources: https://github.com/feathericons/feather and https://github.com/lucide-icons/lucide
+- `lsb-folder-symbolic.svg` and `lsb-folder-open-symbolic.svg`: Lucide folder glyphs, ISC. Copyright held by Lucide Icons and Contributors, subject to the upstream Lucide license. Source: https://github.com/lucide-icons/lucide
+
+Repository-specific sizing, CSS classes, colors, or other adaptations do not replace the upstream licenses for those underlying glyphs. The standard MIT, Apache-2.0, and ISC license texts required by these assets are preserved through this file and `THIRD_PARTY_NOTICES.html`. Other original Linux Soundboard artwork remains subject to the project license unless a file or this notice states otherwise.
+
+## Installer-Managed External Tools
+
+### swhkd
+
+- Component: `swhkd` / `swhks`
+- License: BSD 2-Clause
+- Upstream source: https://github.com/waycrate/swhkd
+- Pinned revision used by the installer: `cbbfc4a981aa263155e3216a42549c9a3ae645fe`
+
+On Wayland, the Linux Soundboard installer can build and install the pinned `swhkd` revision for global hotkeys. `swhkd` is a separate third-party program and remains under its BSD 2-Clause license.
+
+### Minisign
+
+- Component: Minisign command-line verifier
+- License: ISC
+- Upstream source: https://github.com/jedisct1/minisign
+
+The bootstrap installer may download an upstream Minisign verifier when no suitable local verifier is available. Minisign is not relicensed as part of Linux Soundboard. The application also uses the separate Rust `minisign-verify` crate, whose license is recorded in `THIRD_PARTY_NOTICES.html`.
 
 ## MIT-Only Rust Crates
 

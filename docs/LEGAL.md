@@ -6,7 +6,7 @@ This is an informational project document, not legal advice and not a separate l
 
 ## Project license
 
-Linux Soundboard's own source code and original project materials are licensed under the PolyForm Noncommercial License 1.0.0.
+Linux Soundboard's original source code and original project materials are licensed under the PolyForm Noncommercial License 1.0.0. Third-party components and third-party-derived assets are excluded from that grant and retain their own upstream licenses.
 
 - SPDX identifier: `PolyForm-Noncommercial-1.0.0`
 - License file: `LICENSE`
@@ -47,11 +47,11 @@ A fork may not be sold, packaged into a paid product, or distributed through a p
 
 ## Third-party components
 
-Third-party dependencies keep their own licenses. Their notices are documented in `THIRDPARTY_LICENSES.md`.
+Third-party dependencies and third-party-derived assets keep their own licenses. They are not relicensed under the Linux Soundboard project license. Their human-readable notices and source references are documented in `THIRDPARTY_LICENSES.md`.
 
-Binary release bundles should include generated third-party dependency notices matching the exact release build.
+The current AppImage bundles selected native shared libraries for portability. Those libraries remain under their upstream licenses, including LGPL, MIT, BSD, and other applicable terms. The AppImage retains applicable package copyright/license files, and required rights for those components are not restricted by the Linux Soundboard project license.
 
-The generated notices for the current locked Rust dependency graph are in `THIRD_PARTY_NOTICES.html`.
+The generated notices for the current locked Rust dependency graph are in `THIRD_PARTY_NOTICES.html`. MPL-covered Rust packages remain under MPL-2.0, and third-party UI glyphs identified in `THIRDPARTY_LICENSES.md` remain under their upstream Apache-2.0, MIT, or ISC terms.
 
 ## Contributions
 

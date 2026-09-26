@@ -21,6 +21,10 @@ The project owner may publish official commercial builds, including builds distr
 
 The existence of an official paid build does not grant third parties the right to sell, repackage, or commercially distribute the public repository version.
 
+## Third-party components
+
+A commercial license from the Linux Soundboard project owner can only grant rights in material the project owner is entitled to license. Third-party libraries, codecs, bindings, native shared libraries, and third-party-derived assets remain governed by their own upstream licenses and are not relicensed by this document. See `THIRDPARTY_LICENSES.md` and `THIRD_PARTY_NOTICES.html`.
+
 ## Contact
 
 For commercial licensing, contact the project owner through the GitHub repository:
