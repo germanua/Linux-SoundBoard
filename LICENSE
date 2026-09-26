@@ -2,96 +2,147 @@
 
 Copyright (c) 2026 germanua. All rights reserved.
 
-This license applies to Linux Soundboard version 2.4.7 and later public releases that include this license. Earlier releases remain governed by the license terms distributed with those releases.
+This license applies to Linux Soundboard version 2.4.7 and later public releases that
+include this license. Earlier releases remain governed by the license terms distributed
+with those releases.
 
 ## 1. Scope
 
-This license covers the original Linux Soundboard source code, documentation, scripts, branding, screenshots, original artwork, and other original material supplied by the copyright holder, except where a file or notice states otherwise.
+This license covers the original Linux Soundboard source code, documentation, scripts,
+branding, screenshots, original artwork, and other original material supplied by the
+copyright holder, except where a file or notice states otherwise.
 
-Third-party software, libraries, tools, codecs, bindings, icons, artwork, and other third-party materials are excluded from this license and remain governed by their respective licenses. See `THIRDPARTY_LICENSES.md` and `THIRD_PARTY_NOTICES.html`.
+Third-party software, libraries, tools, codecs, bindings, icons, artwork, and other
+third-party materials are excluded from this license and remain governed by their
+respective licenses. See `THIRDPARTY_LICENSES.md` and `THIRD_PARTY_NOTICES.html`.
 
 ## 2. Permission to use official releases
 
-Subject to these terms, you may download, install, execute, and use unmodified official Linux Soundboard releases for personal, noncommercial purposes.
+Subject to these terms, you may download, install, execute, and use unmodified official
+Linux Soundboard releases for personal, noncommercial purposes.
 
-You may make copies reasonably necessary for installation, execution, backup, and recovery of an authorized copy.
+You may make copies reasonably necessary for installation, execution, backup, and
+recovery of an authorized copy.
 
 Commercial use requires prior written permission from the copyright holder.
 
 ## 3. Permission to inspect source
 
-You may view and inspect publicly available Linux Soundboard source code for personal evaluation, learning, interoperability analysis, and good-faith security review.
+You may view and inspect publicly available Linux Soundboard source code for personal
+evaluation, learning, interoperability analysis, and good-faith security review.
 
-Viewing the source does not grant permission to reuse, publish, redistribute, sublicense, or incorporate Linux Soundboard code into another project.
+Viewing the source does not grant permission to reuse, publish, redistribute,
+sublicense, or incorporate Linux Soundboard code into another project.
 
 ## 4. Prohibited acts
 
 Except with prior written permission from the copyright holder, you may not:
 
-- copy or reuse Linux Soundboard source code or substantial portions of it in another project;
+- copy or reuse Linux Soundboard source code or substantial portions of it in another
+  project;
 - modify Linux Soundboard for redistribution or publication;
-- publish, distribute, mirror, sublicense, or otherwise make available the source code or compiled binaries, whether modified or unmodified;
-- publish or distribute a fork, derivative application, rebranded version, renamed version, or substantially similar product based on Linux Soundboard code;
-- sell, rent, lease, license, sublicense, bundle, monetize, or otherwise commercially exploit Linux Soundboard;
-- offer Linux Soundboard, or a derivative based on its code, as part of a paid product, service, subscription, hosting service, support package, or software store listing;
-- remove, alter, or obscure copyright, license, attribution, provenance, or proprietary notices;
-- use Linux Soundboard branding, names, logos, screenshots, or other project identity in a way that suggests an unofficial product is official, endorsed, or affiliated with the copyright holder;
-- circumvent these restrictions by making superficial changes, renaming symbols, changing the application name, changing the user interface, translating the code, or otherwise modifying the work while retaining protected Linux Soundboard code.
+- publish, distribute, mirror, sublicense, or otherwise make available the source code
+  or compiled binaries, whether modified or unmodified;
+- publish or distribute a fork, derivative application, rebranded version, renamed
+  version, or substantially similar product based on Linux Soundboard code;
+- sell, rent, lease, license, sublicense, bundle, monetize, or otherwise commercially
+  exploit Linux Soundboard;
+- offer Linux Soundboard, or a derivative based on its code, as part of a paid
+  product, service, subscription, hosting service, support package, or software store
+  listing;
+- remove, alter, or obscure copyright, license, attribution, provenance, or
+  proprietary notices;
+- use Linux Soundboard branding, names, logos, screenshots, or other project identity
+  in a way that suggests an unofficial product is official, endorsed, or affiliated
+  with the copyright holder;
+- circumvent these restrictions by making superficial changes, renaming symbols,
+  changing the application name, changing the user interface, translating the code, or
+  otherwise modifying the work while retaining protected Linux Soundboard code.
 
-No right to create or distribute derivative works is granted except as expressly stated in this license.
+No right to create or distribute derivative works is granted except as expressly stated
+in this license.
 
 ## 5. Contributions to the official project
 
-You may prepare modifications solely for submission as a contribution to the official Linux Soundboard project, subject to `CONTRIBUTING.md`.
+You may prepare modifications solely for submission as a contribution to the official
+Linux Soundboard project, subject to `CONTRIBUTING.md`.
 
-This permission does not authorize publication or redistribution of those modifications outside the contribution process.
+This permission does not authorize publication or redistribution of those modifications
+outside the contribution process.
 
 ## 6. Platform-hosting copies and forks
 
-If the source is hosted on a public code-hosting service, copies or repository forks made solely through functionality that the hosting service requires or expressly authorizes are permitted only to the minimum extent necessary to use that service.
+If the source is hosted on a public code-hosting service, copies or repository forks
+made solely through functionality that the hosting service requires or expressly
+authorizes are permitted only to the minimum extent necessary to use that service.
 
-Such platform-level permission does not grant any additional right to publish releases, redistribute binaries, reuse Linux Soundboard code in another project, or distribute a modified or rebranded application.
+Such platform-level permission does not grant any additional right to publish releases,
+redistribute binaries, reuse Linux Soundboard code in another project, or distribute a
+modified or rebranded application.
 
 ## 7. Third-party and statutory rights
 
-Nothing in this license changes, removes, or restricts rights granted directly by the licenses of third-party components included with Linux Soundboard.
+Nothing in this license changes, removes, or restricts rights granted directly by the
+licenses of third-party components included with Linux Soundboard.
 
-Nothing in this license restricts reverse engineering, modification, replacement, relinking, debugging, interoperability work, or other acts to the extent they are required to exercise rights under an applicable third-party license, including the GNU Lesser General Public License, or to the extent applicable law does not permit such restrictions.
+Nothing in this license restricts reverse engineering, modification, replacement,
+relinking, debugging, interoperability work, or other acts to the extent they are
+required to exercise rights under an applicable third-party license, including the GNU
+Lesser General Public License, or to the extent applicable law does not permit such
+restrictions.
 
-Those exceptions apply only to the relevant third-party component or legally protected activity and do not grant a general right to copy, reuse, publish, or redistribute Linux Soundboard's original code.
+Those exceptions apply only to the relevant third-party component or legally protected
+activity and do not grant a general right to copy, reuse, publish, or redistribute Linux
+Soundboard's original code.
 
 ## 8. No trademark or branding license
 
-No trademark, trade name, logo, product identity, or endorsement right is granted by this license.
+No trademark, trade name, logo, product identity, or endorsement right is granted by
+this license.
 
-Use of the name `Linux Soundboard`, `Linux_Soundboard_Mic`, project logos, or other distinctive project branding beyond truthful reference to the official project requires prior written permission where such permission is legally required.
+Use of the name `Linux Soundboard`, `Linux_Soundboard_Mic`, project logos, or other
+distinctive project branding beyond truthful reference to the official project requires
+prior written permission where such permission is legally required.
 
 ## 9. Ownership and reservation of rights
 
-Linux Soundboard is licensed, not sold. The copyright holder retains all rights not expressly granted by this license.
+Linux Soundboard is licensed, not sold. The copyright holder retains all rights not
+expressly granted by this license.
 
-No patent, trademark, sublicensing, redistribution, derivative-work, or commercial-use right is granted except where this license expressly says otherwise.
+No patent, trademark, sublicensing, redistribution, derivative-work, or commercial-use
+right is granted except where this license expressly says otherwise.
 
 ## 10. Termination
 
-Your rights under this license terminate automatically if you violate its terms and do not cure the violation within 14 days after receiving written notice from the copyright holder.
+Your rights under this license terminate automatically if you violate its terms and do
+not cure the violation within 14 days after receiving written notice from the copyright
+holder.
 
-Termination does not affect third-party rights granted independently under third-party licenses.
+Termination does not affect third-party rights granted independently under third-party
+licenses.
 
 ## 11. Disclaimer of warranty
 
-To the maximum extent permitted by law, Linux Soundboard is provided "AS IS" and "AS AVAILABLE", without warranties or conditions of any kind, express or implied, including warranties of merchantability, fitness for a particular purpose, title, and non-infringement.
+To the maximum extent permitted by law, Linux Soundboard is provided "AS IS" and "AS
+AVAILABLE", without warranties or conditions of any kind, express or implied, including
+warranties of merchantability, fitness for a particular purpose, title, and
+non-infringement.
 
 ## 12. Limitation of liability
 
-To the maximum extent permitted by law, the copyright holder will not be liable for any indirect, incidental, special, consequential, exemplary, or punitive damages, or for loss of data, profits, revenue, goodwill, or business interruption arising from the software or these terms.
+To the maximum extent permitted by law, the copyright holder will not be liable for any
+indirect, incidental, special, consequential, exemplary, or punitive damages, or for
+loss of data, profits, revenue, goodwill, or business interruption arising from the
+software or these terms.
 
 ## 13. Severability
 
-If any provision of this license is held unenforceable, the remaining provisions remain in effect to the maximum extent permitted by law.
+If any provision of this license is held unenforceable, the remaining provisions remain
+in effect to the maximum extent permitted by law.
 
 ## 14. Written permission
 
-Any permission, commercial license, redistribution authorization, or exception beyond these terms must be granted in writing by the copyright holder.
+Any permission, commercial license, redistribution authorization, or exception beyond
+these terms must be granted in writing by the copyright holder.
 
 Official project: https://github.com/germanua/Linux-SoundBoard
