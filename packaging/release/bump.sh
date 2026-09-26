@@ -199,26 +199,40 @@ bump_doc_filenames() {
     done
 }
 
+bump_appimage_doc() {
+    local rel_path="$1" expected="$2"
+    local file="$REPO_ROOT/$rel_path"
+    local placeholder="$APP_BINARY-VERSION-x86_64.AppImage"
+    local current="$APP_BINARY-$OLD_VERSION-x86_64.AppImage"
+    local replacement="$APP_BINARY-$NEW_VERSION-x86_64.AppImage"
+    local placeholder_count current_count total
+
+    placeholder_count="$(count_occurrences "$file" "$placeholder")"
+    current_count="$(count_occurrences "$file" "$current")"
+    total=$((placeholder_count + current_count))
+    [[ "$total" -eq "$expected" ]] \
+        || fail "$rel_path: expected $expected release AppImage filename(s), found $total; the docs have drifted"
+    [[ "$placeholder_count" -eq 0 ]] || bump_doc_filenames "$rel_path" "$placeholder" "$replacement" "$placeholder_count"
+    [[ "$current_count" -eq 0 ]] || bump_doc_filenames "$rel_path" "$current" "$replacement" "$current_count"
+}
+
 bump_docs() {
-    local old_appimage="$APP_BINARY-$OLD_VERSION-x86_64.AppImage"
-    local new_appimage="$APP_BINARY-$NEW_VERSION-x86_64.AppImage"
     local old_deb="${APP_BINARY}_${OLD_VERSION}-${OLD_PKGREL}_amd64.deb"
     local new_deb="${APP_BINARY}_${NEW_VERSION}-${PKGREL}_amd64.deb"
     local old_rpm="$APP_BINARY-$OLD_VERSION-$OLD_PKGREL.x86_64.rpm"
     local new_rpm="$APP_BINARY-$NEW_VERSION-$PKGREL.x86_64.rpm"
 
-    bump_doc_filenames README.md \
-        "$old_appimage" "$new_appimage" 3
+    bump_appimage_doc README.md 3
 
-    bump_doc_filenames docs/INSTALL.md \
-        "$old_appimage" "$new_appimage" 3
+    bump_appimage_doc docs/INSTALL.md 3
 
     bump_doc_filenames docs/INSTALL.md \
         "$old_deb" "$new_deb" 0 \
         "$old_rpm" "$new_rpm" 0
 
+    bump_appimage_doc docs/TROUBLESHOOTING.md 0
+
     bump_doc_filenames docs/TROUBLESHOOTING.md \
-        "$old_appimage" "$new_appimage" 0 \
         "$old_deb" "$new_deb" 0 \
         "$old_rpm" "$new_rpm" 0
 }
