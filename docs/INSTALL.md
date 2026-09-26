@@ -2,7 +2,7 @@
 
 ## Release format
 
-**Latest public release: 2.4.4.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Arch/AUR, Debian `.deb`, RPM, and binary-tarball artifacts from 2.4.4 and earlier remain historical releases.
+**Latest public release: 2.4.7.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Arch/AUR, Debian `.deb`, RPM, and binary-tarball artifacts from 2.4.4 and earlier remain historical releases.
 
 The AppImage contains the application plus the per-user installer used to configure the persistent audio engine, desktop entry, icons, and virtual-microphone integration.
 
@@ -20,7 +20,7 @@ To verify a downloaded AppImage before running it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh \
-  | bash -s -- verify ./linux-soundboard-VERSION-x86_64.AppImage
+  | bash -s -- verify ./linux-soundboard-2.4.7-x86_64.AppImage
 ```
 
 For an older release, name its tag with `--version vX.Y.Z`.
@@ -51,8 +51,8 @@ The repository retains legacy AUR/DEB/RPM packaging files for maintenance and mi
 ### AppImage from the Releases page
 
 ```bash
-chmod +x linux-soundboard-VERSION-x86_64.AppImage
-./linux-soundboard-VERSION-x86_64.AppImage
+chmod +x linux-soundboard-2.4.7-x86_64.AppImage
+./linux-soundboard-2.4.7-x86_64.AppImage
 ```
 
 On first direct launch:

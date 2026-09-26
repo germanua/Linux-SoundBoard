@@ -73,7 +73,7 @@ can remain available after the window closes.
 
 ## Install
 
-**Latest public release: 2.4.4.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Native packages from 2.4.4 and earlier remain historical artifacts.
+**Latest public release: 2.4.7.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Native packages from 2.4.4 and earlier remain historical artifacts.
 
 The AppImage being prepared for the next public release is **x86_64** and requires **glibc 2.39 or newer**. That covers Ubuntu 24.04/26.04, Debian 13, Fedora 40+, current Arch/CachyOS/EndeavourOS, and openSUSE Leap 16/Tumbleweed. Ubuntu 22.04, Debian 12, and openSUSE Leap 15.6 are below the prepared AppImage ABI baseline and are rejected before installation instead of failing later in the dynamic loader.
 
@@ -92,8 +92,8 @@ If an older native Linux Soundboard package is installed, the installer detects 
 ### Run the AppImage directly
 
 ```bash
-chmod +x linux-soundboard-VERSION-x86_64.AppImage
-./linux-soundboard-VERSION-x86_64.AppImage
+chmod +x linux-soundboard-2.4.7-x86_64.AppImage
+./linux-soundboard-2.4.7-x86_64.AppImage
 ```
 
 On first launch, choose **Install for persistent virtual mic**, **Run temporarily**, or **Exit**. A persistent install keeps the AppImage under your user account and starts the audio engine as a systemd user service. A directly downloaded AppImage does not self-install a privileged Wayland helper; run the one-line installer or `install.sh repair` to provision that helper from a signed release.
@@ -103,7 +103,7 @@ On first launch, choose **Install for persistent virtual mic**, **Run temporaril
 Download the AppImage from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest), then verify it without installing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- verify ./linux-soundboard-VERSION-x86_64.AppImage
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- verify ./linux-soundboard-2.4.7-x86_64.AppImage
 ```
 
 For an older release, add its tag, for example `--version v2.4.4`. Historical releases may still contain native packages or tarballs, but those formats are no longer produced for new releases.

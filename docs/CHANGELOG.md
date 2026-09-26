@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+## [2.4.7] - 2026-09-26
+
 ### Added
 
 - **Concurrent playback:** An optional Playback setting allows several sounds to remain live at once. Voices share one bounded mix path, microphone passthrough is added once per mix chunk, and the engine caps the mix at 32 live voices.

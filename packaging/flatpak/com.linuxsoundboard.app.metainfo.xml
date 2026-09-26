@@ -67,6 +67,18 @@
   </keywords>
 
   <releases>
+    <release version="2.4.7" date="2026-09-26">
+      <description>
+        <p>Linux Soundboard 2.4.7:</p>
+        <ul>
+          <li>Concurrent playback</li>
+          <li>Per-playback Now Playing controls</li>
+          <li>Batch hotkey assignment</li>
+          <li>Routing diagnostics</li>
+          <li>Authenticated in-app AppImage updates</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.4.4" date="2026-08-30">
       <description>
         <p>Linux Soundboard 2.4.4:</p>
