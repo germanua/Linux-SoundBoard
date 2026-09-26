@@ -1,32 +1,15 @@
-# Containerized package builds
+# Containerized release builds
 
-Helpers for building the native packages on a host that is not the package's
-target distribution (for example, building the `.deb`/`.rpm` on Arch).
-
-Each script copies the working tree into an isolated build context, runs the
-matching per-distro packaging script inside a container, and copies the finished
-artifacts into `dist/` at the repository root. They require `docker` and `rsync`
-on the host and network access inside the container.
-
-| Script | Image | Produces |
-|--------|-------|----------|
-| `build-deb-appimage.sh` | `ubuntu:24.04` | `linux-soundboard_*_amd64.deb`, `linux-soundboard-*-x86_64.AppImage` |
-| `build-rpm.sh` | `fedora:latest` | `linux-soundboard-*.x86_64.rpm` |
+Current Linux Soundboard releases use the AppImage as the supported release artifact. The AppImage is built inside Ubuntu 24.04 and therefore has a glibc 2.39 ABI baseline.
 
 ```bash
-packaging/docker/build-rpm.sh
-packaging/docker/build-deb-appimage.sh
+packaging/docker/build-appimage.sh
 ```
 
-Why containers are needed:
+The script stages an isolated copy of the working tree, builds inside `ubuntu:24.04`, and copies the versioned and stable AppImages into `dist/`. It requires Docker, `rsync`, and network access. Override the image with `APPIMAGE_BUILD_IMAGE` if necessary.
 
-- The `.deb` requires the Debian toolchain (`dpkg-buildpackage`, `debhelper`).
-- The `.rpm` spec uses Fedora-only macros (`%{_userunitdir}`) and an rpm database.
-- The AppImage must be built against an older glibc than a rolling-release host
-  provides; otherwise the bundled GTK libraries crash the dynamic loader on
-  startup. Ubuntu 24.04 (glibc 2.39, GTK 4.14, libadwaita 1.5) keeps the AppImage
-  portable while still satisfying the `gtk4`/`libadwaita` feature requirements.
+## Legacy helpers
 
-The tarball and a locally runnable AppImage can also be built directly with
-`packaging/linux/package-appimage.sh` when the host itself is a suitable base.
-Override the base image with `DEB_BUILD_IMAGE` / `RPM_BUILD_IMAGE` if needed.
+`build-deb-appimage.sh` and `build-rpm.sh` are retained for historical maintenance only. They are **not part of the current release pipeline**. This does not pre-decide the distribution policy of a later release.
+
+The AppImage can also be built directly with `packaging/linux/package-appimage.sh` on a host whose glibc baseline is suitable for distribution.

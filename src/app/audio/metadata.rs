@@ -1,5 +1,3 @@
-//! Audio duration probing helpers.
-
 use std::fs::File;
 use std::path::Path;
 use std::time::Duration;
@@ -89,7 +87,7 @@ pub fn probe_duration_ms(path: &str) -> Option<u64> {
         .ok()?;
 
     let format = probed.format;
-    // Probe the same track playback selects.
+
     let track = select_audio_track(format.as_ref(), is_strict_audio_container(path))?;
 
     let params = &track.codec_params;

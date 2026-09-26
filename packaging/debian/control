@@ -41,6 +41,6 @@ Description: Native Linux soundboard with virtual microphone support
   * Virtual microphone for routing audio to Discord, OBS, Zoom, etc.
   * Mic passthrough to mix your voice with soundboard audio
   * LUFS normalization for consistent volume levels
-  * Native Wayland hotkeys via host-installed swhkd with full native X11/XWayland support
+  * Native Wayland hotkeys via the managed swhkd helper with full native X11/XWayland support
   * Modern GTK4/Libadwaita UI with dark mode support
   * Native PipeWire virtual microphone routing

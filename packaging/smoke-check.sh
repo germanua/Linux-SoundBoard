@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Offline packaging consistency checks.
 
-# shellcheck disable=SC2016
+
+
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 skip() { printf '[SKIP] %s\n' "$1"; SKIP=$((SKIP + 1)); }
 note() { printf '[NOTE] %s\n' "$1"; }
 
-# 1. Metadata consistency
+
 
 echo "==> Metadata consistency"
 vm_ec=0
@@ -31,7 +31,7 @@ fi
 
 echo ""
 
-# 1a. Legal and dependency notices
+
 
 echo "==> Legal and dependency notices"
 LEGAL_FILES=(
@@ -40,7 +40,6 @@ LEGAL_FILES=(
     "$REPO_ROOT/THIRDPARTY_LICENSES.md"
     "$REPO_ROOT/THIRD_PARTY_NOTICES.html"
     "$REPO_ROOT/COMMERCIAL-LICENSE.md"
-    "$REPO_ROOT/DONATIONS.md"
 )
 
 for legal_file in "${LEGAL_FILES[@]}"; do
@@ -124,6 +123,7 @@ else
     pass "Native package builds omit unused ALSA development files"
 fi
 if grep -Eq '(rust|Rust|cargo).*(1\.85|1\.85\.0)|(1\.85|1\.85\.0).*(rust|Rust|cargo)' \
+    "$REPO_ROOT/packaging/docker/build-appimage.sh" \
     "$REPO_ROOT/packaging/docker/build-deb-appimage.sh" \
     "$REPO_ROOT/packaging/docker/build-rpm.sh" \
     || grep -Eq 'toolchain:[[:space:]]*"?[0-9]' "$REPO_ROOT/.github/workflows/ci.yml"; then
@@ -136,6 +136,20 @@ if grep -qF 'cp --remove-destination "$CTX"/dist/*.deb "$CTX"/dist/*.AppImage "$
     pass "Container build replaces AppImages that are currently running"
 else
     fail "Container build cannot replace an AppImage that is currently running"
+fi
+if grep -qF 'cp --remove-destination "$built_image" "$HOST_OUTPUT/$built_name"' \
+    "$REPO_ROOT/packaging/docker/build-appimage.sh" \
+    && grep -qF 'generate-checksums.sh" "$HOST_OUTPUT" "${built_names[@]}"' \
+    "$REPO_ROOT/packaging/docker/build-appimage.sh"; then
+    pass "AppImage-only container build publishes only AppImage artifacts"
+else
+    fail "AppImage-only container build does not copy its release artifact correctly"
+fi
+if grep -qF 'local requested=(appimage)' \
+    "$REPO_ROOT/packaging/build-release.sh" "$REPO_ROOT"/packaging/release/*.sh; then
+    pass "Release builder defaults to the AppImage-only artifact set"
+else
+    fail "Release builder does not default to AppImage-only"
 fi
 if grep -qF '%global debug_package %{nil}' "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"; then
     pass "RPM: empty remapped debug packages are disabled"
@@ -208,7 +222,7 @@ fi
 
 echo ""
 
-# 1b. Stable AUR default
+
 
 echo "==> Stable AUR default"
 if grep -qF 'APP_AUR_PACKAGE="linux-soundboard"' "$REPO_ROOT/install.sh"; then
@@ -239,7 +253,7 @@ fi
 
 echo ""
 
-# 2. Desktop file validation
+
 
 echo "==> Desktop file validation"
 DESKTOP_FILES=(
@@ -270,7 +284,7 @@ fi
 
 echo ""
 
-# 3. AppStream metadata validation
+
 
 echo "==> AppStream metadata validation"
 METAINFO="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.metainfo.xml"
@@ -301,7 +315,7 @@ fi
 
 echo ""
 
-# 4. Service file
+
 
 echo "==> Systemd service file"
 SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
@@ -337,7 +351,7 @@ fi
 
 echo ""
 
-# 5. install-user.sh subcommand coverage
+
 
 echo "==> install-user.sh subcommands"
 INSTALLER="$REPO_ROOT/packaging/linux/install-user.sh"
@@ -365,7 +379,7 @@ fi
 
 echo ""
 
-# 5a. install.sh wrapper subcommand coverage
+
 
 echo "==> install.sh wrapper subcommands"
 WRAPPER="$REPO_ROOT/install.sh"
@@ -384,7 +398,7 @@ else
     else
         fail "install.sh: --keep-package option missing"
     fi
-    # Read piped-install prompts from the terminal.
+
     if grep -q "ensure_tty" "$WRAPPER" && grep -q "exec </dev/tty" "$WRAPPER"; then
         pass "install.sh: menu reads prompts from the terminal when piped"
     else
@@ -399,7 +413,7 @@ fi
 
 echo ""
 
-# 6. Flatpak manifest: forbidden finish-args check
+
 
 echo "==> Flatpak manifest permission audit"
 MANIFEST="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.yml"
@@ -435,7 +449,7 @@ fi
 
 echo ""
 
-# 7. AppImage preflight script
+
 
 echo "==> AppImage preflight check script"
 PREFLIGHT="$REPO_ROOT/packaging/linux/appimage-preflight-check.sh"
@@ -487,7 +501,8 @@ else
     fail "AppImage hicolor index omits bundled icon contexts: ${missing_contexts[*]}"
 fi
 
-if grep -qF 'LSB_INSTALL_VERSION' "$REPO_ROOT/src/app/bootstrap.rs" \
+if grep -qF 'LSB_INSTALL_VERSION' \
+    "$REPO_ROOT/src/app/bootstrap.rs" "$REPO_ROOT"/src/app/bootstrap/*.rs \
     && grep -qF '.installed-version' "$REPO_ROOT/packaging/linux/install-user.sh"; then
     pass "AppImage updater: installed version handoff is bundled"
 else
@@ -509,7 +524,7 @@ fi
 
 echo ""
 
-# 8. Shell script syntax checks
+
 
 echo "==> Shell script syntax"
 SHELL_SCRIPTS=(
@@ -542,7 +557,7 @@ done
 
 echo ""
 
-# 9. install.sh (top-level installer)
+
 
 echo "==> Top-level install.sh"
 TOP_INSTALL="$REPO_ROOT/install.sh"
@@ -561,6 +576,12 @@ else
         pass "install.sh: pinned Minisign key matches release.pub"
     else
         fail "install.sh: pinned Minisign key does not match release.pub"
+    fi
+    if [[ -n "$repository_public_key" ]] \
+        && grep -Fxq "$repository_public_key" "$REPO_ROOT/release-keyring.txt" 2>/dev/null; then
+        pass "updater: active Minisign key is present in release-keyring.txt"
+    else
+        fail "updater: active Minisign key is missing from release-keyring.txt"
     fi
 
     check_installer_download_verification_case() {
@@ -704,7 +725,7 @@ fi
 
 echo ""
 
-# 9a. Signed release manifest generation
+
 
 echo "==> Signed release manifest generation"
 SIGNING_TEST_DIR="$(mktemp -d)"
@@ -737,32 +758,47 @@ fi
 
 echo ""
 
-# 10. swhkd build safety
+
 
 echo "==> swhkd build safety"
 SWHKD_PIN="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
 SWHKD_HELPER="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
 if grep -qF "SWHKD_UPSTREAM_COMMIT=\"$SWHKD_PIN\"" "$SWHKD_HELPER" \
     && grep -qF 'git -C "$work_dir/swhkd" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"' "$SWHKD_HELPER" \
-    && grep -qF 'make NO_RFKILL_SW_SUPPORT=1' "$SWHKD_HELPER" \
-    && grep -qF 'swhkd_binary_is_safe "$work_dir/swhkd/target/release/swhkd"' "$SWHKD_HELPER"; then
-    pass "swhkd helper pins and verifies an rfkill-free build"
+    && grep -qF 'verify_pinned_build_inputs' "$SWHKD_HELPER" \
+    && grep -qF 'swhkd_binary_is_safe "$source_bin"' "$SWHKD_HELPER"; then
+    pass "swhkd helper verifies its pinned inputs and the built binary"
 else
-    fail "swhkd helper does not pin and verify an rfkill-free build"
+    fail "swhkd helper does not verify its pinned inputs and the built binary"
 fi
 
-if grep -qF "SWHKD_UPSTREAM_COMMIT=\"$SWHKD_PIN\"" "$TOP_INSTALL" \
-    && grep -qF 'git -C "$src" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"' "$TOP_INSTALL" \
-    && grep -qF 'make NO_RFKILL_SW_SUPPORT=1' "$TOP_INSTALL" \
-    && grep -qF 'if swhkd_binary_is_safe "$swhkd_path"; then' "$TOP_INSTALL"; then
-    pass "install.sh pins and verifies rfkill-free swhkd before launch"
+SWHKD_BUILD_SCRIPT="$REPO_ROOT/packaging/linux/build-swhkd-locked.sh"
+SWHKD_PINNED_LOCK="$REPO_ROOT/packaging/linux/swhkd-Cargo.lock.pinned"
+SWHKD_BUILD_SCRIPT_SHA="$(sha256sum "$SWHKD_BUILD_SCRIPT" | awk '{print $1}')"
+SWHKD_PINNED_LOCK_SHA="$(sha256sum "$SWHKD_PINNED_LOCK" | awk '{print $1}')"
+if grep -qF 'cargo build --release --locked --features no_rfkill' "$SWHKD_BUILD_SCRIPT" \
+    && grep -qF 'SW_RFKILL_ALL' "$SWHKD_BUILD_SCRIPT" \
+    && grep -qF "$SWHKD_BUILD_SCRIPT_SHA" "$SWHKD_HELPER" \
+    && grep -qF "$SWHKD_PINNED_LOCK_SHA" "$SWHKD_HELPER"; then
+    pass "swhkd builds from a digest-pinned lockfile with --locked and no_rfkill"
 else
-    fail "install.sh does not pin and verify rfkill-free swhkd before launch"
+    fail "swhkd build is not pinned and locked"
+fi
+
+if grep -qF 'SWHKD_TRUSTED_DIR="/usr/libexec/linux-soundboard"' "$TOP_INSTALL" \
+    && grep -qF 'trusted_swhkd_bundle_is_safe || return 1' "$TOP_INSTALL" \
+    && grep -qF 'as_root "$helper" --distro "$DISTRO_FAMILY"' "$TOP_INSTALL" \
+    && grep -qF 'provision_trusted_swhkd_helper_from_verified_appimage "$image" "$VERIFIED_ASSET_SHA256"' "$TOP_INSTALL" \
+    && grep -qF '"${root_hash,,}" == "$expected"' "$TOP_INSTALL" \
+    && ! grep -qF 'target/release/swhkd' "$TOP_INSTALL"; then
+    pass "install.sh enforces the authenticated trusted-helper bundle boundary"
+else
+    fail "install.sh does not enforce the trusted swhkd helper boundary"
 fi
 
 echo ""
 
-# 11. Build tool availability notes
+
 
 echo "==> Build tool availability (informational)"
 for tool_label in \
@@ -784,7 +820,7 @@ done
 
 echo ""
 
-# Summary
+
 
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
 if [[ "$FAIL" -gt 0 ]]; then

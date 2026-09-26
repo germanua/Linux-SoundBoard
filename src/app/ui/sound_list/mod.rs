@@ -154,7 +154,6 @@ impl SoundList {
         Self::sync_state_class(widget, "sound-cell-playing", is_playing);
         Self::sync_state_class(widget, "sound-cell-active", is_active);
 
-        // Mirror state onto the cell wrapper so CSS can paint full-width rows.
         if let Some(cell) = widget.parent() {
             Self::sync_state_class(&cell, "sound-cell-playing", is_playing);
             Self::sync_state_class(&cell, "sound-cell-active", is_active);
@@ -240,7 +239,6 @@ impl SoundList {
         self.inner.store.n_items() > 0
     }
 
-    /// The active tab as a hotkey scope key.
     pub fn active_scope_key(&self) -> String {
         crate::library_store::scope_key(&self.inner.active_scope.lock())
     }

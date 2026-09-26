@@ -445,7 +445,6 @@ fn build_general_page(
         let add_folder_cancel_stop = Rc::clone(&add_folder_cancel);
         let add_folder_row_stop = add_folder_row.downgrade();
         scan_stop_btn.connect_clicked(move |btn| {
-            // Drop the borrow before touching GTK; callbacks may re-enter.
             let pending = add_folder_cancel_stop.borrow().as_ref().map(Arc::clone);
             let Some(cancelled) = pending else {
                 return;
@@ -802,6 +801,133 @@ fn build_general_page(
         theme_group.add(&card_row);
     }
     page.add(&theme_group);
+
+    let updates_group = adw::PreferencesGroup::builder().title("Updates").build();
+    let can_apply_updates = crate::update::can_apply_in_app();
+    let automatic_updates_row = adw::SwitchRow::builder()
+        .title("Automatically Check for Updates")
+        .subtitle(if can_apply_updates {
+            "Check in the background at most once per day"
+        } else {
+            "Automatic in-app updates are available for AppImage installs"
+        })
+        .active(can_apply_updates && crate::update::automatic_checks_enabled())
+        .build();
+    automatic_updates_row.set_sensitive(can_apply_updates);
+    automatic_updates_row.connect_active_notify(|row| {
+        if let Err(error) = crate::update::set_automatic_checks_enabled(row.is_active()) {
+            log::warn!("Could not save the automatic update-check setting: {error}");
+        }
+    });
+    updates_group.add(&automatic_updates_row);
+
+    let update_status_row = adw::ActionRow::builder()
+        .title("Current Version")
+        .subtitle(format!("{APP_VERSION} — update status not checked"))
+        .build();
+    let check_updates_button = gtk4::Button::builder()
+        .label("Check for Updates")
+        .valign(gtk4::Align::Center)
+        .css_classes(vec!["settings-primary-btn"])
+        .build();
+    let available_update: Rc<RefCell<Option<crate::update::UpdateInfo>>> =
+        Rc::new(RefCell::new(None));
+    update_status_row.add_suffix(&check_updates_button);
+    {
+        let status_row = update_status_row.clone();
+        let available_update = Rc::clone(&available_update);
+        let parent = parent.clone();
+        check_updates_button.connect_clicked(move |button| {
+            if let Some(info) = available_update.borrow().clone() {
+                let button_status = button.clone();
+                let status_status = status_row.clone();
+                let on_status: Rc<dyn Fn(super::updater::InstallStatus) + 'static> =
+                    Rc::new(move |status| match status {
+                        super::updater::InstallStatus::Downloading {
+                            version,
+                            downloaded,
+                            total,
+                        } => {
+                            button_status.set_sensitive(false);
+                            button_status.set_label("Downloading…");
+                            let percent = if total == 0 {
+                                0
+                            } else {
+                                downloaded.saturating_mul(100) / total
+                            };
+                            status_status.set_subtitle(&format!(
+                                "{APP_VERSION} — downloading version {version}: {percent}%"
+                            ));
+                        }
+                        super::updater::InstallStatus::Cancelled => {
+                            button_status.set_sensitive(true);
+                            button_status.set_label("Update Now");
+                            status_status.set_subtitle("Update download cancelled");
+                        }
+                        super::updater::InstallStatus::Restarting => {
+                            status_status.set_subtitle("Update verified — restarting…");
+                        }
+                        super::updater::InstallStatus::Failed(_) => {
+                            button_status.set_sensitive(true);
+                            button_status.set_label("Update Now");
+                            status_status.set_subtitle("Update download or verification failed");
+                        }
+                    });
+                super::updater::prompt_update(&parent, info, Some(on_status));
+                return;
+            }
+
+            button.set_sensitive(false);
+            button.set_label("Checking…");
+            status_row.set_subtitle(&format!("{APP_VERSION} — checking for updates…"));
+            let button_done = button.clone();
+            let status_done = status_row.clone();
+            let available_done = Rc::clone(&available_update);
+            if let Err(error) = crate::commands::dispatch_async_result(
+                "check_for_updates",
+                crate::update::check_now,
+                move |result| {
+                    button_done.set_sensitive(true);
+                    match result {
+                        Ok(crate::update::CheckOutcome::UpToDate { current }) => {
+                            *available_done.borrow_mut() = None;
+                            button_done.set_label("Check for Updates");
+                            status_done.set_subtitle(&format!("{current} — you're up to date"));
+                        }
+                        Ok(crate::update::CheckOutcome::Available(info)) => {
+                            let info = *info;
+                            let version = info.metadata.version.clone();
+                            *available_done.borrow_mut() = Some(info);
+                            button_done.set_label(if crate::update::can_apply_in_app() {
+                                "Update Now"
+                            } else {
+                                "View Release"
+                            });
+                            status_done.set_subtitle(&format!(
+                                "{} — version {version} is available",
+                                APP_VERSION
+                            ));
+                        }
+                        Err(error) => {
+                            log::warn!("Update check failed: {error}");
+                            *available_done.borrow_mut() = None;
+                            button_done.set_label("Check for Updates");
+                            status_done.set_subtitle(&format!(
+                                "{APP_VERSION} — could not check for updates"
+                            ));
+                        }
+                    }
+                },
+            ) {
+                button.set_sensitive(true);
+                button.set_label("Check for Updates");
+                log::warn!("Could not start the update check: {error}");
+                status_row.set_subtitle(&format!("{APP_VERSION} — could not check for updates"));
+            }
+        });
+    }
+    updates_group.add(&update_status_row);
+    page.add(&updates_group);
 
     let about_group = adw::PreferencesGroup::builder().title("About").build();
     about_group.add(

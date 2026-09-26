@@ -1,137 +1,90 @@
 # Installation Guide
 
+## Release format
+
+**Latest public release: 2.4.4.** The next public release is being prepared around a single AppImage distribution path. No new Arch/AUR, Debian `.deb`, RPM, or binary-tarball artifact is planned for that release unless the policy changes before publication. Historical releases remain unchanged.
+
+The AppImage contains the application plus the per-user installer used to configure the persistent audio engine, desktop entry, icons, and virtual-microphone integration.
+
+### AppImage compatibility
+
+The AppImage being prepared for the next public release is built for **x86_64** and requires **glibc 2.39 or newer**. Tested compatible distro baselines include Ubuntu 24.04/26.04, Debian 13, Fedora 40+, current Arch-family distributions, and openSUSE Leap 16/Tumbleweed. Ubuntu 22.04, Debian 12, and openSUSE Leap 15.6 have older glibc versions and are not compatible with the prepared AppImage.
+
+The prepared authenticated installer and AppImage runtime preflight both check this ABI requirement before the application is launched.
+
 ## Release download verification
 
-`install.sh` verifies `SHA256SUMS.txt.minisig` with the pinned
-[`release.pub`](../release.pub) key before it trusts the SHA-256 manifest. If
-Minisign is not installed, the script downloads a hash-pinned official build to
-its temporary directory and removes it when the command finishes. It does not
-install a verifier or need root.
+`bootstrap-install.sh` first verifies the release-published `install.sh` through `SHA256SUMS.txt.minisig` and the pinned [`release.pub`](../release.pub) key. The authenticated `install.sh` then verifies the AppImage through the same signed manifest. If Minisign is not installed, both scripts use the pinned verifier bootstrap. Missing assets, invalid signatures, missing manifest entries, and checksum mismatches stop the install.
 
-The stable AUR package builds the tagged source archive and does not download a
-GitHub release binary through `install.sh`. For `.deb`, `.rpm`, AppImage, and
-tarball downloads, any missing file, invalid signature, malformed hash, or
-checksum mismatch stops the install.
-
-If you download a file directly from the Releases page, verify that local file
-without installing it:
+To verify a downloaded AppImage before running it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh \
-  | bash -s -- verify ./DOWNLOADED_FILE
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh \
+  | bash -s -- verify ./linux-soundboard-VERSION-x86_64.AppImage
 ```
 
-For an older release, name its tag:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh \
-  | bash -s -- verify ./DOWNLOADED_FILE --version v2.4.3
-```
-
-A downloaded executable cannot verify itself before it runs. Use this command
-before opening an AppImage or installing a downloaded package.
+For an older release, name its tag with `--version vX.Y.Z`.
 
 ## Quick install — one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
-Run from a terminal, this opens a menu:
+For current releases, **Automatic** means AppImage. The installer:
 
-```
-  1) Install the newest version — asks for your password (system package)
-  2) Install a previous version — asks for your password only to remove the system package
-  3) Uninstall — asks for your password (system package)
-  4) Fix setup problems — may ask for your password (hotkey daemon)
-  5) Make a bug report — no password needed
-  6) Show status — no password needed
-  0) Exit
-```
+1. reads the latest GitHub release,
+2. verifies the signed release installer and executes only that authenticated copy,
+3. verifies the signed checksum manifest and downloads the x86_64 AppImage after verifying the host ABI,
+4. checks for an older native package that would shadow the user installation,
+5. extracts the bundled installer and installs the AppImage under `~/.local/opt/linux-soundboard/`, and
+6. configures the user audio engine and, on Wayland, the hotkey helper.
 
-The header above the menu shows your distro, session type, the installed version,
-and whether a native package is present, so you can see the current state before
-choosing anything.
+The AppImage itself stays under your user account. On Wayland, the one-command installer copies the already authenticated release into a root-owned temporary location, verifies that copy against the signed release checksum, and provisions the fixed helper under `/usr/libexec/linux-soundboard`; this step may ask for `sudo`. Removing a legacy native package also requires the system package manager.
 
-Each entry states whether it needs your password, based on your actual system, so
-nothing asks for root unexpectedly. Only three things ever need it: installing or
-removing a native package, and the setuid `swhkd` binary for Wayland hotkeys.
-Everything under `~/.local` and `~/.config` — including installing a previous
-version, the bug report, and status — runs entirely as your user. On a distro
-without a native package, the same menu reads:
+### Existing AUR / DEB / RPM installations
 
-```
-  1) Install the newest version — no password needed
-  2) Install a previous version — no password needed
-  3) Uninstall — no password needed
-```
+Native packages from 2.4.4 and earlier may still be present under `/usr/bin`. That binary takes precedence over the user-installed AppImage and can cause the GUI and persistent engine to run different versions. `install.sh` detects this situation and offers to remove the old package before installing the prepared AppImage.
 
-**Install the newest version** picks the right method for your system:
+The repository retains legacy AUR/DEB/RPM packaging files for maintenance and migration support, but they are **not planned artifacts for the next public release** unless that policy changes before publication.
 
-| Distro                       | What happens                                                     |
-| ---------------------------- | ---------------------------------------------------------------- |
-| Arch / CachyOS / EndeavourOS | Installs stable `linux-soundboard` from the AUR via yay/paru     |
-| Debian / Ubuntu              | Downloads and installs the `.deb` package                        |
-| Fedora                       | Downloads and installs the `.rpm` package                        |
-| Everything else              | Downloads the release tarball and runs `install-user.sh install` |
-
-On Wayland sessions `install.sh` also installs `swhkd` for global hotkeys automatically.
-If `swhkd` is already present, the installer still repairs its root ownership
-and setuid bit so Linux Soundboard can launch it directly.
-
-**Install a previous version** lists the published releases and installs the one
-you pick from its release tarball into `~/.local`, without root. The AUR only
-ever carries the newest version and package-manager downgrades differ per distro,
-so the tarball is used for every older version. A native package would shadow it,
-so the installer offers to remove the package first.
-
-**Fix setup problems** re-runs the install steps one at a time, prints which one
-failed, then shows `install.sh status` and `linux-soundboard --diagnose`.
-
-**Install the newest version** and **Install a previous version** ask which method to use:
-
-| Method | What it does | Root needed |
-| --- | --- | --- |
-| Automatic (default) | The distro's native package when the release ships one, the binary tarball otherwise | Only for the native package |
-| AppImage | Downloads the release AppImage and installs it into `~/.local` through its own bundled installer | No |
-| Binary tarball | Downloads the release tarball and installs it into `~/.local` | No |
-| Native package | Forces the `.deb`, `.rpm`, or AUR build; fails where none is published | Yes |
-
-Pressing enter keeps Automatic, so the flow is unchanged for anyone who does not care.
-Native packages carry the newest release only, so it is not offered for previous versions.
-
-**Make a bug report** is described in [BUG_REPORTS.md](BUG_REPORTS.md).
-
----
-
-## Without a terminal, or in a script
-
-Every menu action has a command, so nothing here needs an interactive shell:
+### AppImage from the Releases page
 
 ```bash
-./install.sh install                    # newest version
-./install.sh install --method appimage  # newest version, from its AppImage
-./install.sh install --method tarball   # newest version, from its binary tarball
-./install.sh install --method native    # force the .deb, .rpm, or AUR package
-./install.sh install --version v2.1.2   # a specific published release
+chmod +x linux-soundboard-VERSION-x86_64.AppImage
+./linux-soundboard-VERSION-x86_64.AppImage
+```
+
+On first direct launch:
+
+- **Install for persistent virtual mic** copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard`, registers the desktop entry and user service, and connects the GUI to the matching service engine.
+- **Run temporarily** keeps everything scoped to that launch and restores eligible routing state during shutdown.
+- **Exit** changes nothing.
+
+Once installed, opening a newer downloaded AppImage updates the installed copy and restarts the matching user engine. The version marker prevents an older downloaded AppImage from silently downgrading a newer installation.
+
+### Command-line operations
+
+```bash
+./install.sh install                    # current release; AppImage
+./install.sh install --method appimage  # explicit AppImage path
+./install.sh install --version vX.Y.Z   # install a published AppImage release
 ./install.sh versions                   # list published releases
-./install.sh verify ./DOWNLOADED_FILE   # verify a release download without installing it
+./install.sh verify ./DOWNLOADED_FILE   # verify a release download
 ./install.sh fix                        # guided repair
 ./install.sh report --output report.txt # bug report file
 ./install.sh status
 ./install.sh uninstall --yes
 ```
 
-Piped with no arguments (`curl ... | bash` from a script or CI, where no terminal
-is attached), `install.sh` installs the newest version instead of opening the menu.
-
----
+`--method tarball` and `--method native` remain accepted only for compatibility with historical releases/workflows. They are not current release formats.
 
 ## Two scripts, different jobs
 
 | Script            | Who runs it                                                               | What it does                                                                        |
 | ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `install.sh`      | You, via the one-liner above                                              | The menu: install, install an older release, uninstall, guided repair, bug report, status. Handles the package manager and swhkd |
+| `bootstrap-install.sh` | You, via the one-liner above | Verifies the release-published installer before executing it |
+| `install.sh` | Called by the bootstrap or run from a verified release asset | The menu: install, install an older release, uninstall, guided repair, bug report, status. Handles the package manager and swhkd |
 | `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, legacy audio cleanup, and the audio snapshots |
 
 `install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
@@ -139,7 +92,7 @@ is attached), `install.sh` installs the newest version instead of opening the me
 For a full uninstall through the same smart wrapper:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- uninstall --yes
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- uninstall --yes
 ```
 
 This removes managed per-user files first, then removes the native `linux-soundboard` package when one is installed. Add `--keep-package` to remove only the per-user setup.
@@ -176,7 +129,7 @@ You can inspect this at any time without uninstalling:
 
 ---
 
-## Manual install (tarball)
+## Historical tarball install (2.4.4 and older)
 
 For source builds or when you want to manage the download yourself, verify the
 release file with the command above before extracting it.
@@ -252,61 +205,13 @@ The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It use
 
 ---
 
-## Package managers
+## Legacy native packages
 
-### Arch Linux, CachyOS, EndeavourOS
+Arch/AUR, Debian `.deb`, and RPM packages were public release formats through 2.4.4. They are retained in the repository for history and migration support, but the next public release is planned as AppImage-only.
 
-```bash
-yay -S linux-soundboard
-# or
-paru -S linux-soundboard
-```
+If one is installed, remove it before using the prepared AppImage so `/usr/bin/linux-soundboard` does not shadow `~/.local/opt/linux-soundboard/linux-soundboard`. The top-level `install.sh` can detect and offer to remove these packages automatically.
 
-The stable AUR package follows tagged releases and installs the app, icons, helper files, and the user audio-engine service. Use `linux-soundboard-git` only to test the current development branch. It does not install a persistent PipeWire virtual mic config.
-
-### Ubuntu and Debian
-
-Download the `.deb` from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest):
-
-```bash
-sudo apt install ./linux-soundboard_2.4.4-1_amd64.deb
-```
-
-Required runtime packages (usually already present on modern Ubuntu/Debian):
-
-```
-pipewire  pipewire-pulse  wireplumber  libpulse0  pulseaudio-utils
-```
-
-The package enables the engine service for new logins automatically. To enable
-it for the current session and clear any obsolete user-level audio routing files
-without copying package-owned files into `~/.local`, run the smart wrapper's
-repair command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
-```
-
-When a native package is installed, `install.sh repair` configures only the user
-service. It does not redeploy the binary, desktop entry, icons, or engine unit
-that the package already owns. On Wayland it also rechecks `swhkd` permissions
-for global hotkeys.
-
-### Fedora
-
-```bash
-sudo dnf install ./linux-soundboard-2.4.4-1.x86_64.rpm
-```
-
-Required runtime packages:
-
-```
-pipewire  pipewire-utils  pipewire-pulseaudio  wireplumber  pulseaudio-libs  pulseaudio-utils
-```
-
-Same as Debian: run the smart wrapper repair command after the RPM install to configure the engine service and clean obsolete user-level audio routing for your account, without copying package-owned files into `~/.local`.
-
----
+For development from source, distro-specific build dependencies are still documented in the source-build section below; dropping native release packages does not drop support for those distributions.
 
 ## AppImage
 
@@ -333,7 +238,7 @@ sudo apt install libfuse2
 # Fedora
 sudo dnf install fuse-libs
 # Arch
-sudo pacman -S fuse2
+sudo pacman -Syu --needed fuse2
 # openSUSE
 sudo zypper install fuse
 ```
@@ -343,8 +248,9 @@ sudo zypper install fuse
 ## Wayland and global hotkeys
 
 On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
+Upstream `swhkd` captures all keyboards visible to the daemon, so Linux Soundboard treats this integration as single-seat only.
 
-**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears at the top of the window with an **Install** button. Clicking it runs a PolicyKit-authorized build and install flow entirely within the app. No terminal required. The installer fetches a pinned reviewed swhkd commit and builds it with `NO_RFKILL_SW_SUPPORT=1`.
+**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears with an **Install** button. The button only runs the fixed root-owned helper at `/usr/libexec/linux-soundboard/install-swhkd-helper.sh`; it never elevates a helper from an AppImage mount, `$HOME`, or `$PATH`. The one-command installer provisions this helper from the signed AppImage automatically on Wayland. A directly downloaded AppImage does not self-provision it; run the one-command installer or `install.sh repair` first.
 
 Linux Soundboard checks the installed daemon before starting it. If the binary
 contains swhkd's rfkill support, or cannot be inspected, it is not launched; the
@@ -362,15 +268,11 @@ for the manual commands.
 
 Requirements for the in-app install:
 
-- Native install (DEB / RPM / AUR / AppImage on host), not a Flatpak sandbox
+- The root-owned Linux Soundboard helper installed under `/usr/libexec/linux-soundboard`
 - `pkexec` available (provided by `pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, or `polkit` on Fedora/Arch)
 - Network access to fetch the pinned `swhkd` source commit from GitHub
 
-**Manual install:**
-
-- Source builds must use `make NO_RFKILL_SW_SUPPORT=1`.
-- Arch family: `yay -S swhkd-bin` or `yay -S swhkd-git`
-- Other distros: see [upstream install notes](https://github.com/waycrate/swhkd/blob/main/INSTALL.md)
+**Manual install:** from a trusted Linux Soundboard source checkout, install `install-swhkd-helper.sh`, `build-swhkd-locked.sh`, and `swhkd-Cargo.lock.pinned` under `/usr/libexec/linux-soundboard`, then run the helper as root. The helper builds the pinned commit with the pinned lockfile and `no_rfkill` feature; do not promote a PATH-resolved `/usr/bin/swhkd` with `chmod u+s`.
 
 On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` needed.
 
@@ -383,7 +285,7 @@ On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` neede
 **Arch:**
 
 ```bash
-sudo pacman -S cargo rust pkgconf gtk4 libadwaita \
+sudo pacman -Syu --needed cargo rust pkgconf gtk4 libadwaita \
   libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber clang
 ```
 

@@ -27,6 +27,7 @@ pub(super) fn source_from_global(
         .get("object.serial")
         .and_then(|value| value.parse::<u64>().ok());
     let is_virtual = media_class == "Audio/Source/Virtual";
+    let is_bluetooth_loopback = pipewire_properties_mark_bluetooth_loopback(props);
     let is_hardware_backed = props.get("device.id").is_some()
         || matches!(
             props.get(*pw::keys::DEVICE_API),
@@ -40,10 +41,15 @@ pub(super) fn source_from_global(
         is_our_virtual_mic: node_name == VIRTUAL_SOURCE_NAME,
         is_virtual,
         is_hardware_backed,
+        is_bluetooth_loopback,
         priority_session,
         node_name,
         display_name,
     })
+}
+
+fn pipewire_properties_mark_bluetooth_loopback(props: &spa::utils::dict::DictRef) -> bool {
+    bluetooth_loopback_property_is_true(props.get(BLUEZ5_LOOPBACK_PROPERTY))
 }
 
 pub(super) fn explicit_link_node_from_global(
@@ -153,16 +159,16 @@ pub(super) fn spawn_virtual_mic_state_reset(source_id: u32) {
         .name("lsb-virtual-mic-state-reset".to_string())
         .spawn(move || {
             let source_id = source_id.to_string();
-            let volume = Command::new("wpctl")
-                .args(["set-volume", &source_id, "1.0"])
-                .status();
-            if !matches!(volume, Ok(status) if status.success()) {
+            let volume = crate::audio::command_runner::run_command(
+                "wpctl",
+                &["set-volume", &source_id, "1.0"],
+            );
+            if !matches!(volume, Ok(output) if output.success) {
                 warn!("Failed to reset Linux Soundboard virtual mic volume with wpctl");
             }
-            let mute = Command::new("wpctl")
-                .args(["set-mute", &source_id, "0"])
-                .status();
-            if !matches!(mute, Ok(status) if status.success()) {
+            let mute =
+                crate::audio::command_runner::run_command("wpctl", &["set-mute", &source_id, "0"]);
+            if !matches!(mute, Ok(output) if output.success) {
                 warn!("Failed to unmute Linux Soundboard virtual mic with wpctl");
             }
         });
@@ -231,7 +237,35 @@ mod tests {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: !is_monitor,
+            is_bluetooth_loopback: false,
         }
+    }
+
+    #[test]
+    fn bluetooth_loopback_property_parser_uses_wireplumber_marker() {
+        let marked = properties! {
+            "bluez5.loopback" => "true"
+        };
+        assert!(pipewire_properties_mark_bluetooth_loopback(marked.dict()));
+
+        let numeric_true = properties! {
+            "bluez5.loopback" => "1"
+        };
+        assert!(pipewire_properties_mark_bluetooth_loopback(
+            numeric_true.dict()
+        ));
+
+        let false_value = properties! {
+            "bluez5.loopback" => "false"
+        };
+        assert!(!pipewire_properties_mark_bluetooth_loopback(
+            false_value.dict()
+        ));
+
+        let absent = properties! {
+            "node.name" => "alsa_input.mic"
+        };
+        assert!(!pipewire_properties_mark_bluetooth_loopback(absent.dict()));
     }
 
     #[test]

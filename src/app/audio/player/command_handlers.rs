@@ -4,10 +4,12 @@ pub(super) fn audio_command_kind(cmd: &AudioCommand) -> &'static str {
     match cmd {
         AudioCommand::Play { .. } => "Play",
         AudioCommand::StopSound { .. } => "StopSound",
+        AudioCommand::StopPlayback { .. } => "StopPlayback",
         AudioCommand::StopAll => "StopAll",
         AudioCommand::Seek { .. } => "Seek",
         AudioCommand::Pause { .. } => "Pause",
         AudioCommand::Resume { .. } => "Resume",
+        AudioCommand::SetPlaybackPaused { .. } => "SetPlaybackPaused",
         AudioCommand::SetLocalVolume { .. } => "SetLocalVolume",
         AudioCommand::SetMicVolume { .. } => "SetMicVolume",
         AudioCommand::SetAutoGainEnabled { .. } => "SetAutoGainEnabled",
@@ -18,6 +20,7 @@ pub(super) fn audio_command_kind(cmd: &AudioCommand) -> &'static str {
         AudioCommand::SetLoudnessBoostEnabled { .. } => "SetLoudnessBoostEnabled",
         AudioCommand::SetLoudnessBoostDb { .. } => "SetLoudnessBoostDb",
         AudioCommand::SetLooping { .. } => "SetLooping",
+        AudioCommand::SetAllowMultiplePlaybacks { .. } => "SetAllowMultiplePlaybacks",
         AudioCommand::SetMicPassthrough { .. } => "SetMicPassthrough",
         AudioCommand::SetMicSource { .. } => "SetMicSource",
         AudioCommand::SetDefaultSourceMode { .. } => "SetDefaultSourceMode",
@@ -47,10 +50,9 @@ pub(super) fn handle_audio_command(
                     "PipeWire backend unavailable".to_string(),
                 )));
             } else {
-                state.finished_playbacks.clear();
                 let play_id = uuid::Uuid::new_v4().to_string();
                 let init_started_at = Instant::now();
-                match ActivePlayback::new(
+                let candidate = ActivePlayback::new(
                     play_id.clone(),
                     sound_id,
                     path,
@@ -59,9 +61,11 @@ pub(super) fn handle_audio_command(
                     sound_lufs,
                     sound_true_peak_dbtp,
                     &state.runtime,
-                ) {
-                    Ok(playback) => {
-                        let init_elapsed_ms = init_started_at.elapsed().as_millis();
+                );
+                let init_elapsed_ms = init_started_at.elapsed().as_millis();
+
+                match state.apply_play_candidate(candidate) {
+                    Ok(_) => {
                         if init_elapsed_ms >= 100 {
                             debug!(
                                 "ActivePlayback initialization was slow: elapsed_ms={} play_id={}",
@@ -69,11 +73,9 @@ pub(super) fn handle_audio_command(
                             );
                         }
                         state.next_playback_order = state.next_playback_order.saturating_add(1);
-                        state.active_playback = Some(playback);
                         let _ = response.send(Ok(play_id));
                     }
                     Err(err) => {
-                        let init_elapsed_ms = init_started_at.elapsed().as_millis();
                         debug!(
                             "ActivePlayback initialization failed: elapsed_ms={} error={}",
                             init_elapsed_ms, err
@@ -88,77 +90,45 @@ pub(super) fn handle_audio_command(
             }
         }
         AudioCommand::StopSound { sound_id } => {
-            if state
-                .active_playback
-                .as_ref()
-                .is_some_and(|playback| playback.sound_id == sound_id)
-            {
-                state.active_playback = None;
-                fade_output_queues(&state.queues);
-            }
+            state.stop_sound_voices(&sound_id);
+        }
+        AudioCommand::StopPlayback { play_id } => {
+            state.stop_voice(&play_id);
         }
         AudioCommand::StopAll => {
-            state.active_playback = None;
-            state.finished_playbacks.clear();
-            fade_output_queues(&state.queues);
+            state.stop_all_voices();
         }
         AudioCommand::Seek {
             play_id,
             position_ms,
         } => {
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state
-                .active_playback
-                .as_mut()
-                .filter(|playback| playback.play_id == play_id)
-            {
-                let _ = playback.seek(position_ms, &runtime);
-                fade_output_queues(&state.queues);
-            }
+            state.seek_voice(&play_id, position_ms);
         }
         AudioCommand::Pause { sound_id } => {
-            if let Some(playback) = state
-                .active_playback
-                .as_mut()
-                .filter(|playback| playback.sound_id == sound_id)
-            {
-                playback.paused = true;
-            }
+            state.set_sound_paused(&sound_id, true);
         }
         AudioCommand::Resume { sound_id } => {
-            if let Some(playback) = state
-                .active_playback
-                .as_mut()
-                .filter(|playback| playback.sound_id == sound_id)
-            {
-                playback.paused = false;
-            }
+            state.set_sound_paused(&sound_id, false);
+        }
+        AudioCommand::SetPlaybackPaused { play_id, paused } => {
+            state.set_voice_paused(&play_id, paused);
         }
         AudioCommand::SetLocalVolume { volume } => state.runtime.local_volume = volume,
         AudioCommand::SetMicVolume { volume } => state.runtime.mic_volume = volume,
         AudioCommand::SetAutoGainEnabled { enabled } => {
             state.runtime.auto_gain.enabled = enabled;
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state.active_playback.as_mut() {
-                playback.reset_limiters(&runtime);
-            }
+            state.reset_voice_limiters();
         }
         AudioCommand::SetAutoGainTarget { target_lufs } => {
             state.runtime.auto_gain.target_lufs = target_lufs;
         }
         AudioCommand::SetAutoGainMode { mode } => {
             state.runtime.auto_gain.mode = AutoGainMode::from_u32(mode);
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state.active_playback.as_mut() {
-                playback.reset_limiters(&runtime);
-            }
+            state.reset_voice_limiters();
         }
         AudioCommand::SetAutoGainApplyTo { apply_to } => {
             state.runtime.auto_gain.apply_to = AutoGainApplyTo::from_u32(apply_to);
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state.active_playback.as_mut() {
-                playback.reset_limiters(&runtime);
-            }
+            state.reset_voice_limiters();
         }
         AudioCommand::SetAutoGainDynamicSettings {
             lookahead_ms,
@@ -170,10 +140,7 @@ pub(super) fn handle_audio_command(
                 attack_ms,
                 release_ms,
             };
-            let runtime = state.runtime.clone();
-            if let Some(playback) = state.active_playback.as_mut() {
-                playback.reset_limiters(&runtime);
-            }
+            state.reset_voice_limiters();
         }
         AudioCommand::SetLoudnessBoostEnabled { enabled } => {
             state.runtime.loudness_boost_enabled = enabled;
@@ -182,6 +149,9 @@ pub(super) fn handle_audio_command(
             state.runtime.loudness_boost_db = crate::config::normalize_loudness_boost_db(boost_db);
         }
         AudioCommand::SetLooping { enabled } => state.runtime.looping = enabled,
+        AudioCommand::SetAllowMultiplePlaybacks { enabled } => {
+            state.set_allow_multiple_playbacks(enabled);
+        }
         AudioCommand::SetMicPassthrough { enabled, response } => {
             state.runtime.mic_passthrough = enabled;
             state.stream_runtime.apply_runtime(&state.runtime);
@@ -206,7 +176,7 @@ pub(super) fn handle_audio_command(
             let _ = response.send(result);
         }
         AudioCommand::Shutdown { policy, response } => {
-            state.active_playback = None;
+            state.active_playbacks.clear();
             clear_all_queues(&state.queues);
             drop_feeder_links(&mut state);
             if let Some(backend) = state.backend.as_mut() {

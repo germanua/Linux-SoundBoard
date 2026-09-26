@@ -83,7 +83,6 @@ pub fn build_window(
             hotkeys.availability_message()
         };
         if let Some(reason) = hotkey_message {
-            // Escape remediation commands before Pango parses them.
             let banner = adw::Banner::new(&format!(
                 "Global hotkeys unavailable — {}",
                 glib::markup_escape_text(&reason)
@@ -137,6 +136,13 @@ pub fn build_window(
         "Window build latency: phase=sound_list elapsed_us={}",
         build_started.elapsed().as_micros()
     );
+    let content_box = GtkBox::new(Orientation::Vertical, 0);
+    content_box.set_hexpand(true);
+    content_box.set_vexpand(true);
+    content_box.append(transport.now_playing_widget());
+    sound_list.widget().set_vexpand(true);
+    content_box.append(sound_list.widget());
+
     let sidebar_paned = Paned::new(Orientation::Horizontal);
     sidebar_paned.set_vexpand(true);
     sidebar_paned.set_wide_handle(true);
@@ -144,7 +150,7 @@ pub fn build_window(
     sidebar_paned.set_resize_end_child(true);
     sidebar_paned.set_shrink_start_child(false);
     sidebar_paned.set_start_child(Some(tabs.widget()));
-    sidebar_paned.set_end_child(Some(sound_list.widget()));
+    sidebar_paned.set_end_child(Some(&content_box));
     sidebar_paned.set_position(220);
     sidebar_paned.connect_position_notify(|paned| {
         let position = cap_sidebar_width(paned.position());
@@ -247,6 +253,13 @@ pub fn build_window(
         let toast_overlay = toast_overlay.clone();
         crate::ui_event_bridge::set_toast_handler(move |message| {
             show_toast(&toast_overlay, &message);
+        });
+    }
+    {
+        let toast_overlay = toast_overlay.clone();
+        let update_parent: gtk4::Window = window.clone().upcast();
+        crate::ui_event_bridge::set_update_handler(move |info| {
+            show_update_toast(&toast_overlay, &update_parent, info);
         });
     }
 
@@ -468,6 +481,10 @@ pub fn handle_hotkey(
             commands::play_hotkey_sound_async(sound_id, press, Arc::clone(state), move |result| {
                 if let Err(err) = result {
                     crate::ui_event_bridge::clear_explicit_play_pending();
+
+                    if matches!(err, commands::CommandError::HotkeyNoOp) {
+                        return;
+                    }
                     log::warn!("Hotkey playback failed for '{}': {}", sound_id_for_log, err);
                 }
             })
@@ -602,6 +619,38 @@ fn handle_control_hotkey(
 
 thread_local! {
     static VISIBLE_TOAST: RefCell<Option<adw::Toast>> = const { RefCell::new(None) };
+}
+
+fn show_update_toast(
+    overlay: &adw::ToastOverlay,
+    parent: &gtk4::Window,
+    info: crate::update::UpdateInfo,
+) {
+    if let Some(previous) = VISIBLE_TOAST.with(|visible| visible.borrow_mut().take()) {
+        previous.dismiss();
+    }
+    let toast = adw::Toast::new(&format!(
+        "Linux Soundboard {} is available",
+        info.metadata.version
+    ));
+    toast.set_timeout(15);
+    toast.set_priority(adw::ToastPriority::High);
+    toast.set_button_label(Some("Update Now"));
+    let parent = parent.clone();
+    toast.connect_button_clicked(move |toast| {
+        toast.dismiss();
+        super::updater::prompt_update(&parent, info.clone(), None);
+    });
+    toast.connect_dismissed(|dismissed| {
+        VISIBLE_TOAST.with(|visible| {
+            let mut visible = visible.borrow_mut();
+            if visible.as_ref() == Some(dismissed) {
+                *visible = None;
+            }
+        });
+    });
+    VISIBLE_TOAST.with(|visible| *visible.borrow_mut() = Some(toast.clone()));
+    overlay.add_toast(toast);
 }
 
 pub fn show_toast(overlay: &adw::ToastOverlay, message: &str) {

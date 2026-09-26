@@ -1,5 +1,3 @@
-//! PipeWire streams for playback and mic capture.
-
 use super::*;
 use std::sync::Arc;
 
@@ -64,9 +62,9 @@ pub(super) fn create_runtime_virtual_source_stream(
             *pw::keys::NODE_DESCRIPTION => "Linux Soundboard Mic Feeder",
             "node.dont-reconnect" => "true",
             "node.always-process" => "true",
-            // Keep consumers from becoming competing drivers.
+
             "node.group" => SOUNDBOARD_NODE_GROUP,
-            // Hold the negotiated quantum/rate against graph reconfiguration.
+
             "node.lock-quantum" => "true",
             "node.lock-rate" => "true",
             "node.latency" => latency_hint,
@@ -84,7 +82,6 @@ pub(super) fn create_runtime_virtual_source_stream(
             *listener_state.borrow_mut() = ManagedStreamState::from_pipewire(new);
         })
         .process(move |stream, _| {
-            // RT callback: never block.
             write_output_buffer(stream, &queues, &stream_runtime, OutputTarget::Virtual);
         })
         .register()
@@ -152,7 +149,6 @@ pub(super) fn create_capture_stream(
         .connect(
             spa::utils::Direction::Input,
             None,
-            // Capture needs autoconnect and RT processing.
             pw::stream::StreamFlags::AUTOCONNECT
                 | pw::stream::StreamFlags::MAP_BUFFERS
                 | pw::stream::StreamFlags::RT_PROCESS,
@@ -219,12 +215,12 @@ fn write_output_buffer(
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
-    let datas = buffer.datas_mut();
-    if datas.is_empty() {
+    let data_blocks = buffer.datas_mut();
+    if data_blocks.is_empty() {
         return;
     }
 
-    let data = &mut datas[0];
+    let data = &mut data_blocks[0];
     let target_name = match target {
         OutputTarget::Local => "local",
         OutputTarget::Virtual => "virtual",
@@ -325,12 +321,12 @@ fn read_capture_buffer(stream: &pw::stream::Stream, queues: &RtSharedQueues) {
     let Some(mut buffer) = stream.dequeue_buffer() else {
         return;
     };
-    let datas = buffer.datas_mut();
-    if datas.is_empty() {
+    let data_blocks = buffer.datas_mut();
+    if data_blocks.is_empty() {
         return;
     }
 
-    let data = &mut datas[0];
+    let data = &mut data_blocks[0];
     let chunk_size = data.chunk().size() as usize;
     let Some(bytes) = data.data() else {
         return;
@@ -357,6 +353,5 @@ fn read_capture_buffer(stream: &pw::stream::Stream, queues: &RtSharedQueues) {
         if let Some(mut queues) = queues.try_lock() {
             queues.mic_in.push_slice(&scratch[..sample_count]);
         }
-        // Drop the frame; RT never blocks and resyncs next callback.
     });
 }

@@ -11,6 +11,7 @@
 | Area                             | Location                                |
 | -------------------------------- | --------------------------------------- |
 | Playback & routing controls      | Top transport bar                       |
+| Per-playback controls            | Now Playing panel above the sound list |
 | Sound actions                    | Sound list · per-sound right-click menu |
 | Tab management                   | Left sidebar · `TABS`                   |
 | Folder browsing & organization   | Left sidebar · `FOLDERS`                |
@@ -44,9 +45,9 @@ The sound list is the primary library view on the right side of the window. It d
 
 **When you activate a sound:**
 
-1. Any existing playback stops immediately
-2. The selected sound begins playing
-3. The transport bar updates to show the active sound, position, and duration
+1. The selected sound begins playing; with Concurrent Playback off it replaces the previous playback, while with Concurrent Playback on it joins the existing mix
+2. The transport bar updates to show the active sound, position, and duration
+3. If two or more playbacks are active, the Now Playing panel exposes per-playback controls
 4. If the file is missing, a **recovery dialog** opens instead of playing
 
 ---
@@ -66,6 +67,8 @@ Appears automatically when you activate a sound whose file no longer exists.
 ## Transport Bar
 
 The transport bar runs across the top of the main window.
+
+When two or more playbacks are active, a compact **Now Playing** panel appears above the sound list, aligned with the library area to the right of the Tabs/Folders sidebar. Playback cards wrap responsively into one, two, or three equal-width columns. Each playback has its own timeline, elapsed and total time, pause/resume button, and stop button. Click, drag, or use the arrow keys on a focused timeline to seek that playback. Repeated plays of the same sound have separate cards. The panel can be collapsed, and its list scrolls after roughly two visible rows so large concurrent mixes do not push the library out of view.
 
 ---
 
@@ -240,14 +243,14 @@ Right-click any row in the sound list to open the context menu.
 #### Set Hotkey / Update Hotkey
 
 - **Trigger:** Right-click → `Set Hotkey` or `Update Hotkey`
-- **What it does:** Opens the hotkey capture dialog for that sound
+- **What it does:** Opens the hotkey capture dialog for the clicked sound, or for the whole current selection when several selected rows are being acted on.
 
 **In the dialog:**
 
 1. Press the key combination you want
 2. Click `Save` to assign it, or `Clear` to remove the existing hotkey
 
-**Result:** The captured hotkey is bound to that sound and plays it globally when the hotkey backend is available.
+**Result:** The captured hotkey is bound atomically to the target sound(s) and plays them through the configured shared-hotkey behavior when the hotkey backend is available. If a batch assignment conflicts or fails, the library is left unchanged rather than partially updating the selection.
 
 > **Notes:**
 >
@@ -541,6 +544,21 @@ Open via the settings button in the transport bar.
 
 ### Audio → Playback
 
+#### Concurrent Playback
+
+- **Path:** `Settings` → `Audio` → `Playback` → `Concurrent Playback`
+- **What it does:** Allows several sounds to remain active and be mixed together instead of each new Play replacing the previous sound.
+- **Default:** Off, preserving the classic one-sound-at-a-time behavior.
+
+> **Notes:**
+>
+> - The engine keeps at most 32 live voices; if the cap is reached, the oldest voice is retired.
+> - Every voice reaches both the local and virtual-microphone outputs according to the normal routing/volume rules.
+> - Real-microphone passthrough is mixed once per output chunk, not once per playing sound.
+> - Turning Concurrent Playback off while several sounds are live keeps the newest voice and retires the others.
+
+---
+
 #### Auto-Gain Normalization
 
 - **Path:** `Settings` → `Audio` → `Playback` → `Auto-Gain Normalization`
@@ -623,7 +641,7 @@ _These controls remain visible and can be configured while Loudness Boost is dis
 
 > **Note:** If mic passthrough is already active, changing the source restarts it with the new source.
 
-> **Auto-detect behavior:** `Auto-detect (Default)` only ever auto-selects two kinds of source: a recognised mic-enhancement chain (EasyEffects, NoiseTorch, RNNoise — preferred, since you deployed it to process your mic) or a real hardware microphone. It never auto-selects other virtual sources — screenshare audio such as Vencord/Discord "Share Sound", OBS virtual audio, loopback/virtual cables, or unnamed custom virtual sources — because those carry application audio, not your voice. Any of those still appears in the dropdown and can be selected explicitly if you really want it.
+> **Auto-detect behavior:** `Auto-detect (Default)` only ever auto-selects two kinds of source: a recognised mic-enhancement chain (EasyEffects, NoiseTorch, RNNoise — preferred, since you deployed it to process your mic) or a real hardware microphone. It never auto-selects other virtual sources — screenshare audio such as Vencord/Discord "Share Sound", OBS virtual audio, loopback/virtual cables, or unnamed custom virtual sources — because those carry application audio, not your voice. It also skips WirePlumber Bluetooth headset autoswitch proxies (`bluez5.loopback=true`) so simply enabling passthrough does not unexpectedly force an A2DP headset into HFP/HSP mode. If that Bluetooth microphone is the only available source, Auto-detect waits; selecting it explicitly remains supported and intentionally permits the headset-profile switch.
 
 ---
 

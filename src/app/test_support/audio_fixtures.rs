@@ -25,6 +25,15 @@ pub enum TestEncodedFixture {
     OpusMp4Stereo48000,
 }
 
+pub const TEST_OGG_OPUS_SERIAL: u32 = 0x4c53424f;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TestOggOpusFinalPage {
+    EndOfStream,
+
+    NoEndOfStreamMarker,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TestOggOpusFixture {
     pub extension: &'static str,
@@ -35,6 +44,7 @@ pub struct TestOggOpusFixture {
     pub channel_mapping_family: u8,
     pub packet_count: usize,
     pub final_granule: Option<u64>,
+    pub final_page: TestOggOpusFinalPage,
 }
 
 impl Default for TestOggOpusFixture {
@@ -48,6 +58,7 @@ impl Default for TestOggOpusFixture {
             channel_mapping_family: 0,
             packet_count: 2,
             final_granule: None,
+            final_page: TestOggOpusFinalPage::EndOfStream,
         }
     }
 }
@@ -135,7 +146,7 @@ pub fn create_test_ogg_opus_file(fixture: TestOggOpusFixture) -> PathBuf {
     let base = std::env::temp_dir().join(format!("lsb-test-audio-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&base).expect("create ogg opus temp dir");
     let path = base.join(format!("tone.{}", fixture.extension));
-    let serial = 0x4c53424f;
+    let serial = TEST_OGG_OPUS_SERIAL;
     let mut writer = PacketWriter::new(Vec::new());
     let mut head = b"OpusHead".to_vec();
     head.push(1);
@@ -195,17 +206,16 @@ pub fn create_test_ogg_opus_file(fixture: TestOggOpusFixture) -> PathBuf {
         } else {
             ((packet_index + 1) * frame_samples) as u64
         };
+        let end_info = if is_last {
+            match fixture.final_page {
+                TestOggOpusFinalPage::EndOfStream => PacketWriteEndInfo::EndStream,
+                TestOggOpusFinalPage::NoEndOfStreamMarker => PacketWriteEndInfo::EndPage,
+            }
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
         writer
-            .write_packet(
-                encoded.into_boxed_slice(),
-                serial,
-                if is_last {
-                    PacketWriteEndInfo::EndStream
-                } else {
-                    PacketWriteEndInfo::NormalPacket
-                },
-                granule,
-            )
+            .write_packet(encoded.into_boxed_slice(), serial, end_info, granule)
             .expect("write opus packet");
     }
 
@@ -248,5 +258,190 @@ pub fn cleanup_test_audio_path(path: &Path) {
     let _ = fs::remove_file(path);
     if let Some(parent) = path.parent() {
         let _ = fs::remove_dir_all(parent);
+    }
+}
+
+struct TestOggPage {
+    serial: u32,
+    header_type: u8,
+    body_start: usize,
+    body_len: usize,
+}
+
+fn walk_test_ogg_pages(bytes: &[u8]) -> Vec<TestOggPage> {
+    let mut pages = Vec::new();
+    let mut offset = 0usize;
+    while offset + 27 <= bytes.len() && &bytes[offset..offset + 4] == b"OggS" {
+        let serial = u32::from_le_bytes(bytes[offset + 14..offset + 18].try_into().unwrap());
+        let header_type = bytes[offset + 5];
+        let segment_count = bytes[offset + 26] as usize;
+        let table_start = offset + 27;
+        let body_start = table_start + segment_count;
+        if body_start > bytes.len() {
+            break;
+        }
+        let body_len: usize = bytes[table_start..body_start]
+            .iter()
+            .map(|value| usize::from(*value))
+            .sum();
+        if body_start + body_len > bytes.len() {
+            break;
+        }
+        pages.push(TestOggPage {
+            serial,
+            header_type,
+            body_start,
+            body_len,
+        });
+        offset = body_start + body_len;
+    }
+    pages
+}
+
+pub fn test_ogg_has_end_of_stream_page(path: &Path) -> bool {
+    let bytes = fs::read(path).expect("read Ogg fixture");
+    walk_test_ogg_pages(&bytes)
+        .iter()
+        .any(|page| page.header_type & 0x04 != 0)
+}
+
+fn test_ogg_page_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04c1_1db7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+fn test_ogg_single_packet_segments(packet_len: usize) -> Vec<u8> {
+    assert!(
+        packet_len < 255,
+        "test fixture pages carry at most one small packet"
+    );
+    if packet_len == 0 {
+        Vec::new()
+    } else {
+        vec![packet_len as u8]
+    }
+}
+
+fn build_test_ogg_page(
+    existing: &[u8],
+    serial: u32,
+    granule: u64,
+    header_type: u8,
+    segments: &[u8],
+    body: &[u8],
+    body_written: usize,
+) -> Vec<u8> {
+    let sequence = walk_test_ogg_pages(existing)
+        .iter()
+        .filter(|page| page.serial == serial)
+        .count() as u32;
+    let mut page = Vec::with_capacity(27 + segments.len() + body.len());
+    page.extend_from_slice(b"OggS");
+    page.push(0);
+    page.push(header_type);
+    page.extend_from_slice(&granule.to_le_bytes());
+    page.extend_from_slice(&serial.to_le_bytes());
+    page.extend_from_slice(&sequence.to_le_bytes());
+    page.extend_from_slice(&[0; 4]);
+    page.push(segments.len() as u8);
+    page.extend_from_slice(segments);
+    page.extend_from_slice(&body[..body_written.min(body.len())]);
+    let checksum = test_ogg_page_crc32(&page);
+    page[22..26].copy_from_slice(&checksum.to_le_bytes());
+    page
+}
+
+pub fn append_test_ogg_page(
+    path: &Path,
+    serial: u32,
+    granule: u64,
+    header_type: u8,
+    packet: &[u8],
+) {
+    let mut bytes = fs::read(path).expect("read Ogg fixture");
+    let segments = test_ogg_single_packet_segments(packet.len());
+    let page = build_test_ogg_page(
+        &bytes,
+        serial,
+        granule,
+        header_type,
+        &segments,
+        packet,
+        packet.len(),
+    );
+    bytes.extend_from_slice(&page);
+    fs::write(path, bytes).expect("write Ogg fixture");
+}
+
+pub fn append_truncated_test_ogg_page(
+    path: &Path,
+    serial: u32,
+    granule: u64,
+    declared_body_len: u8,
+    kept_body_len: usize,
+) {
+    assert!(u16::from(declared_body_len) >= kept_body_len as u16);
+    let mut bytes = fs::read(path).expect("read Ogg fixture");
+
+    let page = build_test_ogg_page(
+        &bytes,
+        serial,
+        granule,
+        0,
+        &[declared_body_len],
+        &vec![0u8; usize::from(declared_body_len)],
+        kept_body_len,
+    );
+    bytes.extend_from_slice(&page);
+    fs::write(path, bytes).expect("write Ogg fixture");
+}
+
+pub fn corrupt_test_ogg_page_body(path: &Path, page_index: usize) {
+    let mut bytes = fs::read(path).expect("read Ogg fixture");
+    let page = walk_test_ogg_pages(&bytes)
+        .into_iter()
+        .nth(page_index)
+        .unwrap_or_else(|| panic!("fixture has no page {page_index}"));
+    assert!(page.body_len > 0, "page {page_index} has an empty body");
+    bytes[page.body_start] ^= 0xff;
+    fs::write(path, bytes).expect("write Ogg fixture");
+}
+
+pub const INVALID_TEST_OPUS_PACKET: &[u8] = &[0x03];
+
+pub fn encode_test_opus_audio_packet(tone_offset: usize) -> Vec<u8> {
+    let mut encoder = OpusEncoder::new(48_000, OpusChannels::Mono, OpusApplication::Audio)
+        .expect("create opus encoder");
+    let mut pcm = vec![0.0f32; 960];
+    for (index, sample) in pcm.iter_mut().enumerate() {
+        let frame = tone_offset * 960 + index;
+        let phase = 2.0 * std::f32::consts::PI * 440.0 * frame as f32 / 48_000.0;
+        *sample = phase.sin() * 0.25;
+    }
+    let mut encoded = vec![0; 4_000];
+    let len = encoder
+        .encode_float(&pcm, &mut encoded)
+        .expect("encode opus frame");
+    encoded.truncate(len);
+    encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_ogg_page_crc32;
+
+    #[test]
+    fn the_fixture_checksum_matches_the_vorbis_crc_parameters() {
+        assert_eq!(test_ogg_page_crc32(&[61, 61, 33]), 0x9f85_8776);
     }
 }

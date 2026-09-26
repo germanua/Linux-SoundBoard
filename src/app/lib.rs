@@ -1,4 +1,3 @@
-// Modules accessible from the binary (main.rs) or external test crates.
 pub mod audio;
 pub mod bootstrap;
 pub mod commands;
@@ -11,10 +10,12 @@ pub(crate) mod app_state;
 pub(crate) mod diagnostics;
 pub(crate) mod hotkeys;
 pub(crate) mod mpris;
+pub(crate) mod private_runtime;
 pub(crate) mod timer_registry;
 pub(crate) mod tray;
 pub(crate) mod ui;
 pub(crate) mod ui_event_bridge;
+pub(crate) mod update;
 
 #[cfg(test)]
 pub(crate) mod test_support;

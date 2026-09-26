@@ -79,6 +79,11 @@ impl HotkeyProjectionCoordinator {
                 .map_err(|error| error.to_string())
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn reconcile_generation(&self) -> u64 {
+        self.gate.generation()
+    }
 }
 
 fn project_current_bindings(

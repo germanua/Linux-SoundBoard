@@ -9,6 +9,8 @@ pub const SWHKD_UPSTREAM_INSTALL_URL: &str =
 const SWHKD_UPSTREAM_COMMIT: &str = "cbbfc4a981aa263155e3216a42549c9a3ae645fe";
 pub const INSTALLED_SWHKD_HELPER_PATH: &str =
     "/usr/libexec/linux-soundboard/install-swhkd-helper.sh";
+pub const MANAGED_SWHKD_BINARY: &str = "/usr/local/libexec/linux-soundboard/swhkd";
+pub const MANAGED_SWHKS_BINARY: &str = "/usr/local/libexec/linux-soundboard/swhks";
 const SWHKD_RFKILL_MARKERS: [&[u8]; 2] = [b"/dev/rfkill", b"SW_RFKILL_ALL"];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -118,6 +120,9 @@ fn detect_distro_family() -> DistroFamily {
 }
 
 pub fn should_offer_swhkd_install(raw_error: &str) -> bool {
+    if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
+        return false;
+    }
     let normalized = raw_error.to_ascii_lowercase();
     normalized.contains("swhkd not found in path")
         || normalized.contains("swhks not found in path")
@@ -152,12 +157,17 @@ pub(super) fn ensure_swhkd_binary_is_safe(path: &Path) -> Result<(), String> {
 }
 
 pub fn manual_swhkd_install_commands() -> String {
+    if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
+        return "# The isolated DEV build never installs or replaces the machine-global swhkd helper.
+# Use the stable installer to manage swhkd, or reuse an already-safe system installation for an explicit DEV hotkey test."
+            .to_string();
+    }
     manual_install_commands_for(detect_distro_family())
 }
 
 fn manual_install_commands_for(distro: DistroFamily) -> String {
     let polkit_install = match distro {
-        DistroFamily::Arch => "sudo pacman -S --needed polkit",
+        DistroFamily::Arch => "sudo pacman -Syu --needed polkit",
         DistroFamily::Debian => "sudo apt-get update && sudo apt-get install -y policykit-1",
         DistroFamily::Fedora => "sudo dnf install -y polkit",
         DistroFamily::OpenSuse => "sudo zypper --non-interactive install polkit",
@@ -169,8 +179,9 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
         }
     };
 
+    let helper_distro = distro_id(distro);
     let build_deps_install = match distro {
-        DistroFamily::Arch => "sudo pacman -S --needed git make rust cargo pkgconf systemd base-devel",
+        DistroFamily::Arch => "sudo pacman -Syu --needed git make rust cargo pkgconf systemd base-devel",
         DistroFamily::Debian => {
             "sudo apt-get update && sudo apt-get install -y git make build-essential pkg-config libudev-dev cargo rustc"
         }
@@ -189,7 +200,18 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
     };
 
     format!(
-        "# 1) Install pkexec (polkit)\n{}\n\n# 2) Install build dependencies\n{}\n\n# 3) Build and install swhkd\nrm -rf /tmp/swhkd-build\ngit init /tmp/swhkd-build\ngit -C /tmp/swhkd-build fetch --depth 1 https://github.com/waycrate/swhkd.git {SWHKD_UPSTREAM_COMMIT}\ngit -C /tmp/swhkd-build checkout --detach {SWHKD_UPSTREAM_COMMIT}\ncd /tmp/swhkd-build\nmake clean || true\nmake NO_RFKILL_SW_SUPPORT=1\nsudo install -Dm755 target/release/swhkd /usr/bin/swhkd\nsudo install -Dm755 target/release/swhks /usr/bin/swhks\nsudo install -Dm644 /dev/null /etc/swhkd/swhkdrc\nsudo chown root:root /usr/bin/swhkd\nsudo chmod u+s /usr/bin/swhkd\nsudo chmod +x /usr/bin/swhks\n\n# 4) Load the uinput module swhkd needs, now and at every boot\nsudo modprobe uinput\necho uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
+        "# swhkd captures every keyboard on this machine; it is meant for single-seat systems.\n\
+# The root-side helper builds it at the pinned upstream commit {SWHKD_UPSTREAM_COMMIT}.\n\n\
+# 1) Install pkexec (polkit)\n{}\n\n\
+# 2) Install build dependencies\n{}\n\n\
+# 3) Install swhkd with the root-side helper (run from a repository checkout)\n\
+sudo install -d -m755 /usr/libexec/linux-soundboard\n\
+sudo install -Dm755 packaging/linux/install-swhkd-helper.sh packaging/linux/build-swhkd-locked.sh /usr/libexec/linux-soundboard/\n\
+sudo install -Dm644 packaging/linux/swhkd-Cargo.lock.pinned /usr/libexec/linux-soundboard/\n\
+sudo /usr/libexec/linux-soundboard/install-swhkd-helper.sh --distro {helper_distro}\n\n\
+# 4) Load the uinput module swhkd needs, now and at every boot\n\
+sudo modprobe uinput\n\
+echo uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
         polkit_install, build_deps_install
     )
 }
@@ -197,6 +219,16 @@ fn manual_install_commands_for(distro: DistroFamily) -> String {
 pub fn install_swhkd_native_detailed(
     enable_uinput: bool,
 ) -> Result<SwhkdInstallReport, SwhkdInstallError> {
+    if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
+        return Err(SwhkdInstallError {
+            kind: SwhkdInstallErrorKind::MissingHelper,
+            summary: "The isolated DEV build does not modify the machine-global swhkd installation."
+                .to_string(),
+            details: "Use the stable Linux Soundboard installer to manage swhkd. DEV may reuse an existing safe installation only when global-hotkey testing is explicitly enabled."
+                .to_string(),
+            state: SwhkdInstallState::Failed,
+        });
+    }
     let distro = detect_distro_family();
     let mut states = vec![SwhkdInstallState::Idle, SwhkdInstallState::Checking];
 
@@ -240,8 +272,9 @@ pub fn install_swhkd_native_detailed(
             kind: SwhkdInstallErrorKind::MissingHelper,
             summary: "Installer helper is missing from this build.".to_string(),
             details: format!(
-                "Expected helper path: {}\nManual guide: {}",
-                INSTALLED_SWHKD_HELPER_PATH, SWHKD_UPSTREAM_INSTALL_URL
+                "Automatic installation needs a root-owned helper at {}; none is installed, so install swhkd manually:\n{}",
+                INSTALLED_SWHKD_HELPER_PATH,
+                manual_swhkd_install_commands()
             ),
             state: SwhkdInstallState::Failed,
         }
@@ -332,68 +365,99 @@ pub fn install_swhkd_native_detailed(
     })
 }
 
-fn resolve_install_helper_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("LSB_SWHKD_INSTALL_HELPER") {
-        let candidate = PathBuf::from(path);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    let installed = PathBuf::from(INSTALLED_SWHKD_HELPER_PATH);
-    if is_executable_file(&installed) {
-        return Some(installed);
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(exe_dir) = current_exe.parent() {
-            let sibling = exe_dir.join("install-swhkd-helper.sh");
-            if is_executable_file(&sibling) {
-                return Some(sibling);
-            }
-
-            let libexec_sibling = exe_dir
-                .join("..")
-                .join("libexec")
-                .join("linux-soundboard")
-                .join("install-swhkd-helper.sh");
-            if is_executable_file(&libexec_sibling) {
-                return Some(libexec_sibling);
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        let source_helper = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("packaging")
-            .join("linux")
-            .join("install-swhkd-helper.sh");
-        if is_executable_file(&source_helper) {
-            return Some(source_helper);
-        }
-    }
-
-    None
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    if !path.is_file() {
+fn file_is_root_owned_regular_with_owner(path: &Path, owner_uid: u32) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() {
         return false;
     }
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(metadata) = fs::metadata(path) {
-            let mode = metadata.permissions().mode();
-            return (mode & 0o111) != 0;
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != owner_uid || (metadata.mode() & 0o022) != 0 {
+            return false;
         }
+        return (metadata.mode() & 0o111) != 0;
     }
 
     #[allow(unreachable_code)]
     true
+}
+
+fn parent_is_root_owned_nonwritable_with_owner(path: &Path, owner_uid: u32) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Ok(metadata) = fs::symlink_metadata(parent) else {
+        return false;
+    };
+    if !metadata.file_type().is_dir() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != owner_uid || (metadata.mode() & 0o022) != 0 {
+            return false;
+        }
+    }
+
+    true
+}
+
+pub(super) fn helper_is_privilege_safe_with_owner(path: &Path, owner_uid: u32) -> bool {
+    path.is_absolute()
+        && file_is_root_owned_regular_with_owner(path, owner_uid)
+        && parent_is_root_owned_nonwritable_with_owner(path, owner_uid)
+}
+
+pub(super) fn helper_is_privilege_safe(path: &Path) -> bool {
+    helper_is_privilege_safe_with_owner(path, 0)
+}
+
+pub(super) fn first_trusted_helper(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|candidate| helper_is_privilege_safe(candidate))
+        .cloned()
+}
+
+fn install_helper_candidates() -> Vec<PathBuf> {
+    vec![PathBuf::from(INSTALLED_SWHKD_HELPER_PATH)]
+}
+
+fn resolve_install_helper_path() -> Option<PathBuf> {
+    first_trusted_helper(&install_helper_candidates())
+}
+
+fn binary_is_safe_to_launch_with_owner(path: &Path, owner_uid: u32) -> bool {
+    file_is_root_owned_regular_with_owner(path, owner_uid)
+        && parent_is_root_owned_nonwritable_with_owner(path, owner_uid)
+}
+
+fn binary_is_safe_to_launch(path: &Path) -> bool {
+    binary_is_safe_to_launch_with_owner(path, 0)
+}
+
+pub(super) fn resolve_swhkd_binary() -> Option<PathBuf> {
+    let managed = PathBuf::from(MANAGED_SWHKD_BINARY);
+    if binary_is_safe_to_launch(&managed) {
+        return Some(managed);
+    }
+    let found = which::which("swhkd").ok()?;
+    binary_is_safe_to_launch(&found).then_some(found)
+}
+
+pub(super) fn resolve_swhks_binary() -> Option<PathBuf> {
+    let managed = PathBuf::from(MANAGED_SWHKS_BINARY);
+    if binary_is_safe_to_launch(&managed) {
+        return Some(managed);
+    }
+    let found = which::which("swhks").ok()?;
+    binary_is_safe_to_launch(&found).then_some(found)
 }
 
 fn distro_id(distro: DistroFamily) -> &'static str {
@@ -417,13 +481,13 @@ pub fn uinput_unavailable() -> bool {
 }
 
 fn has_healthy_swhkd_install() -> bool {
-    let Ok(swhkd_path) = which::which("swhkd") else {
+    let Some(swhkd_path) = resolve_swhkd_binary() else {
         return false;
     };
     if ensure_swhkd_binary_is_safe(&swhkd_path).is_err() {
         return false;
     }
-    if which::which("swhks").is_err() {
+    if resolve_swhks_binary().is_none() {
         return false;
     }
 
@@ -453,39 +517,27 @@ fn distro_display_name(distro: DistroFamily) -> &'static str {
 
 pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
     let intro = format!("{binary_name} not found in PATH.");
+    if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
+        return format!(
+            "{intro}
+The isolated DEV build does not install or replace machine-global swhkd. Use the stable installer to manage it."
+        );
+    }
 
     match detect_distro_family() {
-        DistroFamily::Arch => format!(
+        DistroFamily::Arch
+        | DistroFamily::Debian
+        | DistroFamily::Fedora
+        | DistroFamily::OpenSuse => format!(
             "{intro}\n\
-             Install an AUR package for Wayland hotkeys:\n\
-             • yay -S swhkd-git\n\
-             Avoid swhkd-bin; upstream marks that AUR package as unmaintained.\n\
-             X11 sessions can use the native X11 backend without swhkd."
-        ),
-        DistroFamily::Debian => format!(
-            "{intro}\n\
-             Debian and Ubuntu do not ship swhkd in their default repositories.\n\
-             Install it from the upstream instructions:\n\
-             {SWHKD_UPSTREAM_INSTALL_URL}\n\
-             X11 and XWayland sessions can use the native X11 backend without swhkd."
-        ),
-        DistroFamily::Fedora => format!(
-            "{intro}\n\
-             Fedora does not currently ship swhkd in the official package set.\n\
-             Install it from the upstream instructions:\n\
-             {SWHKD_UPSTREAM_INSTALL_URL}\n\
+             Use Linux Soundboard's Install action; it only runs the pinned root-owned helper.\n\
+             If the helper is unavailable, use the manual commands shown by the installer.\n\
              X11 and XWayland sessions can use the native X11 backend without swhkd."
         ),
         DistroFamily::Other => format!(
             "{intro}\n\
-             Install swhkd from the upstream instructions:\n\
-             {SWHKD_UPSTREAM_INSTALL_URL}\n\
-             X11 and XWayland sessions can use the native X11 backend without swhkd."
-        ),
-        DistroFamily::OpenSuse => format!(
-            "{intro}\n\
-             openSUSE does not currently ship swhkd in the official package set.\n\
-             Install it from the upstream instructions:\n\
+             This distribution is not supported by the managed installer.\n\
+             See the upstream installation notes:\n\
              {SWHKD_UPSTREAM_INSTALL_URL}\n\
              X11 and XWayland sessions can use the native X11 backend without swhkd."
         ),
@@ -495,11 +547,30 @@ pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_has_rfkill_support, detect_distro_family_from_os_release, distro_id,
-        ensure_swhkd_binary_is_safe, manual_install_commands_for, should_offer_swhkd_install,
-        DistroFamily, SwhkdInstallState,
+        binary_has_rfkill_support, binary_is_safe_to_launch, detect_distro_family_from_os_release,
+        distro_id, ensure_swhkd_binary_is_safe, first_trusted_helper, helper_is_privilege_safe,
+        helper_is_privilege_safe_with_owner, manual_install_commands_for,
+        should_offer_swhkd_install, DistroFamily, SwhkdInstallState, INSTALLED_SWHKD_HELPER_PATH,
+        MANAGED_SWHKD_BINARY, MANAGED_SWHKS_BINARY,
     };
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lsb-swhkd-trust-{tag}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_executable(path: &std::path::Path, mode: u32) {
+        fs::write(path, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn current_uid() -> u32 {
+        nix::unistd::getuid().as_raw()
+    }
 
     #[test]
     fn detects_arch_family() {
@@ -539,19 +610,28 @@ mod tests {
 
     #[test]
     fn detects_installable_missing_swhkd_errors() {
-        assert!(should_offer_swhkd_install("swhkd not found in PATH."));
-        assert!(should_offer_swhkd_install(
-            "no Wayland hotkey backend available (swhkd: swhkd not found in PATH.)"
-        ));
-        assert!(should_offer_swhkd_install(
-            "swhkd requires setuid bit for proper operation"
-        ));
-        assert!(should_offer_swhkd_install(
-            "swhkd exited immediately after startup"
-        ));
-        assert!(should_offer_swhkd_install(
-            "Installed swhkd has unsafe rfkill support enabled"
-        ));
+        assert_eq!(
+            should_offer_swhkd_install("swhkd not found in PATH."),
+            crate::app_meta::ALLOW_PRIVILEGED_HELPER
+        );
+        assert_eq!(
+            should_offer_swhkd_install(
+                "no Wayland hotkey backend available (swhkd: swhkd not found in PATH.)"
+            ),
+            crate::app_meta::ALLOW_PRIVILEGED_HELPER
+        );
+        assert_eq!(
+            should_offer_swhkd_install("swhkd requires setuid bit for proper operation"),
+            crate::app_meta::ALLOW_PRIVILEGED_HELPER
+        );
+        assert_eq!(
+            should_offer_swhkd_install("swhkd exited immediately after startup"),
+            crate::app_meta::ALLOW_PRIVILEGED_HELPER
+        );
+        assert_eq!(
+            should_offer_swhkd_install("Installed swhkd has unsafe rfkill support enabled"),
+            crate::app_meta::ALLOW_PRIVILEGED_HELPER
+        );
     }
 
     #[test]
@@ -571,16 +651,42 @@ mod tests {
     }
 
     #[test]
-    fn manual_install_commands_include_polkit_and_build_steps() {
+    fn manual_install_commands_use_only_the_managed_path() {
         let debian = manual_install_commands_for(DistroFamily::Debian);
         assert!(debian.contains("policykit-1"));
         assert!(debian.contains("cbbfc4a981aa263155e3216a42549c9a3ae645fe"));
         assert!(!debian.contains("git clone"));
-        assert!(debian.contains("make NO_RFKILL_SW_SUPPORT=1"));
-        assert!(debian.contains("chmod u+s /usr/bin/swhkd"));
+        assert!(debian.contains("build-swhkd-locked.sh"));
+        assert!(!debian.contains("make NO_RFKILL_SW_SUPPORT"));
+        assert!(debian.contains("single-seat"));
+        assert!(debian
+            .contains("/usr/libexec/linux-soundboard/install-swhkd-helper.sh --distro debian"));
+        assert!(!debian.contains("target/release"));
+        assert!(!debian.contains("chmod u+s"));
+        assert!(!debian.contains("/usr/bin/swhkd"));
 
         let arch = manual_install_commands_for(DistroFamily::Arch);
-        assert!(arch.contains("pacman -S --needed polkit"));
+        assert!(arch.contains("pacman -Syu --needed polkit"));
+    }
+
+    #[test]
+    fn only_the_fixed_system_helper_path_is_a_candidate() {
+        assert_eq!(
+            super::install_helper_candidates(),
+            vec![std::path::PathBuf::from(INSTALLED_SWHKD_HELPER_PATH)]
+        );
+    }
+
+    #[test]
+    fn symlinked_daemon_binary_is_not_launched() {
+        let dir = temp_dir("daemon-link");
+        let real = dir.join("swhkd");
+        write_executable(&real, 0o4755);
+        let link = dir.join("swhkd-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(!binary_is_safe_to_launch(&link));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -622,5 +728,123 @@ mod tests {
             SwhkdInstallState::Failed,
         ];
         assert_eq!(states.len(), 6);
+    }
+
+    #[test]
+    fn user_owned_helper_is_never_a_privileged_target() {
+        let dir = temp_dir("user-owned");
+        let helper = dir.join("install-swhkd-helper.sh");
+        write_executable(&helper, 0o755);
+
+        assert!(helper_is_privilege_safe_with_owner(&helper, current_uid()));
+        assert!(!helper_is_privilege_safe(&helper));
+        assert_eq!(first_trusted_helper(&[helper]), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn symlinked_helper_is_rejected() {
+        let dir = temp_dir("symlink");
+        let real = dir.join("real-helper.sh");
+        write_executable(&real, 0o755);
+        let link = dir.join("install-swhkd-helper.sh");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert!(!helper_is_privilege_safe_with_owner(&link, current_uid()));
+        assert!(!helper_is_privilege_safe(&link));
+        assert_eq!(first_trusted_helper(&[link]), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn group_or_world_writable_helper_is_rejected() {
+        let dir = temp_dir("writable-file");
+        let helper = dir.join("install-swhkd-helper.sh");
+        write_executable(&helper, 0o777);
+        assert!(!helper_is_privilege_safe_with_owner(&helper, current_uid()));
+        fs::remove_dir_all(dir).unwrap();
+
+        let dir = temp_dir("writable-dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+        let helper = dir.join("install-swhkd-helper.sh");
+        write_executable(&helper, 0o755);
+        assert!(!helper_is_privilege_safe_with_owner(&helper, current_uid()));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn home_installed_helper_is_never_a_privileged_target() {
+        let home = temp_dir("home");
+        let tree = home.join(".local").join("opt").join("linux-soundboard");
+        fs::create_dir_all(&tree).unwrap();
+        let helper = tree.join("install-swhkd-helper.sh");
+        write_executable(&helper, 0o755);
+
+        assert_eq!(first_trusted_helper(&[helper]), None);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn environment_override_cannot_select_a_pkexec_helper() {
+        let dir = temp_dir("env-override");
+        let helper = dir.join("attacker-helper.sh");
+        write_executable(&helper, 0o755);
+
+        assert_eq!(first_trusted_helper(&[helper]), None);
+        let removed_env_var = concat!("LSB_SWHKD", "_INSTALL_HELPER");
+        assert!(!include_str!("swhkd_install.rs").contains(removed_env_var));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn trusted_helper_is_selected_over_an_untrusted_candidate() {
+        let dir = temp_dir("candidates");
+        let untrusted = dir.join("a-untrusted.sh");
+        write_executable(&untrusted, 0o777);
+        let trusted = dir.join("b-trusted.sh");
+        write_executable(&trusted, 0o755);
+
+        let uid = current_uid();
+        let picked = [untrusted.as_path(), trusted.as_path()]
+            .into_iter()
+            .find(|candidate| helper_is_privilege_safe_with_owner(candidate, uid));
+        assert_eq!(picked.map(std::path::Path::to_path_buf), Some(trusted));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn managed_daemon_paths_are_fixed_absolute_locations() {
+        for path in [MANAGED_SWHKD_BINARY, MANAGED_SWHKS_BINARY] {
+            let path = std::path::Path::new(path);
+            assert!(path.is_absolute());
+            assert_eq!(
+                path.parent().unwrap(),
+                std::path::Path::new("/usr/local/libexec/linux-soundboard")
+            );
+        }
+    }
+
+    #[test]
+    fn daemon_in_writable_directory_is_not_launched() {
+        let dir = temp_dir("daemon-writable-dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+        let binary = dir.join("swhkd");
+        write_executable(&binary, 0o4755);
+
+        assert!(!super::binary_is_safe_to_launch_with_owner(
+            &binary,
+            current_uid()
+        ));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn user_owned_daemon_binary_is_not_launched() {
+        let dir = temp_dir("daemon");
+        let binary = dir.join("swhkd");
+        write_executable(&binary, 0o4755);
+
+        assert!(!binary_is_safe_to_launch(&binary));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

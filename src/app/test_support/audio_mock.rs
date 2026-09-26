@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use crate::audio::{EngineError, PlaybackEngine, PlaybackPosition};
 
-/// One `play` dispatch, captured verbatim: sound, volume, loudness metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayCall {
     pub sound_id: String,
@@ -16,7 +15,7 @@ pub struct PlayCall {
 #[derive(Default)]
 struct Recorder {
     plays: Vec<PlayCall>,
-    /// Active (and finished) playbacks keyed by the play id `play` handed out.
+
     positions: HashMap<String, PlaybackPosition>,
     stopped_sounds: Vec<String>,
     seeks: Vec<(String, u64)>,
@@ -34,8 +33,6 @@ impl FakeAudioPlayer {
             recorder: Mutex::new(Recorder::default()),
         }
     }
-
-    // assertion / inspection helpers
 
     pub fn play_calls(&self) -> Vec<PlayCall> {
         self.recorder.lock().plays.clone()
@@ -111,6 +108,11 @@ impl PlaybackEngine for FakeAudioPlayer {
         Ok(())
     }
 
+    fn stop_playback(&self, play_id: &str) -> Result<(), EngineError> {
+        self.recorder.lock().positions.remove(play_id);
+        Ok(())
+    }
+
     fn stop_all(&self) {
         let mut rec = self.recorder.lock();
         rec.stop_all_calls += 1;
@@ -141,6 +143,13 @@ impl PlaybackEngine for FakeAudioPlayer {
                 position.paused = false;
             }
         }
+    }
+
+    fn set_playback_paused(&self, play_id: &str, paused: bool) -> Result<(), EngineError> {
+        if let Some(position) = self.recorder.lock().positions.get_mut(play_id) {
+            position.paused = paused;
+        }
+        Ok(())
     }
 
     fn get_playing(&self) -> Vec<String> {

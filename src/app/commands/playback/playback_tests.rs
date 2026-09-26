@@ -117,7 +117,6 @@ mod dispatch {
         )
     }
 
-    /// A library holding `sounds`, each already bound to `chord`.
     fn library_with_shared_chord(
         dir: &std::path::Path,
         sounds: &[Sound],
@@ -230,6 +229,229 @@ mod dispatch {
             .map(|call| call.sound_id)
             .collect();
         assert_eq!(played, [first_id, second_id]);
+    }
+
+    #[test]
+    fn a_shared_chord_skips_a_member_that_is_already_playing() {
+        let (first, dir, _first_path) = sound_on_disk("First");
+        let (second, _second_dir, second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        fake.play(&second_id, &second_path, 1.0, None, None)
+            .expect("seed a playing voice");
+        let baseline = fake.play_calls().len();
+
+        let press = press(true, crate::config::GroupMode::Next);
+        press
+            .cursor
+            .lock()
+            .insert(first_id.clone(), first_id.clone());
+        super::super::play_sound_from_library(
+            &first_id,
+            &super::super::SoundLookup::HotkeyBinding(press),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("the press resolves to an eligible member");
+
+        let played: Vec<String> = fake
+            .play_calls()
+            .into_iter()
+            .skip(baseline)
+            .map(|call| call.sound_id)
+            .collect();
+        assert_eq!(
+            played,
+            [first_id.clone()],
+            "an already-playing member must be skipped, not restarted"
+        );
+    }
+
+    #[test]
+    fn a_single_bound_hotkey_does_not_restart_its_playing_sound() {
+        let (sound, dir, path) = sound_on_disk("Only");
+        let sound_id = sound.id.clone();
+        let store = library_with_shared_chord(&dir.0, std::slice::from_ref(&sound), "Ctrl+KeyB");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        fake.play(&sound_id, &path, 1.0, None, None)
+            .expect("seed a playing voice");
+        let baseline = fake.play_calls().len();
+
+        let result = super::super::play_sound_from_library(
+            &sound_id,
+            &super::super::SoundLookup::HotkeyBinding(press(false, crate::config::GroupMode::Same)),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        );
+
+        assert_eq!(
+            fake.play_calls().len(),
+            baseline,
+            "a single-bound hotkey must not restart its own playing sound"
+        );
+        assert!(
+            matches!(result, Err(CommandError::HotkeyNoOp)),
+            "the quiet no-op must be reported as such, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_shared_chord_alternates_instead_of_restarting_the_long_sound() {
+        let (short, dir, _short_path) = sound_on_disk("Short");
+        let (long, _long_dir, _long_path) = sound_on_disk("Long");
+        let short_id = short.id.clone();
+        let long_id = long.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[short, long], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        let context =
+            super::super::SoundLookup::HotkeyBinding(press(true, crate::config::GroupMode::Next));
+        let play = || {
+            super::super::play_sound_from_library(
+                &short_id,
+                &context,
+                &store,
+                fake.clone() as Arc<dyn PlaybackEngine>,
+            )
+        };
+        let played = || {
+            fake.play_calls()
+                .iter()
+                .map(|call| call.sound_id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        play().expect("the first press plays");
+        assert_eq!(played(), [short_id.clone()]);
+
+        fake.stop_sound(&short_id).expect("the short sound ends");
+        play().expect("the second press plays");
+        assert_eq!(played(), [short_id.clone(), long_id.clone()]);
+
+        play().expect("the third press plays");
+        assert_eq!(
+            played(),
+            [short_id.clone(), long_id.clone(), short_id.clone()]
+        );
+
+        fake.stop_sound(&short_id)
+            .expect("the short sound ends again");
+        play().expect("the fourth press plays");
+        assert_eq!(
+            played(),
+            [short_id.clone(), long_id, short_id.clone(), short_id],
+            "the long sound must not be started a second time"
+        );
+    }
+
+    #[test]
+    fn a_shared_chord_does_nothing_while_every_member_is_playing() {
+        let (first, dir, first_path) = sound_on_disk("First");
+        let (second, _second_dir, second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        fake.play(&first_id, &first_path, 1.0, None, None)
+            .expect("seed");
+        fake.play(&second_id, &second_path, 1.0, None, None)
+            .expect("seed");
+        let baseline = fake.play_calls().len();
+
+        let press = press(true, crate::config::GroupMode::Next);
+        let cursor = Arc::clone(&press.cursor);
+        cursor.lock().insert(first_id.clone(), first_id.clone());
+        let result = super::super::play_sound_from_library(
+            &first_id,
+            &super::super::SoundLookup::HotkeyBinding(press),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        );
+
+        assert_eq!(
+            fake.play_calls().len(),
+            baseline,
+            "an all-playing group must not start anything"
+        );
+        assert!(
+            matches!(result, Err(CommandError::HotkeyNoOp)),
+            "the no-op must be quiet, got {result:?}"
+        );
+        assert_eq!(
+            cursor.lock().get(&first_id).cloned(),
+            Some(first_id),
+            "a no-selection must not move the rotation cursor"
+        );
+    }
+
+    #[test]
+    fn a_member_with_two_live_voices_is_still_skipped() {
+        let (first, dir, first_path) = sound_on_disk("First");
+        let (second, _second_dir, _second_path) = sound_on_disk("Second");
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+        let store = library_with_shared_chord(&dir.0, &[first, second], "Ctrl+KeyA");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        fake.play(&first_id, &first_path, 1.0, None, None)
+            .expect("seed a first voice");
+        fake.play(&first_id, &first_path, 1.0, None, None)
+            .expect("seed a second voice");
+        assert_eq!(
+            fake.get_playing().len(),
+            2,
+            "the mock reports one entry per live voice"
+        );
+        let baseline = fake.play_calls().len();
+
+        super::super::play_sound_from_library(
+            &first_id,
+            &super::super::SoundLookup::HotkeyBinding(press(true, crate::config::GroupMode::Same)),
+            &store,
+            fake.clone() as Arc<dyn PlaybackEngine>,
+        )
+        .expect("the other member is eligible");
+
+        let played: Vec<String> = fake
+            .play_calls()
+            .into_iter()
+            .skip(baseline)
+            .map(|call| call.sound_id)
+            .collect();
+        assert_eq!(played, [second_id], "any live voice excludes the sound");
+    }
+
+    #[test]
+    fn a_direct_play_still_overlaps_its_own_sound() {
+        let (sound, dir, path) = sound_on_disk("Direct");
+        let sound_id = sound.id.clone();
+        let store = library_with_shared_chord(&dir.0, std::slice::from_ref(&sound), "Ctrl+KeyD");
+        let fake = Arc::new(FakeAudioPlayer::new());
+
+        fake.play(&sound_id, &path, 1.0, None, None)
+            .expect("seed a live voice");
+        let baseline = fake.play_calls().len();
+
+        for _ in 0..2 {
+            super::super::play_sound_from_library(
+                &sound_id,
+                &super::super::SoundLookup::ById,
+                &store,
+                fake.clone() as Arc<dyn PlaybackEngine>,
+            )
+            .expect("a direct play is never filtered");
+        }
+
+        assert_eq!(
+            fake.play_calls().len(),
+            baseline + 2,
+            "direct playback keeps full concurrent semantics"
+        );
     }
 
     #[test]
@@ -349,7 +571,7 @@ mod dispatch {
     }
 
     #[test]
-    fn dispatches_play_with_resolved_volume_after_stopping_everything() {
+    fn dispatches_play_with_resolved_volume_without_stopping_anything() {
         let (mut sound, _dir, path) = sound_on_disk("Airhorn");
         sound.volume = 50;
         let sound_id = sound.id.clone();
@@ -363,10 +585,11 @@ mod dispatch {
         let calls = fake.play_calls();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].path, path);
-        // 50% sound volume must reach the engine as a 0.5 base gain.
+
         assert_eq!(calls[0].base_volume, 0.5);
         assert!(play_id.starts_with("fake-play-"));
-        assert_eq!(fake.stop_all_calls(), 1);
+
+        assert_eq!(fake.stop_all_calls(), 0);
     }
 
     #[test]

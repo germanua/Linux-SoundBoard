@@ -1,8 +1,8 @@
 use crate::config::GroupMode;
-// Reuse the store row instead of copying its fields.
-use crate::library_store::HotkeyGroupMember as GroupMember;
 
-/// The two independent Settings toggles that govern resolution.
+use crate::library_store::HotkeyGroupMember as GroupMember;
+use std::collections::HashSet;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct HotkeyToggles {
     pub tab_hotkeys: bool,
@@ -11,13 +11,12 @@ pub(crate) struct HotkeyToggles {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InertReason {
-    /// The chord has no active bindings at all.
     NoMembers,
-    /// Every binding for this chord belongs to some other tab.
+
     OutOfScope,
-    /// Refuse bindings from mixed scopes.
+
     Ambiguous,
-    /// Several sounds share the chord but "Multiple sounds per hotkey" is off.
+
     MultiSoundDisabled,
 }
 
@@ -39,6 +38,8 @@ impl InertReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Selection {
     Play(usize),
+
+    AllPlaying,
     Inert(InertReason),
 }
 
@@ -49,12 +50,12 @@ pub(crate) fn select_from_group(
     mode: GroupMode,
     last_played: Option<&str>,
     entropy: u64,
+    currently_playing: &HashSet<String>,
 ) -> Selection {
     if members.is_empty() {
         return Selection::Inert(InertReason::NoMembers);
     }
 
-    // Indices into `members`, so the answer addresses the caller's slice.
     let candidates: Vec<usize> = if toggles.tab_hotkeys {
         members
             .iter()
@@ -80,22 +81,41 @@ pub(crate) fn select_from_group(
         return Selection::Inert(InertReason::Ambiguous);
     }
 
-    if candidates.len() == 1 {
-        return Selection::Play(first);
-    }
-    if !toggles.multi_sound {
+    if candidates.len() > 1 && !toggles.multi_sound {
         return Selection::Inert(InertReason::MultiSoundDisabled);
+    }
+
+    let is_playing = |index: usize| currently_playing.contains(members[index].sound_id.as_str());
+    let eligible: Vec<usize> = candidates
+        .iter()
+        .copied()
+        .filter(|&index| !is_playing(index))
+        .collect();
+    if eligible.is_empty() {
+        return Selection::AllPlaying;
+    }
+    if eligible.len() == 1 {
+        return Selection::Play(eligible[0]);
+    }
+
+    if mode == GroupMode::Random {
+        return Selection::Play(eligible[(entropy % eligible.len() as u64) as usize]);
     }
 
     let previous =
         last_played.and_then(|id| candidates.iter().position(|&i| members[i].sound_id == id));
-    let position = match mode {
+    let start = match mode {
         GroupMode::Same => previous.unwrap_or(0),
-        GroupMode::Next => previous.map_or(0, |p| (p + 1) % candidates.len()),
-        GroupMode::Random => (entropy % candidates.len() as u64) as usize,
-    };
+        GroupMode::Next => previous.map_or(0, |position| (position + 1) % candidates.len()),
 
-    Selection::Play(candidates[position])
+        GroupMode::Random => 0,
+    };
+    let chosen = (0..candidates.len())
+        .map(|step| candidates[(start + step) % candidates.len()])
+        .find(|&index| !is_playing(index))
+        .unwrap_or(eligible[0]);
+
+    Selection::Play(chosen)
 }
 
 #[cfg(test)]
@@ -134,10 +154,23 @@ mod tests {
         mode: GroupMode,
         last: Option<&str>,
     ) -> Selection {
-        select_from_group(members, scope, toggles, mode, last, 0)
+        select_with_playing(members, scope, toggles, mode, last, &HashSet::new())
     }
 
-    // Today's behavior must survive unchanged
+    fn select_with_playing(
+        members: &[GroupMember],
+        scope: &str,
+        toggles: HotkeyToggles,
+        mode: GroupMode,
+        last: Option<&str>,
+        playing: &HashSet<String>,
+    ) -> Selection {
+        select_from_group(members, scope, toggles, mode, last, 0, playing)
+    }
+
+    fn playing(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
 
     #[test]
     fn single_unscoped_binding_plays_with_every_toggle_off() {
@@ -164,8 +197,6 @@ mod tests {
             Selection::Inert(InertReason::NoMembers)
         );
     }
-
-    // Toggle A: tab scoping
 
     #[test]
     fn binding_from_another_tab_does_not_fire() {
@@ -220,8 +251,6 @@ mod tests {
             Selection::Inert(InertReason::Ambiguous)
         );
     }
-
-    // Toggle B: several sounds on one chord
 
     #[test]
     fn group_needs_the_multi_sound_toggle() {
@@ -290,11 +319,27 @@ mod tests {
     fn random_picks_within_the_group() {
         let members = [member("a", None), member("b", None), member("c", None)];
         assert_eq!(
-            select_from_group(&members, "general", MULTI, GroupMode::Random, None, 7),
+            select_from_group(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Random,
+                None,
+                7,
+                &HashSet::new()
+            ),
             Selection::Play(1)
         );
         assert_eq!(
-            select_from_group(&members, "general", MULTI, GroupMode::Random, None, 9),
+            select_from_group(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Random,
+                None,
+                9,
+                &HashSet::new()
+            ),
             Selection::Play(0)
         );
     }
@@ -310,8 +355,6 @@ mod tests {
         }
     }
 
-    // Indices refer to the caller's slice, not a filtered copy
-
     #[test]
     fn returned_index_addresses_the_original_slice() {
         let members = [
@@ -321,6 +364,286 @@ mod tests {
         assert_eq!(
             select(&members, "tab-b", TABS, GroupMode::Same, None),
             Selection::Play(1)
+        );
+    }
+
+    #[test]
+    fn a_single_member_that_is_playing_selects_nothing() {
+        let members = [member("a", None)];
+        for mode in [GroupMode::Same, GroupMode::Next, GroupMode::Random] {
+            assert_eq!(
+                select_with_playing(
+                    &members,
+                    "general",
+                    MULTI,
+                    mode,
+                    Some("a"),
+                    &playing(&["a"])
+                ),
+                Selection::AllPlaying,
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_member_becomes_eligible_again_once_it_is_free() {
+        let members = [member("a", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("a"),
+                &playing(&[])
+            ),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn a_playing_member_is_skipped_and_the_other_member_is_chosen() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("a"),
+                &playing(&["a"])
+            ),
+            Selection::Play(1)
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("a"),
+                &playing(&["b"])
+            ),
+            Selection::Play(0)
+        );
+    }
+
+    #[test]
+    fn every_member_playing_selects_nothing() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        for mode in [GroupMode::Same, GroupMode::Next, GroupMode::Random] {
+            assert_eq!(
+                select_with_playing(
+                    &members,
+                    "general",
+                    MULTI,
+                    mode,
+                    Some("b"),
+                    &playing(&["a", "b", "c"])
+                ),
+                Selection::AllPlaying,
+                "{mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_playing_member_cannot_resurrect_a_chord_that_is_otherwise_inert() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                OFF,
+                GroupMode::Same,
+                None,
+                &playing(&["a"])
+            ),
+            Selection::Inert(InertReason::MultiSoundDisabled)
+        );
+        let scoped = [member("a", Some("tab-a"))];
+        assert_eq!(
+            select_with_playing(
+                &scoped,
+                "general",
+                TABS,
+                GroupMode::Same,
+                None,
+                &playing(&["a"])
+            ),
+            Selection::Inert(InertReason::OutOfScope)
+        );
+    }
+
+    #[test]
+    fn next_skips_playing_members_and_wraps_once() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("a"),
+                &playing(&["b"])
+            ),
+            Selection::Play(2)
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("a"),
+                &playing(&["b", "c"])
+            ),
+            Selection::Play(0)
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("a"),
+                &playing(&[])
+            ),
+            Selection::Play(1)
+        );
+    }
+
+    #[test]
+    fn a_skipped_member_becomes_eligible_again_after_it_finishes() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("c"),
+                &playing(&["a"])
+            ),
+            Selection::Play(1),
+            "the walk skips the playing member"
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Next,
+                Some("c"),
+                &playing(&[])
+            ),
+            Selection::Play(0),
+            "once nothing is playing the plain rotation is back"
+        );
+    }
+
+    #[test]
+    fn random_never_picks_a_playing_member() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        let b_playing = playing(&["b"]);
+        for entropy in 0..12u64 {
+            let selection = select_from_group(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Random,
+                None,
+                entropy,
+                &b_playing,
+            );
+            assert!(
+                matches!(selection, Selection::Play(0) | Selection::Play(2)),
+                "entropy {entropy} must not pick the playing member: {selection:?}"
+            );
+        }
+        let only_c = playing(&["a", "b"]);
+        for entropy in 0..6u64 {
+            assert_eq!(
+                select_from_group(
+                    &members,
+                    "general",
+                    MULTI,
+                    GroupMode::Random,
+                    None,
+                    entropy,
+                    &only_c
+                ),
+                Selection::Play(2)
+            );
+        }
+    }
+
+    #[test]
+    fn same_keeps_its_preference_but_never_picks_a_playing_member() {
+        let members = [member("a", None), member("b", None), member("c", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("c"),
+                &playing(&[])
+            ),
+            Selection::Play(2)
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("c"),
+                &playing(&["c"])
+            ),
+            Selection::Play(0),
+            "wrapping to the first eligible member"
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("a"),
+                &playing(&["a"])
+            ),
+            Selection::Play(1)
+        );
+    }
+
+    #[test]
+    fn a_shared_chord_alternates_when_only_one_voice_can_be_live() {
+        let members = [member("a", None), member("b", None)];
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("a"),
+                &playing(&["a"])
+            ),
+            Selection::Play(1),
+            "A sounds, so B is chosen"
+        );
+        assert_eq!(
+            select_with_playing(
+                &members,
+                "general",
+                MULTI,
+                GroupMode::Same,
+                Some("b"),
+                &playing(&["b"])
+            ),
+            Selection::Play(0),
+            "B sounds, so A is chosen"
         );
     }
 }

@@ -1,15 +1,6 @@
 post_install() {
   echo "==> Linux Soundboard supports native Wayland and X11 sessions."
-  if [ -f /usr/bin/swhkd ]; then
-    chmod u+s /usr/bin/swhkd || true
-    echo "==> Configured swhkd for native Wayland hotkeys."
-  else
-    echo "==> Install swhkd-git from the AUR or use Linux Soundboard's Install swhkd button for native Wayland hotkeys."
-  fi
-
-  if [ -f /usr/bin/swhks ]; then
-    chmod +x /usr/bin/swhks || true
-  fi
+  echo "==> Use Linux Soundboard's Install swhkd button for the pinned managed Wayland daemon."
 
   if command -v systemctl >/dev/null 2>&1; then
     systemctl --global disable linux-soundboard-engine.service >/dev/null 2>&1 || true

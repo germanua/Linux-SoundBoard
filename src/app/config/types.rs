@@ -177,15 +177,13 @@ impl FromStr for PlayMode {
 }
 impl_string_serde_enum!(PlayMode);
 
-/// Picks a member for a shared hotkey.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum GroupMode {
-    /// Replay whichever member was played last.
     #[default]
     Same,
-    /// Advance through the members in order, one per press.
+
     Next,
-    /// Pick a member at random.
+
     Random,
 }
 
@@ -228,12 +226,21 @@ pub enum ListStyle {
     Card,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DefaultSourceMode {
-    #[default]
     Default,
-    /// Leave the system default source alone.
+
     Manual,
+}
+
+impl Default for DefaultSourceMode {
+    fn default() -> Self {
+        if crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM {
+            Self::Default
+        } else {
+            Self::Manual
+        }
+    }
 }
 
 impl DefaultSourceMode {
@@ -345,7 +352,11 @@ impl FromStr for LoudnessAnalysisState {
 impl_string_serde_enum!(LoudnessAnalysisState);
 
 fn default_default_source_mode() -> DefaultSourceMode {
-    DefaultSourceMode::Default
+    if crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM {
+        DefaultSourceMode::Default
+    } else {
+        DefaultSourceMode::Manual
+    }
 }
 
 impl ListStyle {
@@ -633,7 +644,7 @@ pub struct Settings {
     pub default_source_mode: DefaultSourceMode,
     #[serde(default)]
     pub mic_latency_profile: MicLatencyProfile,
-    /// Case-insensitive app/process substrings excluded from autoroute.
+
     #[serde(default)]
     pub excluded_apps: Vec<String>,
     #[serde(default)]
@@ -766,7 +777,6 @@ impl Settings {
         }
         self.auto_gain_target_lufs = self.auto_gain_target_lufs.clamp(-24.0, 0.0);
         self.loudness_boost_db = normalize_loudness_boost_db(self.loudness_boost_db);
-        self.allow_multiple_playbacks = false;
     }
 }
 
@@ -780,7 +790,7 @@ impl Default for Settings {
             allow_multiple_playbacks: false,
             mic_passthrough: true,
             mic_source: None,
-            default_source_mode: DefaultSourceMode::Default,
+            default_source_mode: default_default_source_mode(),
             mic_latency_profile: MicLatencyProfile::Balanced,
             excluded_apps: Vec::new(),
             skip_delete_confirm: false,

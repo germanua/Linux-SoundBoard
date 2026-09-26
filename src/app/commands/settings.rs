@@ -304,14 +304,12 @@ pub fn set_tray_enabled(enabled: bool, config: Arc<Mutex<Config>>) -> Result<(),
     })
 }
 
-/// Let the close button hide the window instead of quitting.
 pub fn set_close_to_tray(enabled: bool, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
     with_saved_config(&config, |cfg| {
         cfg.settings.close_to_tray = enabled;
     })
 }
 
-/// Publish the playing sound to the desktop's media controls.
 pub fn set_mpris_enabled(enabled: bool, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
     with_saved_config(&config, |cfg| {
         cfg.settings.mpris_enabled = enabled;

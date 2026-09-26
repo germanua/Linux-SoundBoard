@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Linux Soundboard installer
-#
-# Detects your distro and installs via the native package manager.
-# Falls back to the tarball installer on unsupported distros.
-# No root required on the fallback path; sudo is needed for package manager paths.
-#
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
-#        curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- uninstall --yes
 
 set -euo pipefail
 
@@ -18,8 +10,15 @@ APP_AUR_LEGACY_PACKAGE="linux-soundboard-git"
 MINISIGN_PUBLIC_KEY="RWTEtl8HnYs8Fg7BOmAXxuC9PUxqlamX5+C0w4FgUUxXGB6DipbZl8tY"
 MINISIGN_BOOTSTRAP_URL="https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
 MINISIGN_BOOTSTRAP_SHA256="9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"
-SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
-SWHKD_UPSTREAM_COMMIT="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
+SWHKD_MANAGED_DIR="/usr/local/libexec/linux-soundboard"
+SWHKD_MANAGED_BIN="$SWHKD_MANAGED_DIR/swhkd"
+SWHKS_MANAGED_BIN="$SWHKD_MANAGED_DIR/swhks"
+SWHKD_MANAGED_MARKER="$SWHKD_MANAGED_DIR/.managed-by-linux-soundboard"
+SWHKD_TRUSTED_DIR="/usr/libexec/linux-soundboard"
+SWHKD_TRUSTED_HELPER="$SWHKD_TRUSTED_DIR/install-swhkd-helper.sh"
+SWHKD_TRUSTED_BUILD_SCRIPT="$SWHKD_TRUSTED_DIR/build-swhkd-locked.sh"
+SWHKD_TRUSTED_PINNED_LOCK="$SWHKD_TRUSTED_DIR/swhkd-Cargo.lock.pinned"
+SWHKD_TRUSTED_MARKER="$SWHKD_TRUSTED_DIR/.managed-by-linux-soundboard"
 ISSUE_URL="https://github.com/$APP_REPO/issues/new"
 
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -28,20 +27,19 @@ INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 
 WORK_DIR="$(mktemp -d)"
 LATEST_RELEASE_JSON=""
-# Install method for this run: auto | appimage | tarball | native.
 INSTALL_METHOD="auto"
 RELEASE_LIST_JSON=""
 NATIVE_PACKAGE_PRESENT=0
 APT_UPDATED=0
 ZYPPER_REFRESHED=0
+VERIFIED_ASSET_SHA256=""
+DOWNLOADED_APPIMAGE=""
 
 trap 'rm -rf "$WORK_DIR"' EXIT
-
 log()     { printf '[%s] %s\n' "$1" "$2"; }
 info()    { log INFO "$1"; }
 warn()    { log WARN "$1" >&2; }
 fail()    { log ERROR "$1" >&2; exit 1; }
-
 usage() {
     cat <<EOF
 Linux Soundboard installer
@@ -49,8 +47,8 @@ Linux Soundboard installer
 Usage:
   ./install.sh                 open the menu (needs a terminal)
   ./install.sh menu
-  ./install.sh install [--method auto|appimage|tarball|native]
-  ./install.sh install --version vX.Y.Z [--method auto|appimage|tarball]
+  ./install.sh install [--method auto|appimage]
+  ./install.sh install --version vX.Y.Z [--method auto|appimage]
   ./install.sh versions
   ./install.sh verify FILE [--version vX.Y.Z]
   ./install.sh repair [binary]
@@ -64,11 +62,10 @@ Usage:
 With no arguments and a terminal available, the menu opens; piped with no
 arguments it installs the newest version, which keeps scripted use working.
 
-install            detects your distro and installs via a native package when available
---method           auto (default) keeps that detection; appimage and tarball install into
-                   ~/.local without root; native forces the distro package
-install --version  installs that published release into ~/.local, from its tarball or,
-                   with --method appimage, from its AppImage
+install            installs the current signed AppImage into ~/.local
+--method           auto (default) and appimage both use the AppImage for current releases
+                   (tarball/native remain accepted only for historical compatibility)
+install --version  installs that published release from its AppImage by default
 verify             verifies a manually downloaded release file without installing it
 fix                repairs the install step by step and prints what failed
 report             writes a bug report file with system state, app state, and a blank to fill in
@@ -76,8 +73,6 @@ remove/uninstall   removes per-user files and the native package unless --keep-p
                    showing what changed in your audio setup before offering to restore it
 EOF
 }
-
-# ── Download helpers ──────────────────────────────────────────────────────────
 
 if command -v curl >/dev/null 2>&1; then
     fetch()        { curl -fsSL "$1" -o "$2"; }
@@ -90,11 +85,14 @@ elif command -v wget >/dev/null 2>&1; then
 else
     fail "curl or wget is required."
 fi
-
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is required${2:+ $2}, and it is not installed."
 }
-
+normalize_release_version() {
+    local version="${1#v}"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid release version: $1"
+    printf '%s\n' "$version"
+}
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | awk '{print $1}'
@@ -106,7 +104,6 @@ sha256_of() {
         return 1
     fi
 }
-
 minisign_verifier() {
     if command -v minisign >/dev/null 2>&1; then
         command -v minisign
@@ -142,9 +139,6 @@ minisign_verifier() {
     chmod 700 "$verifier"
     printf '%s\n' "$verifier"
 }
-
-# Releases publish a signed SHA256SUMS.txt covering every asset. Verify the
-# signature before trusting any hash from the manifest.
 verify_download() {
     local file=$1
     local tag=${2:-}
@@ -197,9 +191,9 @@ verify_download() {
     [[ "${actual,,}" == "${expected,,}" ]] \
         || fail "Checksum mismatch for $(basename "$file"). Expected $expected, got $actual. Download aborted."
 
+    VERIFIED_ASSET_SHA256="${expected,,}"
     info "Signature and checksum verified."
 }
-
 verify_local_download() {
     local file=""
     local tag=""
@@ -228,7 +222,6 @@ verify_local_download() {
     verify_download "$file" "$tag"
     info "Verified $(basename "$file")."
 }
-
 get_release_json() {
     if [[ -z "$LATEST_RELEASE_JSON" ]]; then
         LATEST_RELEASE_JSON="$(fetch_stdout "https://api.github.com/repos/$APP_REPO/releases/latest")" \
@@ -236,9 +229,6 @@ get_release_json() {
     fi
     printf '%s' "$LATEST_RELEASE_JSON"
 }
-
-# The API is unauthenticated here, so it allows 60 requests an hour. Each list
-# and each tag lookup is cached for the run.
 get_release_list_json() {
     if [[ -z "$RELEASE_LIST_JSON" ]]; then
         RELEASE_LIST_JSON="$(fetch_stdout "https://api.github.com/repos/$APP_REPO/releases?per_page=30")" \
@@ -246,45 +236,34 @@ get_release_list_json() {
     fi
     printf '%s' "$RELEASE_LIST_JSON"
 }
-
 release_json_for_tag() {
     fetch_stdout "https://api.github.com/repos/$APP_REPO/releases/tags/$1" \
         || fail "No release found for $1. See https://github.com/$APP_REPO/releases"
 }
-
 list_release_tags() {
     get_release_list_json \
         | grep -oE '"tag_name":[[:space:]]*"[^"]+"' \
         | sed -E 's/.*"([^"]+)"/\1/'
 }
-
 release_tag_in() {
     grep -oE '"tag_name":[[:space:]]*"[^"]+"' \
         | head -1 | sed -E 's/.*"([^"]+)"/\1/'
 }
-
-# Reads asset URLs out of release JSON on stdin so the same matcher serves the
-# latest release and a pinned tag.
 find_asset_url_in() {
     grep -oE '"browser_download_url":[[:space:]]*"[^"]+"' \
         | sed -E 's/.*"([^"]+)"/\1/' \
         | grep -E "$1" | head -1
 }
-
 find_asset_url() {
     get_release_json | find_asset_url_in "$1"
 }
-
 installed_version() {
     [[ -r "$INSTALL_VERSION_FILE" ]] || return 1
     head -n 1 "$INSTALL_VERSION_FILE"
 }
-
-# ── Distro detection ──────────────────────────────────────────────────────────
-
 detect_distro() {
     [[ -r /etc/os-release ]] || fail "/etc/os-release not found; cannot detect distro."
-    # shellcheck disable=SC1091
+
     source /etc/os-release
     DISTRO_NAME="${PRETTY_NAME:-${ID:-unknown}}"
     DISTRO_FAMILY="other"
@@ -305,31 +284,32 @@ detect_distro() {
         esac
     done
 }
-
 detect_session() {
     SESSION_TYPE="${XDG_SESSION_TYPE:-}"
     [[ -z "$SESSION_TYPE" && -n "${WAYLAND_DISPLAY:-}" ]] && SESSION_TYPE="wayland"
     [[ -z "$SESSION_TYPE" && -n "${DISPLAY:-}" ]]         && SESSION_TYPE="x11"
     SESSION_TYPE="${SESSION_TYPE:-unknown}"
 }
-
 is_wayland() { [[ "${SESSION_TYPE:-}" == "wayland" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }
-
-# ── Package manager helpers ───────────────────────────────────────────────────
-
 apt_install() {
     if (( APT_UPDATED == 0 )); then as_root apt-get update; APT_UPDATED=1; fi
     as_root apt-get install -y "$@"
 }
-
-pacman_install()  { as_root pacman -S --needed --noconfirm "$@"; }
+arch_require_packages() {
+    local missing=() pkg
+    command -v pacman >/dev/null 2>&1 || fail "pacman is required on Arch-family systems."
+    for pkg in "$@"; do
+        pacman -Qq "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+    done
+    if ((${#missing[@]} > 0)); then
+        fail "Arch does not support partial upgrades. Run: sudo pacman -Syu --needed ${missing[*]}; then retry."
+    fi
+}
 dnf_install()     { as_root dnf install -y "$@"; }
-
 zypper_refresh() {
     if (( ZYPPER_REFRESHED == 0 )); then as_root zypper --non-interactive refresh; ZYPPER_REFRESHED=1; fi
 }
 zypper_install() { zypper_refresh; as_root zypper --non-interactive install --no-recommends "$@"; }
-
 package_available() {
     case "$DISTRO_FAMILY" in
         debian)   apt-cache show "$1" >/dev/null 2>&1 ;;
@@ -337,7 +317,6 @@ package_available() {
         *)        return 1 ;;
     esac
 }
-
 pick_pkg() {
     local pkg
     for pkg in "$@"; do
@@ -345,10 +324,6 @@ pick_pkg() {
     done
     return 1
 }
-
-# ── App installation ──────────────────────────────────────────────────────────
-
-# Download the release tarball into WORK_DIR and return the extracted bundle path.
 download_and_extract_tarball() {
     local tag=${1:-}
     local arch; arch="$(uname -m)"
@@ -374,9 +349,8 @@ download_and_extract_tarball() {
 
     find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -1
 }
-
 run_user_installer() {
-    local mode=$1   # install | repair | remove | status
+    local mode=$1
     local bundle_dir=$2
     shift 2
 
@@ -384,7 +358,6 @@ run_user_installer() {
     [[ -x "$installer" ]] || chmod +x "$installer"
     "$installer" "$mode" "$@"
 }
-
 local_user_installer() {
     local script_path="${BASH_SOURCE[0]:-$0}"
     local script_dir
@@ -398,7 +371,8 @@ local_user_installer() {
 
     for candidate in \
         "$script_dir/packaging/linux/install-user.sh" \
-        "$script_dir/install-user.sh"; do
+        "$script_dir/install-user.sh" \
+        "$INSTALL_ROOT/install-user.sh"; do
         if [[ -f "$candidate" ]]; then
             printf '%s\n' "$candidate"
             return 0
@@ -407,12 +381,10 @@ local_user_installer() {
 
     return 1
 }
-
 run_user_installer_from_available_source() {
     local mode=$1
     shift
     local installer
-    local bundle_dir
 
     if installer="$(local_user_installer)"; then
         [[ -x "$installer" ]] || chmod +x "$installer"
@@ -420,18 +392,25 @@ run_user_installer_from_available_source() {
         return
     fi
 
-    bundle_dir="$(download_and_extract_tarball)"
-    run_user_installer "$mode" "$bundle_dir" "$@"
+    local image extract_dir
+    download_appimage "$(installed_version || true)" >/dev/null
+    image="$DOWNLOADED_APPIMAGE"
+    extract_dir="$WORK_DIR/lifecycle-appimage"
+    mkdir -p "$extract_dir"
+    ( cd "$extract_dir" && "$image" --appimage-extract >/dev/null ) \
+        || fail "Could not unpack the verified AppImage for $mode."
+    installer="$extract_dir/squashfs-root/usr/libexec/$APP_BINARY/installer/install-user.sh"
+    [[ -f "$installer" ]] || fail "The verified AppImage carries no lifecycle installer."
+    [[ -x "$installer" ]] || chmod +x "$installer"
+    "$installer" "$mode" "$@"
 }
-
 install_arch() {
     info "Installing from AUR: $APP_AUR_PACKAGE"
-    pacman_install base-devel git
+    arch_require_packages base-devel git
 
     if command -v yay  >/dev/null 2>&1; then yay  -S --needed --noconfirm --useask "$APP_AUR_PACKAGE"; return; fi
     if command -v paru >/dev/null 2>&1; then paru -S --needed --noconfirm --useask "$APP_AUR_PACKAGE"; return; fi
 
-    # No AUR helper — build manually
     local pkg_dir="$WORK_DIR/$APP_AUR_PACKAGE"
     local package_file
     git clone --depth 1 "https://aur.archlinux.org/${APP_AUR_PACKAGE}.git" "$pkg_dir"
@@ -440,7 +419,6 @@ install_arch() {
     [[ -f "$package_file" ]] || fail "AUR build did not produce the expected package."
     as_root pacman -U --needed --noconfirm --ask=4 "$package_file"
 }
-
 install_debian() {
     local url; url="$(find_asset_url "\\.deb\$" || true)"
     if [[ -z "$url" ]]; then
@@ -455,15 +433,9 @@ install_debian() {
     verify_download "$file"
     apt_install "$file"
 
-    # The package owns the binary, desktop entry, icons, and the systemd user
-    # unit. Only enable the engine service for the installing account; do not
-    # redeploy those files into ~/.local, which would shadow the package and run
-    # a stale binary after a package upgrade. The package's postinst already
-    # enables the service for new logins, so a failure here is non-fatal.
     run_user_installer_from_available_source setup-user \
         || warn "Could not configure the user service; it will start on next login."
 }
-
 install_fedora() {
     local url; url="$(find_asset_url "\\.rpm\$" || true)"
     if [[ -z "$url" ]]; then
@@ -478,20 +450,9 @@ install_fedora() {
     verify_download "$file"
     dnf_install "$file"
 
-    # The package owns the binary, desktop entry, icons, and the systemd user
-    # unit. Only enable the engine service for the installing account; do not
-    # redeploy those files into ~/.local, which would shadow the package and run
-    # a stale binary after a package upgrade. The package's postinst already
-    # enables the service for new logins, so a failure here is non-fatal.
     run_user_installer_from_available_source setup-user \
         || warn "Could not configure the user service; it will start on next login."
 }
-
-# The tarball ships only the binary, so GTK, libadwaita, PulseAudio, Opus, X11,
-# and the audio stack have to come from the distro — the same set the .deb, .rpm,
-# and AUR packages declare. Checked by soname first: a desktop system normally
-# has all of it, and this path should not ask for a password when it does not
-# have to.
 missing_runtime_dependencies() {
     local cache=""
     local cmd
@@ -516,7 +477,6 @@ missing_runtime_dependencies() {
     ((${#missing[@]} > 0)) && printf '%s\n' "${missing[@]}"
     return 0
 }
-
 runtime_packages() {
     local polkit
     case "$DISTRO_FAMILY" in
@@ -536,7 +496,6 @@ runtime_packages() {
             ;;
     esac
 }
-
 ensure_runtime_dependencies() {
     local missing=()
     local pkgs=()
@@ -560,7 +519,7 @@ ensure_runtime_dependencies() {
     fi
 
     case "$DISTRO_FAMILY" in
-        arch)     pacman_install "${pkgs[@]}" ;;
+        arch)     arch_require_packages "${pkgs[@]}" ;;
         debian)   apt_install    "${pkgs[@]}" ;;
         fedora)   dnf_install    "${pkgs[@]}" ;;
         opensuse) zypper_install "${pkgs[@]}" ;;
@@ -569,7 +528,6 @@ ensure_runtime_dependencies() {
     mapfile -t missing < <(missing_runtime_dependencies)
     ((${#missing[@]} == 0)) || fail "Dependencies are still missing after installation: ${missing[*]}"
 }
-
 install_tarball() {
     local bundle_dir
 
@@ -577,8 +535,6 @@ install_tarball() {
     bundle_dir="$(download_and_extract_tarball)"
     run_user_installer install "$bundle_dir"
 }
-
-# Download the release AppImage into WORK_DIR and return its path.
 download_appimage() {
     local tag=${1:-}
     local arch; arch="$(uname -m)"
@@ -597,12 +553,77 @@ download_appimage() {
     fetch_progress "$url" "$image"
     verify_download "$image" "$tag" >&2
     chmod +x "$image"
+    DOWNLOADED_APPIMAGE="$image"
 
     printf '%s\n' "$image"
 }
-
-# The installed AppImage mounts itself on every launch, so FUSE has to be present
-# on the machine afterwards — unpacking it here does not need it.
+appimage_glibc_version() {
+    local value
+    value="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+    value="${value#glibc }"
+    [[ "$value" =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+    printf '%s.%s
+' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+ensure_appimage_host_compatibility() {
+    local arch version major minor
+    arch="$(uname -m)"
+    case "$arch" in
+        x86_64|amd64) ;;
+        *) fail "Current AppImage releases support x86_64 only; this system is $arch." ;;
+    esac
+    version="$(appimage_glibc_version || true)"
+    [[ -n "$version" ]] || fail "Current AppImage releases require glibc 2.39 or newer."
+    major="${version%%.*}"
+    minor="${version#*.}"
+    if (( major < 2 || (major == 2 && minor < 39) )); then
+        fail "Current AppImage releases require glibc 2.39 or newer; this system has glibc $version."
+    fi
+}
+appimage_library_available() {
+    local library=$1 cache=""
+    if command -v ldconfig >/dev/null 2>&1; then
+        cache="$(ldconfig -p 2>/dev/null || true)"
+    elif [[ -x /sbin/ldconfig ]]; then
+        cache="$(/sbin/ldconfig -p 2>/dev/null || true)"
+    fi
+    [[ -n "$cache" ]] && grep -qF "$library" <<<"$cache"
+}
+missing_appimage_host_libraries() {
+    local library
+    for library in libfribidi.so.0 libharfbuzz.so.0 libfontconfig.so.1 libwayland-client.so.0 libfreetype.so.6 libX11-xcb.so.1 libX11.so.6 libpipewire-0.3.so.0 libcom_err.so.2 libgpg-error.so.0; do
+        appimage_library_available "$library" || printf '%s\n' "$library"
+    done
+}
+appimage_host_packages() {
+    case "$DISTRO_FAMILY" in
+        arch) printf '%s\n' fribidi harfbuzz fontconfig wayland freetype2 libx11 pipewire e2fsprogs libgpg-error ;;
+        debian) printf '%s\n' libfribidi0 libharfbuzz0b libfontconfig1 libwayland-client0 libfreetype6 libx11-xcb1 libx11-6 libpipewire-0.3-0 libcom-err2 libgpg-error0 ;;
+        fedora) printf '%s\n' fribidi harfbuzz fontconfig libwayland-client freetype libX11-xcb libX11 pipewire-libs libcom_err libgpg-error ;;
+        opensuse) printf '%s\n' libfribidi0 libharfbuzz0 libfontconfig1 libwayland-client0 libfreetype6 libX11-xcb1 libX11-6 libpipewire-0_3-0 libcom_err2 libgpg-error0 ;;
+    esac
+}
+ensure_appimage_host_libraries() {
+    local missing=() pkgs=()
+    mapfile -t missing < <(missing_appimage_host_libraries)
+    ((${#missing[@]} == 0)) && return 0
+    mapfile -t pkgs < <(appimage_host_packages)
+    ((${#pkgs[@]} > 0)) || fail "Current AppImage needs host libraries ${missing[*]}; install your distribution's X11 and PipeWire runtime libraries."
+    if [[ ! -t 0 ]]; then
+        fail "Current AppImage needs host libraries ${missing[*]}. Install these packages and retry: ${pkgs[*]}"
+    fi
+    if ! confirm "Install required AppImage host libraries now (${pkgs[*]})?"; then
+        fail "Current AppImage needs host libraries ${missing[*]}. Install these packages and retry: ${pkgs[*]}"
+    fi
+    case "$DISTRO_FAMILY" in
+        arch) arch_require_packages "${pkgs[@]}" ;;
+        debian) apt_install "${pkgs[@]}" ;;
+        fedora) dnf_install "${pkgs[@]}" ;;
+        opensuse) zypper_install "${pkgs[@]}" ;;
+    esac
+    mapfile -t missing < <(missing_appimage_host_libraries)
+    ((${#missing[@]} == 0)) || fail "Required AppImage host libraries are still missing: ${missing[*]}"
+}
 ensure_fuse_for_appimage() {
     command -v fusermount3 >/dev/null 2>&1 && return 0
     command -v fusermount  >/dev/null 2>&1 && return 0
@@ -618,7 +639,7 @@ ensure_fuse_for_appimage() {
 
     if [[ -t 0 ]] && confirm "Install ${pkgs[*]} now?"; then
         case "$DISTRO_FAMILY" in
-            arch)     pacman_install "${pkgs[@]}" ;;
+            arch)     arch_require_packages "${pkgs[@]}" ;;
             debian)   apt_install    "${pkgs[@]}" ;;
             fedora)   dnf_install    "${pkgs[@]}" ;;
             opensuse) zypper_install "${pkgs[@]}" ;;
@@ -627,11 +648,6 @@ ensure_fuse_for_appimage() {
         warn "Continuing without FUSE. Install ${pkgs[*]} before launching the app."
     fi
 }
-
-# A type-2 AppImage mounts itself with FUSE 2: it needs both the library and the
-# fusermount helper, which several distros ship in separate packages. Ubuntu
-# 24.04 also renamed libfuse2 for the 64-bit time_t transition, so ask the
-# package manager which names it actually carries.
 fuse_packages() {
     case "$DISTRO_FAMILY" in
         arch)
@@ -650,17 +666,77 @@ fuse_packages() {
             ;;
     esac
 }
+root_sha256_of() {
+    local output
+    if output="$(as_root sha256sum "$1" 2>/dev/null)"; then
+        awk '{print $1}' <<<"$output"
+    elif output="$(as_root shasum -a 256 "$1" 2>/dev/null)"; then
+        awk '{print $1}' <<<"$output"
+    elif output="$(as_root openssl dgst -sha256 "$1" 2>/dev/null)"; then
+        awk '{print $NF}' <<<"$output"
+    else
+        return 1
+    fi
+}
 
-# The AppImage carries the same install-user.sh that its own "Install for
-# persistent virtual mic" button runs, so unpack it and hand it the image.
+provision_trusted_swhkd_helper_from_verified_appimage() (
+    set -euo pipefail
+    local image=$1
+    local expected=${2:-}
+    local root_dir root_image root_hash source_dir
+    [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] \
+        || fail "The verified release checksum is unavailable; refusing privileged helper provisioning."
+    root_dir="$(as_root mktemp -d /var/tmp/linux-soundboard-provision.XXXXXX)"
+    trap 'as_root rm -rf -- "$root_dir"' EXIT
+    root_image="$root_dir/release.AppImage"
+
+    as_root install -o root -g root -m700 "$image" "$root_image"
+    root_hash="$(root_sha256_of "$root_image")" \
+        || fail "No root-side SHA-256 tool is available."
+    [[ "${root_hash,,}" == "$expected" ]] \
+        || fail "The root-owned AppImage copy no longer matches the signed release checksum."
+
+    as_root env -C "$root_dir" ./release.AppImage --appimage-extract >/dev/null
+    source_dir="$root_dir/squashfs-root/usr/libexec/$APP_BINARY"
+    for file in install-swhkd-helper.sh build-swhkd-locked.sh swhkd-Cargo.lock.pinned; do
+        as_root test -f "$source_dir/$file" || fail "Verified AppImage is missing $file."
+        as_root test ! -L "$source_dir/$file" || fail "Verified AppImage contains a symlinked $file."
+    done
+
+    local trusted_parent trusted_grandparent
+    trusted_parent="$(dirname -- "$SWHKD_TRUSTED_DIR")"
+    trusted_grandparent="$(dirname -- "$trusted_parent")"
+    if [[ -e "$trusted_parent" || -L "$trusted_parent" ]]; then
+        swhkd_root_owned_directory_is_safe "$trusted_parent" \
+            || fail "$trusted_parent is not a safe root-owned directory."
+    else
+        swhkd_root_owned_directory_is_safe "$trusted_grandparent" \
+            || fail "$trusted_grandparent is not a safe root-owned directory."
+        as_root install -d -o root -g root -m755 "$trusted_parent"
+    fi
+
+    as_root install -d -o root -g root -m755 "$SWHKD_TRUSTED_DIR"
+    swhkd_directory_is_privileged_safe "$SWHKD_TRUSTED_DIR" \
+        || fail "$SWHKD_TRUSTED_DIR is not a safe privileged directory."
+    as_root install -o root -g root -m755 "$source_dir/install-swhkd-helper.sh" "$SWHKD_TRUSTED_HELPER"
+    as_root install -o root -g root -m755 "$source_dir/build-swhkd-locked.sh" "$SWHKD_TRUSTED_BUILD_SCRIPT"
+    as_root install -o root -g root -m644 "$source_dir/swhkd-Cargo.lock.pinned" "$SWHKD_TRUSTED_PINNED_LOCK"
+    printf 'managed-by: linux-soundboard\n' | as_root tee "$SWHKD_TRUSTED_MARKER" >/dev/null
+    as_root chmod 644 "$SWHKD_TRUSTED_MARKER"
+    trusted_swhkd_bundle_is_safe \
+        || fail "The provisioned privileged helper bundle failed validation."
+)
 install_appimage() {
     local tag=${1:-}
     local image
     local extract_dir="$WORK_DIR/appimage"
-    local installer
+    local installer effective_tag prior_version="${LSB_INSTALL_VERSION:-}"
 
+    ensure_appimage_host_compatibility
+    ensure_appimage_host_libraries
     ensure_fuse_for_appimage
-    image="$(download_appimage "$tag")"
+    download_appimage "$tag" >/dev/null
+    image="$DOWNLOADED_APPIMAGE"
 
     mkdir -p "$extract_dir"
     info "Extracting..."
@@ -671,22 +747,30 @@ install_appimage() {
     [[ -f "$installer" ]] || fail "This AppImage carries no bundled installer."
     [[ -x "$installer" ]] || chmod +x "$installer"
 
+    effective_tag="$tag"
+    [[ -n "$effective_tag" ]] || effective_tag="$(get_release_json | release_tag_in || true)"
+    if [[ -n "$effective_tag" ]]; then
+        LSB_INSTALL_VERSION="$(normalize_release_version "$effective_tag")"
+        export LSB_INSTALL_VERSION
+    fi
+
+    if is_wayland; then
+        info "Provisioning the authenticated Wayland hotkey helper..."
+        provision_trusted_swhkd_helper_from_verified_appimage "$image" "$VERIFIED_ASSET_SHA256"
+    fi
+
     "$installer" install "$image"
-}
 
-# Automatic: the distro's native package when the release ships one, and the
-# ~/.local tarball everywhere else. This is what the installer has always done.
+    if [[ -n "$prior_version" ]]; then
+        export LSB_INSTALL_VERSION="$prior_version"
+    else
+        unset LSB_INSTALL_VERSION || true
+    fi
+}
 install_auto() {
-    case "$DISTRO_FAMILY" in
-        arch)    install_arch    ;;
-        debian)  install_debian  ;;
-        fedora)  install_fedora  ;;
-        *)       install_tarball ;;
-    esac
+    warn_if_native_package_shadows || return 0
+    install_appimage
 }
-
-# A ~/.local install sits behind the packaged /usr/bin binary on PATH, so the two
-# would disagree about which build the engine service runs.
 warn_if_native_package_shadows() {
     installed_native_packages >/dev/null 2>&1 || return 0
 
@@ -696,39 +780,59 @@ warn_if_native_package_shadows() {
         return 0
     fi
 
-    info "Nothing was installed. Remove that package first, or use --method native to update it."
+    info "Nothing was installed. Remove the legacy package first; current releases are AppImage-only."
     return 1
 }
-
 install_native() {
     case "$DISTRO_FAMILY" in
         arch)    install_arch   ;;
         debian)  install_debian ;;
         fedora)  install_fedora ;;
-        *) fail "No native package is published for $DISTRO_NAME. Use --method tarball or --method appimage." ;;
+        *) fail "No native package is published for $DISTRO_NAME. Current releases use --method appimage." ;;
     esac
 }
-
 set_install_method() {
     case "$1" in
         auto|appimage|tarball|native) INSTALL_METHOD="$1" ;;
         binary)                       INSTALL_METHOD="tarball" ;;
-        *) fail "Unknown install method: $1. Choose auto, appimage, tarball, or native." ;;
+        *) fail "Unknown install method: $1. Choose auto or appimage for current releases; tarball/native are legacy compatibility modes." ;;
     esac
 }
+trusted_system_command() {
+    local safe_path="/usr/sbin:/usr/bin:/sbin:/bin"
+    local command_name=$1
+    local resolved
 
-# ── Repair, status, and removal ───────────────────────────────────────────────
-
-as_root() {
-    if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-        "$@"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo "$@"
+    if [[ "$command_name" == /* ]]; then
+        resolved="$command_name"
     else
-        fail "sudo is required for this step, and it is not installed."
+        resolved="$(PATH="$safe_path" command -v -- "$command_name" || true)"
     fi
+    [[ -n "$resolved" && -x "$resolved" ]] || return 1
+    printf '%s\n' "$resolved"
 }
+as_root() {
+    local safe_path="/usr/sbin:/usr/bin:/sbin:/bin"
+    local command_name=$1
+    local resolved
+    local sudo_path
+    local env_path
+    shift
 
+    resolved="$(trusted_system_command "$command_name" || true)"
+    [[ -n "$resolved" ]] || fail "Trusted system command not found: $command_name"
+
+    if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+        PATH="$safe_path" "$resolved" "$@"
+        return
+    fi
+
+    sudo_path="$(trusted_system_command sudo || true)"
+    env_path="$(trusted_system_command env || true)"
+    [[ -n "$sudo_path" ]] || fail "sudo is required for this step, and it is not installed."
+    [[ -n "$env_path" ]] || fail "env is required for privileged command execution."
+    "$sudo_path" "$env_path" "PATH=$safe_path" "$resolved" "$@"
+}
 installed_native_packages() {
     local found=0
     local pkg
@@ -759,7 +863,6 @@ installed_native_packages() {
 
     ((found == 1))
 }
-
 remove_deb_package() {
     if command -v apt-get >/dev/null 2>&1; then
         as_root apt-get remove -y "$APP_PACKAGE"
@@ -767,7 +870,6 @@ remove_deb_package() {
         as_root dpkg -r "$APP_PACKAGE"
     fi
 }
-
 remove_rpm_package() {
     if command -v dnf >/dev/null 2>&1; then
         as_root dnf remove -y "$APP_PACKAGE"
@@ -777,13 +879,11 @@ remove_rpm_package() {
         as_root rpm -e "$APP_PACKAGE"
     fi
 }
-
 remove_pacman_package() {
     local pkg=$1
 
     as_root pacman -Rns --noconfirm "$pkg"
 }
-
 remove_native_packages() {
     local found=0
     local kind
@@ -810,7 +910,6 @@ remove_native_packages() {
         info "No native Linux Soundboard package is installed."
     fi
 }
-
 print_native_package_status() {
     local packages=()
     local kind
@@ -830,7 +929,6 @@ print_native_package_status() {
 
 REMOVE_KEEP_PACKAGE=0
 USER_REMOVE_ARGS=()
-
 parse_wrapper_remove_args() {
     REMOVE_KEEP_PACKAGE=0
     USER_REMOVE_ARGS=()
@@ -847,49 +945,137 @@ parse_wrapper_remove_args() {
         shift
     done
 }
+remove_managed_swhkd_assets() {
+    if [[ -d "$SWHKD_MANAGED_DIR" && ! -L "$SWHKD_MANAGED_DIR" ]]; then
+        if swhkd_directory_is_privileged_safe "$SWHKD_MANAGED_DIR" \
+            && managed_marker_is_safe "$SWHKD_MANAGED_MARKER"; then
+            as_root rm -f -- "$SWHKD_MANAGED_BIN" "$SWHKS_MANAGED_BIN" "$SWHKD_MANAGED_MARKER"
+            as_root rmdir "$SWHKD_MANAGED_DIR" >/dev/null 2>&1 || true
+            info "Removed managed Wayland hotkey daemon."
+        else
+            warn "Left $SWHKD_MANAGED_DIR in place because its ownership marker or directory safety check failed."
+        fi
+    fi
 
+    if [[ -d "$SWHKD_TRUSTED_DIR" && ! -L "$SWHKD_TRUSTED_DIR" ]]; then
+        if swhkd_directory_is_privileged_safe "$SWHKD_TRUSTED_DIR" \
+            && managed_marker_is_safe "$SWHKD_TRUSTED_MARKER"; then
+            as_root rm -f -- "$SWHKD_TRUSTED_HELPER" "$SWHKD_TRUSTED_BUILD_SCRIPT" \
+                "$SWHKD_TRUSTED_PINNED_LOCK" "$SWHKD_TRUSTED_MARKER"
+            as_root rmdir "$SWHKD_TRUSTED_DIR" >/dev/null 2>&1 || true
+            info "Removed managed Wayland hotkey helper."
+        else
+            warn "Left $SWHKD_TRUSTED_DIR in place because it is package-owned or failed the safety check."
+        fi
+    fi
+}
+print_swhkd_security_status() {
+    local helper_state managed_state="missing"
+    if trusted_swhkd_bundle_is_safe; then helper_state="ready"
+    elif [[ -e "$SWHKD_TRUSTED_HELPER" || -L "$SWHKD_TRUSTED_HELPER" ]]; then helper_state="unsafe/incomplete"
+    else helper_state="missing"
+    fi
+
+    if swhkd_managed_binary_is_safe && [[ -u "$SWHKD_MANAGED_BIN" ]]; then managed_state="ready"
+    elif [[ -e "$SWHKD_MANAGED_BIN" || -L "$SWHKD_MANAGED_BIN" ]]; then managed_state="unsafe/incomplete"
+    fi
+
+    printf '  Wayland helper: %s (%s)\n' "$helper_state" "$SWHKD_TRUSTED_HELPER"
+    printf '  Managed swhkd:  %s (%s)\n' "$managed_state" "$SWHKD_MANAGED_BIN"
+}
 remove_installation() {
     parse_wrapper_remove_args "$@"
     run_user_installer_from_available_source remove "${USER_REMOVE_ARGS[@]}"
 
     if ((REMOVE_KEEP_PACKAGE == 1)); then
         info "Keeping native package because --keep-package was passed."
+        if ! installed_native_packages >/dev/null 2>&1; then
+            remove_managed_swhkd_assets
+        fi
     else
         remove_native_packages
+        remove_managed_swhkd_assets
     fi
 }
-
 print_status() {
-    run_user_installer_from_available_source status
+    local installer app_path
+    if installer="$(local_user_installer)"; then
+        [[ -x "$installer" ]] || chmod +x "$installer"
+        "$installer" status
+    else
+        app_path="$(resolved_app_binary || true)"
+        printf '%s status:
+' "$APP_NAME"
+        printf '  Binary:         %s
+' "${app_path:-not installed}"
+        printf '  Version marker: %s
+' "$(installed_version || printf 'missing')"
+    fi
     print_native_package_status
+    print_swhkd_security_status
 }
-
-# ── swhkd (Wayland global hotkeys) ───────────────────────────────────────────
-
-build_swhkd_from_source() {
-    local src="$WORK_DIR/swhkd"
-    git init "$src"
-    git -C "$src" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"
-    git -C "$src" checkout --detach "$SWHKD_UPSTREAM_COMMIT"
-    (
-        cd "$src"
-        make clean 2>/dev/null || true
-        make NO_RFKILL_SW_SUPPORT=1
-    )
-    swhkd_binary_is_safe "$src/target/release/swhkd" \
-        || fail "Built swhkd still contains rfkill support; refusing to install it."
-    as_root install -Dm755 "$src/target/release/swhkd" /usr/bin/swhkd
-    as_root install -Dm755 "$src/target/release/swhks" /usr/bin/swhks
-    for f in "$src"/docs/*.gz; do
-        [[ -e "$f" ]] || continue
-        case "$(basename "$f")" in
-            *.1.gz) as_root install -Dm644 "$f" "/usr/share/man/man1/$(basename "$f")" ;;
-            *.5.gz) as_root install -Dm644 "$f" "/usr/share/man/man5/$(basename "$f")" ;;
-        esac
-    done
-    [[ -f /etc/swhkd/swhkdrc ]] || as_root install -Dm644 /dev/null /etc/swhkd/swhkdrc
+swhkd_trusted_helper_is_safe() {
+    local path="$1"
+    [[ -n "$path" && -f "$path" && ! -L "$path" ]] || return 1
+    swhkd_directory_is_privileged_safe "$(dirname -- "$path")" || return 1
+    local uid mode
+    uid="$(stat -c '%u' -- "$path" 2>/dev/null || true)"
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null || true)"
+    [[ "$uid" == "0" && -n "$mode" ]] || return 1
+    (( (8#$mode & 8#0022) == 0 )) || return 1
+    (( (8#$mode & 8#0111) != 0 ))
 }
+root_owned_regular_file_is_safe() {
+    local path=$1
+    local executable=${2:-0}
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    local uid mode
+    uid="$(stat -c '%u' -- "$path" 2>/dev/null || true)"
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null || true)"
+    [[ "$uid" == "0" && -n "$mode" ]] || return 1
+    (( (8#$mode & 8#0022) == 0 )) || return 1
+    (( executable == 0 )) || (( (8#$mode & 8#0111) != 0 ))
+}
+managed_marker_is_safe() {
+    local marker=$1
+    root_owned_regular_file_is_safe "$marker" 0 \
+        && [[ "$(cat "$marker" 2>/dev/null || true)" == "managed-by: linux-soundboard" ]]
+}
+trusted_swhkd_bundle_is_safe() {
+    swhkd_trusted_helper_is_safe "$SWHKD_TRUSTED_HELPER" || return 1
+    root_owned_regular_file_is_safe "$SWHKD_TRUSTED_BUILD_SCRIPT" 1 || return 1
+    root_owned_regular_file_is_safe "$SWHKD_TRUSTED_PINNED_LOCK" 0 || return 1
+    managed_marker_is_safe "$SWHKD_TRUSTED_MARKER" || return 1
 
+    local expected_build expected_lock actual_build actual_lock
+    expected_build="$(sed -n 's/^SWHKD_BUILD_SCRIPT_SHA256="\([0-9a-fA-F]\{64\}\)"$/\1/p' "$SWHKD_TRUSTED_HELPER" | head -n1)"
+    expected_lock="$(sed -n 's/^SWHKD_PINNED_LOCK_SHA256="\([0-9a-fA-F]\{64\}\)"$/\1/p' "$SWHKD_TRUSTED_HELPER" | head -n1)"
+    [[ -n "$expected_build" && -n "$expected_lock" ]] || return 1
+    actual_build="$(sha256_of "$SWHKD_TRUSTED_BUILD_SCRIPT")" || return 1
+    actual_lock="$(sha256_of "$SWHKD_TRUSTED_PINNED_LOCK")" || return 1
+    [[ "${actual_build,,}" == "${expected_build,,}" && "${actual_lock,,}" == "${expected_lock,,}" ]]
+}
+ensure_trusted_swhkd_helper() {
+    trusted_swhkd_bundle_is_safe && return 0
+
+    local tag image
+    tag="$(installed_version || true)"
+    info "Restoring the trusted Wayland helper from a signed release AppImage..."
+    download_appimage "$tag" >/dev/null
+    image="$DOWNLOADED_APPIMAGE"
+    provision_trusted_swhkd_helper_from_verified_appimage "$image" "$VERIFIED_ASSET_SHA256"
+}
+install_swhkd_via_trusted_helper() {
+    local helper="$SWHKD_TRUSTED_HELPER"
+    trusted_swhkd_bundle_is_safe || return 1
+    as_root "$helper" --distro "$DISTRO_FAMILY"
+}
+print_manual_swhkd_recipe() {
+    info "Wayland hotkey setup needs Linux Soundboard's fixed root-owned helper."
+    info "AppImage installs do not elevate helpers from user-writable paths."
+    info "Install install-swhkd-helper.sh, build-swhkd-locked.sh, and swhkd-Cargo.lock.pinned from a trusted source checkout under /usr/libexec/linux-soundboard, then run:"
+    info "  sudo $SWHKD_TRUSTED_HELPER --distro $DISTRO_FAMILY"
+}
 swhkd_binary_is_safe() {
     local binary="$1"
     [[ -r "$binary" ]] || return 1
@@ -899,50 +1085,91 @@ swhkd_binary_is_safe() {
         [[ $? -eq 1 ]]
     fi
 }
-
-configure_swhkd_permissions() {
-    local swhkd_path
-    local swhks_path
-
-    swhkd_path="$(command -v swhkd 2>/dev/null || true)"
-    swhks_path="$(command -v swhks 2>/dev/null || true)"
-
-    [[ -n "$swhkd_path" ]] || fail "swhkd was not found after installation."
-    [[ -n "$swhks_path" ]] || fail "swhks was not found after installation."
+swhkd_root_owned_directory_is_safe() {
+    local dir="$1"
+    [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] || return 1
+    local uid mode
+    uid="$(stat -c '%u' -- "$dir" 2>/dev/null || true)"
+    mode="$(stat -c '%a' -- "$dir" 2>/dev/null || true)"
+    [[ "$uid" == "0" && -n "$mode" ]] || return 1
+    (( (8#$mode & 8#0022) == 0 ))
+}
+swhkd_directory_is_privileged_safe() {
+    local dir="$1"
+    swhkd_root_owned_directory_is_safe "$dir" || return 1
+    swhkd_root_owned_directory_is_safe "$(dirname -- "$dir")"
+}
+swhkd_privileged_target_is_safe() {
+    local path="$1"
+    [[ -n "$path" && -f "$path" && ! -L "$path" ]] || return 1
+    swhkd_directory_is_privileged_safe "$(dirname -- "$path")" || return 1
+    local uid mode
+    uid="$(stat -c '%u' -- "$path" 2>/dev/null || true)"
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null || true)"
+    [[ "$uid" == "0" && -n "$mode" ]] || return 1
+    (( (8#$mode & 8#0022) == 0 )) || return 1
+    (( (8#$mode & 8#0111) != 0 ))
+}
+swhkd_managed_binary_is_safe() {
+    swhkd_privileged_target_is_safe "$SWHKD_MANAGED_BIN"
+}
+configure_managed_swhkd_permissions() {
+    [[ -e "$SWHKD_MANAGED_BIN" ]] || return 0
+    if ! swhkd_managed_binary_is_safe; then
+        warn "Managed swhkd at $SWHKD_MANAGED_BIN is not a regular root-owned executable; it will be rebuilt."
+        return 1
+    fi
 
     info "Configuring swhkd permissions..."
-    as_root chown root:root "$swhkd_path"
-    as_root chmod u+s "$swhkd_path"
-    as_root chmod +x "$swhks_path"
+    as_root chown root:root "$SWHKD_MANAGED_BIN"
+    as_root chmod u+s "$SWHKD_MANAGED_BIN"
+    if [[ -f "$SWHKS_MANAGED_BIN" && ! -L "$SWHKS_MANAGED_BIN" ]]; then
+        as_root chmod 755 "$SWHKS_MANAGED_BIN"
+    fi
 
-    [[ -u "$swhkd_path" ]] || fail "swhkd setuid bit was not applied to $swhkd_path."
+    [[ -u "$SWHKD_MANAGED_BIN" ]] || fail "swhkd setuid bit was not applied to $SWHKD_MANAGED_BIN."
 
     offer_uinput
 }
-
-# The /dev/uinput node exists even when the driver is absent, so opening it is the
-# only honest probe: the kernel autoloads the module on open where it is present,
-# and fails with ENODEV where it is not. Called right after the chown above, so
-# the sudo timestamp is already warm and this asks for no extra password.
+resolve_swhkd_binary() {
+    if swhkd_managed_binary_is_safe; then
+        printf '%s\n' "$SWHKD_MANAGED_BIN"
+        return 0
+    fi
+    local found
+    found="$(command -v swhkd 2>/dev/null || true)"
+    if [[ -n "$found" ]] && swhkd_privileged_target_is_safe "$found" && [[ -u "$found" ]]; then
+        printf '%s\n' "$found"
+        return 0
+    fi
+    return 1
+}
+resolve_swhks_binary() {
+    if [[ -f "$SWHKS_MANAGED_BIN" && ! -L "$SWHKS_MANAGED_BIN" ]]; then
+        printf '%s\n' "$SWHKS_MANAGED_BIN"
+        return 0
+    fi
+    local found
+    found="$(command -v swhks 2>/dev/null || true)"
+    if [[ -n "$found" ]] && swhkd_privileged_target_is_safe "$found"; then
+        printf '%s\n' "$found"
+        return 0
+    fi
+    return 1
+}
 uinput_available() {
     [[ -d /sys/module/uinput ]] && return 0
     as_root sh -c 'exec 3>/dev/uinput' >/dev/null 2>&1
 }
-
 uinput_manual_commands() {
     printf '    sudo modprobe uinput\n'
     printf '    echo uinput | sudo tee /etc/modules-load.d/uinput.conf\n'
 }
-
-# Systems that already have uinput are left untouched. The rest are asked first:
-# loading a kernel module and making it load at boot is the machine owner's call.
 offer_uinput() {
     uinput_available && return 0
 
     local release; release="$(uname -r)"
 
-    # A kernel upgrade removes the running kernel's module tree, so nothing can be
-    # loaded until the new one is booted. Asking to modprobe here would only fail.
     if [[ ! -d "/usr/lib/modules/$release" && ! -d "/lib/modules/$release" ]]; then
         warn "The running kernel ($release) has no modules on disk; it was replaced since boot."
         warn "Reboot, then run this again so uinput can load."
@@ -970,7 +1197,6 @@ offer_uinput() {
 
     enable_uinput
 }
-
 enable_uinput() {
     if [[ ! -d /sys/module/uinput ]] && ! as_root modprobe uinput 2>/dev/null; then
         warn "Could not load the uinput module; Wayland hotkeys stay unavailable until it is."
@@ -981,7 +1207,6 @@ enable_uinput() {
     info "Loading uinput at boot via /etc/modules-load.d/uinput.conf"
     printf 'uinput\n' | as_root tee /etc/modules-load.d/uinput.conf >/dev/null
 }
-
 swhkd_requires_pkexec() {
     local swhkd_path
     local swhks_path
@@ -989,8 +1214,8 @@ swhkd_requires_pkexec() {
     local swhks_pid=""
     local status=0
 
-    swhkd_path="$(command -v swhkd 2>/dev/null || true)"
-    swhks_path="$(command -v swhks 2>/dev/null || true)"
+    swhkd_path="$(resolve_swhkd_binary || true)"
+    swhks_path="$(resolve_swhks_binary || true)"
 
     [[ -n "$swhkd_path" && -n "$swhks_path" ]] || return 1
 
@@ -1036,68 +1261,45 @@ swhkd_requires_pkexec() {
 
     return 1
 }
-
 install_swhkd() {
-    if command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
-        local swhkd_path
-        swhkd_path="$(command -v swhkd)"
-        if swhkd_binary_is_safe "$swhkd_path"; then
-            info "swhkd already installed; checking permissions."
-            configure_swhkd_permissions
+    local existing=""
+    existing="$(resolve_swhkd_binary || true)"
+
+    if [[ -n "$existing" ]] && swhkd_binary_is_safe "$existing"; then
+        if [[ "$existing" != "$SWHKD_MANAGED_BIN" ]]; then
+            info "Using the existing safe swhkd install; leaving its permissions unchanged."
+            offer_uinput
             if ! swhkd_requires_pkexec; then
                 return
             fi
-        else
-            warn "Installed swhkd contains rfkill support or could not be verified; rebuilding it safely before launch."
+        elif configure_managed_swhkd_permissions; then
+            if ! swhkd_requires_pkexec; then
+                return
+            fi
         fi
+    elif [[ -n "$existing" ]]; then
+        warn "Installed swhkd contains rfkill support or could not be verified; rebuilding it safely before launch."
     fi
 
-    info "Installing swhkd from upstream source for Wayland hotkeys..."
-    case "$DISTRO_FAMILY" in
-        arch)
-            pacman_install base-devel git make rust cargo pkgconf systemd
-            build_swhkd_from_source
-            ;;
-        debian)
-            apt_install git make build-essential pkg-config libudev-dev cargo rustc
-            build_swhkd_from_source
-            ;;
-        fedora)
-            dnf_install git make gcc cargo rust pkgconf-pkg-config systemd-devel
-            build_swhkd_from_source
-            ;;
-        opensuse)
-            local pkgcfg; pkgcfg="$(pick_pkg pkg-config pkgconf-pkg-config || true)"
-            local udevdev; udevdev="$(pick_pkg systemd-devel libudev-devel || true)"
-            [[ -n "$pkgcfg" && -n "$udevdev" ]] || fail "Could not locate pkg-config or libudev-devel in zypper repos."
-            zypper_install git make gcc cargo rust "$pkgcfg" "$udevdev"
-            build_swhkd_from_source
-            ;;
-        *)
-            warn "Wayland detected but automatic swhkd install is not supported on this distro. Use the in-app installer."
-            return
-            ;;
-    esac
+    info "Installing swhkd with the root-side helper for Wayland hotkeys..."
+    info "swhkd captures every keyboard on this machine; it is meant for single-seat systems."
 
-    configure_swhkd_permissions
+    if ! install_swhkd_via_trusted_helper; then
+        warn "Refusing to build swhkd as your user; $SWHKD_TRUSTED_HELPER is missing or unsafe."
+        print_manual_swhkd_recipe
+        return
+    fi
+
+    configure_managed_swhkd_permissions \
+        || fail "Managed swhkd at $SWHKD_MANAGED_BIN could not be configured after the build."
 }
-
 repair_swhkd_if_needed() {
     if is_wayland; then
         install_swhkd
-    elif command -v swhkd >/dev/null 2>&1 && command -v swhks >/dev/null 2>&1; then
-        local swhkd_path
-        swhkd_path="$(command -v swhkd)"
-        if swhkd_binary_is_safe "$swhkd_path"; then
-            configure_swhkd_permissions
-        else
-            warn "Installed swhkd contains rfkill support or could not be verified; leaving it unchanged."
-        fi
+    elif [[ -n "$(resolve_swhkd_binary || true)" ]]; then
+        configure_managed_swhkd_permissions || true
     fi
 }
-
-# ── PipeWire services ─────────────────────────────────────────────────────────
-
 ensure_pipewire_services() {
     command -v systemctl >/dev/null 2>&1 || return
     local svc
@@ -1107,9 +1309,6 @@ ensure_pipewire_services() {
         fi
     done
 }
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 install_main() {
     detect_distro
     detect_session
@@ -1137,9 +1336,6 @@ install_main() {
 
     print_launch_hint
 }
-
-# Only the native package lands in /usr/bin. Tarball and AppImage installs go to
-# ~/.local/opt, which is not on PATH, so naming the binary there would mislead.
 print_launch_hint() {
     local user_binary="$HOME/.local/opt/$APP_BINARY/$APP_BINARY"
 
@@ -1152,14 +1348,10 @@ print_launch_hint() {
         printf 'Done.\n'
     fi
 }
-
 repair_main() {
     detect_distro
     detect_session
 
-    # On a native-package install, repair the user service only. A full repair
-    # would deploy a ~/.local copy that shadows the package. An explicit binary
-    # argument still forces a full repair (source builds).
     if [[ $# -eq 0 ]] && installed_native_packages >/dev/null 2>&1; then
         info "Native Linux Soundboard package detected; configuring the user service only."
         run_user_installer_from_available_source setup-user
@@ -1167,27 +1359,19 @@ repair_main() {
         run_user_installer_from_available_source repair "$@"
     fi
 
+    if is_wayland; then
+        ensure_trusted_swhkd_helper
+    fi
     repair_swhkd_if_needed
     ensure_pipewire_services
 }
-
-# ── Interactive front end ─────────────────────────────────────────────────────
-
-# The one-liner pipes this script into bash, which makes stdin the script
-# itself. Every prompt here and in install-user.sh reads stdin, so point it at
-# the terminal once, up front. Returns non-zero when there is no terminal at
-# all, which is what keeps piped noninteractive use working.
 ensure_tty() {
     [[ -t 0 ]] && return 0
-    # /dev/tty exists even with no controlling terminal, where opening it fails
-    # with ENXIO. Probe in a subshell so the failure is silent and stdin here is
-    # left alone; testing the redirection inline would either print the shell's
-    # own error or permanently redirect stderr to hide it.
+
     ( exec </dev/tty ) 2>/dev/null || return 1
     exec </dev/tty
     [[ -t 0 ]]
 }
-
 confirm() {
     local prompt=$1
     local answer
@@ -1199,7 +1383,6 @@ confirm() {
         *)     return 1 ;;
     esac
 }
-
 print_menu_header() {
     local version
     local packages=()
@@ -1223,27 +1406,14 @@ print_menu_header() {
     printf '  Package:   %s\n' "$( ((${#packages[@]} == 0)) && printf 'none' || printf '%s' "${packages[*]}")"
     printf '\n'
 }
-
-# Says up front which entries will ask for a password, from what is actually
-# true here: only a native package install or removal and the setuid swhkd
-# binary need root. Everything under ~/.local and ~/.config does not.
 password_note() {
     case "$1" in
         install-newest)
-            # The method chosen on the next screen decides: only the system
-            # package needs a password, and AppImage and tarball never do.
-            case "$DISTRO_FAMILY" in
-                arch|debian|fedora|opensuse)
-                    printf ' — password only for the system package'
-                    ;;
-                *)
-                    if is_wayland; then
-                        printf ' — asks for your password (hotkey daemon only)'
-                    else
-                        printf ' — no password needed'
-                    fi
-                    ;;
-            esac
+            if is_wayland; then
+                printf ' — AppImage needs no root; hotkey setup may ask for your password'
+            else
+                printf ' — no password needed'
+            fi
             ;;
         install-previous)
             if ((NATIVE_PACKAGE_PRESENT == 1)); then
@@ -1271,7 +1441,6 @@ password_note() {
             ;;
     esac
 }
-
 interactive_menu() {
     detect_distro
     detect_session
@@ -1291,8 +1460,8 @@ interactive_menu() {
         read -r choice || return 0
 
         case "$choice" in
-            1) prompt_install_method && install_main ;;
-            2) prompt_install_method no-native && choose_and_install_version ;;
+            1) INSTALL_METHOD="appimage"; install_main ;;
+            2) INSTALL_METHOD="appimage"; choose_and_install_version ;;
             3) remove_installation ;;
             4) fix_setup ;;
             5) make_bug_report ;;
@@ -1303,28 +1472,23 @@ interactive_menu() {
         esac
     done
 }
-
-# Pressing enter keeps the previous one-keystroke behaviour. Returns non-zero on
-# an unusable answer so the menu redraws instead of installing something else.
 prompt_install_method() {
     local native=${1:-with-native}
     local choice
 
     printf '\n  Installation method:\n'
-    printf '   1) Automatic — native package when available, binary otherwise\n'
-    printf '   2) AppImage — self-contained, installs into ~/.local, no root\n'
-    printf '   3) Binary tarball — installs into ~/.local, no root\n'
-    [[ "$native" == "with-native" ]] && printf '   4) Native package — .deb, .rpm, or AUR\n'
+    printf '   1) AppImage — current supported release format (default)\n'
+    printf '   2) Legacy binary tarball — historical releases only\n'
+    [[ "$native" == "with-native" ]] && printf '   3) Legacy native package — historical workflows only\n'
     printf '\n  Choose a method [1]: '
 
     read -r choice || choice=""
     case "$choice" in
-        ""|1) INSTALL_METHOD="auto" ;;
-        2)    INSTALL_METHOD="appimage" ;;
-        3)    INSTALL_METHOD="tarball" ;;
-        4)
+        ""|1) INSTALL_METHOD="appimage" ;;
+        2)    INSTALL_METHOD="tarball" ;;
+        3)
             if [[ "$native" != "with-native" ]]; then
-                warn "Native packages carry the newest version only."
+                warn "Legacy native-package mode is not available here."
                 return 1
             fi
             INSTALL_METHOD="native"
@@ -1332,9 +1496,6 @@ prompt_install_method() {
         *) warn "Unknown option: $choice"; return 1 ;;
     esac
 }
-
-# ── Previous versions ─────────────────────────────────────────────────────────
-
 choose_and_install_version() {
     local tags=()
     local current
@@ -1364,11 +1525,6 @@ choose_and_install_version() {
 
     install_version "${tags[$((choice - 1))]}"
 }
-
-# An older version always installs from its release tarball into ~/.local. The
-# AUR only ever carries the newest version, and apt/dnf downgrades need flags
-# that differ per distro, so the tarball is the one path that behaves the same
-# everywhere and needs no root.
 install_version() {
     local tag=$1
     local bundle_dir
@@ -1386,16 +1542,17 @@ install_version() {
         fi
     fi
 
-    export LSB_INSTALL_VERSION="$tag"
+    LSB_INSTALL_VERSION="$(normalize_release_version "$tag")"
+    export LSB_INSTALL_VERSION
     case "$INSTALL_METHOD" in
         native)
             unset LSB_INSTALL_VERSION
-            fail "Native packages are published for the newest release only. Use --method tarball or --method appimage to install $tag."
+            fail "Native packages are a historical release format. Use --method appimage to install $tag."
             ;;
-        appimage)
+        auto|appimage)
             install_appimage "$tag"
             ;;
-        *)
+        tarball)
             ensure_runtime_dependencies
             bundle_dir="$(download_and_extract_tarball "$tag")"
             run_user_installer install "$bundle_dir"
@@ -1412,17 +1569,12 @@ install_version() {
     info "Installed $tag."
     print_launch_hint
 }
-
-# ── Fix setup problems ────────────────────────────────────────────────────────
-
 step() {
     local label=$1
     shift
 
     printf '  %-34s' "$label"
-    # In a subshell: these steps call fail() on error, which exits. Without the
-    # subshell the first failing step would abort the repair instead of being
-    # reported and counted.
+
     if ( "$@" ) >"$WORK_DIR/step.log" 2>&1; then
         printf 'ok\n'
         return 0
@@ -1431,11 +1583,6 @@ step() {
     sed 's/^/      /' "$WORK_DIR/step.log" | tail -n 5
     return 1
 }
-
-# --diagnose exits 0 even when the engine and the application do not match, so
-# the report has to be read. A user who runs the repair, sees every step report
-# ok and still cannot use the app has been told nothing. Returns non-zero when a
-# mismatch was found.
 report_engine_mismatch() {
     local diagnosis=$1
 
@@ -1449,7 +1596,6 @@ report_engine_mismatch() {
     printf '      ./install.sh install\n'
     return 1
 }
-
 fix_setup() {
     local failures=0
 
@@ -1482,21 +1628,14 @@ fix_setup() {
         fi
     fi
 }
-
-# ── Bug report ────────────────────────────────────────────────────────────────
-
-# Keeps device names, which contributors need for routing bugs, but takes the
-# home path and username out so the file can be pasted into a public issue.
 redact() {
     sed -e "s#$HOME#~#g" -e "s#\\b$(id -un)\\b#<user>#g"
 }
-
 section() {
     printf '\n================================================================\n'
     printf '%s\n' "$1"
     printf '================================================================\n\n'
 }
-
 run_or_note() {
     local label=$1
     shift
@@ -1509,7 +1648,6 @@ run_or_note() {
     fi
     printf '\n'
 }
-
 collect_system_report() {
     section "SYSTEM REPORT"
     run_or_note "os-release" cat /etc/os-release
@@ -1523,17 +1661,32 @@ collect_system_report() {
     command -v swhkd >/dev/null 2>&1 && swhkd --version 2>&1 || printf 'not installed\n'
     printf '\n'
 }
-
+resolved_app_binary() {
+    if command -v "$APP_BINARY" >/dev/null 2>&1; then
+        command -v "$APP_BINARY"
+    elif [[ -x "$INSTALL_ROOT/$APP_BINARY" ]]; then
+        printf '%s\n' "$INSTALL_ROOT/$APP_BINARY"
+    else
+        return 1
+    fi
+}
 collect_app_report() {
     local library="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_BINARY/library.sqlite3"
 
     section "APP REPORT"
     printf -- '--- install\n'
     printf 'installed version: %s\n' "$(installed_version || printf 'not installed')"
-    printf 'binary: %s\n' "$(command -v "$APP_BINARY" || printf 'not on PATH')"
+    local app_path
+    app_path="$(resolved_app_binary || true)"
+    printf 'binary: %s\n' "${app_path:-not installed}"
     print_native_package_status
+    print_swhkd_security_status
     printf '\n'
-    run_or_note "diagnose" "$APP_BINARY" --diagnose
+    if [[ -n "$app_path" ]]; then
+        run_or_note "diagnose" "$app_path" --diagnose
+    else
+        printf '%s\n\n' '--- diagnose' '(application binary not installed)'
+    fi
     run_or_note "engine service" systemctl --user --no-pager --lines=0 status "$APP_BINARY-engine.service"
     run_or_note "engine log" journalctl --user -u "$APP_BINARY-engine.service" -n 200 --no-pager
     printf -- '--- library\n'
@@ -1558,19 +1711,20 @@ collect_app_report() {
     fi
     printf '\n'
 }
-
 collect_debug_run() {
     local raw_out=$1
     local log="$WORK_DIR/debug-run.log"
 
-    command -v "$APP_BINARY" >/dev/null 2>&1 || return 0
+    local app_path
+    app_path="$(resolved_app_binary || true)"
+    [[ -n "$app_path" ]] || return 0
     printf '\n'
     printf 'A debug run starts Linux Soundboard and its audio engine, which changes\n'
     printf 'your default microphone while it runs, and records what the app logs.\n'
     confirm "Reproduce the problem now with debug logging?" || return 0
 
     info "Starting $APP_BINARY with RUST_LOG=debug ..."
-    RUST_LOG=debug "$APP_BINARY" >"$log" 2>&1 &
+    RUST_LOG=debug "$app_path" >"$log" 2>&1 &
     local pid=$!
     printf '\n  Reproduce the problem, then press Enter here.\n'
     read -r _ || true
@@ -1579,7 +1733,6 @@ collect_debug_run() {
 
     { section "DEBUG RUN LOG (last 300 lines)"; tail -n 300 "$log"; } >>"$raw_out"
 }
-
 bug_report_blank() {
     cat <<'EOF'
 
@@ -1610,7 +1763,6 @@ SCREENSHOTS — IMPORTANT
   dragging the image files into the issue description box.
 EOF
 }
-
 make_bug_report() {
     local output=""
     local raw="$WORK_DIR/report.raw"
@@ -1665,7 +1817,6 @@ make_bug_report() {
             && (xdg-open "$ISSUE_URL" >/dev/null 2>&1 &)
     fi
 }
-
 main() {
     local command="${1:-}"
 
@@ -1716,9 +1867,7 @@ main() {
                         ;;
                 esac
             done
-            # Piped through bash, stdin is the script itself, so the questions
-            # this path may ask (runtime libraries, FUSE, uinput) need the
-            # terminal. Where there is none they are skipped, as before.
+
             ensure_tty || true
             if [[ -n "$install_tag" ]]; then
                 install_version "$install_tag"

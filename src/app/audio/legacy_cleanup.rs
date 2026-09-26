@@ -1,5 +1,3 @@
-//! Removes stale routing artifacts at engine startup.
-
 const LEGACY_MANAGED_MARKER: &str = "managed-by: linux-soundboard";
 const LEGACY_MANAGED_END_MARKER: &str = "end-managed-by: linux-soundboard";
 const LEGACY_PIPEWIRE_CONF_FILE: &str = "99-linuxsoundboard.conf";
@@ -9,6 +7,9 @@ const LEGACY_AUTOROUTE_LOG: &str =
     "Linux SoundBoard: Auto-routing to output.LinuxSoundboard_Mic enabled";
 
 pub(crate) fn cleanup_legacy_audio_routing_artifacts() {
+    if crate::app_meta::BUILD_PROFILE != "stable" {
+        return;
+    }
     cleanup_legacy_pipewire_config();
     cleanup_legacy_pulse_block();
     cleanup_legacy_wireplumber_autoroute();

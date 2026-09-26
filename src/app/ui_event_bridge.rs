@@ -14,6 +14,7 @@ type TrayEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 type NowPlayingHandler = RefCell<Option<Box<dyn FnMut(Option<NowPlaying>)>>>;
 type MprisEnabledHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 type MprisCommandHandler = RefCell<Option<Box<dyn FnMut(MprisCommand)>>>;
+type UpdateHandler = RefCell<Option<Box<dyn FnMut(crate::update::UpdateInfo)>>>;
 
 thread_local! {
     static HOTKEY_HANDLER: StringHandler = RefCell::new(None);
@@ -30,6 +31,7 @@ thread_local! {
     static NOW_PLAYING_HANDLER: NowPlayingHandler = RefCell::new(None);
     static MPRIS_ENABLED_HANDLER: MprisEnabledHandler = RefCell::new(None);
     static MPRIS_COMMAND_HANDLER: MprisCommandHandler = RefCell::new(None);
+    static UPDATE_HANDLER: UpdateHandler = RefCell::new(None);
 
     static CLOSE_TO_TRAY_POLICY: RefCell<Option<Box<dyn Fn() -> bool>>> = RefCell::new(None);
 
@@ -61,6 +63,20 @@ pub fn post_toast(message: String) {
         TOAST_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(message);
+            }
+        });
+    });
+}
+
+pub fn set_update_handler(f: impl FnMut(crate::update::UpdateInfo) + 'static) {
+    UPDATE_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_update_available(info: crate::update::UpdateInfo) {
+    glib::MainContext::default().invoke(move || {
+        UPDATE_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(info);
             }
         });
     });
@@ -112,7 +128,6 @@ pub fn set_tray_enabled_handler(f: impl FnMut(bool) + 'static) {
     TRAY_ENABLED_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
 }
 
-/// Show or withdraw the tray icon after the setting changed.
 pub fn post_tray_enabled(enabled: bool) {
     glib::MainContext::default().invoke(move || {
         TRAY_ENABLED_HANDLER.with(|handler| {
@@ -127,7 +142,6 @@ pub fn set_now_playing_handler(f: impl FnMut(Option<NowPlaying>) + 'static) {
     NOW_PLAYING_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
 }
 
-/// Announce the sound that started, or `None` when playback stopped.
 pub fn post_now_playing(now: Option<NowPlaying>) {
     glib::MainContext::default().invoke(move || {
         NOW_PLAYING_HANDLER.with(|handler| {
@@ -200,7 +214,6 @@ pub fn post_loudness_status_refresh() {
     });
 }
 
-/// GTK-thread handler for engine snapshots. Main thread only.
 pub fn set_snapshot_handler(f: impl FnMut(PlayerSnapshot) + 'static) {
     SNAPSHOT_HANDLER.with(|h| *h.borrow_mut() = Some(Box::new(f)));
 }
@@ -213,7 +226,6 @@ pub fn dispatch_snapshot(snapshot: PlayerSnapshot) {
     });
 }
 
-/// Flag a user-initiated play. Main thread, before `play_sound_async`.
 pub fn mark_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(true));
 }
@@ -222,7 +234,6 @@ pub fn clear_explicit_play_pending() {
     EXPLICIT_PLAY_PENDING.with(|p| p.set(false));
 }
 
-/// True while a user-initiated play is out but hasn't shown up in a snapshot.
 pub fn is_explicit_play_pending() -> bool {
     EXPLICIT_PLAY_PENDING.with(|p| p.get())
 }

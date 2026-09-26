@@ -1,5 +1,3 @@
-//! Restarts unhealthy mic-passthrough streams.
-
 use super::*;
 use source_routing::{recreate_capture_stream, resolve_capture_target, resolve_source_id_by_name};
 
@@ -166,6 +164,7 @@ mod tests {
             is_our_virtual_mic: false,
             is_virtual: false,
             is_hardware_backed: true,
+            is_bluetooth_loopback: false,
         }
     }
 

@@ -2,7 +2,6 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{atomic::Ordering, Arc};
-use std::time::Instant;
 
 use crate::app_state::AppState;
 use crate::audio::PlaybackEngine;
@@ -57,8 +56,6 @@ impl Default for LoudnessCoordinators {
         Self::new()
     }
 }
-
-const SAME_SOUND_DEBOUNCE_MS: u128 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingLoudnessAnalysisTrigger {
@@ -199,8 +196,6 @@ fn play_resolved_sound(
         return Err(CommandError::SourceUnavailable(source_path.to_string()));
     }
 
-    player.stop_all();
-
     let base_volume = sound.volume as f32 / 100.0;
     let sound_lufs = sound.loudness_lufs;
     let sound_true_peak_dbtp = sound.loudness_true_peak_dbtp;
@@ -227,12 +222,11 @@ fn play_resolved_sound(
     result
 }
 
-/// Snapshot used to resolve a hotkey off the GTK thread.
 #[derive(Clone)]
 pub(crate) struct HotkeyPress {
     pub toggles: crate::hotkeys::HotkeyToggles,
     pub mode: crate::config::GroupMode,
-    /// The tab currently showing, as a scope key.
+
     pub active_scope: String,
     pub cursor: Arc<Mutex<HashMap<String, String>>>,
 }
@@ -254,7 +248,11 @@ fn play_sound_from_library(
             .recv()
             .map_err(|error| CommandError::Library(error.to_string()))?
             .ok_or(CommandError::SoundNotFound)?,
-        SoundLookup::HotkeyBinding(press) => resolve_hotkey_press(id, press, library)?,
+        SoundLookup::HotkeyBinding(press) => {
+            let playing: std::collections::HashSet<String> =
+                player.get_playing().into_iter().collect();
+            resolve_hotkey_press(id, press, library, &playing)?
+        }
     };
     play_resolved_sound(sound, player)
 }
@@ -263,6 +261,7 @@ fn resolve_hotkey_press(
     binding_id: &str,
     press: &HotkeyPress,
     library: &crate::library_store::LibraryStore,
+    currently_playing: &std::collections::HashSet<String>,
 ) -> Result<crate::config::Sound, CommandError> {
     let members = library
         .hotkey_group(binding_id)
@@ -278,8 +277,13 @@ fn resolve_hotkey_press(
         press.mode,
         last_played.as_deref(),
         entropy,
+        currently_playing,
     ) {
         crate::hotkeys::Selection::Play(index) => index,
+        crate::hotkeys::Selection::AllPlaying => {
+            log::debug!("Hotkey press skipped: every member of {binding_id} is already playing");
+            return Err(CommandError::HotkeyNoOp);
+        }
         crate::hotkeys::Selection::Inert(reason) => {
             log::info!("Hotkey press resolved to nothing: {}", reason.message());
             return Err(CommandError::Hotkey(reason.message().to_string()));
@@ -428,25 +432,6 @@ fn dispatch_play_sound_async<F>(
 where
     F: FnOnce(Result<String, CommandError>) + 'static,
 {
-    let now = Instant::now();
-    let debounced = {
-        let mut last = state.play_dispatch_debounce.lock();
-        let drop_request = matches!(
-            last.as_ref(),
-            Some((prev_at, prev_id))
-                if prev_id == &id
-                    && now.duration_since(*prev_at).as_millis() < SAME_SOUND_DEBOUNCE_MS
-        );
-        if !drop_request {
-            *last = Some((now, id.clone()));
-        }
-        drop_request
-    };
-    if debounced {
-        log::debug!("Debounced repeated play_sound dispatch: id={}", id);
-        on_complete(Ok(String::new()));
-        return Ok(());
-    }
     let library = state.library.clone();
     let player = Arc::clone(&state.player);
     let first_recorded = Arc::clone(&state.first_playback_recorded);
@@ -476,13 +461,14 @@ where
 pub fn set_allow_multiple_playbacks(
     allow: bool,
     config: Arc<Mutex<Config>>,
+    player: Arc<AudioPlayer>,
 ) -> Result<(), CommandError> {
-    if allow {
-        log::info!("Ignoring request to enable multiple simultaneous playbacks");
-    }
-    with_saved_config(&config, |cfg| {
-        cfg.settings.allow_multiple_playbacks = false;
-    })
+    save_config_and_notify_player(
+        &config,
+        &player,
+        |cfg| cfg.settings.allow_multiple_playbacks = allow,
+        |player| player.set_allow_multiple_playbacks(allow),
+    )
 }
 
 pub fn set_skip_delete_confirm(skip: bool, config: Arc<Mutex<Config>>) -> Result<(), CommandError> {
@@ -522,7 +508,6 @@ pub fn set_auto_gain(
         |player| player.set_auto_gain_enabled(enabled),
     )?;
     if enabled {
-        // Schema 8 keeps sounds only in the store.
         trigger_missing_loudness_analysis_with_store(
             Arc::clone(&config),
             library,
@@ -705,6 +690,12 @@ pub fn stop_sound(id: String, player: Arc<dyn PlaybackEngine>) -> Result<(), Com
         .map_err(|e| CommandError::Engine(e.to_string()))
 }
 
+pub fn stop_playback(play_id: String, player: Arc<dyn PlaybackEngine>) -> Result<(), CommandError> {
+    player
+        .stop_playback(&play_id)
+        .map_err(|e| CommandError::Engine(e.to_string()))
+}
+
 pub fn stop_all(player: Arc<dyn PlaybackEngine>) {
     player.stop_all();
     crate::diagnostics::set_playback_registry_count(0);
@@ -740,6 +731,7 @@ pub fn seek_sound(
             "Seek position too large (max 24 hours)".to_string(),
         ));
     }
+
     let play_id = player
         .get_playback_positions()
         .into_iter()
@@ -771,6 +763,16 @@ pub fn resume_sound(id: String, player: Arc<dyn PlaybackEngine>) {
     player.resume(&id);
 }
 
+pub fn set_playback_paused(
+    play_id: String,
+    paused: bool,
+    player: Arc<dyn PlaybackEngine>,
+) -> Result<(), CommandError> {
+    player
+        .set_playback_paused(&play_id, paused)
+        .map_err(|e| CommandError::Engine(e.to_string()))
+}
+
 pub fn get_audio_status(player: Arc<dyn PlaybackEngine>) -> AudioStatus {
     let playing = player.get_playing();
     let mut positions: HashMap<String, u64> = HashMap::new();
@@ -786,7 +788,6 @@ pub fn get_playback_positions(player: Arc<dyn PlaybackEngine>) -> Vec<PlaybackPo
     player.get_playback_positions()
 }
 
-/// Stops both analysis jobs.
 pub fn cancel_loudness_analysis(coords: &LoudnessCoordinators) {
     coords.backfill.cancel();
     coords.refinement.cancel();

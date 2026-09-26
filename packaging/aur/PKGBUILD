@@ -1,4 +1,4 @@
-# Maintainer: germanua
+
 
 pkgname=linux-soundboard
 pkgver=2.4.4
@@ -26,13 +26,12 @@ makedepends=(
   'pkgconf'
 )
 optdepends=(
-  'swhkd-git: native Wayland hotkey daemon from upstream source'
   'xorg-xwayland: enables the native X11 backend inside Wayland sessions'
 )
 conflicts=('linux-soundboard-git')
-# The bundled SQLite (rusqlite "bundled") is compiled by the cc crate; under LTO
-# it becomes bitcode the final Rust link cannot resolve (undefined sqlite3_*
-# symbols). Disable LTO so the package builds regardless of the host makepkg.conf.
+
+
+
 options=('!lto')
 source=(
   "${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz"
@@ -68,7 +67,7 @@ package() {
     install -Dm755 "$srcdir/target/release/linux-soundboard" \
       "$pkgdir/usr/bin/linux-soundboard"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-    for legal_file in NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+    for legal_file in NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md; do
       install -Dm644 "$legal_file" "$pkgdir/usr/share/doc/$pkgname/$legal_file"
     done
     install -Dm644 packaging/rpm/linux-soundboard.desktop \
@@ -89,6 +88,10 @@ package() {
       "$pkgdir/usr/share/metainfo/com.linuxsoundboard.app.metainfo.xml"
     install -Dm755 packaging/linux/install-swhkd-helper.sh \
       "$pkgdir/usr/libexec/linux-soundboard/install-swhkd-helper.sh"
+    install -Dm755 packaging/linux/build-swhkd-locked.sh \
+      "$pkgdir/usr/libexec/linux-soundboard/build-swhkd-locked.sh"
+    install -Dm644 packaging/linux/swhkd-Cargo.lock.pinned \
+      "$pkgdir/usr/libexec/linux-soundboard/swhkd-Cargo.lock.pinned"
     install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
       "$pkgdir/usr/share/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy"
     install -Dm644 packaging/linux/linux-soundboard-engine.service \

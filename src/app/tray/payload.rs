@@ -1,21 +1,17 @@
 use glib::prelude::ToVariant;
 use glib::variant::{DictEntry, Variant};
 
-/// How a row is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ItemKind {
-    /// A plain clickable row.
     Command,
-    /// Horizontal separator.
+
     Separator,
-    /// A row with a checkmark, ticked or not.
+
     Checkmark(bool),
 }
 
-/// One row of the tray menu.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MenuItem {
-    /// Menu row ID; zero is reserved for the root.
     pub id: i32,
     pub label: String,
     pub kind: ItemKind,
@@ -100,7 +96,6 @@ pub(crate) fn layout(items: &[MenuItem], filter: &[String]) -> Variant {
     ])
 }
 
-/// Every row as the `a(ia{sv})` that `GetGroupProperties` returns.
 pub(crate) fn group_properties(items: &[MenuItem], filter: &[String]) -> Variant {
     let rows = items.iter().map(|item| {
         Variant::tuple_from_iter([item.id.to_variant(), item_properties(item, filter)])

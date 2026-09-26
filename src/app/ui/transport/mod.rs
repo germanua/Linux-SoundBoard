@@ -10,9 +10,11 @@ use gtk4::{Box as GtkBox, Button, Entry, Label, Scale, SearchEntry, ToggleButton
 use crate::app_state::AppState;
 
 use super::sound_list::NavigationContext;
+use now_playing::NowPlayingPanel;
 
 mod build;
 mod helpers;
+mod now_playing;
 mod playback;
 mod scrub;
 mod signals;
@@ -64,6 +66,7 @@ const DEFAULT_SCRUB_DURATION_MS: u64 = 30_000;
 #[derive(Clone)]
 pub struct TransportBar {
     inner: Rc<TransportInner>,
+    now_playing: Rc<NowPlayingPanel>,
 }
 
 struct TransportInner {
@@ -120,7 +123,10 @@ impl TransportBar {
         self.inner.widget.upcast_ref()
     }
 
-    /// Sidebar toggle for the narrow layout.
+    pub fn now_playing_widget(&self) -> &GtkBox {
+        self.now_playing.widget()
+    }
+
     pub fn sidebar_toggle_button(&self) -> &Button {
         &self.inner.sidebar_toggle_btn
     }

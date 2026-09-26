@@ -1,7 +1,5 @@
-//! Optional route-audit logging.
-
 use parking_lot::Mutex;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -20,7 +18,7 @@ pub struct AuditWriter {
 
 impl AuditWriter {
     fn open(path: PathBuf) -> std::io::Result<Self> {
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let file = crate::private_runtime::open_append(&path)?;
         Ok(Self {
             path,
             file: Mutex::new(BufWriter::new(file)),
@@ -40,10 +38,15 @@ pub fn init_from_env() {
     if !env_enabled() {
         return;
     }
-    let path = audit_log_path();
+    let path = match audit_log_path() {
+        Ok(path) => path,
+        Err(err) => {
+            log::warn!("Could not create route-audit runtime directory: {err}");
+            return;
+        }
+    };
     match AuditWriter::open(path.clone()) {
         Ok(writer) => {
-            // A failed `set` just means another thread beat us to it.
             let _ = AUDIT.set(writer);
             if let Some(writer) = AUDIT.get() {
                 log::info!("Route-audit log enabled at {}", writer.path.display());
@@ -71,11 +74,8 @@ fn env_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn audit_log_path() -> PathBuf {
-    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        return PathBuf::from(runtime_dir).join(FILE_NAME);
-    }
-    std::env::temp_dir().join(FILE_NAME)
+fn audit_log_path() -> std::io::Result<PathBuf> {
+    Ok(crate::private_runtime::directory()?.join(FILE_NAME))
 }
 
 #[allow(dead_code)]
@@ -200,7 +200,7 @@ mod tests {
         );
         assert_eq!(map.get("before"), Some(&Value::Null));
         let ts = map.get("ts").and_then(|v| v.as_str()).expect("ts string");
-        // Basic ISO 8601 shape check.
+
         assert!(ts.contains('T') && ts.ends_with('Z'), "ts={ts}");
         assert!(ts.split_once('-').is_some_and(|(year, _)| year.len() == 4));
     }
@@ -253,7 +253,7 @@ mod tests {
         let writer = AuditWriter::open(path.clone()).expect("open audit file");
         writer.write_record("metadata.set", json!({"a": 1}));
         writer.write_record("metadata.clear", json!({"b": 2}));
-        // Drop to ensure flush via BufWriter destructor.
+
         drop(writer);
         let content = std::fs::read_to_string(&path).expect("read audit file");
         let lines: Vec<&str> = content.lines().collect();
@@ -274,7 +274,7 @@ mod tests {
         let previous_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
         let dir = tempdir();
         std::env::set_var("XDG_RUNTIME_DIR", &dir);
-        // Don't call init_from_env(); confirm record_metadata_write is a noop.
+
         record_metadata_write(
             42,
             Some("App"),

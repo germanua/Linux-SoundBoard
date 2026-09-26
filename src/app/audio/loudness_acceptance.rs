@@ -1,5 +1,3 @@
-//! Phase-1 acceptance harness for loudness performance and quality baselines.
-
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

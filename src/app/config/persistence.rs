@@ -32,6 +32,38 @@ fn schema_6_backup_path(path: &Path) -> PathBuf {
     path.with_file_name(SCHEMA_6_BACKUP_FILE_NAME)
 }
 
+fn protect_directory(path: &Path) -> std::io::Result<()> {
+    let existed = fs::symlink_metadata(path).is_ok();
+    if !existed {
+        fs::create_dir_all(path)?;
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not a directory", path.display()),
+        ));
+    }
+    let mode = if existed {
+        metadata.permissions().mode() & 0o700
+    } else {
+        0o700
+    };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+fn protect_file(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    let mode = metadata.permissions().mode() & 0o600;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
 fn ensure_schema_6_backup(path: &Path, original: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let backup_path = schema_6_backup_path(path);
     if backup_path.exists() {
@@ -89,7 +121,7 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join(config_dir_name());
 
-        let _ = fs::create_dir_all(&config_dir);
+        let _ = protect_directory(&config_dir);
         config_dir.join(CONFIG_FILE_NAME)
     }
 
@@ -121,6 +153,7 @@ impl Config {
 
     pub(crate) fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         if path.exists() {
+            protect_file(path)?;
             let content = fs::read(path)?;
             let raw: serde_json::Value = serde_json::from_slice(&content)?;
 
@@ -175,13 +208,17 @@ impl Config {
         E: std::error::Error + 'static,
     {
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            protect_directory(parent)?;
         }
         self.sanitize_for_persistence();
         let tmp_path = save_temp_path(path);
 
         let write_result = (|| -> Result<(), Box<dyn std::error::Error>> {
-            let tmp_file = fs::File::create(&tmp_path)?;
+            let tmp_file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp_path)?;
             {
                 let mut writer = std::io::BufWriter::new(&tmp_file);
                 if self.schema_version >= crate::config::CURRENT_SCHEMA_VERSION {
@@ -220,6 +257,7 @@ impl Config {
             let _ = fs::remove_file(&tmp_path);
             return Err(Box::new(err));
         }
+        protect_file(path)?;
         observer(ConfigSaveBoundary::Renamed)
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)?;
         if let Some(parent) = path.parent() {
@@ -506,6 +544,42 @@ mod tests {
                     dir.file_name().unwrap().to_string_lossy()
                 ))));
 
+        fs::remove_dir_all(dir).expect("cleanup config directory");
+    }
+    #[test]
+    fn saved_config_and_directory_are_private() {
+        let dir = test_dir();
+        fs::create_dir_all(&dir).expect("create config directory");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("loosen dir");
+        let path = dir.join("config.json");
+        let mut config = Config::default();
+        config.save_to_path(&path).expect("save config");
+        assert_eq!(
+            fs::metadata(&dir)
+                .expect("dir metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("file metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("loosen file");
+        Config::load_from_path(&path).expect("load config");
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("repaired metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
         fs::remove_dir_all(dir).expect("cleanup config directory");
     }
 }

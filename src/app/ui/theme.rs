@@ -70,7 +70,6 @@ pub(crate) fn ensure_app_resources() {
 mod tests {
     use super::{DARK_CSS, LIGHT_CSS};
 
-    /// Keyframe selector lists ("0%, 100% {") only parse on GTK 4.20 and newer.
     fn keyframe_selector_lists(css: &str) -> Vec<&str> {
         let mut offenders = Vec::new();
         let mut depth = 0usize;

@@ -1,5 +1,3 @@
-//! Owns the system default audio source.
-
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 
@@ -16,11 +14,10 @@ use super::EngineError;
 use super::LoopState;
 
 const DEFAULT_AUDIO_SOURCE_KEY: &str = "default.audio.source";
-/// PipeWire carries the system-wide defaults on subject 0.
+
 const DEFAULT_METADATA_SUBJECT: u32 = 0;
 const DEFAULT_AUDIO_SOURCE_TYPE: &str = "Spa:String:JSON";
 
-/// Owns the default-metadata proxy and listener.
 pub(super) struct DefaultMetadataHandle {
     pub(super) id: u32,
     metadata: pw::metadata::Metadata,
@@ -44,11 +41,10 @@ pub(super) fn bind_default_metadata_from_global(
     let metadata: pw::metadata::Metadata = registry.bind(global).ok()?;
 
     let global_id = global.id;
-    // Pre-allocate the boxed listener so we can pin it for the C ABI.
+
     let listener = metadata
         .add_listener_local()
         .property(move |subject, key, _type_, value| {
-            // Watch only subject 0's default.audio.source.
             if subject != 0 {
                 return 0;
             }
@@ -77,7 +73,11 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     let new_name = value.and_then(parse_default_source_name);
     state.default_audio_source_name = new_name.clone();
 
-    if !should_reclaim_default(state.runtime.default_source_mode, new_name.as_deref()) {
+    if !should_reclaim_default(
+        crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM,
+        state.runtime.default_source_mode,
+        new_name.as_deref(),
+    ) {
         return;
     }
 
@@ -87,7 +87,7 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
                 "Default source changed externally to '{}'; re-asserting '{}'",
                 name, VIRTUAL_SOURCE_NAME
             );
-            // Remember whatever was here BEFORE us — for uninstall restore.
+
             if state.previous_default_source_name.is_none() {
                 state.previous_default_source_name = Some(name.to_string());
             }
@@ -103,7 +103,7 @@ pub(super) fn handle_default_source_metadata_change(state: &mut LoopState, value
     if reclaim_strategy(new_name.as_deref()) == ReclaimStrategy::RuntimeKey {
         write_runtime_default_source(state);
     }
-    // Keep WirePlumber's configured default on the virtual mic.
+
     claim_default_source_if_enabled(state);
 }
 
@@ -117,7 +117,6 @@ pub(super) fn forget_default_source_belief(state: &mut LoopState, reason: &str) 
     state.claimed_default = false;
 }
 
-/// How to take the default source back.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum ReclaimStrategy {
     ConfiguredClaim,
@@ -135,8 +134,12 @@ fn default_source_metadata_value(name: &str) -> String {
     format!(r#"{{"name":"{name}"}}"#)
 }
 
-fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bool {
-    if mode == DefaultSourceMode::Manual {
+fn should_reclaim_default(
+    allow_claim: bool,
+    mode: DefaultSourceMode,
+    new_name: Option<&str>,
+) -> bool {
+    if !allow_claim || mode == DefaultSourceMode::Manual {
         return false;
     }
     new_name != Some(VIRTUAL_SOURCE_NAME)
@@ -144,7 +147,6 @@ fn should_reclaim_default(mode: DefaultSourceMode, new_name: Option<&str>) -> bo
 
 fn write_runtime_default_source(state: &LoopState) {
     let Some(handle) = state.default_metadata.as_ref() else {
-        // Binding reapplies the claim later.
         return;
     };
     let value = default_source_metadata_value(VIRTUAL_SOURCE_NAME);
@@ -170,7 +172,9 @@ fn parse_default_source_name(raw: &str) -> Option<String> {
 }
 
 pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
-    if state.runtime.default_source_mode != DefaultSourceMode::Default {
+    if !crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM
+        || state.runtime.default_source_mode != DefaultSourceMode::Default
+    {
         return;
     }
     if state
@@ -195,7 +199,6 @@ pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
         return;
     }
 
-    // Remember whatever the user had before so uninstall can restore it.
     if state.previous_default_source_name.is_none() {
         state.previous_default_source_name = state
             .default_audio_source_name
@@ -210,17 +213,20 @@ pub(super) fn claim_default_source_if_enabled(state: &mut LoopState) {
     state.claimed_default = true;
 }
 
-/// Claims or restores the system default for the selected mode.
 pub(super) fn apply_default_source_mode(state: &mut LoopState) -> Result<(), EngineError> {
+    if !crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM {
+        return if state.claimed_default {
+            super::source_routing::restore_default_source(state)
+        } else {
+            Ok(())
+        };
+    }
     match state.runtime.default_source_mode {
         DefaultSourceMode::Default => {
             claim_default_source_if_enabled(state);
             Ok(())
         }
-        DefaultSourceMode::Manual => {
-            // Restore only if we owned the claim.
-            super::source_routing::restore_default_source(state)
-        }
+        DefaultSourceMode::Manual => super::source_routing::restore_default_source(state),
     }
 }
 
@@ -255,12 +261,17 @@ mod tests {
 
     #[test]
     fn a_cleared_default_is_reclaimed() {
-        assert!(should_reclaim_default(DefaultSourceMode::Default, None));
+        assert!(should_reclaim_default(
+            true,
+            DefaultSourceMode::Default,
+            None
+        ));
     }
 
     #[test]
     fn a_foreign_default_is_reclaimed() {
         assert!(should_reclaim_default(
+            true,
             DefaultSourceMode::Default,
             Some("alsa_input.pci-0000_12_00.6.analog-stereo")
         ));
@@ -269,6 +280,7 @@ mod tests {
     #[test]
     fn our_own_default_is_left_alone() {
         assert!(!should_reclaim_default(
+            true,
             DefaultSourceMode::Default,
             Some(VIRTUAL_SOURCE_NAME)
         ));
@@ -320,9 +332,28 @@ mod tests {
     }
 
     #[test]
-    fn manual_mode_never_reclaims() {
-        assert!(!should_reclaim_default(DefaultSourceMode::Manual, None));
+    fn dev_capability_never_reclaims() {
         assert!(!should_reclaim_default(
+            false,
+            DefaultSourceMode::Default,
+            None
+        ));
+        assert!(!should_reclaim_default(
+            false,
+            DefaultSourceMode::Default,
+            Some("alsa_input.usb-mic")
+        ));
+    }
+
+    #[test]
+    fn manual_mode_never_reclaims() {
+        assert!(!should_reclaim_default(
+            true,
+            DefaultSourceMode::Manual,
+            None
+        ));
+        assert!(!should_reclaim_default(
+            true,
             DefaultSourceMode::Manual,
             Some("alsa_input.pci-0000_12_00.6.analog-stereo")
         ));

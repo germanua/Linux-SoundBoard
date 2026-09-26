@@ -96,7 +96,6 @@ impl SoundListInner {
         replacements.sort_unstable_by_key(|(position, _)| *position);
         replacements.dedup_by_key(|(position, _)| *position);
 
-        // Replace the row so GtkColumnView rebinds transient playback state.
         for (position, row) in replacements {
             self.replace_row_at(position, row);
         }

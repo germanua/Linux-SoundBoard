@@ -118,7 +118,7 @@ impl TransportInner {
 
         if let Some(position) = positions.iter().find(|position| !position.finished) {
             self.continue_advance_pending.set(false);
-            // New sound is active — any pending explicit play has now landed.
+
             crate::ui_event_bridge::clear_explicit_play_pending();
             self.clear_continue_suppression_for_playback(&position.play_id);
             self.stop_btn.set_sensitive(true);
@@ -235,7 +235,7 @@ impl TransportInner {
                 drop(active);
                 inner.track_name_label.set_label(&sound.name);
                 inner.track_name_label.set_visible(true);
-                // Publish metadata once the async name arrives.
+
                 let active = inner.active_track.borrow();
                 if let Some(track) = active.as_ref() {
                     crate::ui_event_bridge::post_now_playing(Some(crate::mpris::NowPlaying {
@@ -338,7 +338,6 @@ mod now_playing_tests {
         assert_eq!(now_playing_for(&position(false), 2_500, &None), None);
     }
 
-    /// Guards against announcing the previous sound's name over the new one.
     #[test]
     fn a_name_left_over_from_another_playback_is_not_used() {
         assert_eq!(

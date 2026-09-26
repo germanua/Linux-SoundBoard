@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# Resolved relative to this script at runtime.
-# shellcheck disable=SC1091
+
+
 source "$SCRIPT_DIR/../common.sh"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 DIST_ROOT="$REPO_ROOT/dist"
@@ -24,21 +24,21 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Stage Debian metadata where dpkg-buildpackage expects it
+
 rm -rf "$DEBIAN_DIR"
 mkdir -p "$DEBIAN_DIR"
 cp -a "$SCRIPT_DIR"/. "$DEBIAN_DIR"/
 
-# Clean previous builds
+
 rm -rf "$DEBIAN_DIR/linux-soundboard"
 rm -f "$DIST_ROOT"/*.deb
 rm -f ../*.deb ../*.buildinfo ../*.changes
 
-# Build using debhelper
+
 echo "Running dpkg-buildpackage..."
 dpkg-buildpackage -us -uc -b
 
-# Move .deb to dist/
+
 mkdir -p "$DIST_ROOT"
 mv ../*.deb "$DIST_ROOT/" 2>/dev/null || true
 

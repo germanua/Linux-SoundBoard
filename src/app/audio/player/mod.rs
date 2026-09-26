@@ -1,8 +1,6 @@
-//! PipeWire-backed audio playback with a runtime virtual microphone.
-
 use crate::app_meta::{
-    LOCAL_PLAYBACK_NODE_NAME, MIC_CAPTURE_NODE_NAME, VIRTUAL_OUTPUT_DESCRIPTION,
-    VIRTUAL_SOURCE_NAME,
+    APP_TITLE, LOCAL_PLAYBACK_NODE_NAME, MIC_CAPTURE_NODE_NAME, VIRTUAL_MIC_FEEDER_NODE_NAME,
+    VIRTUAL_OUTPUT_DESCRIPTION, VIRTUAL_SOURCE_NAME,
 };
 use crate::config::{DefaultSourceMode, MicLatencyProfile};
 use glib;
@@ -17,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::mem;
-use std::process::Command;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -86,7 +83,7 @@ use streams::{
 
 const TARGET_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const TARGET_OUTPUT_CHANNELS: u32 = 2;
-// Poll faster than PipeWire's 256-frame quantum.
+
 const MIX_INTERVAL_MS: u64 = 2;
 const MIX_CHUNK_FRAMES: usize = 512;
 const LOCAL_OUTPUT_QUEUE_TARGET_FRAMES: usize = 3_072;
@@ -101,10 +98,17 @@ const ULTRA_STARVATION_TICK_FALLBACK_THRESHOLD: u32 = 12;
 const AUDIO_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const PLAY_COMMAND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FINISHED_PLAYBACK_SNAPSHOTS: usize = 128;
+
+const MAX_ACTIVE_PLAYBACKS: usize = 32;
 const SHUTDOWN_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
 const SHUTDOWN_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const UI_SNAPSHOT_PROGRESS_INTERVAL_MS: u64 = 100;
 const CAPTURE_RECREATE_MISS_THRESHOLD: u8 = 2;
+const BLUEZ5_LOOPBACK_PROPERTY: &str = "bluez5.loopback";
+
+fn bluetooth_loopback_property_is_true(value: Option<&str>) -> bool {
+    matches!(value, Some("true") | Some("1"))
+}
 
 thread_local! {
     static OUTPUT_CALLBACK_SCRATCH: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
@@ -137,7 +141,7 @@ pub struct PlayerSnapshot {
     pub playback_positions: Vec<PlaybackPosition>,
     pub playing_ids: Vec<String>,
     pub audio_sources: Vec<AudioSourceInfo>,
-    /// Captured passthrough source, if any.
+
     pub active_capture_target: Option<String>,
 }
 
@@ -170,6 +174,7 @@ struct SourceDescriptor {
     is_our_virtual_mic: bool,
     is_virtual: bool,
     is_hardware_backed: bool,
+    is_bluetooth_loopback: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -549,6 +554,23 @@ impl AudioPlayer {
         }
     }
 
+    pub fn set_allow_multiple_playbacks(&self, enabled: bool) {
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => {
+                let _ = local
+                    .command_tx
+                    .send(AudioCommand::SetAllowMultiplePlaybacks { enabled });
+            }
+            AudioPlayerBackend::Remote(_) => {
+                let _ = remote_ok(
+                    crate::audio::engine_ipc::EngineRequest::SetAllowMultiplePlaybacks { enabled },
+                );
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => {}
+        }
+    }
+
     pub fn set_mic_passthrough(&self, enabled: bool) -> Result<(), EngineError> {
         let local = match &self.backend {
             AudioPlayerBackend::Local(local) => local,
@@ -778,6 +800,24 @@ impl AudioPlayer {
         }
     }
 
+    pub fn stop_playback(&self, play_id: &str) -> Result<(), EngineError> {
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => local
+                .command_tx
+                .send(AudioCommand::StopPlayback {
+                    play_id: play_id.to_string(),
+                })
+                .map_err(|_| EngineError::Setup("Audio backend thread is not running".to_string())),
+            AudioPlayerBackend::Remote(_) => {
+                remote_ok(crate::audio::engine_ipc::EngineRequest::StopPlayback {
+                    play_id: play_id.to_string(),
+                })
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => Ok(()),
+        }
+    }
+
     pub fn play_replace(
         &self,
         sound_id: &str,
@@ -803,7 +843,7 @@ impl AudioPlayer {
                 "PlayReplace",
             );
         }
-        // In-process stop-and-play avoids an IPC race.
+
         self.stop_all();
         self.play(
             sound_id,
@@ -877,6 +917,26 @@ impl AudioPlayer {
             }
             #[cfg(test)]
             AudioPlayerBackend::Noop(_) => {}
+        }
+    }
+
+    pub fn set_playback_paused(&self, play_id: &str, paused: bool) -> Result<(), EngineError> {
+        match &self.backend {
+            AudioPlayerBackend::Local(local) => local
+                .command_tx
+                .send(AudioCommand::SetPlaybackPaused {
+                    play_id: play_id.to_string(),
+                    paused,
+                })
+                .map_err(|_| EngineError::Setup("Audio backend thread is not running".to_string())),
+            AudioPlayerBackend::Remote(_) => {
+                remote_ok(crate::audio::engine_ipc::EngineRequest::SetPlaybackPaused {
+                    play_id: play_id.to_string(),
+                    paused,
+                })
+            }
+            #[cfg(test)]
+            AudioPlayerBackend::Noop(_) => Ok(()),
         }
     }
 
@@ -1083,6 +1143,7 @@ fn test_runtime_config_with_mode(mode: DefaultSourceMode) -> RuntimeConfig {
         loudness_boost_enabled: false,
         loudness_boost_db: 0.0,
         looping: false,
+        allow_multiple_playbacks: false,
         audio_backend: AudioBackendKind::PipeWire,
     }
 }

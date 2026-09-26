@@ -1,5 +1,3 @@
-//! System tray integration: a StatusNotifierItem and its dbusmenu.
-
 pub(crate) mod menu;
 pub(crate) mod payload;
 mod service;

@@ -13,6 +13,7 @@ mod tab_dnd;
 pub mod tabs_sidebar;
 pub mod theme;
 pub mod transport;
+pub mod updater;
 
 pub(super) fn is_unmodified_delete_shortcut(
     keyval: gtk4::gdk::Key,

@@ -14,9 +14,8 @@ use super::icons;
 pub(super) type FolderRowRefs = Rc<RefCell<Vec<gtk4::glib::WeakRef<adw::ActionRow>>>>;
 pub(super) type RebuildPending = Rc<Cell<bool>>;
 
-/// Reloads the removed-folder list.
 pub(super) type HiddenFolderRefresh = Rc<dyn Fn()>;
-/// Lets the restore button trigger the reload that creates it.
+
 type HiddenFolderRefreshHolder = Rc<RefCell<Option<HiddenFolderRefresh>>>;
 
 fn try_set_rebuild_pending(rebuild_pending: &Cell<bool>) -> bool {
@@ -228,7 +227,7 @@ pub(super) fn build_hidden_folders_group(
         .visible(false)
         .build();
     let rows: Rc<RefCell<Vec<adw::ActionRow>>> = Rc::new(RefCell::new(Vec::new()));
-    // Holder breaks the reload callback's self-reference.
+
     let holder: HiddenFolderRefreshHolder = Rc::new(RefCell::new(None));
     let refresh: HiddenFolderRefresh = {
         let group = group.clone();

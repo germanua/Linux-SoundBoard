@@ -9,7 +9,7 @@ Linux Soundboard uses GitHub Issues for bug reports and regressions.
 The installer collects everything below for you:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
 Choose **Make a bug report**, or run it directly:
@@ -48,7 +48,7 @@ installer cannot run on your system.
 
 - Distribution and version
 - Session type: `Wayland`, `X11`, or `XWayland`
-- Install method: `AUR`, `.deb`, `.rpm`, `AppImage`, or source build
+- Install method: `AppImage` or source build (note any legacy AUR/`.deb`/`.rpm` package still installed)
 - Exact steps to reproduce
 - Expected behavior
 - Actual behavior
@@ -66,7 +66,7 @@ wpctl status -n
 linux-soundboard --diagnose
 ```
 
-If the issue is packaging-related, include the package filename you installed and the exact command used to install it.
+If the issue is installation-related, include the AppImage filename (or identify the legacy package/source build) and the exact command used to install it.
 
 If sounds, folders, tabs, or hotkey bindings are missing or wrong, include the
 state of the library database:

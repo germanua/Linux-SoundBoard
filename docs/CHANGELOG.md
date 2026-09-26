@@ -6,6 +6,51 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- **Concurrent playback:** An optional Playback setting allows several sounds to remain live at once. Voices share one bounded mix path, microphone passthrough is added once per mix chunk, and the engine caps the mix at 32 live voices.
+- **Per-playback Now Playing controls:** When two or more playbacks are active, a compact panel above the sound library provides a seek timeline, elapsed/total time, pause/resume, and stop for every playback. Repeated plays of the same sound remain independently controllable. Cards wrap into up to three columns and the panel scrolls after roughly two visible rows instead of pushing the library downward.
+- **Batch hotkey assignment:** One hotkey can be applied atomically to multiple selected sounds when shared hotkeys are enabled, with scope-aware conflict checks and rollback-safe updates.
+- **Routing diagnostics:** Bug reports include default sink/source names, relevant node states, Bluetooth card profiles, and the microphone capture graph.
+- **Authenticated in-app AppImage updates:** Stable AppImage installs automatically check at most once per day and can also check manually in Settings. Signed `update.json`, the release checksum manifest, and the complete AppImage are authenticated before an update is offered. Downloads use private staging with byte-level progress and cancellation, and installation requires an explicit Restart & Update action.
+- **Update recovery:** Before replacement, the updater snapshots the installed AppImage, configuration, SQLite library through SQLite's backup API, and user systemd units. A failed install or unhealthy new launch restores the prior state and reopens the previous version with a recovery notice.
+
+### Changed
+
+- **Next-release distribution:** The development line after public 2.4.4 is being prepared as an x86_64 AppImage-only release. Legacy AUR/DEB/RPM/tarball files remain for history and migration support but are not planned public artifacts for the next release. The current AppImage baseline requires glibc 2.39 or newer.
+- **Now Playing layout:** Per-playback controls live with the sound library rather than inside the global transport bar, preserving the Tabs/Folders sidebar and using the library width more efficiently.
+- **Shared-hotkey selection:** Shared hotkeys skip sounds that already have a live voice instead of immediately selecting an already-playing member again.
+- **Private application state:** Configuration, SQLite data, installer state, snapshots, runtime logs, command captures, and updater staging use owner-only paths and permissions.
+- **Bounded external commands:** Audio/service probes use bounded subprocess execution, including large-output commands, so a wedged PipeWire, PulseAudio, or systemd command cannot indefinitely block startup or diagnostics.
+- **Native-package update behavior:** Package-managed installations can check for a release manually but never self-modify `/usr`; the update UI directs those users to the authenticated AppImage path instead.
+- **Release/update metadata:** Signed `update.json` metadata and a bounded Minisign keyring authorize update metadata and support controlled signing-key rotation. GitHub provides discovery and transport, while release tags, metadata, and artifacts remain authorized by the release-bound signature.
+- **Privileged helper updates:** A release that needs to change the root-owned Wayland hotkey helper continues through the authenticated installer instead of expanding the in-app updater's privilege boundary.
+
+### Fixed
+
+- **Bluetooth microphone auto-detect:** WirePlumber Bluetooth headset autoswitch loopback sources (`bluez5.loopback=true`) are no longer treated as ordinary hardware microphones, including through the PulseAudio compatibility backend, preventing unexpected A2DP-to-headset profile switching during automatic mic selection. If that proxy is the only available microphone, Auto-detect waits; explicitly choosing the headset microphone remains supported.
+- **Ogg Opus stream endings:** Complete CRC-valid audio remains playable when an otherwise usable stream lacks the conventional end-of-stream marker or ends with an incomplete terminal page; corrupt or unusable streams remain errors.
+- **Hotkey capture safety:** Saving with no newly captured chord no longer behaves like Clear, and clearing a binding uses the live scope selection.
+- **AppImage downgrade prevention:** Release versions are normalized consistently so an older AppImage cannot silently replace a newer installed copy.
+- **Runtime path safety:** Diagnostic logs, command-capture files, engine IPC fallbacks, and updater state reject symlink redirection and avoid predictable shared temporary paths.
+- **AppImage host compatibility:** Installer and runtime preflight reject unsupported architectures and glibc baselines before launch, validate required host-side libraries, and provide distro-specific guidance instead of failing later in the dynamic loader.
+- **Wayland helper dependencies:** Arch-family setup no longer expects a separate `cargo` package, and openSUSE uses the current `pkgconf-pkg-config` package name.
+- **Tab count rendering:** Sidebar count badges no longer clip digits or render them at fractional positions that blur the glyphs.
+
+### Security
+
+- **Wayland hotkey privilege boundary:** Privileged setup uses a fixed root-owned helper and managed daemon path. Linux Soundboard never promotes a `swhkd` discovered through `PATH`, `$HOME`, package hooks, or an AppImage mount.
+- **Pinned hotkey build:** The managed `swhkd` build uses a checked-in locked dependency graph with rfkill support disabled and removes the RustSec vulnerabilities present in the previous pinned upstream lockfile.
+- **Authenticated bootstrap:** The public one-line installer authenticates the release-published installer and checksum manifest before executing the installer or accepting the AppImage.
+- **Trusted privileged command resolution:** Root operations resolve commands from trusted system directories before invoking `sudo`, preventing a hostile caller `PATH` from substituting tools or package managers.
+- **Release build inputs and dependency policy:** AppImage tooling, runtime, Rust bootstrap, and container inputs are pinned and verified. CI audits both Rust lockfiles and applies `cargo-deny` advisory, source, license, and dependency-policy checks.
+- **Updater trust boundary:** Update downloads are HTTPS-only, repository-restricted, size-bounded, staged in private state, re-verified before installation, and protected against downgrade, symlink redirection, partial downloads, PID reuse, and tampered replacement files.
+- **Release-key rotation:** The updater accepts a bounded Minisign keyring so a transition release can trust the current and next signing key before the active signer changes. Release preflight refuses a signer absent from that keyring.
+
+### Maintenance
+
+- **Smaller source modules:** Oversized application, test, and release-pipeline files were split into smaller logical units without changing behavior, and CI now rejects maintained code/script files above 2,000 lines.
+
 ## [2.4.4] - 2026-08-30
 
 ### Changed

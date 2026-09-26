@@ -1,5 +1,3 @@
-//! StatusNotifierItem and D-Bus menu implementation.
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -16,12 +14,10 @@ const ITEM_PATH: &str = "/StatusNotifierItem";
 const MENU_INTERFACE: &str = "com.canonical.dbusmenu";
 const MENU_PATH: &str = "/MenuBar";
 
-/// Something the user did to the tray icon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrayAction {
-    /// The icon was left-clicked.
     Activate,
-    /// A menu row was clicked, identified by its `MenuItem::id`.
+
     MenuItem(i32),
 }
 
@@ -116,7 +112,7 @@ const INTERFACES_XML: &str = r#"
 
 struct TrayState {
     items: Vec<MenuItem>,
-    /// Bumped whenever the menu changes; hosts use it to spot a stale layout.
+
     revision: u32,
     tooltip: String,
 }
@@ -128,7 +124,7 @@ pub(crate) struct TrayService {
     watcher: Cell<Option<gio::SignalSubscriptionId>>,
     registrations: RefCell<Vec<gio::RegistrationId>>,
     state: Rc<RefCell<TrayState>>,
-    /// True after a watcher accepts registration.
+
     registered: Rc<Cell<bool>>,
 }
 
@@ -206,7 +202,6 @@ impl TrayService {
         self.registered.get()
     }
 
-    /// Replaces the menu and bumps its revision.
     pub(crate) fn set_menu(&self, items: Vec<MenuItem>) {
         {
             let mut state = self.state.borrow_mut();
@@ -269,7 +264,6 @@ fn watcher_appeared(params: &Variant) -> bool {
         .is_some_and(|new_owner| !new_owner.is_empty())
 }
 
-/// The bus name convention every watcher expects.
 fn item_bus_name(pid: u32) -> String {
     format!("org.kde.StatusNotifierItem-{pid}-1")
 }
@@ -331,7 +325,7 @@ fn register_item(
             "Menu" => glib::variant::ObjectPath::try_from(MENU_PATH)
                 .expect("the literal menu path is a valid object path")
                 .to_variant(),
-            // False lets left-click reach Activate.
+
             "ItemIsMenu" => false.to_variant(),
             "IconPixmap" | "OverlayIconPixmap" | "AttentionIconPixmap" => empty_pixmaps(),
             _ => String::new().to_variant(),
@@ -394,7 +388,7 @@ fn register_menu(
                         None => Err(unknown_id(id)),
                     }
                 }
-                // Qt signals changes and ignores this result.
+
                 "AboutToShow" => Ok(Some(Variant::tuple_from_iter([false.to_variant()]))),
                 "AboutToShowGroup" => Ok(Some(Variant::tuple_from_iter([
                     empty_int_list(),
@@ -403,7 +397,6 @@ fn register_menu(
                 "EventGroup" => Ok(Some(Variant::tuple_from_iter([empty_int_list()]))),
                 "Event" => {
                     if let Some(id) = clicked_id(&params) {
-                        // The handler may rebuild the borrowed menu state.
                         drop(state);
                         handler(TrayAction::MenuItem(id));
                     }
@@ -524,7 +517,7 @@ mod tests {
     #[test]
     fn a_watcher_taking_the_name_counts_as_arriving() {
         assert!(watcher_appeared(&name_owner_changed("", ":1.42")));
-        // A panel restart hands the name straight from one owner to the next.
+
         assert!(watcher_appeared(&name_owner_changed(":1.41", ":1.42")));
     }
 

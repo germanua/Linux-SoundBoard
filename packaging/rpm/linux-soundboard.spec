@@ -35,7 +35,7 @@ Recommends:     xorg-x11-server-Xwayland
 A high-performance, native Linux soundboard built with Rust, GTK4, and
 Libadwaita. Features include virtual microphone for routing audio to
 Discord, OBS, Zoom, etc., mic passthrough, LUFS normalization, global
-hotkeys via swhkd on Wayland and via the native X11 backend on X11/XWayland, and modern GTK4/Libadwaita
+hotkeys via managed swhkd on Wayland and via the native X11 backend on X11/XWayland, and modern GTK4/Libadwaita
 UI with native PipeWire virtual microphone support.
 
 %prep
@@ -48,20 +48,20 @@ cargo build --locked --release --manifest-path src/Cargo.toml
 %install
 rm -rf %{buildroot}
 
-# Install binary
+
 install -Dm755 target/release/linux-soundboard \
     %{buildroot}%{_bindir}/linux-soundboard
 
-for legal_file in NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md; do
+for legal_file in NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md; do
     install -Dm644 $legal_file \
         %{buildroot}%{_docdir}/%{name}/$legal_file
 done
 
-# Install desktop file
+
 install -Dm644 packaging/rpm/linux-soundboard.desktop \
     %{buildroot}%{_datadir}/applications/com.linuxsoundboard.app.desktop
 
-# Install icons
+
 for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
     install -Dm644 src/resources/icons/$size/apps/com.linuxsoundboard.app.png \
         %{buildroot}%{_datadir}/icons/hicolor/$size/apps/com.linuxsoundboard.app.png
@@ -69,17 +69,21 @@ for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
         %{buildroot}%{_datadir}/icons/hicolor/$size/apps/linux-soundboard.png
 done
 
-# Install metainfo
+
 install -Dm644 packaging/flatpak/com.linuxsoundboard.app.metainfo.xml \
     %{buildroot}%{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 
-# Install one-click Wayland hotkey installer helper and policy
+
 install -Dm755 packaging/linux/install-swhkd-helper.sh \
     %{buildroot}%{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
+install -Dm755 packaging/linux/build-swhkd-locked.sh \
+    %{buildroot}%{_libexecdir}/linux-soundboard/build-swhkd-locked.sh
+install -Dm644 packaging/linux/swhkd-Cargo.lock.pinned \
+    %{buildroot}%{_libexecdir}/linux-soundboard/swhkd-Cargo.lock.pinned
 install -Dm644 packaging/linux/com.linuxsoundboard.install-swhkd.policy \
     %{buildroot}%{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 
-# Install user service for boot-ready audio engine
+
 install -Dm644 packaging/linux/linux-soundboard-engine.service \
     %{buildroot}%{_userunitdir}/linux-soundboard-engine.service
 install -Dm644 packaging/linux/linux-soundboard-engine.target \
@@ -91,13 +95,14 @@ install -Dm644 packaging/linux/linux-soundboard-engine.target \
 %{_docdir}/%{name}/THIRDPARTY_LICENSES.md
 %{_docdir}/%{name}/THIRD_PARTY_NOTICES.html
 %{_docdir}/%{name}/COMMERCIAL-LICENSE.md
-%{_docdir}/%{name}/DONATIONS.md
 %{_bindir}/linux-soundboard
 %{_datadir}/applications/com.linuxsoundboard.app.desktop
 %{_datadir}/icons/hicolor/*/apps/com.linuxsoundboard.app.png
 %{_datadir}/icons/hicolor/*/apps/linux-soundboard.png
 %{_datadir}/metainfo/com.linuxsoundboard.app.metainfo.xml
 %{_libexecdir}/linux-soundboard/install-swhkd-helper.sh
+%{_libexecdir}/linux-soundboard/build-swhkd-locked.sh
+%{_libexecdir}/linux-soundboard/swhkd-Cargo.lock.pinned
 %{_datadir}/polkit-1/actions/com.linuxsoundboard.install-swhkd.policy
 %{_userunitdir}/linux-soundboard-engine.service
 %{_userunitdir}/linux-soundboard-engine.target
@@ -110,21 +115,8 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl --global enable linux-soundboard-engine.target >/dev/null 2>&1 || true
 fi
 
-# Set setuid bit on swhkd if it exists
-if [ -f /usr/bin/swhkd ]; then
-    chmod u+s /usr/bin/swhkd
-    echo "✓ Configured swhkd with setuid permissions"
-else
-    echo "Warning: swhkd not found. Native Wayland hotkeys need a host-installed swhkd."
-    echo "Fedora does not currently ship swhkd in the official package set."
-    echo "Install it from upstream: https://github.com/waycrate/swhkd/blob/main/INSTALL.md"
-    echo "X11 and XWayland sessions can use the native X11 backend without swhkd."
-fi
-
-# Ensure swhks is executable
-if [ -f /usr/bin/swhks ]; then
-    chmod +x /usr/bin/swhks
-fi
+echo "Wayland hotkeys use Linux Soundboard's pinned managed swhkd installer."
+echo "Open Linux Soundboard and use Install swhkd when Wayland hotkeys are needed."
 
 echo "✓ LinuxSoundBoard configuration complete"
 

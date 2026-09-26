@@ -2,7 +2,6 @@ use super::AutoGainDynamicParams;
 
 const LIMITER_UPDATE_INTERVAL_FRAMES: usize = 256;
 
-/// Leaves 2% headroom for inter-sample peaks.
 const LIMITER_TARGET_PEAK: f32 = 0.98;
 
 pub(super) struct LookAheadLimiter {
@@ -70,7 +69,6 @@ impl LookAheadLimiter {
             self.current_gain = (self.current_gain + step).min(self.target_gain);
         }
 
-        // Keep dynamic warmup click-free by passing audio through immediately.
         sample * self.current_gain
     }
 }

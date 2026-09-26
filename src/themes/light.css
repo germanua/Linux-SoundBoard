@@ -1,4 +1,4 @@
-/* Light theme custom styles */
+
 @define-color accent_bg_color #A88D52;
 @define-color accent_fg_color #332B1F;
 @define-color accent_color #A88D52;
@@ -9,7 +9,7 @@ window,
   color: #332b1f;
 }
 
-/* Global text color */
+
 label,
 button,
 entry {
@@ -168,7 +168,7 @@ headerbar:backdrop,
   border: 1px solid transparent;
 }
 
-/* Symbolic icon coloring in transport bar */
+
 .transport-bar button image {
   color: #332b1f;
   -gtk-icon-size: 14px;
@@ -242,7 +242,7 @@ headerbar:backdrop,
   -gtk-icon-size: 16px;
 }
 
-/* Column view text */
+
 columnview {
   color: #332b1f;
 }
@@ -284,7 +284,7 @@ columnview row > cell label {
   border: 1px solid rgba(168, 141, 82, 0.55);
 }
 
-/* Appearance options selection in Settings */
+
 .appearance-choice-row {
   border-left: 3px solid transparent;
   border-radius: 8px;
@@ -304,7 +304,7 @@ row.appearance-choice-row {
   border-left-color: #a88d52;
 }
 
-/* Navigation sidebar selection override */
+
 .navigation-sidebar row:selected {
   background-color: rgba(168, 141, 82, 0.2);
   border-left: 4px solid #a88d52;
@@ -323,7 +323,7 @@ row.appearance-choice-row {
   outline: none;
 }
 
-/* A line in the gap means "drop here to reorder". */
+
 .lsb-folder-row.lsb-drop-before {
   box-shadow: inset 0 3px 0 0 #a88d52;
 }
@@ -332,7 +332,7 @@ row.appearance-choice-row {
   box-shadow: inset 0 -3px 0 0 #a88d52;
 }
 
-/* A filled row means "put what you are dragging inside this folder". */
+
 .lsb-folder-row.lsb-drop-into {
   background-color: rgba(168, 141, 82, 0.3);
   border-radius: 6px;
@@ -344,7 +344,7 @@ row.appearance-choice-row {
   opacity: 1;
 }
 
-/* Hotkey badge — pill style */
+
 .hotkey-badge {
   font-family: monospace;
   font-size: 0.72rem;
@@ -361,7 +361,7 @@ row.appearance-choice-row {
   padding: 8px 16px;
 }
 
-/* GTK before 4.20 needs separate opacity-only keyframes. */
+
 @keyframes playing-dot-pulse {
   0% {
     opacity: 1;
@@ -392,7 +392,7 @@ row.appearance-choice-row {
   }
 }
 
-/* Playing sound indicator dot */
+
 .playing-dot {
   min-width: 8px;
   min-height: 8px;
@@ -401,7 +401,7 @@ row.appearance-choice-row {
   animation: playing-dot-pulse 1.5s ease-in-out infinite;
 }
 
-/* Row styling for sound list */
+
 columnview row:nth-child(even)
   > cell:not(.sound-cell-playing):not(.sound-cell-active) {
   background-color: rgba(168, 141, 82, 0.03);
@@ -418,19 +418,19 @@ columnview header button:checked {
   color: #332b1f;
 }
 
-/* Active transport buttons — background tint + border glow */
+
 .btn-active {
   background-color: rgba(168, 141, 82, 0.25);
   border: 1px solid rgba(168, 141, 82, 0.44);
 }
 
-/* Settings button active glow */
+
 .btn-settings-active {
   background-color: rgba(168, 141, 82, 0.25);
   border: 1px solid rgba(168, 141, 82, 0.5);
 }
 
-/* Settings controls should keep the app palette instead of the system accent */
+
 .lsb-settings-overlay {
   background-color: transparent;
 }
@@ -570,7 +570,7 @@ columnview header button:checked {
   border-radius: 8px;
 }
 
-/* Right-click context menus (tab / sound popovers). */
+
 .lsb-context-menu > contents {
   background-color: #fffdfb;
   border: 1px solid rgba(120, 93, 41, 0.35);
@@ -710,12 +710,12 @@ columnview header button:checked {
   background-color: rgba(123, 61, 48, 0.16);
 }
 
-/* Refresh button spinning indicator */
+
 .spinning {
   animation: spin 0.8s linear infinite;
 }
 
-/* Custom scrollbar styling */
+
 scrollbar slider {
   min-width: 8px;
   min-height: 8px;
@@ -727,7 +727,7 @@ scrollbar slider:hover {
   background-color: rgba(168, 141, 82, 0.7);
 }
 
-/* Transport button hover */
+
 .transport-bar button:hover {
   background-color: rgba(168, 141, 82, 0.12);
   border-radius: 10px;
@@ -741,7 +741,7 @@ scrollbar slider:hover {
   border-radius: 10px;
 }
 
-/* Scrub bar (transport Scale widget) */
+
 .transport-bar scale {
   min-height: 18px;
 }
@@ -766,7 +766,7 @@ scrollbar slider:hover {
   min-height: 14px;
 }
 
-/* Volume sliders (smaller) */
+
 scale.volume-slider trough {
   background-color: rgba(247, 244, 239, 0.7);
   border: 1px solid rgba(168, 141, 82, 0.4);
@@ -818,7 +818,61 @@ entry.volume-input {
   color: #332b1f;
 }
 
-/* Sound row hover */
+
+
+.now-playing-panel {
+  background-color: #f5f0e8;
+  border-top: 1px solid rgba(168, 141, 82, 0.26);
+  border-bottom: 1px solid rgba(168, 141, 82, 0.20);
+  padding: 1px 6px 3px;
+}
+.now-playing-header { min-height: 24px; }
+.now-playing-panel .now-playing-title { font-weight: 600; color: #332b1f; }
+.now-playing-panel .now-playing-disclosure,
+.now-playing-panel .now-playing-row-btn {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  background-color: transparent;
+  background-image: none;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.now-playing-panel .now-playing-disclosure:hover,
+.now-playing-panel .now-playing-row-btn:hover {
+  background-color: rgba(51, 43, 31, 0.08);
+  border-color: rgba(168, 141, 82, 0.28);
+}
+.now-playing-list { padding: 0; }
+.now-playing-list > flowboxchild { padding: 0; }
+.now-playing-row {
+  min-height: 32px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background-color: rgba(236, 227, 212, 0.74);
+}
+.now-playing-row.paused { background-color: rgba(236, 227, 212, 0.50); }
+.now-playing-panel .now-playing-track-name {
+  min-width: 90px;
+  font-weight: 500;
+  color: #332b1f;
+}
+.now-playing-panel .now-playing-time {
+  font-size: 0.80rem;
+  color: rgba(51, 43, 31, 0.68);
+}
+.now-playing-progress { min-width: 80px; min-height: 8px; }
+.now-playing-progress trough {
+  min-height: 4px;
+  border-radius: 3px;
+  background-color: rgba(247, 244, 239, 0.9);
+  border: 1px solid rgba(168, 141, 82, 0.24);
+}
+.now-playing-progress trough highlight { border-radius: 3px; background-color: #a88d52; }
+.now-playing-progress trough slider { min-width: 10px; min-height: 10px; }
+
+
 columnview row:hover {
   background-color: rgba(168, 141, 82, 0.08);
 }
@@ -827,7 +881,7 @@ columnview row:hover > cell {
   background-color: transparent;
 }
 
-/* Sound list selection should use the app palette, not the desktop accent */
+
 columnview.data-table row:selected {
   background-color: rgba(168, 141, 82, 0.18);
   background-image: none;
@@ -884,7 +938,7 @@ columnview.data-table rubberband {
   border: 1px solid rgba(168, 141, 82, 0.55);
 }
 
-/* Hotkey capture zone */
+
 .hotkey-capture-zone {
   border: 2px solid rgba(168, 141, 82, 0.5);
   border-radius: 8px;
@@ -909,7 +963,7 @@ columnview.data-table rubberband {
   color: #a88d52;
 }
 
-/* Add-to-tab mode header in transport bar */
+
 .add-to-tab-header {
   color: #a88d52;
   font-weight: bold;
@@ -942,16 +996,17 @@ columnview.data-table rubberband {
   -gtk-icon-size: 28px;
 }
 
-/* Tab count badge */
+
 .tab-count-badge {
-  font-size: 0.72rem;
+  font-size: 0.80rem;
+  min-height: 16px;
   background-color: transparent;
   border-radius: 0;
-  padding: 0;
+  padding: 1px 0;
   color: rgba(51, 43, 31, 0.55);
 }
 
-/* Monospace label */
+
 .monospace {
   font-family: monospace;
   font-size: 0.8rem;
@@ -975,7 +1030,7 @@ columnview.data-table rubberband {
   font-weight: 500;
 }
 
-/* Theme swatch circles */
+
 .theme-swatch {
   min-width: 16px;
   min-height: 16px;
@@ -984,7 +1039,7 @@ columnview.data-table rubberband {
   border: 1px solid rgba(168, 141, 82, 0.3);
 }
 
-/* Volume controls pill container */
+
 .volume-group {
   background-color: rgba(168, 141, 82, 0.08);
   border: 1px solid rgba(168, 141, 82, 0.18);
@@ -993,7 +1048,7 @@ columnview.data-table rubberband {
   margin: 0;
 }
 
-/* Content area background differentiation */
+
 columnview {
   color: #332b1f;
   background-color: #f0ede8;
@@ -1008,12 +1063,12 @@ columnview header button {
   opacity: 0.95;
 }
 
-/* Card mode header - match cell padding */
+
 columnview.list-style-card header button {
   padding: 10px 12px;
 }
 
-/* Card mode container */
+
 columnview.list-style-card row > cell {
   padding: 10px 8px;
 }
@@ -1031,7 +1086,7 @@ columnview.list-style-card row > cell:first-child {
   border-left: 4px solid transparent;
 }
 
-/* Card mode row backgrounds - more visible alternation */
+
 columnview.list-style-card row:nth-child(even) {
   background-color: rgba(168, 141, 82, 0.06);
 }
@@ -1040,13 +1095,13 @@ columnview.list-style-card row:nth-child(odd) {
   background-color: rgba(247, 244, 239, 0.5);
 }
 
-/* Card mode row backgrounds - disable zebra striping */
+
 columnview.list-style-card row:nth-child(even),
 columnview.list-style-card row:nth-child(odd) {
   background-color: transparent;
 }
 
-/* Card mode hover - stronger effect */
+
 columnview.list-style-card row:hover {
   background-color: rgba(168, 141, 82, 0.15);
 }
@@ -1059,7 +1114,7 @@ columnview.list-style-card.data-table row:selected:hover {
   background-color: rgba(168, 141, 82, 0.27);
 }
 
-/* Card mode playing state - consistent color across all cells */
+
 columnview.list-style-card .sound-cell-playing {
   background-color: transparent;
 }
@@ -1068,7 +1123,7 @@ columnview.list-style-card .sound-cell-first.sound-cell-playing {
   border-left-color: transparent;
 }
 
-/* Card mode active/selected - stronger accent */
+
 columnview.list-style-card .sound-cell-active {
   background-color: transparent;
 }
@@ -1093,33 +1148,33 @@ columnview.list-style-card row > cell.sound-cell-active {
   background-color: rgba(168, 141, 82, 0.25);
 }
 
-/* Card mode playing dot - larger with glow simulation */
+
 .list-style-card .playing-dot {
   min-width: 10px;
   min-height: 10px;
   color: #332b1f;
 }
 
-/* Card mode sound name - bolder */
+
 .list-style-card .sound-name {
   font-weight: 600;
   font-size: 0.9rem;
 }
 
-/* Card mode hotkey badge - more subtle */
+
 .list-style-card .hotkey-badge {
   background-color: transparent;
   border: 1px solid rgba(168, 141, 82, 0.25);
   color: rgba(51, 43, 31, 0.7);
 }
 
-/* Card mode index number - more visible */
+
 .list-style-card .sound-index {
   font-size: 0.8rem;
   color: rgba(168, 141, 82, 0.6);
 }
 
-/* Drag icon label */
+
 .drag-icon-label {
   background-color: rgba(168, 141, 82, 0.95);
   color: #f7f4ef;

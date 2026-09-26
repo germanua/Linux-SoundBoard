@@ -21,12 +21,6 @@ The project owner may publish official commercial builds, including builds distr
 
 The existence of an official paid build does not grant third parties the right to sell, repackage, or commercially distribute the public repository version.
 
-## Donations and sponsorships
-
-Voluntary donations to the official project support development but do not grant ownership, commercial-use rights, resale rights, or a commercial license.
-
-Payments required or expected in exchange for a copy, build, bundle, commercial service, or paid support are not treated as ordinary donations under this policy. See [Donations and Sponsorships](DONATIONS.md).
-
 ## Contact
 
 For commercial licensing, contact the project owner through the GitHub repository:

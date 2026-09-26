@@ -508,7 +508,7 @@ fn test_set_hotkey_valid() {
                 .recv()
                 .expect("read the sound's bindings");
             assert_eq!(bindings.len(), 1);
-            // Stored canonicalized, not as typed.
+
             assert_eq!(bindings[0].accelerator, "Ctrl+Digit1");
         }
         Err(e) => {
@@ -773,7 +773,7 @@ fn a_tab_can_be_given_its_own_hotkey() {
         binding.owner,
         crate::library_store::HotkeyBindingOwner::Tab("tab:party".to_string())
     );
-    // Always live, or there would be no way to switch back to this tab.
+
     assert_eq!(binding.tab_scope, None);
 }
 
@@ -872,6 +872,835 @@ fn a_tab_binding_id_is_not_mistaken_for_a_sound() {
         commands::tab_from_binding_id(ControlHotkeyAction::StopAll.binding_id()),
         None
     );
+}
+
+fn hotkey_batch_sounds(count: usize) -> Vec<Sound> {
+    (0..count)
+        .map(|index| {
+            Sound::new(
+                format!("Batch {index}"),
+                format!("/tmp/hotkey-batch-{}-{index}.mp3", uuid::Uuid::new_v4()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_store_batch_writes_one_row_per_target() {
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+
+    let written = library
+        .set_sound_hotkeys(ids.clone(), Some("Ctrl+Alt+KeyQ".to_string()), None)
+        .recv()
+        .expect("the transaction commits");
+    assert_eq!(written, 3);
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert_eq!(bindings.len(), 1, "one row for {id}");
+        assert_eq!(bindings[0].accelerator, "Ctrl+Alt+KeyQ");
+        assert_eq!(bindings[0].tab_scope, None);
+    }
+}
+
+#[test]
+fn a_batch_replaces_only_the_target_scope() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    let tab_chords = ["Ctrl+Alt+Digit1", "Ctrl+Alt+Digit2", "Ctrl+Alt+Digit3"];
+    let global_chords = ["Ctrl+Alt+KeyA", "Ctrl+Alt+KeyB", "Ctrl+Alt+KeyC"];
+    for ((id, tab_chord), global_chord) in ids.iter().zip(tab_chords).zip(global_chords) {
+        library
+            .set_sound_hotkeys(
+                vec![id.clone()],
+                Some(tab_chord.to_string()),
+                Some("tab:one".to_string()),
+            )
+            .recv()
+            .expect("seed the tab binding");
+        seed_hotkey_binding(
+            &library,
+            crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+            global_chord,
+        );
+    }
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyZ".to_string()),
+        true,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection,
+    )
+    .expect("the batch replaces the tab binding");
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        let scoped: Vec<&str> = bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.as_deref() == Some("tab:one"))
+            .map(|binding| binding.accelerator.as_str())
+            .collect();
+        let global: Vec<&str> = bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.is_none())
+            .map(|binding| binding.accelerator.as_str())
+            .collect();
+        assert_eq!(scoped, ["Ctrl+Alt+KeyZ"], "the tab binding is replaced");
+        assert_eq!(global.len(), 1, "the global binding is untouched");
+    }
+}
+
+#[test]
+fn a_failed_batch_leaves_no_partial_state() {
+    let sounds = hotkey_batch_sounds(2);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(ids[0].clone()),
+        "Ctrl+Alt+KeyA",
+    );
+
+    let mut targets = ids.clone();
+    targets.push("missing-sound".to_string());
+    library
+        .set_sound_hotkeys(targets, Some("Ctrl+Alt+KeyB".to_string()), None)
+        .recv()
+        .expect_err("an unknown target aborts the batch");
+
+    let first = library
+        .hotkey_bindings_for_sound(&ids[0])
+        .recv()
+        .expect("read the first target");
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].accelerator, "Ctrl+Alt+KeyA",
+        "the already-processed target must roll back"
+    );
+    let second = library
+        .hotkey_bindings_for_sound(&ids[1])
+        .recv()
+        .expect("read the second target");
+    assert!(second.is_empty(), "no target may be left written");
+}
+
+#[test]
+fn a_batch_clear_removes_only_the_target_scope() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    for id in &ids {
+        library
+            .set_sound_hotkeys(
+                vec![id.clone()],
+                Some("Ctrl+Alt+Digit5".to_string()),
+                Some("tab:one".to_string()),
+            )
+            .recv()
+            .expect("seed the tab binding");
+        seed_hotkey_binding(
+            &library,
+            crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+            "Ctrl+Alt+KeyD",
+        );
+    }
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        None,
+        true,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection,
+    )
+    .expect("the batch clears the tab binding");
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert!(
+            !bindings
+                .iter()
+                .any(|binding| binding.tab_scope.as_deref() == Some("tab:one")),
+            "the tab binding is cleared"
+        );
+        assert!(
+            bindings.iter().any(|binding| binding.tab_scope.is_none()),
+            "the global binding survives"
+        );
+    }
+}
+
+#[test]
+fn a_global_clear_keeps_the_tab_binding() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(1);
+    let id = sounds[0].id.clone();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+        "Ctrl+Alt+KeyF",
+    );
+    library
+        .set_sound_hotkeys(
+            vec![id.clone()],
+            Some("Ctrl+Alt+Digit2".to_string()),
+            Some("tab:one".to_string()),
+        )
+        .recv()
+        .expect("seed the tab binding");
+
+    commands::set_hotkey_many(
+        vec![id.clone()],
+        None,
+        false,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("a clear needs no sharing toggle");
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert!(
+        !bindings.iter().any(|binding| binding.tab_scope.is_none()),
+        "the global binding is cleared"
+    );
+    assert_eq!(
+        bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.as_deref() == Some("tab:one"))
+            .map(|binding| binding.accelerator.as_str())
+            .collect::<Vec<_>>(),
+        ["Ctrl+Alt+Digit2"],
+        "the tab binding survives"
+    );
+}
+
+#[test]
+fn a_tab_clear_keeps_the_global_binding() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(1);
+    let id = sounds[0].id.clone();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+        "Ctrl+Alt+KeyF",
+    );
+    library
+        .set_sound_hotkeys(
+            vec![id.clone()],
+            Some("Ctrl+Alt+Digit2".to_string()),
+            Some("tab:one".to_string()),
+        )
+        .recv()
+        .expect("seed the tab binding");
+
+    commands::set_hotkey_many(
+        vec![id.clone()],
+        None,
+        false,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection,
+    )
+    .expect("a clear needs no sharing toggle");
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert!(
+        !bindings
+            .iter()
+            .any(|binding| binding.tab_scope.as_deref() == Some("tab:one")),
+        "the tab binding is cleared"
+    );
+    assert_eq!(
+        bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.is_none())
+            .map(|binding| binding.accelerator.as_str())
+            .collect::<Vec<_>>(),
+        ["Ctrl+Alt+KeyF"],
+        "the global binding survives"
+    );
+}
+
+#[test]
+fn a_multi_sound_tab_clear_needs_no_sharing() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    let globals = ["Ctrl+Alt+KeyA", "Ctrl+Alt+KeyB", "Ctrl+Alt+KeyC"];
+    for (id, global) in ids.iter().zip(globals) {
+        seed_hotkey_binding(
+            &library,
+            crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+            global,
+        );
+        library
+            .set_sound_hotkeys(
+                vec![id.clone()],
+                Some("Ctrl+Alt+Digit3".to_string()),
+                Some("tab:one".to_string()),
+            )
+            .recv()
+            .expect("seed the tab binding");
+    }
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        None,
+        false,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection,
+    )
+    .expect("a multi-sound clear needs no sharing toggle");
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert!(
+            !bindings
+                .iter()
+                .any(|binding| binding.tab_scope.as_deref() == Some("tab:one")),
+            "the tab binding is cleared for {id}"
+        );
+        assert!(
+            bindings.iter().any(|binding| binding.tab_scope.is_none()),
+            "the global binding survives for {id}"
+        );
+    }
+}
+
+#[test]
+fn a_clear_leaves_other_tabs_untouched() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(1);
+    let id = sounds[0].id.clone();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(id.clone()),
+        "Ctrl+Alt+KeyA",
+    );
+    for (chord, scope) in [
+        ("Ctrl+Alt+Digit1", "tab:one"),
+        ("Ctrl+Alt+Digit2", "tab:two"),
+    ] {
+        library
+            .set_sound_hotkeys(
+                vec![id.clone()],
+                Some(chord.to_string()),
+                Some(scope.to_string()),
+            )
+            .recv()
+            .expect("seed the tab binding");
+    }
+
+    commands::set_hotkey_many(
+        vec![id.clone()],
+        None,
+        false,
+        Some("tab:one".to_string()),
+        library.clone(),
+        projection.clone(),
+    )
+    .expect("the tab clear commits");
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert!(
+        !bindings
+            .iter()
+            .any(|binding| binding.tab_scope.as_deref() == Some("tab:one")),
+        "the cleared tab is empty"
+    );
+    assert!(
+        bindings
+            .iter()
+            .any(|binding| binding.tab_scope.as_deref() == Some("tab:two")),
+        "the other tab survives a tab clear"
+    );
+    assert!(
+        bindings.iter().any(|binding| binding.tab_scope.is_none()),
+        "the global binding survives a tab clear"
+    );
+
+    commands::set_hotkey_many(
+        vec![id.clone()],
+        None,
+        false,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("the global clear commits");
+
+    let bindings = library
+        .hotkey_bindings_for_sound(&id)
+        .recv()
+        .expect("read the sound's bindings");
+    assert!(
+        !bindings.iter().any(|binding| binding.tab_scope.is_none()),
+        "the global binding is cleared"
+    );
+    assert!(
+        bindings
+            .iter()
+            .any(|binding| binding.tab_scope.as_deref() == Some("tab:two")),
+        "the other tab survives a global clear"
+    );
+}
+
+#[test]
+fn a_batch_persists_the_canonical_normalized() {
+    let sounds = hotkey_batch_sounds(2);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+
+    let raw = "control+alt+KeyQ";
+    let canonical =
+        crate::hotkeys::canonicalize_hotkey_string(raw).expect("the spelling is a valid hotkey");
+    assert_ne!(
+        canonical, raw,
+        "the input must be a non-canonical spelling of a valid hotkey"
+    );
+
+    library
+        .set_sound_hotkeys(ids.clone(), Some(raw.to_string()), None)
+        .recv()
+        .expect("the batch commits");
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].accelerator, raw, "the accelerator is kept");
+        assert_eq!(
+            bindings[0].normalized.as_deref(),
+            Some(canonical.as_str()),
+            "normalized is the canonical accelerator"
+        );
+    }
+}
+
+#[test]
+fn duplicate_targets_are_deduplicated_before_writing() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(2);
+    let ids = vec![
+        sounds[0].id.clone(),
+        sounds[0].id.clone(),
+        sounds[1].id.clone(),
+    ];
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    commands::set_hotkey_many(
+        ids,
+        Some("Ctrl+Alt+KeyE".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("duplicates are collapsed");
+
+    for sound in &sounds {
+        let bindings = library
+            .hotkey_bindings_for_sound(&sound.id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert_eq!(bindings.len(), 1);
+    }
+}
+
+#[test]
+fn a_batch_with_sharing_on_is_one_successful_operation() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyM".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("sharing lets a free chord go to the whole batch");
+
+    let mut binding_ids = Vec::new();
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        assert_eq!(bindings.len(), 1);
+        binding_ids.push(bindings[0].binding_id.clone());
+    }
+    let members = library
+        .hotkey_group(&binding_ids[0])
+        .recv()
+        .expect("read the shared group");
+    assert_eq!(members.len(), 3, "all three answer to one chord");
+}
+
+#[test]
+fn a_batch_with_sharing_off_is_refused_before_any_write() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    let error = commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyG".to_string()),
+        false,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect_err("several sounds on one chord needs the toggle");
+    assert!(
+        error.to_string().contains("Multiple Sounds Per Hotkey"),
+        "the refusal names the setting: {error}"
+    );
+
+    for id in &ids {
+        assert!(library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings")
+            .is_empty());
+    }
+}
+
+#[test]
+fn a_target_that_already_holds_the_chord_is_not_its_own_conflict() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(ids[1].clone()),
+        "Ctrl+Alt+KeyH",
+    );
+
+    let holder = commands::hotkey_holder_many(
+        ids.clone(),
+        "Ctrl+Alt+KeyH".to_string(),
+        None,
+        library.clone(),
+    )
+    .expect("the preflight query runs");
+    assert!(
+        holder.is_none(),
+        "a target member is never an external holder"
+    );
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyH".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("the batch joins its own member");
+
+    for id in &ids {
+        assert_eq!(
+            library
+                .hotkey_bindings_for_sound(id)
+                .recv()
+                .expect("read the sound's bindings")
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn an_external_holder_is_flagged_once_and_kept() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let other = Sound::new(
+        "Outside".to_string(),
+        format!("/tmp/hotkey-outside-{}.mp3", uuid::Uuid::new_v4()),
+    );
+    let other_id = other.id.clone();
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let mut all = sounds;
+    all.push(other);
+    let library = create_test_library_with(&[], &all);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(other_id.clone()),
+        "Ctrl+Alt+KeyF",
+    );
+
+    let holder = commands::hotkey_holder_many(
+        ids.clone(),
+        "Ctrl+Alt+KeyF".to_string(),
+        None,
+        library.clone(),
+    )
+    .expect("the preflight query runs");
+    assert!(holder.is_some(), "the outside holder is reported");
+
+    commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyF".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection,
+    )
+    .expect("sharing lets the batch join an existing chord");
+
+    assert_eq!(
+        library
+            .hotkey_bindings_for_sound(&other_id)
+            .recv()
+            .expect("read the holder's bindings")
+            .len(),
+        1,
+        "the outside holder keeps its binding"
+    );
+    for id in &ids {
+        assert_eq!(
+            library
+                .hotkey_bindings_for_sound(id)
+                .recv()
+                .expect("read the sound's bindings")
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn a_batch_never_takes_a_control_actions_or_a_tabs_chord() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Control(
+            ControlHotkeyAction::StopAll.id().to_string(),
+        ),
+        "Ctrl+Alt+KeyK",
+    );
+    let error = commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyK".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection.clone(),
+    )
+    .expect_err("a control action keeps its chord");
+    assert_eq!(
+        crate::hotkeys::format_hotkey_error(&error.to_string()),
+        "That shortcut is already assigned to control action \"Stop All\"."
+    );
+
+    commands::set_tab_hotkey(
+        "tab:party".to_string(),
+        Some("Ctrl+Alt+KeyL".to_string()),
+        library.clone(),
+        projection.clone(),
+    )
+    .expect("bind a tab");
+    let error = commands::set_hotkey_many(
+        ids,
+        Some("Ctrl+Alt+KeyL".to_string()),
+        true,
+        None,
+        library,
+        projection,
+    )
+    .expect_err("a tab keeps its chord");
+    assert!(
+        crate::hotkeys::format_hotkey_error(&error.to_string()).contains("already assigned"),
+        "the tab clash is reported: {error}"
+    );
+}
+
+#[test]
+fn a_batch_reconciles_the_projection_once() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(3);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+
+    for id in &ids {
+        library
+            .set_sound_hotkeys(
+                vec![id.clone()],
+                Some("Ctrl+Alt+Digit7".to_string()),
+                Some("tab:one".to_string()),
+            )
+            .recv()
+            .expect("seed the tab binding");
+    }
+
+    let before = projection.reconcile_generation();
+    commands::set_hotkey_many(
+        ids.clone(),
+        Some("Ctrl+Alt+KeyN".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection.clone(),
+    )
+    .expect("the batch is assigned");
+
+    for id in &ids {
+        let bindings = library
+            .hotkey_bindings_for_sound(id)
+            .recv()
+            .expect("read the sound's bindings");
+        let global: Vec<_> = bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.is_none())
+            .collect();
+        assert_eq!(global.len(), 1, "one global row for {id}");
+        assert_eq!(global[0].accelerator, "Ctrl+Alt+KeyN");
+        assert_eq!(
+            global[0].normalized.as_deref(),
+            Some("Ctrl+Alt+KeyN"),
+            "the persisted normalized matches the accelerator"
+        );
+        assert!(
+            bindings
+                .iter()
+                .any(|binding| binding.tab_scope.as_deref() == Some("tab:one")),
+            "the other scope survives for {id}"
+        );
+    }
+
+    assert_eq!(
+        projection.reconcile_generation() - before,
+        1,
+        "one logical batch means one reconcile"
+    );
+}
+
+#[test]
+fn a_failed_batch_does_not_reconcile() {
+    let hotkeys = create_projection_hotkey_manager();
+    let sounds = hotkey_batch_sounds(2);
+    let ids: Vec<String> = sounds.iter().map(|sound| sound.id.clone()).collect();
+    let library = create_test_library_with(&[], &sounds);
+    let projection =
+        crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), Arc::clone(&hotkeys));
+    seed_hotkey_binding(
+        &library,
+        crate::library_store::HotkeyBindingOwner::Sound(ids[0].clone()),
+        "Ctrl+Alt+KeyA",
+    );
+
+    let mut targets = ids.clone();
+    targets.push("missing-sound".to_string());
+
+    let before = projection.reconcile_generation();
+    commands::set_hotkey_many(
+        targets,
+        Some("Ctrl+Alt+KeyB".to_string()),
+        true,
+        None,
+        library.clone(),
+        projection.clone(),
+    )
+    .expect_err("an unknown target aborts the batch");
+
+    assert_eq!(
+        projection.reconcile_generation(),
+        before,
+        "a rolled-back batch must not reconcile"
+    );
+
+    let first = library
+        .hotkey_bindings_for_sound(&ids[0])
+        .recv()
+        .expect("read the first target");
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].accelerator, "Ctrl+Alt+KeyA",
+        "the already-processed target must roll back"
+    );
+    let second = library
+        .hotkey_bindings_for_sound(&ids[1])
+        .recv()
+        .expect("read the second target");
+    assert!(second.is_empty(), "no target may be left written");
 }
 
 #[test]

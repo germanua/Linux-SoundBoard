@@ -1,5 +1,3 @@
-//! MPRIS2 player for desktop media controls.
-
 mod metadata;
 
 use std::cell::RefCell;
@@ -17,7 +15,6 @@ const ROOT_INTERFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
 
-/// Something a media-control widget asked us to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MprisCommand {
     PlayPause,
@@ -28,7 +25,6 @@ pub(crate) enum MprisCommand {
     Quit,
 }
 
-/// The method a host called, or `None` for one we do not act on.
 fn command_for(method: &str) -> Option<MprisCommand> {
     match method {
         "PlayPause" | "Play" | "Pause" => Some(MprisCommand::PlayPause),
@@ -176,7 +172,6 @@ impl MprisService {
         self.announce();
     }
 
-    /// Withdraw from the desktop's media controls.
     pub(crate) fn shutdown(&self) {
         self.name.release();
         for registration in self.registrations.borrow_mut().drain(..) {
@@ -343,7 +338,6 @@ mod tests {
 
         let reply = reply.borrow_mut().take().expect("a reply arrived");
 
-        // Panels only discover the well-known bus name.
         let owned_while_playing = name_has_owner(&connection);
         service.set_enabled(false);
         settle();
@@ -372,7 +366,6 @@ mod tests {
         );
     }
 
-    /// Let the main loop turn, so queued D-Bus traffic actually goes out.
     fn settle() {
         let main_loop = glib::MainLoop::new(None, false);
         glib::timeout_add_local_once(std::time::Duration::from_millis(150), {
@@ -443,7 +436,6 @@ mod tests {
         settle();
         let during_first = name_has_owner(&connection);
 
-        // The first sound ends, and a moment later the user starts another.
         service.set_now_playing(None);
         settle();
         let between_sounds = name_has_owner(&connection);

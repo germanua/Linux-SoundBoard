@@ -44,13 +44,16 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_for_persistence_disables_multiple_playback() {
+    fn sanitize_for_persistence_keeps_multiple_playback() {
         let mut cfg = Config::default();
         cfg.settings.allow_multiple_playbacks = true;
 
         cfg.sanitize_for_persistence();
 
-        assert!(!cfg.settings.allow_multiple_playbacks);
+        assert!(
+            cfg.settings.allow_multiple_playbacks,
+            "a user's concurrent-playback choice must survive a save"
+        );
     }
 
     #[test]
@@ -84,7 +87,15 @@ mod tests {
         assert_eq!(value["settings"]["auto_gain_apply_to"], "both");
         assert_eq!(value["settings"]["play_mode"], "default");
         assert_eq!(value["settings"]["list_style"], "compact");
-        assert_eq!(value["settings"]["default_source_mode"], "default");
+        let expected_default_source_mode = if crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM {
+            "default"
+        } else {
+            "manual"
+        };
+        assert_eq!(
+            value["settings"]["default_source_mode"],
+            expected_default_source_mode
+        );
         assert_eq!(value["settings"]["mic_latency_profile"], "balanced");
     }
 
@@ -126,10 +137,53 @@ mod tests {
         assert_eq!(cfg.settings.auto_gain_apply_to, AutoGainApplyTo::MicOnly);
         assert_eq!(cfg.settings.play_mode, PlayMode::Default);
         assert_eq!(cfg.settings.list_style, ListStyle::Compact);
-        assert_eq!(cfg.settings.default_source_mode, DefaultSourceMode::Default);
+        assert_eq!(
+            cfg.settings.default_source_mode,
+            if crate::app_meta::ALLOW_DEFAULT_SOURCE_CLAIM {
+                DefaultSourceMode::Default
+            } else {
+                DefaultSourceMode::Manual
+            }
+        );
+        assert!(
+            cfg.settings.allow_multiple_playbacks,
+            "a config that already contains true must keep it on load"
+        );
         assert_eq!(
             cfg.settings.mic_latency_profile,
             MicLatencyProfile::Balanced
+        );
+    }
+
+    #[test]
+    fn allow_multiple_playbacks_round_trips_through_json() {
+        for allowed in [false, true] {
+            let mut cfg = Config::default();
+            cfg.settings.allow_multiple_playbacks = allowed;
+
+            let json = serde_json::to_string(&cfg).expect("serialize config");
+            let reloaded: Config = serde_json::from_str(&json).expect("deserialize config");
+
+            assert_eq!(
+                reloaded.settings.allow_multiple_playbacks, allowed,
+                "saving {allowed} must reload as {allowed}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_config_without_the_key_loads_as_single_playback() {
+        let mut value = serde_json::to_value(Config::default()).expect("serialize config");
+        value["settings"]
+            .as_object_mut()
+            .expect("settings object")
+            .remove("allow_multiple_playbacks");
+
+        let reloaded: Config = serde_json::from_value(value).expect("deserialize an old config");
+
+        assert!(
+            !reloaded.settings.allow_multiple_playbacks,
+            "an old config with no key must load as single playback"
         );
     }
 

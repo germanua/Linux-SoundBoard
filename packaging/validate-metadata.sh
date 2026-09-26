@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#
-# Cross-validates packaging metadata consistency for Linux Soundboard.
-# Run from the repository root or any subdirectory.
-#
-# Exit codes: 0 = all checks pass, 1 = one or more failures.
+
+
+
+
+
 
 set -euo pipefail
 
@@ -17,24 +17,30 @@ pass() { printf '[PASS] %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '[FAIL] %s\n' "$1" >&2; FAIL=$((FAIL + 1)); }
 note() { printf '[NOTE] %s\n' "$1"; }
 
-# ── Source of truth ──────────────────────────────────────────────────────────
+
 
 CARGO_TOML="$REPO_ROOT/src/Cargo.toml"
 EXPECTED_APP_ID="com.linuxsoundboard.app"
 EXPECTED_BINARY="linux-soundboard"
 EXPECTED_VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$CARGO_TOML" | head -n 1)"
+PUBLIC_VERSION="$(sed -n 's/^## \[\([0-9][0-9.]*\)\].*/\1/p' "$REPO_ROOT/docs/CHANGELOG.md" | head -n 1)"
 
 if [[ -z "$EXPECTED_VERSION" ]]; then
     echo "ERROR: could not read version from $CARGO_TOML" >&2
     exit 1
 fi
+if [[ -z "$PUBLIC_VERSION" ]]; then
+    echo "ERROR: could not read latest public version from docs/CHANGELOG.md" >&2
+    exit 1
+fi
 
-note "Version from Cargo.toml: $EXPECTED_VERSION"
+note "Development version from Cargo.toml: $EXPECTED_VERSION"
+note "Latest public version from changelog: $PUBLIC_VERSION"
 note "App ID:    $EXPECTED_APP_ID"
 note "Binary:    $EXPECTED_BINARY"
 echo ""
 
-# ── Version consistency ──────────────────────────────────────────────────────
+
 
 check_version_in_file() {
     local label="$1"
@@ -47,28 +53,14 @@ check_version_in_file() {
     fi
     local found
     found="$(grep -oP "$pattern" "$file" | head -n 1 || true)"
-    if [[ "$found" == "$EXPECTED_VERSION" ]]; then
-        pass "$label: version $EXPECTED_VERSION"
+    if [[ "$found" == "$PUBLIC_VERSION" ]]; then
+        pass "$label: version $PUBLIC_VERSION"
     else
-        fail "$label: expected version $EXPECTED_VERSION, got '$found' in $file"
+        fail "$label: expected latest public version $PUBLIC_VERSION, got '$found' in $file"
     fi
 }
 
-check_version_in_file "RPM spec" \
-    "$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
-    '(?<=^Version:\s{8})[\d.]+'
-
-check_version_in_file "AUR stable PKGBUILD" \
-    "$REPO_ROOT/packaging/aur/PKGBUILD" \
-    '(?<=^pkgver=)[\d.]+'
-
-check_version_in_file "AUR stable .SRCINFO" \
-    "$REPO_ROOT/packaging/aur/.SRCINFO" \
-    '(?<=pkgver = )[\d.]+'
-
-check_version_in_file "debian/changelog" \
-    "$REPO_ROOT/packaging/debian/changelog" \
-    "(?<=linux-soundboard \()[\d.]+"
+note "AUR/DEB/RPM version checks skipped: current release policy is AppImage-only"
 
 check_version_in_file "metainfo.xml latest release" \
     "$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.metainfo.xml" \
@@ -76,7 +68,7 @@ check_version_in_file "metainfo.xml latest release" \
 
 echo ""
 
-# ── App ID consistency ───────────────────────────────────────────────────────
+
 
 check_app_id_in_file() {
     local label="$1"
@@ -104,7 +96,7 @@ check_app_id_in_file "AUR git PKGBUILD"          "$REPO_ROOT/packaging/aur/linux
 
 echo ""
 
-# ── Binary name consistency ──────────────────────────────────────────────────
+
 
 check_binary_in_file() {
     local label="$1"
@@ -125,13 +117,18 @@ check_binary_in_file "Flatpak manifest (command)" "$REPO_ROOT/packaging/flatpak/
 check_binary_in_file "RPM spec (%files)"          "$REPO_ROOT/packaging/rpm/linux-soundboard.spec"
 check_binary_in_file "AUR stable PKGBUILD"        "$REPO_ROOT/packaging/aur/PKGBUILD"
 check_binary_in_file "AUR git PKGBUILD"           "$REPO_ROOT/packaging/aur/linux-soundboard-git/PKGBUILD"
-check_binary_in_file "install-user.sh"            "$REPO_ROOT/packaging/linux/install-user.sh"
+if grep -qF "source \"\$SCRIPT_DIR/app-meta.sh\"" "$REPO_ROOT/packaging/linux/install-user.sh" && \
+   grep -qF "\$APP_BINARY" "$REPO_ROOT/packaging/linux/install-user.sh"; then
+    pass "install-user.sh: binary metadata sourced from app-meta.sh"
+else
+    fail "install-user.sh: expected app-meta.sh source and APP_BINARY usage"
+fi
 check_binary_in_file "app-meta.sh"                "$REPO_ROOT/packaging/linux/app-meta.sh"
 check_binary_in_file "engine service"             "$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
 
 echo ""
 
-# ── Desktop file fields ──────────────────────────────────────────────────────
+
 
 check_desktop_fields() {
     local label="$1"
@@ -159,7 +156,7 @@ check_desktop_fields "RPM desktop"     "$REPO_ROOT/packaging/rpm/linux-soundboar
 
 echo ""
 
-# ── Metainfo required fields ─────────────────────────────────────────────────
+
 
 METAINFO="$REPO_ROOT/packaging/flatpak/com.linuxsoundboard.app.metainfo.xml"
 if [[ ! -f "$METAINFO" ]]; then
@@ -176,7 +173,7 @@ fi
 
 echo ""
 
-# ── Service file fields ──────────────────────────────────────────────────────
+
 
 SERVICE="$REPO_ROOT/packaging/linux/linux-soundboard-engine.service"
 TARGET="$REPO_ROOT/packaging/linux/linux-soundboard-engine.target"
@@ -205,7 +202,7 @@ fi
 
 echo ""
 
-# ── Icon files ───────────────────────────────────────────────────────────────
+
 
 ICON_ROOT="$REPO_ROOT/src/resources/icons"
 ICON_SIZES=(16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512)
@@ -224,7 +221,7 @@ done
 
 echo ""
 
-# ── Metainfo installed by all native package formats ────────────────────────
+
 
 for label_and_file in \
     "RPM spec:$REPO_ROOT/packaging/rpm/linux-soundboard.spec" \
@@ -243,7 +240,7 @@ done
 
 echo ""
 
-# ── Known stale artifacts ────────────────────────────────────────────────────
+
 
 if [[ -f "$REPO_ROOT/packaging/deb/control" ]]; then
     note "packaging/deb/control exists — this is a legacy artifact predating packaging/debian/."
@@ -252,7 +249,7 @@ fi
 
 echo ""
 
-# ── Summary ──────────────────────────────────────────────────────────────────
+
 
 echo "Results: $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then

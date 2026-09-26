@@ -205,7 +205,6 @@ impl TransportInner {
             None => return,
         };
 
-        commands::stop_all(self.state.player.clone());
         if let Err(error) = commands::play_adjacent_sound_async(
             context.scope,
             context.search,
@@ -245,7 +244,6 @@ impl TransportInner {
 
         self.clear_continue_suppression();
         self.continue_advance_pending.set(true);
-        commands::stop_all(self.state.player.clone());
 
         let weak = Rc::downgrade(self);
         match commands::play_adjacent_sound_from_id_async(
@@ -280,6 +278,18 @@ impl TransportInner {
             .as_ref()
             .map(|track| track.play_id.clone());
         commands::stop_all(self.state.player.clone());
+    }
+
+    pub(super) fn stop_playback_instance(&self, play_id: &str) {
+        let active = self.active_track.borrow();
+        if let Some(track) = active.as_ref().filter(|track| track.play_id == play_id) {
+            *self.continue_suppressed_play_id.borrow_mut() = Some(track.play_id.clone());
+        }
+        drop(active);
+        if let Err(error) = commands::stop_playback(play_id.to_string(), self.state.player.clone())
+        {
+            log::warn!("Stop playback failed for {play_id}: {error}");
+        }
     }
 
     pub(super) fn is_continue_suppressed(&self) -> bool {

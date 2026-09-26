@@ -3,16 +3,16 @@
   <id>com.linuxsoundboard.app</id>
   <name>Linux Soundboard</name>
   <summary>Native Linux soundboard with virtual microphone support</summary>
-  
+
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>PolyForm-Noncommercial-1.0.0</project_license>
-  
+
   <developer id="io.github.germanua">
     <name>germanua</name>
   </developer>
-  
+
   <launchable type="desktop-id">com.linuxsoundboard.app.desktop</launchable>
-  
+
   <description>
     <p>
       A high-performance, native Linux soundboard built with Rust, GTK4, and Libadwaita.
@@ -29,7 +29,7 @@
       <li>Native PipeWire virtual microphone routing</li>
     </ul>
   </description>
-  
+
   <screenshots>
     <screenshot type="default">
       <caption>Main window with sound library and folder sidebar</caption>
@@ -48,16 +48,16 @@
       <image>https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/assets/screenshots/Settings_hotkeys_dark.png</image>
     </screenshot>
   </screenshots>
-  
+
   <url type="homepage">https://github.com/germanua/Linux-SoundBoard</url>
   <url type="bugtracker">https://github.com/germanua/Linux-SoundBoard/issues</url>
   <url type="vcs-browser">https://github.com/germanua/Linux-SoundBoard</url>
-  
+
   <categories>
     <category>AudioVideo</category>
     <category>Audio</category>
   </categories>
-  
+
   <keywords>
     <keyword>soundboard</keyword>
     <keyword>audio</keyword>
@@ -65,7 +65,7 @@
     <keyword>microphone</keyword>
     <keyword>virtual mic</keyword>
   </keywords>
-  
+
   <releases>
     <release version="2.4.4" date="2026-08-30">
       <description>
@@ -259,13 +259,13 @@
       </description>
     </release>
   </releases>
-  
+
   <content_rating type="oars-1.1" />
-  
+
   <requires>
     <display_length compare="ge">360</display_length>
   </requires>
-  
+
   <supports>
     <control>pointing</control>
     <control>keyboard</control>

@@ -1,18 +1,14 @@
-//! State owned by the PipeWire loop thread.
-
 use super::*;
 
 pub(super) struct LoopState {
-    // Config: read-only after `new()`, safe to clone into closures.
     pub(super) runtime: RuntimeConfig,
 
-    // Registry changes stay on the PipeWire loop thread.
     pub(super) available: bool,
     pub(super) default_metadata: Option<DefaultMetadataHandle>,
     pub(super) backend: Option<BackendState>,
     pub(super) sources: HashMap<u32, SourceDescriptor>,
     pub(super) sinks: HashMap<u32, SinkDescriptor>,
-    // Link once both FL/FR endpoint pairs exist.
+
     pub(super) feeder_node_id: Option<u32>,
     pub(super) feeder_output_ports: HashMap<AudioChannel, u32>,
     pub(super) virtual_mic_node_id: Option<u32>,
@@ -30,7 +26,7 @@ pub(super) struct LoopState {
     pub(super) claimed_default: bool,
     pub(super) default_source_command_in_flight: std::sync::Arc<AtomicBool>,
 
-    pub(super) active_playback: Option<ActivePlayback>,
+    pub(super) active_playbacks: Vec<ActivePlayback>,
     pub(super) finished_playbacks: HashMap<String, PlaybackSnapshot>,
     pub(super) next_playback_order: u64,
 
@@ -40,6 +36,9 @@ pub(super) struct LoopState {
     pub(super) local_mix_buffer: Vec<f32>,
     pub(super) virtual_mix_buffer: Vec<f32>,
     pub(super) mic_scratch_buffer: Vec<f32>,
+
+    pub(super) voice_local_scratch: Vec<f32>,
+    pub(super) voice_virtual_scratch: Vec<f32>,
 
     pub(super) snapshot: std::sync::Arc<RwLock<PlayerSnapshot>>,
     pub(super) last_ui_send: Option<Instant>,
@@ -75,7 +74,7 @@ impl LoopState {
             previous_default_source_name: None,
             claimed_default: false,
             default_source_command_in_flight: std::sync::Arc::new(AtomicBool::new(false)),
-            active_playback: None,
+            active_playbacks: Vec::new(),
             finished_playbacks: HashMap::new(),
             next_playback_order: 0,
             queues: RtSharedQueues::new(ProcessQueues::new(
@@ -91,12 +90,31 @@ impl LoopState {
             local_mix_buffer: Vec::new(),
             virtual_mix_buffer: Vec::new(),
             mic_scratch_buffer: Vec::new(),
+            voice_local_scratch: Vec::new(),
+            voice_virtual_scratch: Vec::new(),
         }
+    }
+
+    pub(super) fn adopt_voice(&mut self, playback: ActivePlayback) -> String {
+        let play_id = playback.play_id.clone();
+        if self.active_playbacks.len() >= MAX_ACTIVE_PLAYBACKS {
+            if let Some(oldest) = self
+                .active_playbacks
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, voice)| voice.playback_order)
+                .map(|(index, _)| index)
+            {
+                self.active_playbacks.remove(oldest);
+            }
+        }
+        self.active_playbacks.push(playback);
+        play_id
     }
 
     pub(super) fn snapshot_positions(&self) -> Vec<PlaybackPosition> {
         let mut registry = self.finished_playbacks.clone();
-        if let Some(active) = &self.active_playback {
+        for active in &self.active_playbacks {
             registry.insert(
                 active.play_id.clone(),
                 PlaybackSnapshot {
@@ -132,11 +150,141 @@ impl LoopState {
     }
 
     pub(super) fn playing_ids(&self) -> Vec<String> {
-        self.active_playback
-            .as_ref()
-            .filter(|playback| !playback.finished)
-            .map(|playback| vec![playback.sound_id.clone()])
-            .unwrap_or_default()
+        let mut ids: Vec<String> = Vec::new();
+        for playback in &self.active_playbacks {
+            if playback.finished || ids.iter().any(|id| id == &playback.sound_id) {
+                continue;
+            }
+            ids.push(playback.sound_id.clone());
+        }
+        ids
+    }
+
+    pub(super) fn stop_sound_voices(&mut self, sound_id: &str) {
+        self.active_playbacks
+            .retain(|playback| playback.sound_id != sound_id);
+    }
+
+    pub(super) fn stop_voice(&mut self, play_id: &str) {
+        self.active_playbacks
+            .retain(|playback| playback.play_id != play_id);
+    }
+
+    pub(super) fn stop_all_voices(&mut self) {
+        self.active_playbacks.clear();
+        self.finished_playbacks.clear();
+        fade_output_queues(&self.queues);
+    }
+
+    pub(super) fn set_sound_paused(&mut self, sound_id: &str, paused: bool) {
+        for playback in &mut self.active_playbacks {
+            if playback.sound_id == sound_id {
+                playback.paused = paused;
+            }
+        }
+    }
+
+    pub(super) fn set_voice_paused(&mut self, play_id: &str, paused: bool) {
+        if let Some(playback) = self
+            .active_playbacks
+            .iter_mut()
+            .find(|playback| playback.play_id == play_id)
+        {
+            playback.paused = paused;
+        }
+    }
+
+    pub(super) fn seek_voice(&mut self, play_id: &str, position_ms: u64) -> bool {
+        let runtime = self.runtime.clone();
+        let Some(playback) = self
+            .active_playbacks
+            .iter_mut()
+            .find(|playback| playback.play_id == play_id)
+        else {
+            return false;
+        };
+        let _ = playback.seek(position_ms, &runtime);
+        true
+    }
+
+    pub(super) fn reset_voice_limiters(&mut self) {
+        let runtime = self.runtime.clone();
+        for playback in &mut self.active_playbacks {
+            playback.reset_limiters(&runtime);
+        }
+    }
+
+    pub(super) fn apply_play_candidate(
+        &mut self,
+        candidate: Result<ActivePlayback, EngineError>,
+    ) -> Result<String, EngineError> {
+        let playback = candidate?;
+        Ok(self.adopt_play_voice(playback))
+    }
+
+    fn adopt_play_voice(&mut self, playback: ActivePlayback) -> String {
+        if self.runtime.allow_multiple_playbacks {
+            self.adopt_voice(playback)
+        } else {
+            self.replace_all_voices(playback)
+        }
+    }
+
+    fn replace_all_voices(&mut self, playback: ActivePlayback) -> String {
+        let play_id = playback.play_id.clone();
+        self.active_playbacks.clear();
+        self.active_playbacks.push(playback);
+        fade_output_queues(&self.queues);
+        play_id
+    }
+
+    pub(super) fn set_allow_multiple_playbacks(&mut self, enabled: bool) {
+        self.runtime.allow_multiple_playbacks = enabled;
+        if enabled {
+            return;
+        }
+        let newest_order = self
+            .active_playbacks
+            .iter()
+            .map(|voice| voice.playback_order)
+            .max();
+        if let Some(newest_order) = newest_order {
+            self.active_playbacks
+                .retain(|voice| voice.playback_order == newest_order);
+        }
+    }
+
+    pub(super) fn retire_finished_voices(&mut self) -> usize {
+        if !self.active_playbacks.iter().any(|voice| voice.finished) {
+            return 0;
+        }
+        let mut retired = 0usize;
+        let mut index = 0usize;
+        while index < self.active_playbacks.len() {
+            if !self.active_playbacks[index].finished {
+                index += 1;
+                continue;
+            }
+            let (play_id, snapshot) = {
+                let voice = &self.active_playbacks[index];
+                (
+                    voice.play_id.clone(),
+                    PlaybackSnapshot {
+                        sound_id: voice.sound_id.clone(),
+                        playback_order: voice.playback_order,
+                        position_ms: voice.position_ms,
+                        paused: voice.paused,
+                        duration_ms: voice.duration_ms,
+                        finished: true,
+                    },
+                )
+            };
+            self.finished_playbacks.insert(play_id, snapshot);
+            self.active_playbacks.remove(index);
+            retired += 1;
+        }
+        self.trim_finished_playbacks(MAX_FINISHED_PLAYBACK_SNAPSHOTS);
+        retired
     }
 
     pub(super) fn trim_finished_playbacks(&mut self, max_entries: usize) {
@@ -222,6 +370,7 @@ mod tests {
             is_our_virtual_mic: is_ours,
             is_virtual: is_ours,
             is_hardware_backed: !is_monitor && !is_ours,
+            is_bluetooth_loopback: false,
         }
     }
 
@@ -292,6 +441,7 @@ mod tests {
                     is_our_virtual_mic: false,
                     is_virtual: false,
                     is_hardware_backed: true,
+                    is_bluetooth_loopback: false,
                 },
             );
         }

@@ -28,6 +28,7 @@ fn replace_debounce_timeout(slot: &RefCell<Option<glib::SourceId>>, timeout_id: 
 
 impl TransportBar {
     pub fn handle_snapshot(&self, snapshot: crate::audio::PlayerSnapshot) {
+        self.now_playing.handle_snapshot(&snapshot);
         self.inner.handle_snapshot(snapshot);
     }
 
@@ -341,7 +342,6 @@ impl TransportBar {
                             let _ = remove_source_id_safe(timeout_id);
                         }
 
-                        // Coalesce drag updates into one seek.
                         let inner_weak_commit = Rc::downgrade(&inner_seek);
                         let timeout_id =
                             glib::timeout_add_local_once(Duration::from_millis(100), move || {
@@ -521,14 +521,14 @@ mod tests {
         let slot = RefCell::new(Some(42_u32));
         assert_eq!(close_once(&slot), Some(42));
         assert!(slot.borrow().is_none());
-        // Idempotent on repeat close.
+
         assert_eq!(close_once(&slot), None);
     }
 
     #[test]
     fn settings_reopening_replaces_stale_timer_id() {
         let slot = RefCell::new(Some(1_u32));
-        // Simulate defensive take on open (stale timer from prior session).
+
         let prev = slot.borrow_mut().take();
         assert_eq!(prev, Some(1));
         *slot.borrow_mut() = Some(2);

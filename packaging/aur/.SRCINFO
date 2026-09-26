@@ -20,7 +20,6 @@ pkgbase = linux-soundboard
 	depends = pipewire
 	depends = pipewire-pulse
 	depends = wireplumber
-	optdepends = swhkd-git: native Wayland hotkey daemon from upstream source
 	optdepends = xorg-xwayland: enables the native X11 backend inside Wayland sessions
 	conflicts = linux-soundboard-git
 	options = !lto

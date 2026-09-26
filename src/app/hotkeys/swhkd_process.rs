@@ -1,6 +1,6 @@
 use log::{debug, error, info, warn};
 use nix::sys::signal::Signal;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::error::HotkeyError;
-use super::swhkd_install::missing_swhkd_message;
+use super::swhkd_install::{missing_swhkd_message, resolve_swhkd_binary, resolve_swhks_binary};
 use super::{
     SWHKD_MONITOR_INTERVAL_SECS, SWHKD_SOCKET_POLL_INTERVAL_MS, SWHKD_STALE_TERMINATE_TIMEOUT_MS,
     SWHKD_STARTUP_VERIFY_WAIT_MS,
@@ -39,8 +39,8 @@ impl SwhkdProcesses {
     pub fn spawn_swhks() -> Result<Child, HotkeyError> {
         info!("Spawning swhks process");
 
-        let swhks_path = which::which("swhks")
-            .map_err(|_| HotkeyError::Process(missing_swhkd_message("swhks")))?;
+        let swhks_path = resolve_swhks_binary()
+            .ok_or_else(|| HotkeyError::Process(missing_swhkd_message("swhks")))?;
 
         let mut command = Command::new(swhks_path);
         command
@@ -55,15 +55,15 @@ impl SwhkdProcesses {
     fn spawn_swhkd(config_path: &Path) -> Result<SpawnedSwhkd, HotkeyError> {
         info!("Spawning swhkd process");
 
-        let swhkd_path = which::which("swhkd")
-            .map_err(|_| HotkeyError::Process(missing_swhkd_message("swhkd")))?;
+        let swhkd_path = resolve_swhkd_binary()
+            .ok_or_else(|| HotkeyError::Process(missing_swhkd_message("swhkd")))?;
 
         if !Self::has_setuid_bit(&swhkd_path) {
             warn!("swhkd does not have setuid bit set");
             return Err(HotkeyError::Process(
-                "swhkd requires setuid bit for proper operation.\n\
-                 Run: sudo chmod u+s \"$(command -v swhkd)\"\n\
-                 Or reinstall the package."
+                "swhkd requires the setuid bit for proper operation, and the installed copy lacks it.\n\
+                 Use the Install swhkd button to rebuild it into \
+                 /usr/local/libexec/linux-soundboard/swhkd with the setuid bit."
                     .to_string(),
             ));
         }
@@ -180,7 +180,6 @@ impl SwhkdProcesses {
     pub fn terminate_stale_daemons() {
         info!("Stopping pre-existing swhkd/swhks daemons before spawning a managed pair");
 
-        // SIGTERM lets swhkd ungrab input devices and exit cleanly.
         Self::signal_user_processes("swhkd", Signal::SIGTERM);
         Self::signal_user_processes("swhks", Signal::SIGTERM);
 
@@ -196,7 +195,6 @@ impl SwhkdProcesses {
         Self::remove_stale_runtime_files();
     }
 
-    /// PIDs of processes named `name` owned by the current user.
     fn user_pids(name: &str) -> Vec<i32> {
         let uid = nix::unistd::getuid().as_raw();
         Self::processes_for_real_uid(name, uid)
@@ -285,16 +283,7 @@ impl SwhkdProcesses {
     }
 
     fn create_spawn_log(launch_label: &str) -> Result<(File, PathBuf), HotkeyError> {
-        let uid = nix::unistd::getuid();
-        let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(format!("/run/user/{uid}")));
-        let log_dir = if runtime_dir.is_dir() {
-            runtime_dir.join("linux-soundboard")
-        } else {
-            std::env::temp_dir().join("linux-soundboard")
-        };
-        fs::create_dir_all(&log_dir)
+        let log_dir = crate::private_runtime::directory()
             .map_err(|e| HotkeyError::Io(format!("Failed to create swhkd log dir: {e}")))?;
 
         let stamp = SystemTime::now()
@@ -307,10 +296,7 @@ impl SwhkdProcesses {
             launch_label
         ));
 
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
+        let mut file = crate::private_runtime::open_new(&log_path)
             .map_err(|e| HotkeyError::Io(format!("Failed to open swhkd log: {e}")))?;
         writeln!(file, "linux-soundboard: launching swhkd ({launch_label})").ok();
 
@@ -330,8 +316,8 @@ impl SwhkdProcesses {
         } else if lowercase_log.contains("launch the binary with pkexec") {
             "The installed swhkd build refuses direct launch. Use the Install swhkd button to rebuild the daemon with the Linux Soundboard helper."
         } else {
-            "Run: sudo chown root:root \"$(command -v swhkd)\" && sudo chmod u+s \"$(command -v swhkd)\"\n\
-             Or use the Install swhkd button to rebuild swhkd automatically."
+            "Use the Install swhkd button to rebuild swhkd into \
+             /usr/local/libexec/linux-soundboard/swhkd with the setuid bit."
         };
 
         format!(
@@ -414,7 +400,6 @@ impl SwhkdProcesses {
         let _ = child.wait();
     }
 
-    /// Removes files left by a killed swhkd.
     fn remove_stale_runtime_files() {
         let uid = nix::unistd::getuid();
         let runtime_dir = PathBuf::from(format!("/run/user/{}", uid));

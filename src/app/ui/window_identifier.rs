@@ -43,7 +43,7 @@ where
             };
 
             glib::MainContext::default().spawn_local(async move {
-                // SAFETY: captured surface and display outlive the await.
+
                 let identifier = unsafe {
                     WindowIdentifier::from_wayland_raw(
                         gdk4_wayland::ffi::gdk_wayland_surface_get_wl_surface(

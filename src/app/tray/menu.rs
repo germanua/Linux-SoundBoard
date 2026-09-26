@@ -1,14 +1,12 @@
 use super::payload::MenuItem;
 use crate::config::ControlHotkeyAction;
 
-/// What clicking a row should do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuAction {
-    /// Show the window if it is hidden, hide it if it is showing.
     ToggleWindow,
-    /// One of the actions a control hotkey can already trigger.
+
     Control(ControlHotkeyAction),
-    /// Shut the application down for real.
+
     Quit,
 }
 

@@ -103,7 +103,7 @@ impl StoreScanBatch {
             .parent()
             .filter(|path| path.components().next().is_some())
             .map(|path| path.to_string_lossy().into_owned());
-        // Match the store's per-component folder row count.
+
         let folder_rows = parent
             .as_ref()
             .map(|path| Path::new(path).components().count().max(1))
@@ -112,7 +112,6 @@ impl StoreScanBatch {
             .as_ref()
             .is_some_and(|path| self.folder_paths.contains(path));
 
-        // Reserve the folder row repeated after each flush.
         let rows_after_flush = 2_usize.saturating_add(folder_rows);
         if rows_after_flush > MAX_BATCH_ROWS {
             return Err(CommandError::Library(format!(

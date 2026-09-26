@@ -1,5 +1,3 @@
-//! PipeWire links for the virtual mic feeder.
-
 use log::{info, warn};
 use pipewire as pw;
 use pw::properties::properties;
@@ -23,7 +21,6 @@ impl AudioChannel {
     }
 }
 
-/// Link proxy destroyed on drop.
 pub(super) struct FeederLink {
     _link: pw::link::Link,
 }
@@ -70,7 +67,6 @@ pub(super) fn try_link_feeder_to_virtual_mic(state: &mut LoopState) {
     }
 }
 
-/// Clears links when either endpoint disappears.
 pub(super) fn drop_feeder_links(state: &mut LoopState) {
     if state.feeder_links.is_empty() {
         return;

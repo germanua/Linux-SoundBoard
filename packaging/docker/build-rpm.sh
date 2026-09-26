@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-#
-# Build the .rpm in a Fedora container, for hosts that are not Fedora/RHEL.
-#
-# The RPM spec relies on Fedora-only build macros (notably %{_userunitdir} from
-# systemd-rpm-macros) and an rpm database, so packaging/rpm/package-rpm.sh cannot
-# run on other distributions. This wrapper runs that script inside fedora:latest.
-#
-# Usage (from anywhere in the checkout):
-#   packaging/docker/build-rpm.sh
-#
-# The resulting .rpm is copied into dist/ at the repository root. Requires docker
-# and rsync on the host; the container needs network access to install packages.
+
+
+
+
+
+
+
+
+
+
+
 
 set -euo pipefail
 
-IMAGE="${RPM_BUILD_IMAGE:-fedora:latest}"
+FEDORA_IMAGE_DIGEST="docker.io/library/fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80"
+IMAGE="${RPM_BUILD_IMAGE:-$FEDORA_IMAGE_DIGEST}"
 
-# ---------------------------------------------------------------------------
-# Container stage: install build dependencies and build the RPM into /src/dist.
-# ---------------------------------------------------------------------------
+
+
+
 if [ "${1:-}" = "--in-container" ]; then
     HOST_UID="${HOST_UID:-0}"
     HOST_GID="${HOST_GID:-0}"
@@ -41,9 +41,9 @@ if [ "${1:-}" = "--in-container" ]; then
     exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Host stage: stage an isolated build context and run this script in the image.
-# ---------------------------------------------------------------------------
+
+
+
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v rsync  >/dev/null || { echo "rsync is required"  >&2; exit 1; }
 
@@ -52,10 +52,11 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
 CTX="$(mktemp -d)"
 trap 'rm -rf "$CTX"' EXIT
-# Copy the working tree (so uncommitted packaging fixes are included) without the
-# host build outputs, which are distro-specific and must not leak into the image.
+
+
 rsync -a \
     --exclude='target/' --exclude='dist/' --exclude='.git/' --exclude='.history/' \
+    --exclude='.commandcode/' --exclude='dev/' \
     "$REPO_ROOT"/ "$CTX"/
 mkdir -p "$CTX/dist"
 
@@ -67,8 +68,8 @@ docker run --rm \
 
 mkdir -p "$REPO_ROOT/dist"
 cp "$CTX"/dist/*.rpm "$REPO_ROOT/dist/"
-# package-rpm.sh hashed the container's dist/, not this one, so the host list is
-# still missing the rpm we just copied in.
+
+
 "$REPO_ROOT/packaging/generate-checksums.sh" "$REPO_ROOT/dist" >/dev/null
 
 echo "==> Done. Artifacts in $REPO_ROOT/dist:"

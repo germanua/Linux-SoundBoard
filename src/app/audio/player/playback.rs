@@ -187,8 +187,7 @@ impl ActivePlayback {
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
             let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
 
-            // Fade in to avoid a cold-start click.
-            const FADE_IN_SAMPLES: u64 = 480; // ~5 ms at 48 kHz stereo
+            const FADE_IN_SAMPLES: u64 = 480;
             let fade_scale = if self.fallback_samples_written <= FADE_IN_SAMPLES {
                 self.fallback_samples_written as f32 / FADE_IN_SAMPLES as f32
             } else {
@@ -201,15 +200,15 @@ impl ActivePlayback {
                 limiter.process(local_faded)
             } else {
                 local_faded
-            }
-            .clamp(-1.0, 1.0);
+            };
 
             let virtual_lufs_processed = if let Some(limiter) = self.virtual_limiter.as_mut() {
                 limiter.process(virtual_faded)
             } else {
                 virtual_faded
             };
-            virtual_out[index] = (virtual_lufs_processed * virtual_boost_gain).clamp(-1.0, 1.0);
+
+            virtual_out[index] = virtual_lufs_processed * virtual_boost_gain;
 
             index += 1;
         }

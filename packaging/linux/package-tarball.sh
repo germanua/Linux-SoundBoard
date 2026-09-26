@@ -3,9 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck disable=SC1091
+
 source "$SCRIPT_DIR/app-meta.sh"
-# shellcheck disable=SC1091
+
 source "$SCRIPT_DIR/../common.sh"
 
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
@@ -13,6 +13,8 @@ MANIFEST_PATH="$REPO_ROOT/src/Cargo.toml"
 ICON_SOURCE_ROOT="$REPO_ROOT/src/resources/icons"
 BINARY_SOURCE="$REPO_ROOT/target/release/$APP_BINARY"
 SWHKD_HELPER_SOURCE="$REPO_ROOT/packaging/linux/install-swhkd-helper.sh"
+SWHKD_BUILD_SCRIPT_SOURCE="$REPO_ROOT/packaging/linux/build-swhkd-locked.sh"
+SWHKD_PINNED_LOCK_SOURCE="$REPO_ROOT/packaging/linux/swhkd-Cargo.lock.pinned"
 INSTALLER_SOURCE="$REPO_ROOT/packaging/linux/install-user.sh"
 APP_META_SOURCE="$REPO_ROOT/packaging/linux/app-meta.sh"
 DIST_ROOT="$REPO_ROOT/dist"
@@ -54,8 +56,10 @@ install -Dm755 "$BINARY_SOURCE" "$bundle_dir/$APP_BINARY"
 install -Dm755 "$INSTALLER_SOURCE" "$bundle_dir/install-user.sh"
 install -Dm644 "$APP_META_SOURCE" "$bundle_dir/app-meta.sh"
 install -Dm755 "$SWHKD_HELPER_SOURCE" "$bundle_dir/install-swhkd-helper.sh"
+install -Dm755 "$SWHKD_BUILD_SCRIPT_SOURCE" "$bundle_dir/build-swhkd-locked.sh"
+install -Dm644 "$SWHKD_PINNED_LOCK_SOURCE" "$bundle_dir/swhkd-Cargo.lock.pinned"
 
-for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md DONATIONS.md README.md; do
+for legal_file in LICENSE NOTICE.md THIRDPARTY_LICENSES.md THIRD_PARTY_NOTICES.html COMMERCIAL-LICENSE.md README.md; do
     install -Dm644 "$REPO_ROOT/$legal_file" "$bundle_dir/$legal_file"
 done
 
@@ -68,8 +72,8 @@ rm -f "$tarball_path"
 tar -czf "$tarball_path" -C "$DIST_ROOT" "$bundle_name"
 rm -rf "$bundle_dir"
 
-# Refreshed over everything in dist/, so the list covers the .deb, .rpm, and
-# AppImage built before it as well.
+
+
 "$REPO_ROOT/packaging/generate-checksums.sh" "$DIST_ROOT" >/dev/null
 
 echo "Created tarball artifact:"

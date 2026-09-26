@@ -11,7 +11,8 @@ use gtk4::{DragSource, EventControllerKey, GestureClick, Widget};
 use crate::app_state::AppState;
 use crate::commands;
 use crate::config::Sound;
-use crate::ui::dialogs::{DialogHostWeak, HotkeyScopePrompt};
+use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord};
+use crate::ui::dialogs::{DialogHost, DialogHostWeak, HotkeyScopePrompt};
 use crate::ui::is_unmodified_delete_shortcut;
 
 use crate::ui::{menu, tab_dnd};
@@ -85,7 +86,243 @@ impl HotkeyAssignment {
     }
 }
 
+struct HotkeyAssignmentMany {
+    inner: Rc<SoundListInner>,
+    state: Arc<AppState>,
+    dialog_host: DialogHostWeak,
+    target_ids: Vec<String>,
+    multi_sound_hotkeys: bool,
+    tab_scope: Option<String>,
+}
+
+impl HotkeyAssignmentMany {
+    fn dispatch(self, hotkey: Option<String>) {
+        let Self {
+            inner,
+            state,
+            dialog_host,
+            target_ids,
+            multi_sound_hotkeys,
+            tab_scope,
+        } = self;
+
+        let inner_done = Rc::clone(&inner);
+        let dialog_done = dialog_host.clone();
+        let state_done = Arc::clone(&state);
+
+        let dispatch = commands::set_hotkey_many_async(
+            target_ids,
+            hotkey,
+            multi_sound_hotkeys,
+            tab_scope,
+            state.library.clone(),
+            state.hotkey_projection.clone(),
+            move |result| match result {
+                Ok(()) => inner_done.refresh_from_state_inner(),
+                Err(e) => {
+                    if matches!(&e, commands::CommandError::HotkeyProjection(_)) {
+                        inner_done.refresh_from_state_inner();
+                    }
+                    log::warn!("Set hotkey for selected failed: {e}");
+                    let detail = e.to_string();
+                    let message = crate::hotkeys::format_hotkey_error(&detail);
+                    if let Some(dialog_host) = dialog_done.upgrade() {
+                        if crate::hotkeys::should_offer_swhkd_install(&detail) {
+                            dialog_host.show_hotkey_error_with_install_option(
+                                "Failed to Set Hotkey",
+                                &message,
+                                Arc::clone(&state_done.hotkeys),
+                                state_done.hotkey_projection.clone(),
+                            );
+                        } else {
+                            dialog_host.show_error("Failed to Set Hotkey", &message);
+                        }
+                    }
+                }
+            },
+        );
+        if let Err(error) = dispatch {
+            log::warn!("Failed to dispatch hotkey update: {error}");
+            if let Some(dialog_host) = dialog_host.upgrade() {
+                dialog_host.show_error("Failed to Set Hotkey", &error.to_string());
+            }
+        }
+    }
+}
+
+fn common_scope_hotkey(
+    bindings: &[HotkeyBindingRecord],
+    target_ids: &[String],
+    tab_scope: Option<&str>,
+) -> Option<String> {
+    let mut common: Option<&str> = None;
+    for id in target_ids {
+        let chord = bindings.iter().find_map(|binding| match &binding.owner {
+            HotkeyBindingOwner::Sound(sound)
+                if sound == id && binding.tab_scope.as_deref() == tab_scope =>
+            {
+                Some(binding.accelerator.as_str())
+            }
+            _ => None,
+        });
+        match (common, chord) {
+            (None, Some(chord)) => common = Some(chord),
+            (Some(existing), Some(chord)) if existing == chord => {}
+            _ => return None,
+        }
+    }
+    common.map(str::to_string)
+}
+
+fn initial_scope_for_targets(
+    bindings: &[HotkeyBindingRecord],
+    anchor_id: &str,
+    active_scope: &str,
+) -> bool {
+    let mut scoped = false;
+    let mut unscoped = false;
+    for binding in bindings {
+        if !matches!(&binding.owner, HotkeyBindingOwner::Sound(sound) if sound == anchor_id) {
+            continue;
+        }
+        if binding.tab_scope.as_deref() == Some(active_scope) {
+            scoped = true;
+        } else if binding.tab_scope.is_none() {
+            unscoped = true;
+        }
+    }
+
+    scoped || !unscoped
+}
+
 impl SoundListInner {
+    fn assign_selected_hotkey(
+        inner: Rc<SoundListInner>,
+        state: Arc<AppState>,
+        anchor_id: String,
+        target_ids: Vec<String>,
+        dialog_host: DialogHost,
+    ) {
+        let target_ids = normalize_sound_ids(target_ids);
+        if target_ids.is_empty() {
+            return;
+        }
+
+        let dialog_host_weak = dialog_host.downgrade();
+        let tab_hotkeys = state.config.lock().settings.tab_hotkeys;
+        let active_scope = crate::library_store::scope_key(&inner.active_scope.lock());
+
+        let dispatch = commands::hotkey_bindings_for_sounds_async(
+            target_ids.clone(),
+            state.library.clone(),
+            move |result| {
+                let Some(dialog_host) = dialog_host_weak.upgrade() else {
+                    return;
+                };
+                let bindings = result.unwrap_or_else(|error| {
+                    log::warn!("Could not read the shortcuts: {error}");
+                    Vec::new()
+                });
+                let initial_scoped =
+                    initial_scope_for_targets(&bindings, &anchor_id, &active_scope);
+                let initial_chord = common_scope_hotkey(
+                    &bindings,
+                    &target_ids,
+                    initial_scoped.then_some(active_scope.as_str()),
+                );
+
+                let inner_confirm = Rc::clone(&inner);
+                let state_confirm = Arc::clone(&state);
+                let dialog_host_confirm = dialog_host_weak.clone();
+                let target_ids_confirm = target_ids.clone();
+                let active_scope_confirm = active_scope.clone();
+
+                dialog_host.show_hotkey_capture(
+                    initial_chord.as_deref(),
+                    tab_hotkeys.then_some(HotkeyScopePrompt {
+                        scoped_now: initial_scoped,
+                    }),
+                    move |hotkey| {
+                        crate::hotkeys::canonicalize_hotkey_string(hotkey)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    },
+                    move |hotkey, scoped| {
+                        let tab_scope = scoped.then(|| active_scope_confirm.clone());
+                        let multi_sound_hotkeys =
+                            state_confirm.config.lock().settings.multi_sound_hotkeys;
+
+                        let assign = HotkeyAssignmentMany {
+                            inner: Rc::clone(&inner_confirm),
+                            state: Arc::clone(&state_confirm),
+                            dialog_host: dialog_host_confirm.clone(),
+                            target_ids: target_ids_confirm.clone(),
+                            multi_sound_hotkeys,
+                            tab_scope: tab_scope.clone(),
+                        };
+
+                        let Some(chord) = hotkey else {
+                            assign.dispatch(None);
+                            return;
+                        };
+                        if !multi_sound_hotkeys {
+
+                            assign.dispatch(Some(chord));
+                            return;
+                        }
+
+                        let dialog_ask = dialog_host_confirm.clone();
+                        let chord_shown = chord.clone();
+                        let count = target_ids_confirm.len();
+                        let dispatch = commands::hotkey_holder_many_async(
+                            target_ids_confirm.clone(),
+                            chord,
+                            tab_scope,
+                            state_confirm.library.clone(),
+                            move |result| {
+                                let holder = match result {
+                                    Ok(Some(holder)) => holder,
+                                    Ok(None) => {
+                                        assign.dispatch(Some(chord_shown));
+                                        return;
+                                    }
+                                    Err(error) => {
+
+                                        log::warn!("Could not check the shortcut: {error}");
+                                        assign.dispatch(Some(chord_shown));
+                                        return;
+                                    }
+                                };
+                                let Some(dialog_host) = dialog_ask.upgrade() else {
+                                    return;
+                                };
+                                let assign = RefCell::new(Some(assign));
+                                dialog_host.show_confirm(
+                                    "Share Shortcut",
+                                    &format!(
+                                        "{chord_shown} is already assigned to {holder}.\n\nAdd the {count} selected sounds to this shortcut?"
+                                    ),
+                                    "Add",
+                                    move || {
+                                        if let Some(assign) = assign.borrow_mut().take() {
+                                            assign.dispatch(Some(chord_shown.clone()));
+                                        }
+                                    },
+                                );
+                            },
+                        );
+                        if let Err(error) = dispatch {
+                            log::warn!("Failed to check the shortcut: {error}");
+                        }
+                    },
+                );
+            },
+        );
+        if let Err(error) = dispatch {
+            log::warn!("Failed to read the shortcuts: {error}");
+        }
+    }
+
     pub(super) fn connect_activate(self: &Rc<Self>) {
         let inner_weak = Rc::downgrade(self);
         let store = self.store.clone();
@@ -343,7 +580,6 @@ impl SoundListInner {
         gesture.set_button(3);
         gesture.set_propagation_phase(gtk4::PropagationPhase::Capture);
         gesture.connect_pressed(|gesture, _, _, _| {
-            // Keep the selection when opening the context menu.
             gesture.set_state(gtk4::EventSequenceState::Claimed);
         });
 
@@ -371,7 +607,7 @@ impl SoundListInner {
         drag_source.set_button(gtk4::gdk::BUTTON_PRIMARY);
         drag_source.set_propagation_phase(gtk4::PropagationPhase::Capture);
         drag_source.set_propagation_limit(gtk4::PropagationLimit::SameNative);
-        // Leave the sequence shared so normal row selection still works.
+
         drag_source.set_exclusive(false);
 
         let inner_weak = Rc::downgrade(self);
@@ -518,14 +754,13 @@ impl SoundListInner {
 
         let section1 = gio::Menu::new();
         section1.append(Some("Rename"), Some("sound-ctx.rename"));
-        section1.append(
-            Some(if sound.hotkey.is_some() {
-                "Update Hotkey"
-            } else {
-                "Set Hotkey"
-            }),
-            Some("sound-ctx.set-hotkey"),
-        );
+        let hotkey_label = match (target_count > 1, sound.hotkey.is_some()) {
+            (true, true) => "Update Hotkey for Selected",
+            (true, false) => "Set Hotkey for Selected",
+            (false, true) => "Update Hotkey",
+            (false, false) => "Set Hotkey",
+        };
+        section1.append(Some(hotkey_label), Some("sound-ctx.set-hotkey"));
         section1.append(Some("Check file path"), Some("sound-ctx.check-path"));
         section1.append(
             Some(if target_count > 1 {
@@ -624,9 +859,20 @@ impl SoundListInner {
             let inner = Rc::clone(self);
             let state = Arc::clone(&self.state);
             let sound = sound.clone();
+            let target_ids = target_ids.clone();
             let dialog_host = self.dialog_host.clone();
             let action = gio::SimpleAction::new("set-hotkey", None);
             action.connect_activate(move |_, _| {
+                if target_ids.len() > 1 {
+                    Self::assign_selected_hotkey(
+                        Rc::clone(&inner),
+                        Arc::clone(&state),
+                        sound.id.clone(),
+                        target_ids.clone(),
+                        dialog_host.clone(),
+                    );
+                    return;
+                }
                 let inner_confirm = Rc::clone(&inner);
                 let sound = sound.clone();
                 let state_confirm = Arc::clone(&state);
@@ -692,7 +938,7 @@ impl SoundListInner {
                                         return;
                                     }
                                     Err(error) => {
-                                        // Let set report the clash.
+
                                         log::warn!("Could not check the shortcut: {error}");
                                         assign.dispatch();
                                         return;
@@ -1139,6 +1385,67 @@ mod tests {
             removal_confirmation(2),
             "Remove 2 selected sounds from the soundboard? The audio files will remain on disk."
         );
+    }
+
+    fn sound_binding(owner: &str, tab_scope: Option<&str>, chord: &str) -> HotkeyBindingRecord {
+        HotkeyBindingRecord {
+            binding_id: format!("{owner}:{chord}"),
+            owner: HotkeyBindingOwner::Sound(owner.to_string()),
+            accelerator: chord.to_string(),
+            normalized: Some(chord.to_string()),
+            issue: None,
+            tab_scope: tab_scope.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_batch_prefill_needs_one_agreed_chord() {
+        let ids = vec!["a".to_string(), "b".to_string()];
+
+        let agreed = vec![
+            sound_binding("a", Some("tab:one"), "F8"),
+            sound_binding("b", Some("tab:one"), "F8"),
+        ];
+        assert_eq!(
+            common_scope_hotkey(&agreed, &ids, Some("tab:one")),
+            Some("F8".to_string())
+        );
+
+        let split = vec![
+            sound_binding("a", Some("tab:one"), "F8"),
+            sound_binding("b", Some("tab:one"), "F9"),
+        ];
+        assert_eq!(common_scope_hotkey(&split, &ids, Some("tab:one")), None);
+
+        let partial = vec![sound_binding("a", Some("tab:one"), "F8")];
+        assert_eq!(common_scope_hotkey(&partial, &ids, Some("tab:one")), None);
+
+        let unscoped = vec![
+            sound_binding("a", None, "F8"),
+            sound_binding("b", None, "F8"),
+        ];
+        assert_eq!(common_scope_hotkey(&unscoped, &ids, Some("tab:one")), None);
+        assert_eq!(
+            common_scope_hotkey(&unscoped, &ids, None),
+            Some("F8".to_string())
+        );
+    }
+
+    #[test]
+    fn the_initial_scope_follows_the_clicked_sound() {
+        let scoped = vec![sound_binding("a", Some("tab:one"), "F8")];
+        assert!(initial_scope_for_targets(&scoped, "a", "tab:one"));
+
+        let global = vec![sound_binding("a", None, "F8")];
+        assert!(!initial_scope_for_targets(&global, "a", "tab:one"));
+
+        assert!(initial_scope_for_targets(&[], "a", "tab:one"));
+
+        let mixed = vec![
+            sound_binding("a", None, "F8"),
+            sound_binding("b", Some("tab:one"), "F8"),
+        ];
+        assert!(!initial_scope_for_targets(&mixed, "a", "tab:one"));
     }
 
     #[test]

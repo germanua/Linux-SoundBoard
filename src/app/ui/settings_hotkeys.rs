@@ -30,7 +30,7 @@ pub(super) fn build_hotkeys_page(
     let description = unavailable_reason
         .as_ref()
         .map(|reason| {
-            // "&&" in remediation commands breaks Pango markup.
+
             format!(
                 "These global hotkeys use the native Wayland backend when available and the X11 backend only in X11 sessions. Currently unavailable: {}",
                 glib::markup_escape_text(reason)
@@ -76,7 +76,6 @@ pub(super) fn build_hotkeys_page(
     }
 
     for meta in ControlHotkeyAction::all() {
-        // Lives with the setting it cycles rather than in this list.
         if meta.action == ControlHotkeyAction::CycleGroupMode {
             continue;
         }
@@ -144,7 +143,7 @@ fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::
         GroupMode::Next => 1,
         GroupMode::Random => 2,
     });
-    // Ignore updates coming from the cycle hotkey.
+
     let applying_mode = Rc::new(std::cell::Cell::new(false));
     {
         let state_mode = Arc::clone(&state);
@@ -200,7 +199,7 @@ fn build_behaviour_group(state: Arc<AppState>, dialog_host: DialogHost) -> adw::
             {
                 log::warn!("Could not save the multiple sounds setting: {error}");
             }
-            // The mode only means something once a shortcut can be shared.
+
             if let Some(mode_row) = mode_weak.upgrade() {
                 mode_row.set_visible(row.is_active());
             }
@@ -295,7 +294,6 @@ fn build_hotkey_row(
             let dialog_host_weak = dialog_host_record.downgrade();
             dialog_host_record.show_hotkey_capture(
                 current.as_deref(),
-                // Control actions are never limited to a tab.
                 None,
                 move |hotkey| {
                     crate::hotkeys::canonicalize_hotkey_string(hotkey)

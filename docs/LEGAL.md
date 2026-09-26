@@ -53,10 +53,6 @@ Binary release bundles should include generated third-party dependency notices m
 
 The generated notices for the current locked Rust dependency graph are in `THIRD_PARTY_NOTICES.html`.
 
-## Donations
-
-Voluntary donations and sponsorships to the official project do not change the public source license and do not grant commercial rights. See `DONATIONS.md`.
-
 ## Contributions
 
 The project is currently solo-maintained. External contributions are governed by `CONTRIBUTING.md`.

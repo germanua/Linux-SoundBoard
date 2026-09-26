@@ -1,22 +1,31 @@
-pub const APP_ID: &str = "com.linuxsoundboard.app";
-pub const APP_ICON_NAME: &str = "linux-soundboard";
-pub const APP_TITLE: &str = "Linux Soundboard";
-pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const APP_BINARY: &str = env!("CARGO_PKG_NAME");
-pub const CONFIG_DIR_NAME: &str = "linux-soundboard";
+pub const BUILD_PROFILE: &str = env!("LSB_PROFILE_ID");
+pub const APP_ID: &str = env!("LSB_APP_ID");
+pub const APP_ICON_NAME: &str = env!("LSB_APP_ICON_NAME");
+pub const APP_TITLE: &str = env!("LSB_APP_TITLE");
+pub const APP_VERSION: &str = env!("LSB_APP_VERSION");
+pub const APP_BINARY: &str = env!("LSB_APP_BINARY");
+pub const CONFIG_DIR_NAME: &str = env!("LSB_CONFIG_DIR_NAME");
+pub const STATE_DIR_NAME: &str = env!("LSB_STATE_DIR_NAME");
+pub const UPDATE_REPO: &str = env!("LSB_UPDATE_REPO");
+pub const UPDATE_CHANNEL: &str = env!("LSB_UPDATE_CHANNEL");
+pub const INSTALLER_COMMAND: &str = env!("LSB_INSTALLER_COMMAND");
+pub const ENGINE_SERVICE_NAME: &str = env!("LSB_ENGINE_SERVICE_NAME");
+pub const ENGINE_TARGET_NAME: &str = env!("LSB_ENGINE_TARGET_NAME");
+pub const HOTKEY_PIPE_NAME: &str = env!("LSB_HOTKEY_PIPE_NAME");
+pub const ALLOW_PRIVILEGED_HELPER: bool = env!("LSB_ALLOW_PRIVILEGED_HELPER").as_bytes()[0] == b'1';
+pub const ALLOW_DEFAULT_SOURCE_CLAIM: bool =
+    env!("LSB_ALLOW_DEFAULT_SOURCE_CLAIM").as_bytes()[0] == b'1';
 
 pub const GENERAL_TAB_ID: &str = "general";
-
 pub const BACKEND_ENV_VAR: &str = "GDK_BACKEND";
 pub const FORCE_X11_ENV_VAR: &str = "LSB_FORCE_X11";
 pub const RENDERER_ENV_VAR: &str = "GSK_RENDERER";
 pub const FALLBACK_RENDERER: &str = "cairo";
 pub const WAYLAND_BACKEND: &str = "wayland";
 pub const X11_BACKEND: &str = "x11";
-pub const LOCAL_PLAYBACK_NODE_NAME: &str = "linuxsoundboard.local_playback";
-pub const MIC_CAPTURE_NODE_NAME: &str = "linuxsoundboard.mic_capture";
-pub const VIRTUAL_SOURCE_NAME: &str = "linuxsoundboard.virtual_mic";
-// Stream feeding the virtual mic's null sink.
-pub const VIRTUAL_MIC_FEEDER_NODE_NAME: &str = "linuxsoundboard.virtual_mic_feeder";
-pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = "Linux_Soundboard_Output";
-pub const VIRTUAL_MIC_DESCRIPTION: &str = "Linux_Soundboard_Mic";
+pub const LOCAL_PLAYBACK_NODE_NAME: &str = env!("LSB_LOCAL_PLAYBACK_NODE");
+pub const MIC_CAPTURE_NODE_NAME: &str = env!("LSB_MIC_CAPTURE_NODE");
+pub const VIRTUAL_SOURCE_NAME: &str = env!("LSB_VIRTUAL_SOURCE");
+pub const VIRTUAL_MIC_FEEDER_NODE_NAME: &str = env!("LSB_VIRTUAL_FEEDER_NODE");
+pub const VIRTUAL_OUTPUT_DESCRIPTION: &str = env!("LSB_VIRTUAL_OUTPUT_DESCRIPTION");
+pub const VIRTUAL_MIC_DESCRIPTION: &str = env!("LSB_VIRTUAL_MIC_DESCRIPTION");

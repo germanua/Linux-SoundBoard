@@ -12,6 +12,8 @@ pub(super) struct RuntimeConfig {
     pub(super) loudness_boost_enabled: bool,
     pub(super) loudness_boost_db: f64,
     pub(super) looping: bool,
+
+    pub(super) allow_multiple_playbacks: bool,
     pub(super) audio_backend: AudioBackendKind,
 }
 
@@ -37,6 +39,7 @@ impl RuntimeConfig {
                 config.settings.loudness_boost_db,
             ),
             looping: playback.play_mode.should_loop(),
+            allow_multiple_playbacks: playback.allow_multiple_playbacks,
             audio_backend: AudioBackendKind::PipeWire,
         }
     }

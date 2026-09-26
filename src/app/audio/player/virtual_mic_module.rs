@@ -1,7 +1,3 @@
-//! Runtime null-sink for the virtual microphone.
-
-#[cfg(not(test))]
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
@@ -12,17 +8,17 @@ use super::loop_state::LoopState;
 use super::pw_backend::BackendState;
 use super::EngineError;
 use crate::app_meta::{VIRTUAL_MIC_DESCRIPTION, VIRTUAL_SOURCE_NAME};
+#[cfg(not(test))]
+use crate::audio::command_runner::run_command;
 
 const VIRTUAL_MIC_REPAIR_DELAY: Duration = Duration::from_secs(2);
 const VIRTUAL_MIC_REPAIR_COOLDOWN: Duration = Duration::from_secs(5);
 
-/// Unloads its pactl null sink on drop.
 pub(super) struct NullSinkModule {
     pub(super) module_id: u32,
 }
 
 impl NullSinkModule {
-    /// Replaces stale null sinks from crashed engines.
     #[cfg(not(test))]
     pub(super) fn load_or_attach() -> Result<Self, EngineError> {
         let stale = find_all_existing_module_ids();
@@ -32,30 +28,23 @@ impl NullSinkModule {
                 stale.len()
             );
             for id in stale {
-                let _ = Command::new("pactl")
-                    .args(["unload-module", &id.to_string()])
-                    .output();
+                let id = id.to_string();
+                let _ = run_command("pactl", &["unload-module", &id]);
             }
         }
 
         let args = build_load_args();
-        let output = Command::new("pactl")
-            .arg("load-module")
-            .arg("module-null-sink")
-            .args(&args)
-            .output()
-            .map_err(|err| {
-                EngineError::Setup(format!("Failed to spawn pactl load-module: {err}"))
-            })?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut command_args = vec!["load-module", "module-null-sink"];
+        command_args.extend(args.iter().map(String::as_str));
+        let output = run_command("pactl", &command_args)
+            .map_err(|err| EngineError::Setup(format!("Failed to run pactl load-module: {err}")))?;
+        if !output.success {
             return Err(EngineError::Setup(format!(
                 "pactl load-module failed: {}",
-                stderr.trim()
+                output.stderr.trim()
             )));
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let id_text = stdout.trim();
+        let id_text = output.stdout.trim();
         let module_id: u32 = id_text.parse().map_err(|_| {
             EngineError::Setup(format!(
                 "pactl load-module returned non-numeric module id: {:?}",
@@ -91,24 +80,15 @@ impl NullSinkModule {
 impl Drop for NullSinkModule {
     fn drop(&mut self) {
         let module_id = self.module_id;
-        match Command::new("pactl")
-            .args(["unload-module", &module_id.to_string()])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                info!("Unloaded null-sink module (id={})", module_id);
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                warn!(
-                    "pactl unload-module {} failed: {}",
-                    module_id,
-                    stderr.trim()
-                );
-            }
-            Err(err) => {
-                warn!("Failed to spawn pactl unload-module {}: {err}", module_id);
-            }
+        let id = module_id.to_string();
+        match run_command("pactl", &["unload-module", &id]) {
+            Ok(out) if out.success => info!("Unloaded null-sink module (id={})", module_id),
+            Ok(out) => warn!(
+                "pactl unload-module {} failed: {}",
+                module_id,
+                out.stderr.trim()
+            ),
+            Err(err) => warn!("Failed to run pactl unload-module {}: {err}", module_id),
         }
     }
 }
@@ -211,15 +191,11 @@ fn reset_virtual_mic_graph_state(state: &mut LoopState) {
 
 #[cfg(not(test))]
 fn virtual_source_exists() -> bool {
-    let output = match Command::new("pactl")
-        .args(["list", "short", "sources"])
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
+    let output = match run_command("pactl", &["list", "short", "sources"]) {
+        Ok(output) if output.success => output,
         _ => return false,
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    source_list_contains_virtual_mic(&stdout)
+    source_list_contains_virtual_mic(&output.stdout)
 }
 
 #[cfg(test)]
@@ -228,23 +204,17 @@ fn virtual_source_exists() -> bool {
 }
 
 #[cfg(not(test))]
-/// Finds every null sink using our virtual-mic name.
 fn find_all_existing_module_ids() -> Vec<u32> {
-    let output = match Command::new("pactl")
-        .args(["list", "short", "modules"])
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
+    let output = match run_command("pactl", &["list", "short", "modules"]) {
+        Ok(output) if output.success => output,
         _ => return Vec::new(),
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_existing_module_ids(&stdout)
+    parse_existing_module_ids(&output.stdout)
 }
 
 fn parse_existing_module_ids(stdout: &str) -> Vec<u32> {
     let mut found = Vec::new();
     for line in stdout.lines() {
-        // Format: "<id>\tmodule-null-sink\t<args>"
         let mut cols = line.split('\t');
         let Some(id) = cols.next() else { continue };
         let Some(name) = cols.next() else { continue };
@@ -281,7 +251,7 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("media.class=Audio/Source/Virtual"));
         assert!(joined.contains(&format!("sink_name={VIRTUAL_SOURCE_NAME}")));
-        // pactl truncates descriptions at whitespace.
+
         assert!(joined.contains(VIRTUAL_MIC_DESCRIPTION));
         assert!(!VIRTUAL_MIC_DESCRIPTION.contains(' '));
     }

@@ -1,5 +1,3 @@
-//! Validate sound source paths.
-
 use std::path::Path;
 
 pub fn check_file_exists(path: &str) -> bool {

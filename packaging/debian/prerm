@@ -8,5 +8,3 @@ if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
         systemctl --global disable linux-soundboard-engine.service >/dev/null 2>&1 || true
     fi
 fi
-
-#DEBHELPER#

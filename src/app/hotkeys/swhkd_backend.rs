@@ -14,7 +14,9 @@ use super::backend_runtime::{try_dispatch_hotkey, HotkeyBackend};
 use super::error::{unsupported_key_for_backend, HotkeyError};
 use super::parse_hotkey_spec;
 use super::swhkd_config::SwhkdConfig;
-use super::swhkd_install::{ensure_swhkd_binary_is_safe, missing_swhkd_message};
+use super::swhkd_install::{
+    ensure_swhkd_binary_is_safe, missing_swhkd_message, resolve_swhkd_binary, resolve_swhks_binary,
+};
 use super::swhkd_process::SwhkdProcesses;
 use super::{
     SWHKD_PIPE_OPEN_RETRY_SECS, SWHKD_PIPE_REOPEN_DELAY_MS, SWHKD_RELOAD_POST_SIGNAL_WAIT_MS,
@@ -99,11 +101,11 @@ impl SwhkdBackend {
     pub fn new() -> Result<Self, HotkeyError> {
         info!("Initializing swhkd backend");
 
-        let swhkd_path = which::which("swhkd")
-            .map_err(|_| HotkeyError::BackendUnavailable(missing_swhkd_message("swhkd")))?;
+        let swhkd_path = resolve_swhkd_binary()
+            .ok_or_else(|| HotkeyError::BackendUnavailable(missing_swhkd_message("swhkd")))?;
         ensure_swhkd_binary_is_safe(&swhkd_path).map_err(HotkeyError::BackendUnavailable)?;
 
-        if which::which("swhks").is_err() {
+        if resolve_swhks_binary().is_none() {
             return Err(HotkeyError::BackendUnavailable(missing_swhkd_message(
                 "swhks",
             )));
@@ -147,14 +149,13 @@ impl SwhkdBackend {
             )));
         }
 
-        let pipe_path = runtime_dir.join("lsb_hotkey.pipe");
+        let pipe_path = runtime_dir.join(crate::app_meta::HOTKEY_PIPE_NAME);
 
         if pipe_path.exists() {
             fs::remove_file(&pipe_path)
                 .map_err(|e| HotkeyError::Io(format!("Failed to remove old pipe: {}", e)))?;
         }
 
-        // Let root-owned `swhkd` write to the pipe.
         nix::unistd::mkfifo(
             &pipe_path,
             nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,

@@ -22,7 +22,6 @@ pub fn show_popover_menu(
     let widget_weak = widget.downgrade();
     let namespace = namespace.to_string();
     popover.connect_closed(move |popover| {
-        // Let activation finish before unparenting.
         let popover = popover.clone();
         let widget_weak = widget_weak.clone();
         let namespace = namespace.clone();

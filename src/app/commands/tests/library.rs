@@ -3,13 +3,17 @@ use crate::test_support::audio_fixtures::{cleanup_test_audio_path, create_test_a
 use std::fs;
 
 #[test]
-fn test_set_allow_multiple_playbacks_is_ignored() {
+fn test_set_allow_multiple_playbacks_is_honoured() {
     let config = create_test_config_state();
-    let result = commands::set_allow_multiple_playbacks(true, config.clone());
+    let player = create_test_audio_player();
+    let result = commands::set_allow_multiple_playbacks(true, config.clone(), player);
     assert!(result.is_ok());
 
     let cfg = config.lock();
-    assert!(!cfg.settings.allow_multiple_playbacks);
+    assert!(
+        cfg.settings.allow_multiple_playbacks,
+        "the setting must be stored, not forced off"
+    );
 }
 
 #[test]

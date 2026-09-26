@@ -1,7 +1,5 @@
 const INITIAL_DECODER_BUFFER_FRAMES: u64 = 4_096;
 
-// Audio source abstraction
-
 pub(crate) type SeekError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub(crate) trait AudioSource: Iterator<Item = i16> {
@@ -18,7 +16,6 @@ pub(super) trait ResettableSource: AudioSource {
     fn seek_resettable(&mut self, position: std::time::Duration) -> Result<(), SeekError>;
 }
 
-/// Resamples mono or stereo sources to stereo.
 pub(super) struct ChannelSampleRateConverter<S: AudioSource> {
     source: S,
     in_channels: u16,
@@ -108,10 +105,8 @@ impl<S: AudioSource> Iterator for ChannelSampleRateConverter<S> {
     }
 }
 
-// Decoders
-
 use log::debug;
-use ogg::PacketReader;
+use ogg::{OggReadError, PacketReader};
 use opus::{Channels as OpusChannels, Decoder as OpusDecoder};
 use std::io::BufReader as IoBufReader;
 use std::time::Duration;
@@ -264,7 +259,8 @@ impl OggOpusSource {
         };
         let decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, opus_channels)
             .map_err(|e| EngineError::Playback(format!("Failed to create Opus decoder: {e}")))?;
-        let playable_frames = scan_ogg_opus_frames(path, head.stream_serial, head.pre_skip)?;
+        let playable_frames =
+            scan_ogg_opus_frames(path, head.stream_serial, head.pre_skip, opus_channels)?;
         let total_duration = Some(Duration::from_secs_f64(
             playable_frames as f64 / f64::from(OPUS_SAMPLE_RATE),
         ));
@@ -461,17 +457,35 @@ fn parse_ogg_opus_head(data: &[u8]) -> Result<OggOpusHead, EngineError> {
     })
 }
 
-fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result<u64, EngineError> {
+fn scan_ogg_opus_frames(
+    path: &str,
+    stream_serial: u32,
+    pre_skip: u16,
+    opus_channels: OpusChannels,
+) -> Result<u64, EngineError> {
     let file = std::fs::File::open(path)
         .map_err(|e| EngineError::Playback(format!("Failed to scan Ogg Opus file: {e}")))?;
+
+    let mut decoder = OpusDecoder::new(OPUS_SAMPLE_RATE, opus_channels)
+        .map_err(|e| EngineError::Playback(format!("Failed to create Opus decoder: {e}")))?;
+    let mut decode_buffer = vec![0i16; OPUS_MAX_FRAME_SAMPLES_PER_CHANNEL * opus_channels as usize];
     let mut reader = PacketReader::new(IoBufReader::new(file));
     let mut last_granule = None;
     let mut saw_audio = false;
     let mut saw_end = false;
-    loop {
+
+    let stop_reason = loop {
         let packet = match reader.read_packet() {
             Ok(Some(packet)) => packet,
-            Ok(None) => break,
+
+            Ok(None) => break "clean end of file",
+
+            Err(OggReadError::ReadError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break "file ends mid-page";
+            }
+
             Err(error) => {
                 return Err(EngineError::Playback(format!(
                     "Failed to scan Ogg Opus packets: {error}"
@@ -485,6 +499,13 @@ fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result
             && !packet.data.starts_with(b"OpusHead")
             && !packet.data.starts_with(b"OpusTags");
         if is_audio {
+            decoder
+                .decode(&packet.data, &mut decode_buffer, false)
+                .map_err(|error| {
+                    EngineError::Playback(format!(
+                        "Failed to decode Ogg Opus audio packet: {error}"
+                    ))
+                })?;
             saw_audio = true;
             if packet.absgp_page() != u64::MAX {
                 last_granule = Some(packet.absgp_page());
@@ -493,16 +514,16 @@ fn scan_ogg_opus_frames(path: &str, stream_serial: u32, pre_skip: u16) -> Result
         if packet.last_in_stream() {
             saw_end = true;
         }
-    }
+    };
     if !saw_audio {
         return Err(EngineError::Playback(
             "Ogg Opus stream contains no audio packets".to_string(),
         ));
     }
     if !saw_end {
-        return Err(EngineError::Playback(
-            "Ogg Opus stream is truncated before its end-of-stream page".to_string(),
-        ));
+        debug!(
+            "Ogg Opus stream has no end-of-stream page ({stop_reason}); playing the complete, CRC-valid pages up to it"
+        );
     }
     let final_granule = last_granule.ok_or_else(|| {
         EngineError::Playback("Ogg Opus stream has no valid final granule position".to_string())

@@ -1,5 +1,3 @@
-//! EBU R128 loudness analysis for auto-gain.
-
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -9,47 +7,41 @@ use log::{debug, warn};
 
 use super::player::{DecodedAudioSource, DecodedPlaybackSource};
 
-/// Cap boost so very quiet files do not explode in volume.
 const MAX_GAIN_FACTOR: f32 = 8.0;
 
-/// True-peak ceiling (dBTP) the output must stay under after gain.
 const TRUE_PEAK_CEILING_DBTP: f32 = -1.0;
 
-/// Keep a floor so gain never goes to zero.
 const MIN_GAIN_FACTOR: f32 = 0.01;
 
-/// Smallest window we use for smart previews.
 const MIN_PREVIEW_WINDOW_MS: u64 = 500;
-/// Bias toward the louder window when previews disagree a lot.
+
 const PREVIEW_SPREAD_LOUD_BIAS_LU: f64 = 5.0;
-/// Tight spreads are stable enough to use weighted mean.
+
 const PREVIEW_SPREAD_TIGHT_MEAN_LU: f64 = 1.2;
-/// Intro guard prevents anchoring on silence-only fades.
+
 const PREVIEW_INTRO_GUARD_MS: u64 = 500;
-/// Preferred analysis window length for each smart-preview window.
+
 const PREVIEW_TARGET_WINDOW_MS: u64 = 2_500;
 const PREVIEW_ANCHORS_MEDIUM_PCT: [u64; 4] = [8, 35, 65, 90];
 const PREVIEW_ANCHORS_LONG_PCT: [u64; 5] = [5, 25, 50, 75, 92];
 
 static NEVER_CANCELLED: AtomicBool = AtomicBool::new(false);
 
-/// Never-cancelled token for one-off analyses.
 pub fn never_cancelled() -> &'static AtomicBool {
     &NEVER_CANCELLED
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoudnessError {
-    /// Audio file could not be opened.
     #[error("{0}")]
     Io(String),
-    /// Audio probe, decode, or analysis computation failed.
+
     #[error("{0}")]
     Decode(String),
-    /// No valid loudness result could be computed.
+
     #[error("{0}")]
     NoResult(String),
-    /// Analysis was interrupted by a cancel request.
+
     #[error("Analysis cancelled")]
     Cancelled,
 }
@@ -248,7 +240,6 @@ fn analyze_context_with_stats(
     })
 }
 
-/// Highest channel true peak, or none if every query fails.
 fn extract_true_peak_dbtp(ebur128: &EbuR128, channels: u32) -> Option<f32> {
     let mut max_peak: f64 = 0.0;
     let mut any_ok = false;

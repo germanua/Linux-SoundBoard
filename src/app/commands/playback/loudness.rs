@@ -296,7 +296,7 @@ fn refine_estimated_loudness_with_store(
                 }
             };
             updates.push(refinement_update(outcome, &sound));
-            // Push partial progress so the settings counts move mid-run.
+
             if should_flush_loudness_progress(updates.len(), false) {
                 library
                     .apply_loudness_updates(std::mem::take(&mut updates))

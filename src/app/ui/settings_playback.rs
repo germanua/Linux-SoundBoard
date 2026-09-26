@@ -115,6 +115,7 @@ pub(super) fn build_playback_groups(
             release_ms,
             loudness_boost,
             loudness_boost_db,
+            allow_multiple_playbacks,
         ) = {
             let cfg = state.config.lock();
             let s = &cfg.settings;
@@ -128,6 +129,7 @@ pub(super) fn build_playback_groups(
                 s.auto_gain_release_ms,
                 s.loudness_boost,
                 s.loudness_boost_db,
+                s.allow_multiple_playbacks,
             )
         };
 
@@ -166,6 +168,23 @@ pub(super) fn build_playback_groups(
             });
         }
         playback_group.add(&loudness_boost_row);
+
+        let concurrent_row = adw::SwitchRow::builder()
+            .title("Concurrent Playback")
+            .subtitle("Allow multiple sounds to play at once")
+            .active(allow_multiple_playbacks)
+            .build();
+        {
+            let state2 = Arc::clone(&state);
+            concurrent_row.connect_active_notify(move |row| {
+                let _ = commands::set_allow_multiple_playbacks(
+                    row.is_active(),
+                    Arc::clone(&state2.config),
+                    Arc::clone(&state2.player),
+                );
+            });
+        }
+        playback_group.add(&concurrent_row);
 
         let boost_row = adw::SpinRow::with_range(0.0, crate::config::MAX_LOUDNESS_BOOST_DB, 1.0);
         boost_row.set_title("Boost (dB)");
@@ -495,7 +514,7 @@ pub(super) fn build_playback_groups(
                                 log::warn!("Failed to read loudness status summary: {error}")
                             }
                         }
-                        // Refreshes that land mid-query collapse into one.
+
                         if pending.replace(false) {
                             crate::ui_event_bridge::post_loudness_status_refresh();
                         }
@@ -515,7 +534,6 @@ pub(super) fn build_playback_groups(
             });
         }
 
-        // Refresh once when the overlay opens; completions refresh themselves.
         {
             let refresh_loudness_status = Rc::clone(&refresh_loudness_status);
             if let Some(visibility_widget) = visibility_weak.upgrade() {
@@ -548,5 +566,55 @@ mod tests {
                 "feature toggle must not hide its settings group: {visibility_call}"
             );
         }
+    }
+
+    #[test]
+    fn the_concurrent_playback_row_sits_in_the_playback_card_in_order() {
+        let source = include_str!("settings_playback.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("source before the test module");
+
+        assert!(production.contains(".title(\"Concurrent Playback\")"));
+        assert!(production.contains(".subtitle(\"Allow multiple sounds to play at once\")"));
+        assert!(
+            production.contains("commands::set_allow_multiple_playbacks("),
+            "the row must drive the concurrent-playback command"
+        );
+        assert!(
+            production.contains("Arc::clone(&state2.player)"),
+            "the command needs the player so the engine learns immediately"
+        );
+        assert!(
+            production.contains(".active(allow_multiple_playbacks)"),
+            "the row must start from the persisted value"
+        );
+        assert!(
+            production.contains("playback_group.add(&concurrent_row);"),
+            "the row belongs to the Playback card"
+        );
+        assert!(
+            !production.contains("auto_gain_group.add(&concurrent_row)")
+                && !production.contains("loudness_boost_group.add(&concurrent_row)"),
+            "the row must not be added to another group"
+        );
+
+        let position = |needle: &str| {
+            production
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle} must exist"))
+        };
+        let auto_gain_toggle = position("playback_group.add(&auto_gain_row);");
+        let boost_toggle = position("playback_group.add(&loudness_boost_row);");
+        let concurrent_toggle = position("playback_group.add(&concurrent_row);");
+        let detailed_subsection = position("auto_gain_group.add(&target_row);");
+        assert!(
+            auto_gain_toggle < boost_toggle
+                && boost_toggle < concurrent_toggle
+                && concurrent_toggle < detailed_subsection,
+            "order must be Auto-Gain, Loudness Boost, Concurrent Playback, then the \
+             detailed Auto-Gain subsection"
+        );
     }
 }

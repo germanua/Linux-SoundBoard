@@ -11,43 +11,15 @@ pub(super) fn mix_tick(state_rc: &Rc<RefCell<LoopState>>) {
 
     fill_output_queues(&mut state);
 
-    let finished_snapshot = state
-        .active_playback
-        .as_ref()
-        .filter(|playback| playback.finished)
-        .map(|playback| PlaybackSnapshot {
-            sound_id: playback.sound_id.clone(),
-            playback_order: playback.playback_order,
-            position_ms: playback.position_ms,
-            paused: playback.paused,
-            duration_ms: playback.duration_ms,
-            finished: true,
-        });
-    if let Some(snapshot) = finished_snapshot {
-        let play_id = state
-            .active_playback
-            .as_ref()
-            .map(|playback| playback.play_id.clone())
-            .unwrap_or_default();
-        state.finished_playbacks.insert(play_id, snapshot);
-        state.trim_finished_playbacks(MAX_FINISHED_PLAYBACK_SNAPSHOTS);
-        state.active_playback = None;
-    } else if let Some(play_id) = state
-        .active_playback
-        .as_ref()
-        .map(|playback| playback.play_id.clone())
-    {
-        state.finished_playbacks.remove(&play_id);
-    }
+    state.retire_finished_voices();
     state.publish_snapshot();
 }
 
 pub(super) fn fill_output_queues(state: &mut LoopState) {
-    let playback_active = state.active_playback.is_some();
-    let capture_stream_active = state.capture_stream_active();
+    let playback_active = !state.active_playbacks.is_empty();
+    let passthrough_active = state.runtime.mic_passthrough && state.capture_stream_active();
     let wants_local_output = playback_active;
-    let wants_virtual_output =
-        playback_active || (state.runtime.mic_passthrough && capture_stream_active);
+    let wants_virtual_output = playback_active || passthrough_active;
     if !wants_local_output && !wants_virtual_output {
         state.ultra_starvation_ticks = 0;
         return;
@@ -75,7 +47,6 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         let Some((local_deficit, virtual_deficit)) =
             current_queue_deficits(&state.queues, local_target_samples, virtual_target_samples)
         else {
-            // RT owns the queue; retry next tick.
             state.stream_runtime.record_lock_contention();
             return;
         };
@@ -85,7 +56,7 @@ pub(super) fn fill_output_queues(state: &mut LoopState) {
         }
 
         let chunk_samples = wanted_samples.min(MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize);
-        let pushed = enqueue_mixed_chunk(state, chunk_samples);
+        let pushed = enqueue_mixed_chunk(state, chunk_samples, passthrough_active);
         if pushed == 0 {
             break;
         }
@@ -172,17 +143,18 @@ fn current_queue_deficits(
     Some((local_deficit, virtual_deficit))
 }
 
-fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
+fn enqueue_mixed_chunk(
+    state: &mut LoopState,
+    chunk_samples: usize,
+    passthrough_active: bool,
+) -> usize {
     let runtime = state.runtime.clone();
-    let playback_active = state.active_playback.is_some();
-    let capture_stream_active = state.capture_stream_active();
-    let passthrough_active = state.runtime.mic_passthrough && capture_stream_active;
+    let playback_active = !state.active_playbacks.is_empty();
 
     if passthrough_active && !playback_active {
         return if let Some(mut queues) = state.queues.try_lock() {
             enqueue_passthrough_chunk(&mut queues, chunk_samples)
         } else {
-            // Do not block the main loop on the RT lock.
             state.stream_runtime.record_lock_contention();
             0
         };
@@ -199,15 +171,35 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
         state.virtual_mix_buffer.fill(0.0);
     }
 
-    if let Some(playback) = state.active_playback.as_mut() {
-        playback.render_into(
-            &mut state.local_mix_buffer,
-            &mut state.virtual_mix_buffer,
-            &runtime,
-        );
+    if state.voice_local_scratch.len() != chunk_samples {
+        state.voice_local_scratch.resize(chunk_samples, 0.0);
+    }
+    if state.voice_virtual_scratch.len() != chunk_samples {
+        state.voice_virtual_scratch.resize(chunk_samples, 0.0);
     }
 
-    // Allocate before taking the queue lock.
+    for playback in &mut state.active_playbacks {
+        playback.render_into(
+            &mut state.voice_local_scratch,
+            &mut state.voice_virtual_scratch,
+            &runtime,
+        );
+        for (mixed, voice_sample) in state
+            .local_mix_buffer
+            .iter_mut()
+            .zip(&state.voice_local_scratch)
+        {
+            *mixed += *voice_sample;
+        }
+        for (mixed, voice_sample) in state
+            .virtual_mix_buffer
+            .iter_mut()
+            .zip(&state.voice_virtual_scratch)
+        {
+            *mixed += *voice_sample;
+        }
+    }
+
     if state.mic_scratch_buffer.len() < chunk_samples {
         state.mic_scratch_buffer.resize(chunk_samples, 0.0);
     }
@@ -220,11 +212,14 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
     if passthrough_active && queues.mic_in.len() >= chunk_samples {
         let slot = &mut state.mic_scratch_buffer[..chunk_samples];
         let dequeued = queues.mic_in.pop_into(slot);
-        for (virtual_sample, mic_sample) in
-            state.virtual_mix_buffer.iter_mut().zip(&slot[..dequeued])
-        {
-            *virtual_sample = (*virtual_sample + *mic_sample).clamp(-1.0, 1.0);
-        }
+        add_mic_chunk(&mut state.virtual_mix_buffer, &slot[..dequeued]);
+    }
+
+    for sample in state.local_mix_buffer.iter_mut() {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
+    for sample in state.virtual_mix_buffer.iter_mut() {
+        *sample = sample.clamp(-1.0, 1.0);
     }
 
     if playback_active {
@@ -235,6 +230,12 @@ fn enqueue_mixed_chunk(state: &mut LoopState, chunk_samples: usize) -> usize {
     }
 
     chunk_samples
+}
+
+fn add_mic_chunk(virtual_mix: &mut [f32], mic: &[f32]) {
+    for (virtual_sample, mic_sample) in virtual_mix.iter_mut().zip(mic) {
+        *virtual_sample += *mic_sample;
+    }
 }
 
 pub(super) fn enqueue_passthrough_chunk(queues: &mut ProcessQueues, chunk_samples: usize) -> usize {
@@ -248,7 +249,6 @@ pub(super) fn enqueue_passthrough_chunk(queues: &mut ProcessQueues, chunk_sample
 }
 
 pub(super) fn clear_virtual_mic_queues(queues: &RtSharedQueues) {
-    // A later trim clears a contended queue.
     if let Some(mut queues) = queues.try_lock() {
         queues.mic_in.samples.clear();
         queues.virtual_out.samples.clear();
@@ -269,10 +269,8 @@ pub(super) fn clear_all_queues(queues: &RtSharedQueues) {
     }
 }
 
-// ~5 ms at 48 kHz stereo — enough to ramp to silence without audible delay
 const FADE_OUT_SAMPLES: usize = 480;
 
-/// Replaces queued output with a short fade to zero.
 pub(super) fn fade_output_queues(queues: &RtSharedQueues) {
     if let Some(mut queues) = queues.try_lock() {
         apply_fade_out(&mut queues.local);
@@ -284,12 +282,12 @@ pub(super) fn apply_fade_out(queue: &mut SampleQueue) {
     if queue.samples.is_empty() {
         return;
     }
-    // Trim all but the last FADE_OUT_SAMPLES so the stop is immediate.
+
     let len = queue.samples.len();
     if len > FADE_OUT_SAMPLES {
         queue.samples.drain(..len - FADE_OUT_SAMPLES);
     }
-    // Apply linear ramp: index 0 → full amplitude, last index → 0.0
+
     let total = queue.samples.len();
     for (i, sample) in queue.samples.iter_mut().enumerate() {
         let scale = 1.0 - (i as f32 / (total - 1).max(1) as f32);
@@ -366,5 +364,209 @@ mod tests {
         assert_eq!(result, 0);
         assert_eq!(queues.virtual_out.len(), 0);
         assert_eq!(queues.mic_in.len(), 64, "mic_in should be untouched");
+    }
+
+    fn mix_runtime() -> RuntimeConfig {
+        let mut runtime =
+            super::super::test_runtime_config_with_mode(crate::config::DefaultSourceMode::Manual);
+        runtime.local_volume = 1.0;
+        runtime.mic_volume = 1.0;
+        runtime
+    }
+
+    fn constant_wav(value: i16) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("lsb-wp5-mix-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create mix dir");
+        let path = dir.join("tone.wav");
+        let rate = 48_000u32;
+        let channels = 2u16;
+        let frames = 4_096usize;
+        let mut pcm = Vec::with_capacity(frames * 2 * 2);
+        for _ in 0..frames {
+            for _ in 0..channels {
+                pcm.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&rate.to_le_bytes());
+        bytes.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&pcm);
+        std::fs::write(&path, bytes).expect("write constant wav");
+        path
+    }
+
+    fn mix_chunk(
+        runtime: &RuntimeConfig,
+        voices: &[(&std::path::Path, f32)],
+    ) -> (Vec<f32>, Vec<f32>) {
+        mix_chunk_with_mic(runtime, voices, None)
+    }
+
+    fn mix_chunk_with_mic(
+        runtime: &RuntimeConfig,
+        voices: &[(&std::path::Path, f32)],
+        mic: Option<f32>,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let mut state = LoopState::new(runtime.clone(), super::super::test_player_snapshot_store());
+        for (index, (path, base_volume)) in voices.iter().enumerate() {
+            let voice = ActivePlayback::new(
+                format!("play-{index}"),
+                format!("sound-{index}"),
+                path.to_string_lossy().to_string(),
+                index as u64,
+                *base_volume,
+                None,
+                None,
+                runtime,
+            )
+            .expect("create voice");
+            state.adopt_voice(voice);
+        }
+        let chunk = MIX_CHUNK_FRAMES * TARGET_OUTPUT_CHANNELS as usize;
+        let passthrough_active = if let Some(mic_value) = mic {
+            let mic_chunk = vec![mic_value; chunk];
+            state.queues.lock().mic_in.push_slice(&mic_chunk);
+            true
+        } else {
+            false
+        };
+        assert_eq!(
+            enqueue_mixed_chunk(&mut state, chunk, passthrough_active),
+            chunk
+        );
+        let queues = state.queues.lock();
+        (
+            queues.local.samples.iter().copied().collect(),
+            queues.virtual_out.samples.iter().copied().collect(),
+        )
+    }
+
+    fn tail(samples: &[f32]) -> f32 {
+        *samples.last().expect("mixed samples")
+    }
+
+    #[test]
+    fn two_voices_sum_into_one_mix() {
+        let runtime = mix_runtime();
+
+        let path = constant_wav(8_192);
+        let (local, virtual_out) = mix_chunk(&runtime, &[(&path, 1.0), (&path, 1.0)]);
+
+        assert!((tail(&local) - 0.5).abs() < 1e-6, "local={}", tail(&local));
+        assert!(
+            (tail(&virtual_out) - 0.5).abs() < 1e-6,
+            "virtual={}",
+            tail(&virtual_out)
+        );
+        assert!(local[480..]
+            .iter()
+            .all(|sample| (sample - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_bus_clamp_bounds_the_summed_voices() {
+        let runtime = mix_runtime();
+        let loud = constant_wav(26_214);
+        let (local, virtual_out) = mix_chunk(&runtime, &[(&loud, 1.0), (&loud, 1.0)]);
+        assert_eq!(tail(&local), 1.0, "the sum is clamped at the bus");
+        assert_eq!(tail(&virtual_out), 1.0);
+        assert!(local.iter().all(|sample| sample.abs() <= 1.0));
+
+        let quiet = constant_wav(-26_214);
+        let (local, _) = mix_chunk(&runtime, &[(&quiet, 1.0), (&quiet, 1.0)]);
+        assert_eq!(tail(&local), -1.0);
+        assert!(local.iter().all(|sample| sample.abs() <= 1.0));
+    }
+
+    #[test]
+    fn opposite_voices_cancel() {
+        let runtime = mix_runtime();
+        let positive = constant_wav(16_384);
+        let negative = constant_wav(-16_384);
+        let (local, virtual_out) = mix_chunk(&runtime, &[(&positive, 1.0), (&negative, 1.0)]);
+        assert!(tail(&local).abs() < 1e-6, "local={}", tail(&local));
+        assert!(tail(&virtual_out).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_mix_does_not_depend_on_voice_order() {
+        let runtime = mix_runtime();
+        let loud = constant_wav(26_214);
+        let quiet = constant_wav(8_192);
+        let forward = mix_chunk(&runtime, &[(&loud, 1.0), (&quiet, 1.0)]);
+        let reversed = mix_chunk(&runtime, &[(&quiet, 1.0), (&loud, 1.0)]);
+        assert_eq!(forward.0, reversed.0);
+        assert_eq!(forward.1, reversed.1);
+    }
+
+    #[test]
+    fn every_voice_reaches_both_outputs() {
+        let runtime = mix_runtime();
+        let path = constant_wav(8_192);
+
+        let (local, virtual_out) = mix_chunk(&runtime, &[(&path, 1.0), (&path, 0.5)]);
+        assert!(
+            (tail(&local) - 0.375).abs() < 1e-6,
+            "local={}",
+            tail(&local)
+        );
+        assert!(
+            (tail(&virtual_out) - 0.375).abs() < 1e-6,
+            "virtual={}",
+            tail(&virtual_out)
+        );
+    }
+
+    #[test]
+    fn the_mic_is_summed_once_per_chunk() {
+        let mut mix = vec![0.5f32; 4];
+        add_mic_chunk(&mut mix, &[0.25f32; 4]);
+        assert!(
+            mix.iter().all(|sample| (sample - 0.75).abs() < 1e-6),
+            "{mix:?}"
+        );
+    }
+
+    #[test]
+    fn the_mic_is_summed_once_however_many_voices_are_mixed() {
+        let runtime = mix_runtime();
+        let path = constant_wav(8_192);
+
+        let (local, virtual_out) =
+            mix_chunk_with_mic(&runtime, &[(&path, 1.0), (&path, 1.0)], Some(0.25));
+        assert!(
+            (tail(&virtual_out) - 0.75).abs() < 1e-6,
+            "two voices + one mic chunk: virtual={}",
+            tail(&virtual_out)
+        );
+        assert!((tail(&local) - 0.5).abs() < 1e-6, "local={}", tail(&local));
+        assert!(virtual_out.iter().all(|sample| sample.abs() <= 1.0));
+
+        let (_, single_voice) = mix_chunk_with_mic(&runtime, &[(&path, 1.0)], Some(0.25));
+        assert!(
+            (tail(&single_voice) - 0.5).abs() < 1e-6,
+            "one voice + one mic chunk: virtual={}",
+            tail(&single_voice)
+        );
+        let (_, three_voices) = mix_chunk_with_mic(
+            &runtime,
+            &[(&path, 1.0), (&path, 1.0), (&path, 1.0)],
+            Some(0.25),
+        );
+        assert!(
+            (tail(&three_voices) - 1.0).abs() < 1e-6,
+            "three voices + one mic chunk: virtual={}",
+            tail(&three_voices)
+        );
     }
 }

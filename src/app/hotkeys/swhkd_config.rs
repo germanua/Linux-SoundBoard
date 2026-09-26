@@ -136,7 +136,9 @@ impl SwhkdConfig {
             PathBuf::from(home).join(".config")
         };
 
-        Ok(config_dir.join("linux-soundboard").join("swhkdrc"))
+        Ok(config_dir
+            .join(crate::app_meta::CONFIG_DIR_NAME)
+            .join("swhkdrc"))
     }
 
     pub fn begin_projection(&mut self) -> Result<(), HotkeyError> {
@@ -264,7 +266,6 @@ impl SwhkdConfig {
         result
     }
 
-    /// Send `SIGHUP` to reload `swhkd`.
     pub fn reload_swhkd(swhkd_pid: i32) -> Result<(), HotkeyError> {
         info!("Sending SIGHUP to swhkd (PID: {})", swhkd_pid);
 

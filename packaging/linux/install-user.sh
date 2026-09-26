@@ -3,22 +3,22 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# Resolved relative to this script at runtime.
-# shellcheck disable=SC1091
+
+
 source "$SCRIPT_DIR/app-meta.sh"
 
-MANAGED_MARKER="managed-by: linux-soundboard"
 MANAGED_MARKER_LINE="# $MANAGED_MARKER"
-END_MANAGED_MARKER_LINE="# end-managed-by: linux-soundboard"
-VIRTUAL_SOURCE_NAME="linuxsoundboard.virtual_mic"
-ENGINE_SERVICE_NAME="linux-soundboard-engine.service"
-ENGINE_TARGET_NAME="linux-soundboard-engine.target"
-PIPEWIRE_CONF_NAME="99-linuxsoundboard.conf"
+END_MANAGED_MARKER_LINE="# end-$MANAGED_MARKER"
 SYSTEM_PIPEWIRE_CONF="/usr/share/pipewire/pipewire.conf.d/$PIPEWIRE_CONF_NAME"
 
 INSTALL_ROOT="${INSTALL_ROOT:-$HOME/.local/opt/$APP_BINARY}"
 INSTALL_BINARY="$INSTALL_ROOT/$APP_BINARY"
+INSTALL_LIFECYCLE_SCRIPT="$INSTALL_ROOT/install-user.sh"
+INSTALL_APP_META="$INSTALL_ROOT/app-meta.sh"
+INSTALL_RESOURCE_ICON_DIR="$INSTALL_ROOT/installer-icons"
 INSTALL_HELPER="$INSTALL_ROOT/install-swhkd-helper.sh"
+INSTALL_SWHKD_BUILD_SCRIPT="$INSTALL_ROOT/build-swhkd-locked.sh"
+INSTALL_SWHKD_PINNED_LOCK="$INSTALL_ROOT/swhkd-Cargo.lock.pinned"
 INSTALL_DOC_DIR="$INSTALL_ROOT/docs"
 INSTALL_VERSION_FILE="$INSTALL_ROOT/.installed-version"
 
@@ -35,7 +35,7 @@ ENGINE_TARGET="$SYSTEMD_USER_DIR/$ENGINE_TARGET_NAME"
 PIPEWIRE_USER_CONF="$XDG_CONFIG_HOME/pipewire/pipewire.conf.d/$PIPEWIRE_CONF_NAME"
 PULSE_DEFAULT_PA="$XDG_CONFIG_HOME/pulse/default.pa"
 
-STATE_DIR="$XDG_STATE_HOME/$APP_BINARY/install-user"
+STATE_DIR="$XDG_STATE_HOME/$STATE_DIR_NAME/install-user"
 BACKUP_DIR="$STATE_DIR/backups"
 MANIFEST_FILE="$STATE_DIR/manifest.tsv"
 BACKUP_MANIFEST_FILE="$STATE_DIR/backups.tsv"
@@ -43,21 +43,21 @@ AUDIO_SNAPSHOT_FILE="$STATE_DIR/preinstall-audio.env"
 SNAPSHOT_DIR="$STATE_DIR/snapshots"
 SNAPSHOT_KEEP=10
 
-# Deployed beside the binary and removed with it, so the two sites cannot drift.
+
 LEGAL_DOCUMENTS=(
     LICENSE
     NOTICE.md
     THIRDPARTY_LICENSES.md
     THIRD_PARTY_NOTICES.html
     COMMERCIAL-LICENSE.md
-    DONATIONS.md
+
 )
 
 YES=0
 KEEP_DATA=0
 DEFAULT_SOURCE_POLICY="ask"
-# Set to 1 whenever a managed PipeWire/PulseAudio/WirePlumber file is disabled,
-# removed, or rewritten, so the audio stack is only restarted when needed.
+
+
 AUDIO_CONFIG_CHANGED=0
 
 log() {
@@ -103,8 +103,9 @@ EOF
 }
 
 ensure_state_dir() {
-    mkdir -p "$STATE_DIR" "$BACKUP_DIR"
+    install -d -m700 "$STATE_DIR" "$BACKUP_DIR"
     touch "$MANIFEST_FILE" "$BACKUP_MANIFEST_FILE"
+    chmod 600 "$MANIFEST_FILE" "$BACKUP_MANIFEST_FILE"
 }
 
 checksum_file() {
@@ -167,6 +168,7 @@ backup_file_if_needed() {
 
     mkdir -p "$BACKUP_DIR"
     cp -p -- "$path" "$backup_path"
+    chmod 600 "$backup_path"
     printf '%s\t%s\t%s\n' "$path" "$backup_path" "$(checksum_file "$backup_path")" >>"$BACKUP_MANIFEST_FILE"
 }
 
@@ -238,6 +240,43 @@ install_file_from_content() {
     rm -f "$tmp"
 }
 
+install_binary_from_source() {
+    local source=$1
+    local dest=$2
+    local source_real
+    local dest_real
+    local tmp
+    local expected="${LSB_INSTALL_EXPECTED_SHA256:-}"
+
+    ensure_parent_dir "$dest"
+    if [[ -e "$dest" ]]; then
+        source_real="$(realpath "$source")"
+        dest_real="$(realpath "$dest")"
+        if [[ "$source_real" == "$dest_real" ]]; then
+            chmod 755 "$dest"
+            record_file "$dest"
+            return 0
+        fi
+    fi
+
+    backup_file_if_needed "$dest"
+    tmp="$(mktemp "$INSTALL_ROOT/.${APP_BINARY}.new.XXXXXX")"
+    install -m755 "$source" "$tmp"
+    if [[ -n "$expected" ]]; then
+        command -v sha256sum >/dev/null 2>&1 || { rm -f "$tmp"; fail "sha256sum is required for authenticated updates."; }
+        local actual
+        actual="$(sha256sum "$tmp" | awk '{print $1}')"
+        if [[ "$actual" != "$expected" ]]; then
+            rm -f "$tmp"
+            fail "The copied update does not match its signed SHA-256."
+        fi
+    fi
+    mv -f "$tmp" "$dest"
+    chmod 755 "$dest"
+    record_file "$dest"
+}
+
+
 find_existing_path() {
     local candidate
 
@@ -272,7 +311,8 @@ resolve_binary_source() {
 resolve_icon_source_root() {
     find_existing_path \
         "$SCRIPT_DIR/icons" \
-        "$SCRIPT_DIR/../../src/resources/icons"
+        "$SCRIPT_DIR/../../src/resources/icons" \
+        "$INSTALL_RESOURCE_ICON_DIR"
 }
 
 desktop_quote() {
@@ -289,6 +329,20 @@ systemd_quote() {
     raw="${raw//\\/\\\\}"
     raw="${raw//\"/\\\"}"
     printf '"%s"' "$raw"
+}
+
+render_persisted_app_meta() {
+    printf '#!/usr/bin/env bash\n'
+    local name
+    for name in \
+        LSB_BUILD_PROFILE APP_ID APP_ICON_NAME APP_ICON_SOURCE_ID APP_ICON_SOURCE_NAME \
+        APP_BINARY APP_NAME APP_COMMENT APP_URL APP_REPO UPDATE_CHANNEL CONFIG_DIR_NAME \
+        STATE_DIR_NAME ENGINE_SERVICE_NAME ENGINE_TARGET_NAME PIPEWIRE_CONF_NAME \
+        PIPEWIRE_NAMESPACE VIRTUAL_OUTPUT_DESCRIPTION VIRTUAL_MIC_DESCRIPTION \
+        LSB_ALLOW_PRIVILEGED_HELPER LSB_ALLOW_DEFAULT_SOURCE_CLAIM HOTKEY_PIPE_NAME LOCAL_PLAYBACK_NODE_NAME MIC_CAPTURE_NODE_NAME \
+        VIRTUAL_SOURCE_NAME VIRTUAL_MIC_FEEDER_NODE_NAME MANAGED_MARKER; do
+        printf '%s=%q\n' "$name" "${!name}"
+    done
 }
 
 render_desktop_file() {
@@ -310,7 +364,7 @@ X-LinuxSoundboard-Managed=true
 EOF
 }
 
-# A type-2 AppImage is an ELF with the magic bytes AI\x02 at offset 8.
+
 is_appimage() {
     local magic
 
@@ -322,12 +376,12 @@ is_appimage() {
 render_engine_service() {
     local hardening=""
 
-    # All three imply NoNewPrivileges — the seccomp ones implicitly — which blocks
-    # the setuid fusermount an AppImage needs to mount itself.
+
+
     if ! is_appimage "$INSTALL_BINARY"; then
         hardening="# Hardening options tested compatible with PipeWire/PulseAudio user services.
-# ProtectHome and ProtectSystem are omitted: the engine must access user sound
-# files under \$HOME and does not run with mount namespaces in user sessions.
+
+
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes"
@@ -346,13 +400,13 @@ StartLimitBurst=5
 X-LinuxSoundBoard-Managed=true
 
 [Service]
-# Type=exec: systemd tracks the exec'd process PID and reports exec failures
-# clearly, unlike Type=simple which considers the service started immediately.
+
+
 Type=exec
 ExecStart=$(systemd_quote "$INSTALL_BINARY") --audio-engine
 Restart=on-failure
 RestartSec=2s
-# Exit 2 means the saved configuration is unreadable or incompatible.
+
 RestartPreventExitStatus=2
 
 ${hardening}
@@ -483,8 +537,8 @@ capture_preinstall_audio_snapshot() {
     } >"$AUDIO_SNAPSHOT_FILE"
 }
 
-# Reads one key out of a snapshot env file. The files are written with %q
-# escaping, so they are sourced rather than parsed.
+
+
 snapshot_value() {
     local file=$1
     local key=$2
@@ -492,7 +546,7 @@ snapshot_value() {
     [[ -f "$file" ]] || return 1
     (
         set +u
-        # shellcheck disable=SC1090
+
         source "$file"
         printf '%s\n' "${!key:-}"
     )
@@ -502,9 +556,9 @@ source_snapshot_value() {
     snapshot_value "$AUDIO_SNAPSHOT_FILE" "$1"
 }
 
-# Every audio-relevant file this installer can touch, plus the ones a user is
-# most likely to have configured themselves. Depth is bounded so a large
-# WirePlumber tree cannot stall a snapshot.
+
+
+
 audio_config_fingerprint() {
     local dir
     local file
@@ -534,15 +588,15 @@ swhkd_state() {
     printf '%s\n' "$(swhkd --version 2>/dev/null | head -n 1 || printf 'present')"
 }
 
-# Records the audio world around an install, update or removal so a later
-# uninstall can say what changed and offer to put it back.
+
+
 capture_audio_snapshot() {
     local event=${1:-manual}
     local stamp
     local base
 
     ensure_state_dir
-    mkdir -p "$SNAPSHOT_DIR"
+    install -d -m700 "$SNAPSHOT_DIR"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
     base="$SNAPSHOT_DIR/$stamp-$event"
 
@@ -562,6 +616,7 @@ capture_audio_snapshot() {
         printf '# wpctl status -n\n'
         command -v wpctl >/dev/null 2>&1 && wpctl status -n 2>&1 || printf 'wpctl not available\n'
     } >"$base.txt"
+    chmod 600 "$base.env" "$base.files" "$base.txt"
 
     prune_snapshots
     printf '%s\n' "$base.env"
@@ -573,9 +628,9 @@ prune_snapshots() {
     local keep=$SNAPSHOT_KEEP
 
     [[ -d "$SNAPSHOT_DIR" ]] || return 0
-    # The oldest snapshot is the only record of the audio setup before this app
-    # was ever installed, which is what an uninstall compares against. Age it out
-    # and the diff would quietly start measuring from some later update instead.
+
+
+
     oldest="$(first_snapshot || true)"
     while IFS= read -r file; do
         [[ "$file" == "$oldest" ]] && continue
@@ -591,8 +646,8 @@ latest_snapshot() {
     printf '%s\n' "$file"
 }
 
-# The oldest retained snapshot is the closest thing to "before this app", which
-# is what an uninstall wants to compare against.
+
+
 first_snapshot() {
     [[ -d "$SNAPSHOT_DIR" ]] || return 1
     local file
@@ -601,8 +656,8 @@ first_snapshot() {
     printf '%s\n' "$file"
 }
 
-# Prints only what moved between a snapshot and the live system. Empty output
-# means nothing this installer cares about changed.
+
+
 snapshot_diff() {
     local snapshot=${1:-}
     local changed=0
@@ -636,7 +691,7 @@ snapshot_diff() {
         fi
     done
 
-    # The first-ever snapshot predates this format and has no file list.
+
     if [[ ! -f "${snapshot%.env}.files" ]]; then
         ((changed == 1)) || printf '  nothing changed\n'
         return 0
@@ -887,6 +942,9 @@ remove_system_managed_audio_file() {
 }
 
 cleanup_legacy_wireplumber_config() {
+
+
+    [[ "$LSB_BUILD_PROFILE" == "dev" ]] && return 0
     local path
     local candidates=(
         "$XDG_CONFIG_HOME/wireplumber/main.lua.d/99-linuxsoundboard-autoroute.lua"
@@ -904,6 +962,9 @@ cleanup_legacy_wireplumber_config() {
 }
 
 cleanup_legacy_audio_config() {
+    if [[ "$LSB_BUILD_PROFILE" == "dev" ]]; then
+        return 0
+    fi
     capture_preinstall_audio_snapshot
     disable_managed_audio_file "$PIPEWIRE_USER_CONF" "PipeWire virtual mic config"
     remove_system_managed_audio_file "$SYSTEM_PIPEWIRE_CONF" "PipeWire virtual mic config"
@@ -959,7 +1020,7 @@ reload_start_engine_service() {
 
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     systemctl --user disable "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
-    # Clears the start-rate limit left by an earlier broken engine.
+
     systemctl --user reset-failed "$ENGINE_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl --user enable "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
     systemctl --user restart "$ENGINE_TARGET_NAME" >/dev/null 2>&1 || true
@@ -983,6 +1044,16 @@ refresh_desktop_caches() {
     fi
 }
 
+persist_installer_icons() {
+    local icon_root=$1
+    local icon_path relative
+
+    while IFS= read -r icon_path; do
+        relative="${icon_path#"$icon_root"/}"
+        install_file_from_source "$icon_path" "$INSTALL_RESOURCE_ICON_DIR/$relative" 644
+    done < <(find "$icon_root" -path "*/apps/$APP_ICON_SOURCE_ID.png" -type f | sort)
+}
+
 install_icons() {
     local icon_root=$1
     local icon_path
@@ -998,7 +1069,7 @@ install_icons() {
             install_file_from_source "$icon_path" "$dest" 644
             installed=1
         done
-    done < <(find "$icon_root" -path "*/apps/$APP_ID.png" -type f | sort)
+    done < <(find "$icon_root" -path "*/apps/$APP_ICON_SOURCE_ID.png" -type f | sort)
 
     if ((installed == 0)); then
         fail "Could not find app icons below $icon_root."
@@ -1009,7 +1080,7 @@ resolve_project_file() {
     local name=$1
     local candidate
 
-    for candidate in "$SCRIPT_DIR/$name" "$SCRIPT_DIR/../../$name"; do
+    for candidate in "$SCRIPT_DIR/$name" "$SCRIPT_DIR/../../$name" "$INSTALL_DOC_DIR/$name"; do
         if [[ -f "$candidate" ]]; then
             printf '%s\n' "$candidate"
             return 0
@@ -1039,7 +1110,7 @@ install_or_repair() {
     local icon_source_root
     AUDIO_CONFIG_CHANGED=0
 
-    # Before the first mutation, so an uninstall can say what this run changed.
+
     capture_preinstall_audio_snapshot
     capture_audio_snapshot "$([[ -x "$INSTALL_BINARY" ]] && printf 'update' || printf 'install')" >/dev/null
 
@@ -1048,10 +1119,24 @@ install_or_repair() {
 
     info "$([[ "$mode" == "repair" ]] && printf 'Repairing' || printf 'Installing') $APP_NAME."
 
-    install_file_from_source "$binary_source" "$INSTALL_BINARY" 755
+    install_binary_from_source "$binary_source" "$INSTALL_BINARY"
+    install_file_from_source "$SCRIPT_DIR/install-user.sh" "$INSTALL_LIFECYCLE_SCRIPT" 755
+    install_file_from_content "$INSTALL_APP_META" 644 "$(render_persisted_app_meta)"
+    persist_installer_icons "$icon_source_root"
 
-    if [[ -x "$SCRIPT_DIR/install-swhkd-helper.sh" ]]; then
-        install_file_from_source "$SCRIPT_DIR/install-swhkd-helper.sh" "$INSTALL_HELPER" 755
+    if [[ "$LSB_ALLOW_PRIVILEGED_HELPER" == "1" ]]; then
+        if [[ -x "$SCRIPT_DIR/install-swhkd-helper.sh" ]]; then
+            install_file_from_source "$SCRIPT_DIR/install-swhkd-helper.sh" "$INSTALL_HELPER" 755
+        fi
+        if [[ -f "$SCRIPT_DIR/build-swhkd-locked.sh" ]]; then
+            install_file_from_source "$SCRIPT_DIR/build-swhkd-locked.sh" "$INSTALL_SWHKD_BUILD_SCRIPT" 755
+        fi
+        if [[ -f "$SCRIPT_DIR/swhkd-Cargo.lock.pinned" ]]; then
+            install_file_from_source "$SCRIPT_DIR/swhkd-Cargo.lock.pinned" "$INSTALL_SWHKD_PINNED_LOCK" 644
+        fi
+    else
+
+        rm -f -- "$INSTALL_HELPER" "$INSTALL_SWHKD_BUILD_SCRIPT" "$INSTALL_SWHKD_PINNED_LOCK"
     fi
 
     install_legal_documents
@@ -1064,7 +1149,7 @@ install_or_repair() {
     reload_start_engine_service
     refresh_desktop_caches
     if [[ -n "${LSB_INSTALL_VERSION:-}" ]]; then
-        install_file_from_content "$INSTALL_VERSION_FILE" 644 "$LSB_INSTALL_VERSION"
+        install_file_from_content "$INSTALL_VERSION_FILE" 600 "$LSB_INSTALL_VERSION"
     fi
 
     if virtual_mic_present; then
@@ -1087,12 +1172,12 @@ maybe_restart_audio_services() {
     fi
 }
 
-# Service-only setup for native package (DEB/RPM) installs. The package owns the
-# binary, desktop entry, icons, and the systemd user unit, so this only enables
-# the engine service for the installing account and clears obsolete user-level
-# audio routing. It deliberately does not deploy a second copy of those files
-# into ~/.local, which would shadow the package and run a stale binary after a
-# package upgrade.
+
+
+
+
+
+
 setup_user_service() {
     AUDIO_CONFIG_CHANGED=0
 
@@ -1241,11 +1326,11 @@ remove_empty_recorded_dirs() {
 
 purge_app_data() {
     rm -rf -- \
-        "${XDG_CONFIG_HOME:?}/$APP_BINARY" \
+        "${XDG_CONFIG_HOME:?}/$CONFIG_DIR_NAME" \
         "${XDG_CACHE_HOME:?}/$APP_BINARY"
 
-    if [[ -d "$XDG_STATE_HOME/$APP_BINARY" ]]; then
-        find "$XDG_STATE_HOME/$APP_BINARY" -mindepth 1 -maxdepth 1 ! -name install-user -exec rm -rf -- {} +
+    if [[ -d "$XDG_STATE_HOME/$STATE_DIR_NAME" ]]; then
+        find "$XDG_STATE_HOME/$STATE_DIR_NAME" -mindepth 1 -maxdepth 1 ! -name install-user -exec rm -rf -- {} +
     fi
 
     info "Purged Linux Soundboard config/state/cache data."
@@ -1277,9 +1362,9 @@ confirm_remove() {
     esac
 }
 
-# Resolves the restore decision once, with the snapshot diff in front of the
-# user, so restore_preinstall_default_source never has to ask blindly.
-# Everything but the policy goes to stderr; stdout is the policy.
+
+
+
 resolve_restore_policy() {
     if [[ "$DEFAULT_SOURCE_POLICY" != "ask" ]]; then
         printf '%s\n' "$DEFAULT_SOURCE_POLICY"
@@ -1329,12 +1414,17 @@ remove_installation() {
     remove_pipewire_config
     remove_pulse_managed_block
     remove_known_app_file "$INSTALL_HELPER" "helper"
+    remove_known_app_file "$INSTALL_SWHKD_BUILD_SCRIPT" "swhkd build script"
+    remove_known_app_file "$INSTALL_SWHKD_PINNED_LOCK" "swhkd pinned lockfile"
     remove_known_app_file "$INSTALL_BINARY" "binary"
     remove_known_app_file "$INSTALL_VERSION_FILE" "installed version marker"
     for legal_file in "${LEGAL_DOCUMENTS[@]}"; do
         remove_known_app_file "$INSTALL_DOC_DIR/$legal_file" "legal document"
     done
     rmdir "$INSTALL_DOC_DIR" >/dev/null 2>&1 || true
+    rm -rf -- "$INSTALL_RESOURCE_ICON_DIR"
+    remove_known_app_file "$INSTALL_APP_META" "installer metadata"
+    remove_known_app_file "$INSTALL_LIFECYCLE_SCRIPT" "lifecycle installer"
 
     restart_audio_services
     refresh_desktop_caches
@@ -1356,7 +1446,7 @@ remove_installation() {
 
     if ((keep_state == 0)); then
         rm -rf -- "$STATE_DIR"
-        rmdir "$XDG_STATE_HOME/$APP_BINARY" >/dev/null 2>&1 || true
+        rmdir "$XDG_STATE_HOME/$STATE_DIR_NAME" >/dev/null 2>&1 || true
     else
         warn "Keeping installer backups at $STATE_DIR because not every backup was restored."
     fi
@@ -1518,8 +1608,8 @@ main() {
             usage
             ;;
         *)
-            # Backward compatibility: old installer accepted a binary path as
-            # the first positional argument.
+
+
             if [[ -e "$command" ]]; then
                 install_or_repair install "$command"
             else

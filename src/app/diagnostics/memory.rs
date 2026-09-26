@@ -2,6 +2,8 @@ use log::{info, warn};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::SystemTime;
 
@@ -498,14 +500,17 @@ pub fn write_memory_report() -> Result<(), Box<dyn std::error::Error>> {
 
     report.top_file_mappings = read_top_file_mappings(8);
 
-    let output_path = std::env::var("LSB_MEMORY_REPORT_PATH")
-        .unwrap_or_else(|_| "/tmp/lsb_memory_report.json".to_string());
+    let output_path = std::env::var_os("LSB_MEMORY_REPORT_PATH")
+        .map(PathBuf::from)
+        .unwrap_or(crate::private_runtime::directory()?.join("memory-report.json"));
 
     let json = serde_json::to_string_pretty(&report)?;
-    std::fs::write(&output_path, json)?;
-    info!("Memory report written to: {}", output_path);
+    let mut json_file = crate::private_runtime::open_truncate(&output_path)?;
+    json_file.write_all(json.as_bytes())?;
+    json_file.sync_all()?;
+    info!("Memory report written to: {}", output_path.display());
 
-    let text_path = output_path.replace(".json", ".txt");
+    let text_path = output_path.with_extension("txt");
     let mut text = String::new();
     text.push_str("Linux Soundboard Memory Report\n");
     text.push_str("==============================\n\n");
@@ -597,8 +602,13 @@ pub fn write_memory_report() -> Result<(), Box<dyn std::error::Error>> {
         text.push('\n');
     }
 
-    std::fs::write(&text_path, text)?;
-    info!("Memory report text summary written to: {}", text_path);
+    let mut text_file = crate::private_runtime::open_truncate(&text_path)?;
+    text_file.write_all(text.as_bytes())?;
+    text_file.sync_all()?;
+    info!(
+        "Memory report text summary written to: {}",
+        text_path.display()
+    );
 
     Ok(())
 }

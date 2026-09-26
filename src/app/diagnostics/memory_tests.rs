@@ -128,7 +128,6 @@ fn inventory_reports_the_resident_row_cache_not_a_whole_library_estimate() {
 
     let inventory = assemble_app_inventory(&runtime, &Config::default(), 0);
 
-    // 156k sounds are in SQLite; only the paged model's rows are resident.
     assert_eq!(inventory.ui_cached_pages, 3);
     assert_eq!(inventory.ui_cached_payload_bytes, 700 * 1024);
     assert_eq!(inventory.ui_cached_row_count, 768);

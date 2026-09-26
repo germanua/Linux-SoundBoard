@@ -255,7 +255,6 @@ pub(super) fn install_volume_editor(adjustment: &Adjustment, label: &Label, entr
     }
 }
 
-/// Rejects stale async name lookups.
 pub(super) fn should_apply_resolved_track_name(
     current_play_id: Option<&str>,
     resolved_for: &str,
@@ -577,7 +576,6 @@ mod tests {
             last_committed_sound_id: Some("sound-1".to_string()),
         };
 
-        // Clear pending state when the commit matches the last dispatched seek.
         if interaction.last_committed_sound_id.as_deref() == Some("sound-1")
             && interaction.last_committed_position_ms == Some(5_000)
         {

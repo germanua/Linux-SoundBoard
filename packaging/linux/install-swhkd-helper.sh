@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
+PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SWHKD_REPO_URL="https://github.com/waycrate/swhkd.git"
 SWHKD_UPSTREAM_COMMIT="cbbfc4a981aa263155e3216a42549c9a3ae645fe"
+SWHKD_MANAGED_DIR="/usr/local/libexec/linux-soundboard"
+SWHKD_MANAGED_BIN="$SWHKD_MANAGED_DIR/swhkd"
+SWHKS_MANAGED_BIN="$SWHKD_MANAGED_DIR/swhks"
+SWHKD_MANAGED_MARKER="$SWHKD_MANAGED_DIR/.managed-by-linux-soundboard"
+SWHKD_BUILD_SCRIPT_SHA256="03c19d6db4a44ed15ea1c20758330218e64e68d75303b413c93ad7345bc64aed"
+SWHKD_PINNED_LOCK_SHA256="b0ae3f27d0e371b76a5f033ab7137a7a5808d425ab588c38b8a0fa10231c81b1"
 
-# Only set by --enable-uinput: the caller asks the user first.
+
 ENABLE_UINPUT=0
 
 log() {
@@ -14,6 +23,24 @@ log() {
 fail() {
   log "ERROR: $1" >&2
   exit 1
+}
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+any_sha256_tool_is_available() {
+  command -v sha256sum >/dev/null 2>&1 \
+    || command -v shasum >/dev/null 2>&1 \
+    || command -v openssl >/dev/null 2>&1
 }
 
 swhkd_binary_is_safe() {
@@ -34,7 +61,7 @@ require_root() {
 
 detect_distro_family() {
   if [ -r /etc/os-release ]; then
-    # shellcheck disable=SC1091
+
     source /etc/os-release
   fi
 
@@ -66,7 +93,14 @@ install_build_deps() {
   case "$distro" in
     arch)
       command -v pacman >/dev/null 2>&1 || fail "pacman not found on Arch-family system."
-      pacman -Sy --noconfirm --needed git make rust cargo pkgconf systemd base-devel
+      local missing=() pkg
+      for pkg in git make rust pkgconf systemd gcc; do
+        pacman -Qq "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+      done
+      if [ "${#missing[@]}" -gt 0 ]; then
+        fail "Missing Arch build packages (${missing[*]}). Run 'sudo pacman -Syu' first, then retry."
+      fi
+      command -v cargo >/dev/null 2>&1 || fail "The installed Arch rust package does not provide cargo. Run 'sudo pacman -Syu' first, then retry."
       ;;
     debian)
       command -v apt-get >/dev/null 2>&1 || fail "apt-get not found on Debian-family system."
@@ -79,7 +113,7 @@ install_build_deps() {
       ;;
     opensuse)
       command -v zypper >/dev/null 2>&1 || fail "zypper not found on openSUSE-family system."
-      zypper --non-interactive install git make gcc cargo rust pkg-config systemd-devel
+      zypper --non-interactive install git make gcc cargo rust pkgconf-pkg-config systemd-devel
       ;;
     *)
       fail "Unsupported distribution family for one-click install."
@@ -87,14 +121,14 @@ install_build_deps() {
   esac
 }
 
-# swhkd creates a virtual keyboard through /dev/uinput. The device node exists
-# even when the module is absent, and opening it then fails with ENODEV.
+
+
 enable_uinput() {
   local release
   release="$(uname -r)"
 
-  # A kernel upgrade removes the running kernel's module tree, so nothing loads
-  # until the new one is booted.
+
+
   if [ ! -d "/usr/lib/modules/$release" ] && [ ! -d "/lib/modules/$release" ]; then
     log "WARNING: the running kernel ($release) has no modules on disk; reboot, then run this again"
     return 0
@@ -112,8 +146,132 @@ enable_uinput() {
   fi
 }
 
+pinned_build_input_dir() {
+  local dir
+  for dir in \
+      "$SCRIPT_DIR" \
+      "$SCRIPT_DIR/../libexec/linux-soundboard" \
+      "$SCRIPT_DIR/../../libexec/linux-soundboard"; do
+    if [ -f "$dir/build-swhkd-locked.sh" ] && [ -f "$dir/swhkd-Cargo.lock.pinned" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pinned_build_inputs_match() {
+  local dir="$1"
+  local actual
+
+  [ -f "$dir/build-swhkd-locked.sh" ] || return 1
+  [ -f "$dir/swhkd-Cargo.lock.pinned" ] || return 1
+  actual="$(sha256_file "$dir/build-swhkd-locked.sh")" || return 1
+  [ "$actual" = "$SWHKD_BUILD_SCRIPT_SHA256" ] || return 1
+  actual="$(sha256_file "$dir/swhkd-Cargo.lock.pinned")" || return 1
+  [ "$actual" = "$SWHKD_PINNED_LOCK_SHA256" ] || return 1
+}
+
+verify_pinned_build_inputs() {
+  local dir="$1"
+
+  any_sha256_tool_is_available \
+    || fail "No sha256 tool is available; refusing to run unverified build inputs."
+  pinned_build_inputs_match "$dir" \
+    || fail "The pinned swhkd build inputs do not match their digests; refusing to run them."
+}
+
+root_owned_dir_is_safe() {
+  local dir="$1"
+  local uid mode
+
+  [ -n "$dir" ] && [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+  uid="$(stat -c '%u' -- "$dir" 2>/dev/null || true)"
+  mode="$(stat -c '%a' -- "$dir" 2>/dev/null || true)"
+  [ "$uid" = "0" ] && [ -n "$mode" ] || return 1
+  (( (8#$mode & 8#0022) == 0 ))
+}
+
+managed_parent_is_safe() {
+  local parent
+
+  parent="$(dirname -- "$1")"
+  [ -e "$parent" ] || [ -L "$parent" ] || return 0
+  root_owned_dir_is_safe "$parent"
+}
+
+managed_dir_is_safe() {
+  root_owned_dir_is_safe "$1" || return 1
+  managed_parent_is_safe "$1"
+}
+
+managed_target_is_replaceable() {
+  local path="$1"
+
+  [ ! -e "$path" ] && [ ! -L "$path" ] && return 0
+  [ -f "$path" ] && [ ! -L "$path" ]
+}
+
+install_managed_swhkd_binaries() {
+  local checkout="$1"
+  local source_bin="$checkout/target/release/swhkd"
+  local source_srv="$checkout/target/release/swhks"
+
+  if [ ! -f "$source_bin" ] || [ -L "$source_bin" ]; then
+    fail "No regular swhkd binary in the build workspace."
+  fi
+  if [ ! -f "$source_srv" ] || [ -L "$source_srv" ]; then
+    fail "No regular swhks binary in the build workspace."
+  fi
+  swhkd_binary_is_safe "$source_bin" \
+    || fail "Built swhkd still contains rfkill support; refusing to install it."
+
+  log "Installing binaries"
+  if [ -e "$SWHKD_MANAGED_DIR" ] || [ -L "$SWHKD_MANAGED_DIR" ]; then
+    managed_dir_is_safe "$SWHKD_MANAGED_DIR" \
+      || fail "$SWHKD_MANAGED_DIR is not a root-owned, non-writable directory."
+  else
+    managed_parent_is_safe "$SWHKD_MANAGED_DIR" \
+      || fail "$(dirname -- "$SWHKD_MANAGED_DIR") is not a root-owned, non-writable directory."
+    install -d -m755 "$SWHKD_MANAGED_DIR"
+  fi
+  if ! managed_target_is_replaceable "$SWHKD_MANAGED_BIN" \
+    || ! managed_target_is_replaceable "$SWHKS_MANAGED_BIN"; then
+    fail "$SWHKD_MANAGED_DIR holds a symlink or special file."
+  fi
+
+  install -Dm755 "$source_bin" "$SWHKD_MANAGED_BIN"
+  install -Dm755 "$source_srv" "$SWHKS_MANAGED_BIN"
+  rm -f -- "$SWHKD_MANAGED_MARKER"
+  printf 'managed-by: linux-soundboard\n' > "$SWHKD_MANAGED_MARKER"
+  chmod 644 "$SWHKD_MANAGED_MARKER"
+
+  local man
+  for man in "$checkout"/docs/*.gz; do
+    [ -e "$man" ] || continue
+    case "$(basename "$man")" in
+      *.1.gz) install -Dm644 "$man" "/usr/share/man/man1/$(basename "$man")" ;;
+      *.5.gz) install -Dm644 "$man" "/usr/share/man/man5/$(basename "$man")" ;;
+    esac
+  done
+
+  if [ ! -f /etc/swhkd/swhkdrc ]; then
+    install -Dm644 /dev/null /etc/swhkd/swhkdrc
+  fi
+
+  chown root:root "$SWHKD_MANAGED_BIN"
+  chmod u+s "$SWHKD_MANAGED_BIN"
+  chmod 755 "$SWHKS_MANAGED_BIN"
+
+  if [ ! -u "$SWHKD_MANAGED_BIN" ]; then
+    fail "swhkd setuid bit was not applied."
+  fi
+}
+
 build_and_install_swhkd() {
   local work_dir
+  local build_input_dir
+
   work_dir="$(mktemp -d /tmp/linux-soundboard-swhkd.XXXXXX)"
   trap 'rm -rf "$work_dir"' EXIT
 
@@ -122,30 +280,16 @@ build_and_install_swhkd() {
   git -C "$work_dir/swhkd" fetch --depth 1 "$SWHKD_REPO_URL" "$SWHKD_UPSTREAM_COMMIT"
   git -C "$work_dir/swhkd" checkout --detach "$SWHKD_UPSTREAM_COMMIT"
 
-  log "Building swhkd"
-  (
-    cd "$work_dir/swhkd"
-    make clean || true
-    make NO_RFKILL_SW_SUPPORT=1
-  )
-  swhkd_binary_is_safe "$work_dir/swhkd/target/release/swhkd" \
-    || fail "Built swhkd still contains rfkill support; refusing to install it."
+  build_input_dir="$(pinned_build_input_dir)" \
+    || fail "The pinned swhkd build inputs are missing next to $0."
+  managed_dir_is_safe "$build_input_dir" \
+    || fail "$build_input_dir is not a root-owned, non-writable directory."
+  verify_pinned_build_inputs "$build_input_dir"
 
-  log "Installing binaries"
-  install -Dm755 "$work_dir/swhkd/target/release/swhkd" /usr/bin/swhkd
-  install -Dm755 "$work_dir/swhkd/target/release/swhks" /usr/bin/swhks
+  log "Building swhkd (pinned lockfile, no_rfkill)"
+  "$build_input_dir/build-swhkd-locked.sh" "$work_dir/swhkd"
 
-  if [ ! -f /etc/swhkd/swhkdrc ]; then
-    install -Dm644 /dev/null /etc/swhkd/swhkdrc
-  fi
-
-  chown root:root /usr/bin/swhkd
-  chmod u+s /usr/bin/swhkd
-  chmod +x /usr/bin/swhks
-
-  if [ ! -u /usr/bin/swhkd ]; then
-    fail "swhkd setuid bit was not applied."
-  fi
+  install_managed_swhkd_binaries "$work_dir/swhkd"
 
   if [ "$ENABLE_UINPUT" -eq 1 ]; then
     enable_uinput
@@ -184,4 +328,6 @@ main() {
   build_and_install_swhkd
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

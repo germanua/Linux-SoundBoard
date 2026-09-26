@@ -1,5 +1,3 @@
-//! Background loudness worker.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -34,7 +32,6 @@ impl MissingLoudnessAnalysisCoordinator {
         self.in_flight.load(Ordering::Acquire)
     }
 
-    /// Cancels only this coordinator's run.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
     }
@@ -44,7 +41,6 @@ impl MissingLoudnessAnalysisCoordinator {
         self.cancelled.load(Ordering::SeqCst)
     }
 
-    /// Handed to the running analysis so it can poll for a cancel.
     pub fn cancel_token(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancelled)
     }
@@ -66,7 +62,6 @@ impl MissingLoudnessAnalysisCoordinator {
             return Ok(false);
         }
 
-        // Ours only — don't clobber a cancel another run is still acting on.
         self.cancelled.store(false, Ordering::SeqCst);
 
         let in_flight = Arc::clone(&self.in_flight);

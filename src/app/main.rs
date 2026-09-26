@@ -6,7 +6,7 @@ fn limit_malloc_arenas() {
     extern "C" {
         fn mallopt(param: i32, value: i32) -> i32;
     }
-    // SAFETY: called before allocations; no pointer state involved.
+
     unsafe {
         mallopt(M_ARENA_MAX, 2);
     }

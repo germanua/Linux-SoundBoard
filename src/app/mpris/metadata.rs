@@ -3,18 +3,15 @@ use glib::variant::{DictEntry, Variant};
 
 use crate::app_meta::{APP_ID, APP_TITLE};
 
-/// What is playing right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NowPlaying {
-    /// The sound's public id, used to build a track path.
     pub id: String,
-    /// The name shown in the transport bar.
+
     pub title: String,
     pub duration_ms: Option<u64>,
     pub paused: bool,
 }
 
-/// What `PlaybackStatus` should report.
 pub(crate) fn playback_status(now: Option<&NowPlaying>) -> &'static str {
     match now {
         Some(now) if now.paused => "Paused",
@@ -58,7 +55,6 @@ pub(crate) fn build(now: Option<&NowPlaying>) -> Variant {
         ),
     ];
     if let Some(duration_ms) = now.duration_ms {
-        // MPRIS counts in microseconds.
         entries.push((
             "mpris:length",
             ((duration_ms as i64).saturating_mul(1_000)).to_variant(),

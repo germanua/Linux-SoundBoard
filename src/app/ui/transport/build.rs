@@ -28,7 +28,6 @@ impl TransportBar {
         hbox.add_css_class("transport-row");
         hbox.add_css_class("transport-row-primary");
 
-        // Shows the sidebar only in the narrow layout.
         let sidebar_toggle_btn = icons::button(icons::SIDEBAR, "Show Tabs");
         sidebar_toggle_btn.add_css_class("transport-btn");
         sidebar_toggle_btn.add_css_class("transport-icon-btn");
@@ -313,6 +312,8 @@ impl TransportBar {
         row2.add_css_class("transport-row-secondary");
         row2.set_visible(false);
 
+        let now_playing = super::now_playing::NowPlayingPanel::new(Arc::clone(&state));
+
         let transport_root = GtkBox::new(Orientation::Vertical, 4);
         transport_root.add_css_class("transport-bar");
         transport_root.append(&hbox);
@@ -367,7 +368,16 @@ impl TransportBar {
             on_settings_requested: RefCell::new(None),
         });
 
-        let tb = Self { inner };
+        {
+            let weak = Rc::downgrade(&inner);
+            now_playing.set_stop_sound_handler(move |play_id| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.stop_playback_instance(&play_id);
+                }
+            });
+        }
+
+        let tb = Self { inner, now_playing };
         tb.connect_signals();
         log::debug!(
             "Transport build latency: phase=complete elapsed_us={}",

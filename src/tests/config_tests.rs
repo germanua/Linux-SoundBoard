@@ -19,7 +19,6 @@ fn test_config_default_has_schema_version() {
 
 #[test]
 fn test_config_default_has_empty_collections() {
-    // The library lives in SQLite; a default config carries settings only.
     let _ = Config::default();
 }
 

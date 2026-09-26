@@ -202,6 +202,9 @@ fn handle_request(
             }
         }
         EngineRequest::StopSound { sound_id } => result_to_response(player.stop_sound(&sound_id)),
+        EngineRequest::StopPlayback { play_id } => {
+            result_to_response(player.stop_playback(&play_id))
+        }
         EngineRequest::StopAll => {
             player.stop_all();
             EngineResponse::Ok
@@ -220,6 +223,9 @@ fn handle_request(
         EngineRequest::Resume { sound_id } => {
             player.resume(&sound_id);
             EngineResponse::Ok
+        }
+        EngineRequest::SetPlaybackPaused { play_id, paused } => {
+            result_to_response(player.set_playback_paused(&play_id, paused))
         }
         EngineRequest::SetLocalVolume { volume } => {
             player.set_local_volume(volume);
@@ -263,6 +269,10 @@ fn handle_request(
         }
         EngineRequest::SetLooping { enabled } => {
             player.set_looping(enabled);
+            EngineResponse::Ok
+        }
+        EngineRequest::SetAllowMultiplePlaybacks { enabled } => {
+            player.set_allow_multiple_playbacks(enabled);
             EngineResponse::Ok
         }
         EngineRequest::SetMicPassthrough { enabled } => {

@@ -76,14 +76,12 @@ pub(super) fn decode_folder_drag(bytes: &Bytes) -> Option<FolderDragPayload> {
     Some(payload)
 }
 
-/// Where a pointer sits within a folder row during a drag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FolderDropZone {
-    /// Insert above this row.
     Before,
-    /// Merge into this row's folder.
+
     Into,
-    /// Insert below this row.
+
     After,
 }
 

@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Writes SHA256SUMS.txt over the release artifacts in dist/. When
-# LSB_RELEASE_SIGNING_KEY and LSB_RELEASE_TAG are set, also writes the signed
-# manifest required by install.sh.
-#
-# Usage: packaging/generate-checksums.sh [dist-dir]
+
+
+
+
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-DIST_ROOT="${1:-$REPO_ROOT/dist}"
+DIST_ROOT="${LSB_DIST_ROOT:-$REPO_ROOT/dist}"
 SUMS_NAME="SHA256SUMS.txt"
 SIGNATURE_NAME="$SUMS_NAME.minisig"
 SIGNING_KEY="${LSB_RELEASE_SIGNING_KEY:-}"
@@ -18,9 +17,27 @@ PUBLIC_KEY="${LSB_RELEASE_PUBLIC_KEY:-$REPO_ROOT/release.pub}"
 
 fail() { printf 'generate-checksums: %s\n' "$1" >&2; exit 1; }
 
+ONLY=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --only)
+            shift
+            [[ $# -gt 0 ]] || fail "--only needs a file name"
+            ONLY+=("$1")
+            ;;
+        -*)
+            fail "unknown option: $1"
+            ;;
+        *)
+            DIST_ROOT="$1"
+            ;;
+    esac
+    shift
+done
+
 [[ -d "$DIST_ROOT" ]] || fail "no such directory: $DIST_ROOT"
 
-# Both write "<hash>  <name>", which is what install.sh parses.
+
 if command -v sha256sum >/dev/null 2>&1; then
     hash_files() { sha256sum "$@"; }
 elif command -v shasum >/dev/null 2>&1; then
@@ -29,19 +46,26 @@ else
     fail "sha256sum or shasum is required, and neither is installed."
 fi
 
-# Release assets only: the AppDir, the desktop and metainfo files, and the
-# downloaded build tools also live in dist/ and are never published.
-mapfile -t assets < <(
-    find "$DIST_ROOT" -maxdepth 1 -type f \
-        \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) \
-        -printf '%f\n' | sort
-)
+if ((${#ONLY[@]} > 0)); then
+    assets=()
+    for name in "${ONLY[@]}"; do
+        [[ -f "$DIST_ROOT/$name" ]] || fail "missing asset: $name"
+        assets+=("$name")
+    done
+    mapfile -t assets < <(printf '%s\n' "${assets[@]}" | sort)
+else
+    mapfile -t assets < <(
+        find "$DIST_ROOT" -maxdepth 1 -type f \
+            \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name 'install.sh' -o -name 'update.json' \) \
+            -printf '%f\n' | sort
+    )
+fi
 
 ((${#assets[@]} > 0)) || fail "no release artifacts found in $DIST_ROOT"
 
 (
     cd "$DIST_ROOT"
-    # Names stay bare so the list matches whatever the asset is downloaded as.
+
     hash_files "${assets[@]}" > "$SUMS_NAME"
 )
 

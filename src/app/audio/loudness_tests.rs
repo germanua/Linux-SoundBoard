@@ -56,7 +56,6 @@ fn test_gain_factor_true_peak_attenuation_does_not_relax() {
 
 #[test]
 fn test_gain_factor_true_peak_infinite_is_ignored() {
-    // Silence has no true-peak limit.
     let gain = compute_gain_factor(-20.0, -14.0, Some(f32::NEG_INFINITY));
     assert!((gain - 2.0).abs() < 0.05);
 }

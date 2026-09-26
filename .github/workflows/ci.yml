@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install system dependencies
         run: |
@@ -40,13 +40,13 @@ jobs:
         run: echo "channel=$(sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
           components: rustfmt, clippy
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry/index
@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Fail if audio imports ui
         run: |
@@ -99,8 +99,8 @@ jobs:
 
       - name: Fail if loudness_acceptance is in the production module graph
         run: |
-          # Reject ungated "pub mod loudness_acceptance" — a #[cfg(test)] gate
-          # must appear on the same line: "#[cfg(test)] pub mod loudness_acceptance"
+
+
           if grep -r --include="*.rs" "^pub mod loudness_acceptance" src/app/audio/; then
             echo "ERROR: loudness_acceptance declared without #[cfg(test)] gate in audio/"
             exit 1
@@ -111,7 +111,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install validators
         run: |
@@ -133,23 +133,42 @@ jobs:
 
       - name: ShellCheck installer scripts
         run: |
-          shellcheck install.sh
+          shellcheck bootstrap-install.sh
+          shellcheck -e SC1091 install.sh
           shellcheck packaging/common.sh
+          shellcheck -e SC1090,SC2034,SC2317 packaging/profile.sh
           shellcheck packaging/validate-metadata.sh
-          shellcheck packaging/smoke-check.sh
-          shellcheck packaging/linux/install-user.sh
-          shellcheck packaging/linux/install-swhkd-helper.sh
-          shellcheck packaging/linux/package-appimage.sh
+          shellcheck -e SC2016 packaging/smoke-check.sh
+          shellcheck -e SC1091,SC2016,SC2034,SC2317,SC2329 packaging/build-release.sh
+          shellcheck -s bash -e SC1091,SC2016,SC2034,SC2154,SC2317,SC2329 packaging/release/*.sh
+          shellcheck -e SC1090,SC1091,SC2034 packaging/linux/app-meta.sh
+          shellcheck -e SC1090,SC1091 packaging/linux/install-user.sh
+          shellcheck -e SC1091 packaging/linux/install-swhkd-helper.sh
+          shellcheck packaging/linux/build-swhkd-locked.sh
+          shellcheck -e SC1091,SC2016 packaging/linux/package-appimage.sh
+          shellcheck -e SC1091 packaging/linux/package-tarball.sh
+          shellcheck -e SC1091 packaging/docker/build-appimage.sh
+          shellcheck packaging/docker/build-deb-appimage.sh
           shellcheck packaging/linux/appimage-preflight-check.sh
-          shellcheck packaging/debian/package-deb.sh
-          shellcheck packaging/rpm/package-rpm.sh
+          shellcheck -e SC1091 packaging/debian/package-deb.sh
+          shellcheck -e SC1091 packaging/rpm/package-rpm.sh
           shellcheck packaging/generate-checksums.sh
+          python3 -m py_compile packaging/generate-update-metadata.py
           shellcheck packaging/generate-third-party-notices.sh
+          shellcheck -e SC1090,SC1091,SC2016,SC2034,SC2317,SC2329 packaging/tests/swhkd-privilege-boundary-test.sh
+          shellcheck -e SC1090,SC1091,SC2016 packaging/tests/appimage-tool-anchors-test.sh
+          shellcheck -e SC2016 packaging/tests/install-security-policy-test.sh
+          shellcheck packaging/tests/install-user-lifecycle-test.sh
+          shellcheck -e SC1090,SC1091,SC2034 packaging/tests/install-wrapper-lifecycle-test.sh
+          shellcheck packaging/tests/bootstrap-security-test.sh
+          shellcheck packaging/tests/update-metadata-test.sh
+          shellcheck packaging/tests/source-file-size-test.sh
+          shellcheck -e SC1090 packaging/tests/appimage-host-compatibility-test.sh
 
       - name: Validate systemd service file
         run: |
-          # The metadata-only job does not build the application. Provide an
-          # ephemeral executable so systemd-analyze can validate ExecStart.
+
+
           sudo install -Dm755 /bin/true /usr/local/bin/linux-soundboard
           systemd-analyze verify packaging/linux/linux-soundboard-engine.service packaging/linux/linux-soundboard-engine.target
 
@@ -170,12 +189,19 @@ jobs:
       - name: Packaging smoke check
         run: bash packaging/smoke-check.sh
 
+      - name: Packaging regression tests
+        run: |
+          for test in packaging/tests/*.sh; do
+            echo "==> $test"
+            bash "$test"
+          done
+
   deps:
     name: Unused dependencies
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install system dependencies
         run: |
@@ -196,12 +222,12 @@ jobs:
         run: echo "channel=$(sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
 
       - name: Cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry/index
@@ -218,24 +244,67 @@ jobs:
       - name: Check for unused dependencies
         run: cargo machete
 
-  license-notices:
-    name: Third-party license notices
+  advisory-audit:
+    name: Dependency advisories
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Read Rust toolchain
         id: rust-toolchain
         run: echo "channel=$(sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ steps.rust-toolchain.outputs.channel }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+
+      - name: Audit the application lockfile
+        run: cargo audit
+
+      - name: Audit the pinned swhkd lockfile
+        run: cargo audit --file packaging/linux/swhkd-Cargo.lock.pinned
+
+      - name: Install cargo-deny
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --no-self-update
+          cargo +1.88.0 install cargo-deny --version 0.19.8 --locked
+
+      - name: Enforce dependency policy
+        run: cargo +1.88.0 deny check
+
+      - name: Verify the embedded swhkd build digests
+        run: |
+          for file in packaging/linux/build-swhkd-locked.sh packaging/linux/swhkd-Cargo.lock.pinned; do
+            digest="$(sha256sum "$file" | awk '{print $1}')"
+            if ! grep -qF "$digest" packaging/linux/install-swhkd-helper.sh; then
+              echo "ERROR: install-swhkd-helper.sh does not embed the digest of $file"
+              exit 1
+            fi
+          done
+
+  license-notices:
+    name: Third-party license notices
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Read Rust toolchain
+        id: rust-toolchain
+        run: echo "channel=$(sed -n 's/^channel = \"\(.*\)\"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: ${{ steps.rust-toolchain.outputs.channel }}
 
       - name: Cache cargo registry
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
             ~/.cargo/registry/index

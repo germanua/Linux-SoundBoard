@@ -47,7 +47,6 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Engin
     let Some(target) = target else {
         if let Some(requested) = state.runtime.mic_source.as_deref() {
             if name_looks_like_enhancement_source(requested) {
-                // Do not silently bypass the requested processor.
                 warn!(
                     "Selected mic source '{}' is currently absent. Soundboard will NOT \
                      fall back to the raw microphone — start the upstream processor \
@@ -63,9 +62,21 @@ pub(super) fn recreate_capture_stream(state: &mut LoopState) -> Result<(), Engin
         } else if state
             .sources
             .values()
+            .any(|source| source.is_bluetooth_loopback)
+        {
+            info!(
+                "Mic passthrough: a Bluetooth headset microphone is available but Auto-detect \
+                 will not activate its autoswitch source; select it explicitly in Settings if \
+                 switching the headset to duplex mode is intentional"
+            );
+        } else if state
+            .sources
+            .values()
             .any(|s| !s.is_monitor && !s.is_our_virtual_mic)
         {
-            info!("Mic passthrough: all available sources are monitors or virtual; waiting for a physical microphone");
+            info!(
+                "Mic passthrough: no eligible hardware or enhancement microphone is available yet"
+            );
         } else {
             info!("Mic passthrough: no microphone found — will activate automatically when one is connected");
         }
@@ -94,7 +105,6 @@ pub(super) fn resolve_capture_target_from_default(
     state: &LoopState,
     default_source: Option<String>,
 ) -> Option<String> {
-    // Explicit user selection always wins.
     if let Some(source) = state.runtime.mic_source.as_ref() {
         return state
             .sources
@@ -103,12 +113,10 @@ pub(super) fn resolve_capture_target_from_default(
             .map(|candidate| candidate.node_name.clone());
     }
 
-    // Prefer processed audio over the raw default mic.
     if let Some(best) = best_upstream_mic_source_name(&state.sources) {
         return Some(best);
     }
 
-    // Fall back to PipeWire's current or pre-claim default.
     if let Some(default_source) = default_source {
         if is_upstream_mic_source(&default_source, &state.sources) {
             return Some(default_source);
@@ -152,7 +160,7 @@ pub(super) fn transient_restore_target(state: &LoopState) -> Option<(u32, String
             state
                 .sources
                 .values()
-                .find(|source| source.node_name == name && auto_detect_eligible(source))
+                .find(|source| source.node_name == name && upstream_source_allowed(source))
         })
         .or_else(|| {
             best_upstream_mic_source_name(&state.sources)
@@ -224,6 +232,7 @@ fn upstream_source_allowed(source: &SourceDescriptor) -> bool {
 
 fn auto_detect_eligible(source: &SourceDescriptor) -> bool {
     upstream_source_allowed(source)
+        && !source.is_bluetooth_loopback
         && (is_named_enhancement_source(source) || source.is_hardware_backed)
 }
 
@@ -235,7 +244,6 @@ fn auto_detect_rank(source: &SourceDescriptor) -> u8 {
     }
 }
 
-// True when the node name or description matches a known mic-enhancement app.
 fn is_named_enhancement_source(source: &SourceDescriptor) -> bool {
     name_looks_like_enhancement_source(&source.node_name)
         || name_looks_like_enhancement_source(&source.display_name)
@@ -390,7 +398,7 @@ pub(super) fn resolve_source_id_by_name(
 fn set_default_source(source_id: u32) -> Result<(), EngineError> {
     let source_id = source_id.to_string();
     let output = run_wpctl_with_timeout(["set-default", source_id.as_str()])?;
-    if output.status.success() {
+    if output.success {
         Ok(())
     } else {
         let detail = command_output_detail(&output);
@@ -407,7 +415,7 @@ fn set_default_source(source_id: u32) -> Result<(), EngineError> {
 #[cfg(not(test))]
 fn set_pulse_default_source(source_name: &str) -> Result<(), EngineError> {
     let output = run_pactl_with_timeout(["set-default-source", source_name])?;
-    if output.status.success() {
+    if output.success {
         Ok(())
     } else {
         let detail = command_output_detail(&output);
@@ -424,14 +432,14 @@ fn set_pulse_default_source(source_name: &str) -> Result<(), EngineError> {
 #[cfg(not(test))]
 fn run_wpctl_with_timeout<const N: usize>(
     args: [&str; N],
-) -> Result<std::process::Output, EngineError> {
+) -> Result<crate::audio::command_runner::CommandOutput, EngineError> {
     run_command_with_timeout("wpctl", &args, WPCTL_COMMAND_TIMEOUT)
 }
 
 #[cfg(not(test))]
 pub(super) fn run_pactl_with_timeout<const N: usize>(
     args: [&str; N],
-) -> Result<std::process::Output, EngineError> {
+) -> Result<crate::audio::command_runner::CommandOutput, EngineError> {
     run_command_with_timeout("pactl", &args, PACTL_COMMAND_TIMEOUT)
 }
 
@@ -440,57 +448,21 @@ pub(super) fn run_command_with_timeout(
     program: &str,
     args: &[&str],
     timeout: Duration,
-) -> Result<std::process::Output, EngineError> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            EngineError::Routing(format!("Failed to run {} {}: {e}", program, args.join(" ")))
-        })?;
-
-    let started_at = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                return child.wait_with_output().map_err(|e| {
-                    EngineError::Routing(format!("Failed to collect {} output: {e}", program))
-                });
-            }
-            Ok(None) => {
-                if started_at.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(EngineError::Routing(format!(
-                        "{} {} timed out after {} ms",
-                        program,
-                        args.join(" "),
-                        timeout.as_millis()
-                    )));
-                }
-                thread::sleep(WPCTL_POLL_INTERVAL);
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(EngineError::Routing(format!(
-                    "Failed while waiting for {}: {e}",
-                    program
-                )));
-            }
-        }
-    }
+) -> Result<crate::audio::command_runner::CommandOutput, EngineError> {
+    crate::audio::command_runner::run_command_with_timeout(program, args, timeout)
+        .map_err(|error| EngineError::Routing(error.to_string()))
 }
 
 #[cfg(not(test))]
-pub(super) fn command_output_detail(output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+pub(super) fn command_output_detail(
+    output: &crate::audio::command_runner::CommandOutput,
+) -> String {
+    let stderr = output.stderr.trim().to_string();
     if !stderr.is_empty() {
         return stderr;
     }
 
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    output.stdout.trim().to_string()
 }
 
 #[cfg(test)]

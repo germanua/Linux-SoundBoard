@@ -33,13 +33,11 @@ pub struct X11Backend {
 #[derive(Debug)]
 struct NonNullXDisplay(*mut xlib::Display);
 
-// SAFETY: the owning mutex serializes Xlib calls.
 unsafe impl Send for NonNullXDisplay {}
-// SAFETY: same Mutex, same reason.
+
 unsafe impl Sync for NonNullXDisplay {}
 
 impl NonNullXDisplay {
-    // SAFETY: caller holds the Xlib mutex and the display is open.
     unsafe fn close(self) {
         xlib::XCloseDisplay(self.0);
     }
@@ -110,7 +108,6 @@ impl X11Backend {
             ));
         }
 
-        // SAFETY: display stays local and closes on every exit.
         unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -154,7 +151,6 @@ impl X11Backend {
         })
     }
 
-    // SAFETY: display stays live; copy Xlib-owned bytes before returning.
     unsafe fn keycode_to_name(display: *mut xlib::Display, keycode: u32) -> Option<String> {
         let keysym = xlib::XKeycodeToKeysym(display, keycode as u8, 0);
         if keysym == 0 {
@@ -313,7 +309,6 @@ impl HotkeyBackend for X11Backend {
             return;
         };
 
-        // SAFETY: this thread owns the display until storing it for Drop.
         thread::spawn(move || unsafe {
             let display = xlib::XOpenDisplay(ptr::null());
             if display.is_null() {
@@ -345,7 +340,6 @@ impl HotkeyBackend for X11Backend {
 
             let connection_fd = xlib::XConnectionNumber(display);
             loop {
-                // SAFETY: Xlib owns the fd while the display is open.
                 let x_fd = BorrowedFd::borrow_raw(connection_fd);
                 let mut poll_fds = [
                     nix::poll::PollFd::new(x_fd, nix::poll::PollFlags::POLLIN),

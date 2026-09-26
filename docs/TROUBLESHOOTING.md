@@ -7,7 +7,7 @@ This guide covers the issues most likely to block installation, startup, audio r
 The installer can run these for you and repair what it finds:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
 Choose **Fix setup problems** (or run `./install.sh fix`). It repairs the user
@@ -31,10 +31,10 @@ wpctl status -n
 
 Install the host FUSE package and retry:
 
-- Ubuntu / Debian: `sudo apt install libfuse2`
+- Ubuntu / Debian: `sudo apt install libfuse2t64 fuse` (use `libfuse2` where `libfuse2t64` is unavailable)
 - Fedora: `sudo dnf install fuse-libs`
-- Arch Linux: `sudo pacman -S fuse2`
-- openSUSE: `sudo zypper install fuse`
+- Arch Linux: `sudo pacman -Syu --needed fuse2`
+- openSUSE: `sudo zypper install libfuse2 fuse`
 
 ### `.deb` install reports dependency problems
 
@@ -305,7 +305,7 @@ a working soundboard while the service is repaired.
    Rerunning the downloaded AppImage and choosing **Install for persistent
    virtual mic** rewrites both, as does the guided repair:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
+   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- repair
    ```
 3. If the service restarts in a loop, stop it through the target — the service
    itself sets `RefuseManualStop=yes`:
@@ -513,26 +513,16 @@ Try the in-app one-click flow first:
 2. Click `Install` from the hotkey banner, hotkey settings page, or failed hotkey dialog.
 3. Approve the privilege prompt.
 
-Confirm it is installed and running:
+Confirm the managed daemon is installed and running:
 
 ```bash
-command -v swhkd
+ls -l /usr/local/libexec/linux-soundboard/swhkd
 pgrep swhkd
 ```
 
-Check the setuid bit on the installed binary:
+The managed `swhkd` file should be root-owned, non-writable by group/others, executable, and show the owner setuid bit.
 
-```bash
-ls -l "$(command -v swhkd)"
-```
-
-If `swhkd` prints `Make sure to launch the binary with pkexec`, the permissions
-do not show an `s` bit on the owner execute field, or Linux Soundboard reports
-unsafe rfkill support, rebuild it with the app's safe installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- repair
-```
+If `swhkd` reports a privilege error, the owner setuid bit is missing, or Linux Soundboard reports unsafe rfkill support, run `install.sh repair`. On Wayland it restores the fixed root-owned helper from a signed AppImage before rebuilding the managed daemon. The app itself still never elevates a helper from the AppImage mount or `$HOME`.
 
 If one-click install fails:
 
@@ -540,14 +530,13 @@ If one-click install fails:
 - Ensure network access is available (the installer fetches a pinned upstream `swhkd` commit).
 - Retry from the app and review the detailed failure output shown in the dialog.
 
-Installation paths:
+Installation path on supported native packages:
 
-- Arch family: install `swhkd-bin` or `swhkd-git` from the AUR
-- Debian / Ubuntu / Fedora / openSUSE: follow upstream installation guidance
+- Use Linux Soundboard's pinned managed installer on Arch, Debian/Ubuntu, Fedora, and openSUSE.
+- The privileged helper is fixed at `/usr/libexec/linux-soundboard/install-swhkd-helper.sh` and installs the daemon under `/usr/local/libexec/linux-soundboard`.
+- Direct AppImage installs do not elevate a helper from the AppImage mount. Use the one-command installer or `install.sh repair` to provision the fixed helper from a signed release.
 
-Upstream guide:
-
-- https://github.com/waycrate/swhkd/blob/main/INSTALL.md
+Other distributions can consult the upstream swhkd guide, but Linux Soundboard cannot verify those installation methods.
 
 ### swhkd fails with "Failed to create uinput device"
 
@@ -576,9 +565,7 @@ loaded until the new kernel is booted and `modprobe` fails outright. Reboot
 before trying anything else.
 
 Restart Linux Soundboard afterwards; the hotkey backend is chosen at startup.
-The in-app **Install** button and `install.sh` run both steps for you, but only
-where the module is actually missing, and only after asking — neither touches a
-system that already provides uinput.
+When the fixed root-owned helper is installed, the in-app **Install** button can run both steps after asking. Neither path touches a system that already provides uinput.
 
 ### X11 hotkeys do not work
 
@@ -613,7 +600,7 @@ Use the dependency blocks in [INSTALL.md](INSTALL.md) under the source-build sec
 
 - Debian / Ubuntu: `sudo apt install build-essential`
 - Fedora: `sudo dnf install gcc gcc-c++ make`
-- Arch Linux: `sudo pacman -S base-devel`
+- Arch Linux: `sudo pacman -Syu --needed base-devel`
 
 ## When Reporting a Bug
 

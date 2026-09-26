@@ -16,7 +16,6 @@ use crate::hotkeys::{
 type ResponseHandler = Box<dyn FnMut(&str) + 'static>;
 type HotkeyValidator = Box<dyn Fn(&str) -> Result<(), String> + 'static>;
 
-/// Offer to limit a sound's hotkey to the tab it is being set from.
 pub struct HotkeyScopePrompt {
     pub scoped_now: bool,
 }
@@ -81,7 +80,6 @@ pub(super) fn dismiss_on_press_outside<F>(
     let overlay_coords = overlay.clone();
     let panel = panel.clone().upcast::<gtk4::Widget>();
     gesture.connect_pressed(move |gesture, _, x, y| {
-        // Before the first allocation there is no panel to be outside of.
         let Some(bounds) = panel.compute_bounds(&overlay_coords) else {
             return;
         };
@@ -214,7 +212,6 @@ impl DialogHost {
 
         hotkey_page.append(&hotkey_capture_box);
 
-        // Only shown when tab hotkeys are on; see show_hotkey_capture.
         let hotkey_scope_check = gtk4::CheckButton::builder()
             .label("Only while this tab is open")
             .halign(gtk4::Align::Center)
@@ -354,7 +351,6 @@ impl DialogHost {
         self.present(None);
     }
 
-    /// Runs only after consent for a confirmed missing module.
     pub fn prompt_swhkd_install(
         &self,
         hotkeys: Arc<Mutex<crate::hotkeys::HotkeyManager>>,
@@ -590,19 +586,19 @@ impl DialogHost {
             Some(ActionSpec::danger("clear", "Clear")),
             Some(ActionSpec::primary("save", "Save")),
         );
+        self.sync_save_sensitivity();
 
         let host = self.downgrade();
         self.set_response_handler(move |response| {
             let Some(host) = host.upgrade() else {
                 return;
             };
-            match response {
-                "save" => {
-                    let captured_hotkey = host.inner.captured_hotkey.borrow().clone();
-                    on_confirm(captured_hotkey, host.inner.hotkey_scope_check.is_active());
+            let captured = host.inner.captured_hotkey.borrow().clone();
+            match capture_action(response, captured.as_deref()) {
+                CaptureAction::Forward(payload) => {
+                    on_confirm(payload, host.inner.hotkey_scope_check.is_active());
                 }
-                "clear" => on_confirm(None, false),
-                _ => {}
+                CaptureAction::NoChange | CaptureAction::Ignore => {}
             }
         });
         self.present(Some(self.inner.hotkey_capture_box.clone().upcast()));
@@ -736,6 +732,15 @@ impl DialogHost {
             });
             self.inner.hotkey_capture_box.add_controller(key_ctrl);
         }
+        {
+            let capture_box = self.inner.hotkey_capture_box.clone();
+            let gesture = gtk4::GestureClick::new();
+            gesture.set_button(1);
+            gesture.connect_pressed(move |_, _, _, _| {
+                capture_box.grab_focus();
+            });
+            self.inner.hotkey_capture_box.add_controller(gesture);
+        }
     }
 
     fn prepare(&self, page: &str, title: &str, message: &str) {
@@ -847,10 +852,16 @@ impl DialogHost {
         button.set_visible(false);
         button.set_label("");
         button.set_widget_name("");
+        button.set_sensitive(true);
         button.remove_css_class("dialog-host-action-btn");
         button.remove_css_class("flat");
         button.remove_css_class("settings-primary-btn");
         button.remove_css_class("settings-danger-btn");
+    }
+
+    fn sync_save_sensitivity(&self) {
+        let captured = self.inner.captured_hotkey.borrow().is_some();
+        self.inner.primary_btn.set_sensitive(captured);
     }
 
     fn handle_hotkey_key_pressed(
@@ -927,6 +938,7 @@ impl DialogHost {
             .hotkey_status_label
             .set_text("Captured! Press Save or try again.");
         *self.inner.captured_hotkey.borrow_mut() = Some(combo);
+        self.sync_save_sensitivity();
 
         glib::Propagation::Stop
     }
@@ -1046,10 +1058,37 @@ fn build_captured_combo(
     Ok(combo)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureAction {
+    Forward(Option<String>),
+    NoChange,
+    Ignore,
+}
+
+fn capture_action(response: &str, captured: Option<&str>) -> CaptureAction {
+    match response {
+        "clear" => CaptureAction::Forward(None),
+        "save" => match captured {
+            Some(chord) => CaptureAction::Forward(Some(chord.to_string())),
+            None => CaptureAction::NoChange,
+        },
+        _ => CaptureAction::Ignore,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_captured_combo, resolve_capture_key_candidates};
+    use super::{
+        build_captured_combo, capture_action, resolve_capture_key_candidates, CaptureAction,
+        DialogHost, HotkeyScopePrompt,
+    };
     use crate::hotkeys::{format_hotkey_error, HotkeyCode, HotkeyModifier};
+    use gtk4::prelude::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    type Recorded = Rc<RefCell<Option<(Option<String>, bool)>>>;
 
     #[test]
     fn capture_prefers_actual_symbol_key_over_unrelated_mapped_name() {
@@ -1101,5 +1140,384 @@ mod tests {
         )
         .unwrap();
         assert_eq!(combo, "Ctrl+Slash");
+    }
+
+    #[test]
+    fn a_save_with_nothing_captured_is_not_a_clear() {
+        assert_eq!(
+            capture_action("save", None),
+            CaptureAction::NoChange,
+            "a save with nothing captured asks for no change"
+        );
+        assert_eq!(
+            capture_action("save", Some("F8")),
+            CaptureAction::Forward(Some("F8".to_string())),
+            "a save forwards the captured chord"
+        );
+        assert_eq!(
+            capture_action("clear", None),
+            CaptureAction::Forward(None),
+            "clear is explicit even with nothing captured"
+        );
+        assert_eq!(
+            capture_action("clear", Some("F8")),
+            CaptureAction::Forward(None),
+            "clear ignores any captured chord"
+        );
+        assert_eq!(capture_action("cancel", None), CaptureAction::Ignore);
+        assert_eq!(
+            capture_action("ok", Some("F8")),
+            CaptureAction::Ignore,
+            "only save and clear are acted on"
+        );
+    }
+
+    fn open_capture(
+        host: &DialogHost,
+        prefill: Option<&str>,
+        scoped_now: bool,
+        checkbox: bool,
+    ) -> Recorded {
+        let recorded = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&recorded);
+        host.show_hotkey_capture(
+            prefill,
+            Some(HotkeyScopePrompt { scoped_now }),
+            |_| Ok(()),
+            move |hotkey, scoped| {
+                *sink.borrow_mut() = Some((hotkey, scoped));
+            },
+        );
+        host.inner.hotkey_scope_check.set_active(checkbox);
+        recorded
+    }
+
+    fn open_capture_with_sink<F>(
+        host: &DialogHost,
+        prefill: Option<&str>,
+        scoped_now: bool,
+        checkbox: bool,
+        sink: F,
+    ) where
+        F: Fn(Option<String>, bool) + 'static,
+    {
+        host.show_hotkey_capture(
+            prefill,
+            Some(HotkeyScopePrompt { scoped_now }),
+            |_| Ok(()),
+            sink,
+        );
+        host.inner.hotkey_scope_check.set_active(checkbox);
+    }
+
+    fn capture_response(
+        host: &DialogHost,
+        prefill: Option<&str>,
+        scoped_now: bool,
+        checkbox: bool,
+        response: &str,
+    ) -> Option<(Option<String>, bool)> {
+        let recorded = open_capture(host, prefill, scoped_now, checkbox);
+        host.handle_response(response);
+        let result = recorded.borrow().clone();
+        result
+    }
+
+    fn scope_chords(
+        library: &crate::library_store::LibraryStore,
+        sound_id: &str,
+        tab_scope: Option<&str>,
+    ) -> Vec<String> {
+        let bindings = library
+            .hotkey_bindings_for_sound(sound_id)
+            .recv()
+            .expect("read the sound's bindings");
+        let mut chords: Vec<String> = bindings
+            .iter()
+            .filter(|binding| binding.tab_scope.as_deref() == tab_scope)
+            .map(|binding| binding.accelerator.clone())
+            .collect();
+        chords.sort();
+        chords
+    }
+
+    fn mirror_production_callback(
+        ids: Vec<String>,
+        active_scope: String,
+        library: crate::library_store::LibraryStore,
+        projection: crate::hotkeys::HotkeyProjectionCoordinator,
+    ) -> impl Fn(Option<String>, bool) + 'static {
+        move |hotkey, scoped| {
+            let tab_scope = scoped.then(|| active_scope.clone());
+            crate::commands::set_hotkey_many(
+                ids.clone(),
+                hotkey,
+                true,
+                tab_scope,
+                library.clone(),
+                projection.clone(),
+            )
+            .expect("the mirrored callback commits");
+        }
+    }
+
+    #[test]
+    #[ignore = "drives the shared GTK main context: needs a display and must \
+                run alone, e.g. xvfb-run -a cargo test --lib -- --ignored --exact \
+                ui::dialogs::tests::clear_forwards_the_live_scope_toggle_like_save"]
+    #[allow(clippy::print_stderr)]
+    fn clear_forwards_the_live_scope_toggle_like_save() {
+        if gtk4::init().is_err() {
+            eprintln!("skipped: no display available");
+            return;
+        }
+
+        let host = DialogHost::new();
+        let prefill = Some("Ctrl+Alt+KeyA");
+
+        assert_eq!(
+            capture_response(&host, prefill, true, true, "clear"),
+            Some((None, true))
+        );
+        assert_eq!(
+            capture_response(&host, prefill, true, false, "clear"),
+            Some((None, false))
+        );
+        assert_eq!(
+            capture_response(&host, prefill, false, true, "clear"),
+            Some((None, true))
+        );
+
+        for checkbox in [true, false] {
+            let saved = capture_response(&host, prefill, true, checkbox, "save");
+            let cleared = capture_response(&host, prefill, true, checkbox, "clear");
+            assert_eq!(
+                saved.map(|(_, scoped)| scoped),
+                cleared.map(|(_, scoped)| scoped),
+                "Save and Clear must report the same scope"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "drives the shared GTK main context: needs a display and must \
+                run alone, e.g. xvfb-run -a cargo test --lib -- --ignored --exact \
+                ui::dialogs::tests::a_save_without_a_captured_chord_preserves_the_bindings"]
+    #[allow(clippy::print_stderr)]
+    fn a_save_without_a_captured_chord_preserves_the_bindings() {
+        if gtk4::init().is_err() {
+            eprintln!("skipped: no display available");
+            return;
+        }
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("lsb-capture-dialog-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).expect("create the test directory");
+        let library = crate::library_store::LibraryStore::open(temp_dir.join("library.sqlite3"))
+            .expect("open a disposable library store");
+        let hotkeys = Arc::new(parking_lot::Mutex::new(
+            crate::hotkeys::HotkeyManager::new_test_noop(),
+        ));
+        let projection = crate::hotkeys::HotkeyProjectionCoordinator::new(library.clone(), hotkeys);
+
+        let sound_a = crate::config::Sound::new("Alpha".to_string(), "/tmp/alpha.wav".to_string());
+        let sound_b = crate::config::Sound::new("Beta".to_string(), "/tmp/beta.wav".to_string());
+        let id_a = sound_a.id.clone();
+        let id_b = sound_b.id.clone();
+        library
+            .apply_batch(crate::library_store::LibraryBatch::Sounds(vec![
+                crate::library_store::SoundRecord {
+                    sound: sound_a,
+                    general_position: 0,
+                    locations: Vec::new(),
+                },
+                crate::library_store::SoundRecord {
+                    sound: sound_b,
+                    general_position: 1,
+                    locations: Vec::new(),
+                },
+            ]))
+            .recv()
+            .expect("seed the sounds");
+
+        for (id, global, scoped) in [
+            (&id_a, "F8", "Ctrl+Alt+Digit1"),
+            (&id_b, "F9", "Ctrl+Alt+Digit2"),
+        ] {
+            library
+                .set_sound_hotkeys(vec![id.clone()], Some(global.to_string()), None)
+                .recv()
+                .expect("seed the global binding");
+            library
+                .set_sound_hotkeys(
+                    vec![id.clone()],
+                    Some(scoped.to_string()),
+                    Some("tab:one".to_string()),
+                )
+                .recv()
+                .expect("seed the tab binding");
+        }
+        assert_eq!(scope_chords(&library, &id_a, None), ["F8"]);
+        assert_eq!(scope_chords(&library, &id_b, None), ["F9"]);
+
+        let ids = vec![id_a.clone(), id_b.clone()];
+        let db_host = DialogHost::new();
+
+        open_capture_with_sink(
+            &db_host,
+            None,
+            false,
+            false,
+            mirror_production_callback(
+                ids.clone(),
+                "tab:one".to_string(),
+                library.clone(),
+                projection.clone(),
+            ),
+        );
+        db_host.handle_response("save");
+        assert_eq!(
+            scope_chords(&library, &id_a, None),
+            ["F8"],
+            "a neutral save must not delete Alpha's global binding"
+        );
+        assert_eq!(
+            scope_chords(&library, &id_b, None),
+            ["F9"],
+            "a neutral save must not delete Beta's global binding"
+        );
+
+        open_capture_with_sink(
+            &db_host,
+            None,
+            false,
+            true,
+            mirror_production_callback(
+                ids.clone(),
+                "tab:one".to_string(),
+                library.clone(),
+                projection.clone(),
+            ),
+        );
+        db_host.handle_response("save");
+        assert_eq!(
+            scope_chords(&library, &id_a, Some("tab:one")),
+            ["Ctrl+Alt+Digit1"],
+            "a neutral save must not delete Alpha's tab binding"
+        );
+        assert_eq!(
+            scope_chords(&library, &id_b, Some("tab:one")),
+            ["Ctrl+Alt+Digit2"],
+            "a neutral save must not delete Beta's tab binding"
+        );
+
+        open_capture_with_sink(
+            &db_host,
+            None,
+            false,
+            false,
+            mirror_production_callback(
+                ids.clone(),
+                "tab:one".to_string(),
+                library.clone(),
+                projection.clone(),
+            ),
+        );
+        db_host.handle_response("clear");
+        assert!(
+            scope_chords(&library, &id_a, None).is_empty(),
+            "a global clear must remove Alpha's global binding"
+        );
+        assert!(
+            scope_chords(&library, &id_b, None).is_empty(),
+            "a global clear must remove Beta's global binding"
+        );
+        assert_eq!(
+            scope_chords(&library, &id_a, Some("tab:one")),
+            ["Ctrl+Alt+Digit1"],
+            "a global clear must leave the tab scope alone"
+        );
+
+        open_capture_with_sink(
+            &db_host,
+            None,
+            false,
+            true,
+            mirror_production_callback(ids, "tab:one".to_string(), library.clone(), projection),
+        );
+        db_host.handle_response("clear");
+        assert!(
+            scope_chords(&library, &id_a, Some("tab:one")).is_empty(),
+            "a tab clear must remove Alpha's tab binding"
+        );
+        assert!(
+            scope_chords(&library, &id_b, Some("tab:one")).is_empty(),
+            "a tab clear must remove Beta's tab binding"
+        );
+
+        let host = DialogHost::new();
+        let chord = Some("F8");
+
+        assert_eq!(
+            capture_response(&host, None, false, false, "save"),
+            None,
+            "a save with nothing captured must forward nothing"
+        );
+        assert_eq!(
+            capture_response(&host, None, false, false, "clear"),
+            Some((None, false)),
+            "an explicit clear must still work from the neutral state"
+        );
+        assert_eq!(
+            capture_response(&host, chord, false, true, "save"),
+            Some((Some("F8".to_string()), true)),
+            "a captured chord saves with the live scope"
+        );
+
+        open_capture(&host, None, false, false);
+        assert!(
+            !host.inner.primary_btn.is_sensitive(),
+            "Save must be insensitive with nothing captured"
+        );
+        assert!(
+            host.inner.secondary_btn.is_sensitive(),
+            "Clear must stay usable in the neutral state"
+        );
+        open_capture(&host, chord, false, false);
+        assert!(
+            host.inner.primary_btn.is_sensitive(),
+            "Save must be sensitive once a chord is prefilled"
+        );
+
+        open_capture(&host, None, false, false);
+        assert!(!host.inner.primary_btn.is_sensitive());
+        let propagation =
+            host.handle_hotkey_key_pressed(gtk4::gdk::Key::F8, 0, gtk4::gdk::ModifierType::empty());
+        assert_eq!(propagation, glib::Propagation::Stop);
+        assert_eq!(
+            host.inner.captured_hotkey.borrow().as_deref(),
+            Some("F8"),
+            "the key handler must record the captured chord"
+        );
+        assert!(
+            host.inner.primary_btn.is_sensitive(),
+            "Save must become sensitive after a capture"
+        );
+
+        open_capture(&host, chord, false, false);
+        assert!(host.inner.primary_btn.is_sensitive());
+        assert_eq!(
+            capture_response(&host, chord, false, false, "save"),
+            Some((Some("F8".to_string()), false))
+        );
+        open_capture(&host, None, false, false);
+        assert!(
+            !host.inner.primary_btn.is_sensitive(),
+            "reopening with no chord must clear Save's sensitivity"
+        );
+        assert!(
+            host.inner.captured_hotkey.borrow().is_none(),
+            "no stale chord may survive a reopen"
+        );
     }
 }

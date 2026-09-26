@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -20,9 +20,9 @@ pub enum EngineIpcError {
 }
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(3);
-const ENGINE_DIR_NAME: &str = "linux-soundboard";
+const ENGINE_DIR_NAME: &str = crate::app_meta::APP_BINARY;
 const ENGINE_SOCKET_NAME: &str = "engine.sock";
-pub const ENGINE_PROTOCOL_VERSION: u32 = 2;
+pub const ENGINE_PROTOCOL_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -38,7 +38,7 @@ pub enum EngineRequest {
         #[serde(default)]
         sound_true_peak_dbtp: Option<f32>,
     },
-    /// Replaces playback without publishing an empty snapshot.
+
     PlayReplace {
         sound_id: String,
         path: String,
@@ -50,6 +50,9 @@ pub enum EngineRequest {
     StopSound {
         sound_id: String,
     },
+    StopPlayback {
+        play_id: String,
+    },
     StopAll,
     Seek {
         play_id: String,
@@ -60,6 +63,10 @@ pub enum EngineRequest {
     },
     Resume {
         sound_id: String,
+    },
+    SetPlaybackPaused {
+        play_id: String,
+        paused: bool,
     },
     SetLocalVolume {
         volume: f32,
@@ -91,6 +98,9 @@ pub enum EngineRequest {
         boost_db: f64,
     },
     SetLooping {
+        enabled: bool,
+    },
+    SetAllowMultiplePlaybacks {
         enabled: bool,
     },
     SetMicPassthrough {
@@ -153,13 +163,24 @@ pub enum BindEngineSocket {
 }
 
 pub fn engine_socket_path() -> PathBuf {
-    engine_socket_path_for(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+    crate::private_runtime::directory()
+        .unwrap_or_else(|_| {
+            PathBuf::from(format!(
+                "/run/user/{}/{}",
+                nix::unistd::getuid().as_raw(),
+                ENGINE_DIR_NAME
+            ))
+        })
+        .join(ENGINE_SOCKET_NAME)
 }
 
+#[cfg(test)]
 pub fn engine_socket_path_for(runtime_dir: Option<PathBuf>) -> PathBuf {
     let base = runtime_dir.unwrap_or_else(|| {
-        let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
-        std::env::temp_dir().join(format!("{ENGINE_DIR_NAME}-{user}"))
+        std::env::temp_dir().join(format!(
+            "{ENGINE_DIR_NAME}-{}",
+            nix::unistd::getuid().as_raw()
+        ))
     });
     base.join(ENGINE_DIR_NAME).join(ENGINE_SOCKET_NAME)
 }
@@ -193,7 +214,6 @@ pub fn engine_info_at(path: &Path) -> Result<EngineInfo, EngineIpcError> {
 }
 
 pub fn engine_info_compatible(info: &EngineInfo) -> bool {
-    // Schema mismatch means the UI and engine must restart together.
     info.engine_protocol_version == ENGINE_PROTOCOL_VERSION
         && info.config_schema_version == CURRENT_SCHEMA_VERSION
         && info.app_version == APP_VERSION
@@ -294,6 +314,18 @@ pub fn bind_engine_socket_at(path: &Path) -> Result<BindEngineSocket, EngineIpcE
             dir.display()
         ))
     })?;
+    let metadata = fs::symlink_metadata(dir).map_err(|e| {
+        EngineIpcError::Io(format!(
+            "Failed to inspect engine socket dir {}: {e}",
+            dir.display()
+        ))
+    })?;
+    if !metadata.file_type().is_dir() || metadata.uid() != nix::unistd::getuid().as_raw() {
+        return Err(EngineIpcError::Io(format!(
+            "Unsafe engine socket directory: {}",
+            dir.display()
+        )));
+    }
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
         EngineIpcError::Io(format!(
             "Failed to protect engine socket dir {}: {e}",
@@ -414,7 +446,10 @@ mod tests {
         let path = engine_socket_path_for(Some(PathBuf::from("/run/user/1000")));
         assert_eq!(
             path,
-            PathBuf::from("/run/user/1000/linux-soundboard/engine.sock")
+            PathBuf::from(format!(
+                "/run/user/1000/{}/engine.sock",
+                crate::app_meta::APP_BINARY
+            ))
         );
     }
 
@@ -444,6 +479,16 @@ mod tests {
         assert!(matches!(
             level,
             EngineRequest::SetLoudnessBoostDb { boost_db } if boost_db == 150.0
+        ));
+    }
+
+    #[test]
+    fn parses_concurrent_playback_requests() {
+        let request = parse_request(r#"{"type":"set_allow_multiple_playbacks","enabled":true}"#)
+            .expect("parse concurrent playback toggle");
+        assert!(matches!(
+            request,
+            EngineRequest::SetAllowMultiplePlaybacks { enabled: true }
         ));
     }
 

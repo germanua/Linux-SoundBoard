@@ -6,22 +6,21 @@ pub const X11_BACKEND_UNAVAILABLE: &str = "X11_BACKEND_UNAVAILABLE";
 
 #[derive(Debug, thiserror::Error)]
 pub enum HotkeyError {
-    /// Bad spec: unknown key token, empty string, that sort of thing.
     #[error("{0}")]
     Parse(String),
-    /// Binding clash parsed by the UI.
+
     #[error("HOTKEY_CONFLICT:{0}")]
     Conflict(String),
-    /// Unsupported key parsed by the UI.
+
     #[error("UNSUPPORTED_KEY_FOR_BACKEND:{0}")]
     UnsupportedKey(String),
-    /// swhkd or X11 setup failed.
+
     #[error("{0}")]
     BackendUnavailable(String),
-    /// Config file, named pipe or socket I/O.
+
     #[error("{0}")]
     Io(String),
-    /// Child process spawn, signal or wait.
+
     #[error("{0}")]
     Process(String),
 }

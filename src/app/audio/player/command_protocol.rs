@@ -1,5 +1,3 @@
-//! Commands sent from AudioPlayer to the PipeWire loop.
-
 use super::*;
 
 pub(super) enum AudioCommand {
@@ -14,6 +12,9 @@ pub(super) enum AudioCommand {
     StopSound {
         sound_id: String,
     },
+    StopPlayback {
+        play_id: String,
+    },
     StopAll,
     Seek {
         play_id: String,
@@ -24,6 +25,10 @@ pub(super) enum AudioCommand {
     },
     Resume {
         sound_id: String,
+    },
+    SetPlaybackPaused {
+        play_id: String,
+        paused: bool,
     },
     SetLocalVolume {
         volume: f32,
@@ -55,6 +60,9 @@ pub(super) enum AudioCommand {
         boost_db: f64,
     },
     SetLooping {
+        enabled: bool,
+    },
+    SetAllowMultiplePlaybacks {
         enabled: bool,
     },
     SetMicPassthrough {

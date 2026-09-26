@@ -1,30 +1,32 @@
 #!/usr/bin/env bash
-#
-# Build the .deb and a portable AppImage in an Ubuntu 24.04 container, for hosts
-# that cannot produce them natively.
-#
-# The .deb needs a Debian toolchain (dpkg-buildpackage, debhelper) and the AppImage
-# must be built against an older glibc than a rolling-release host provides, or the
-# bundled GTK stack crashes the dynamic loader at startup. Ubuntu 24.04 supplies
-# glibc 2.39 and GTK 4.14 / libadwaita 1.5, which satisfy the gtk4 "v4_10" and
-# libadwaita "v1_5" bindings while keeping the AppImage portable.
-#
-# Usage (from anywhere in the checkout):
-#   packaging/docker/build-deb-appimage.sh
-#
-# Resulting artifacts are copied into dist/ at the repository root. Requires docker
-# and rsync on the host; the container needs network access.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -euo pipefail
 
-IMAGE="${DEB_BUILD_IMAGE:-ubuntu:24.04}"
+UBUNTU_IMAGE_DIGEST="docker.io/library/ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3"
+IMAGE="${DEB_BUILD_IMAGE:-$UBUNTU_IMAGE_DIGEST}"
 
-# ---------------------------------------------------------------------------
-# Container stage: install dependencies and build the .deb and AppImage.
-# ---------------------------------------------------------------------------
+
+
+
 if [ "${1:-}" = "--in-container" ]; then
     export DEBIAN_FRONTEND=noninteractive
-    export APPIMAGE_EXTRACT_AND_RUN=1   # no FUSE inside the container
+    export APPIMAGE_EXTRACT_AND_RUN=1
     HOST_UID="${HOST_UID:-0}"
     HOST_GID="${HOST_GID:-0}"
 
@@ -40,18 +42,29 @@ if [ "${1:-}" = "--in-container" ]; then
 
     RUST_TOOLCHAIN="$(sed -n 's/^channel = "\(.*\)"$/\1/p' /src/rust-toolchain.toml | head -n 1)"
     [ -n "$RUST_TOOLCHAIN" ] || { echo "FATAL: rust-toolchain.toml has no channel" >&2; exit 3; }
-    echo "==> Installing Rust $RUST_TOOLCHAIN via rustup"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal >/dev/null
-    # shellcheck disable=SC1091
-    . "$HOME/.cargo/env"
+    case "$(uname -m)" in
+        x86_64) rustup_target="x86_64-unknown-linux-gnu"
+                rustup_sha="dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71" ;;
+        aarch64|arm64) rustup_target="aarch64-unknown-linux-gnu"
+                rustup_sha="15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433" ;;
+        *) echo "FATAL: unsupported architecture for rustup: $(uname -m)" >&2; exit 3 ;;
+    esac
+    echo "==> Installing Rust $RUST_TOOLCHAIN via rustup 1.29.1"
+    curl -fsSL "https://static.rust-lang.org/rustup/archive/1.29.1/${rustup_target}/rustup-init" -o /tmp/rustup-init
+    rustup_actual="$(sha256sum /tmp/rustup-init | awk '{print $1}')"
+    [ "$rustup_actual" = "$rustup_sha" ] \
+        || { echo "FATAL: rustup-init sha256 is $rustup_actual, expected $rustup_sha" >&2; exit 3; }
+    chmod +x /tmp/rustup-init
+    /tmp/rustup-init -y --default-toolchain "$RUST_TOOLCHAIN" --profile minimal --no-modify-path >/dev/null
+    PATH="$HOME/.cargo/bin:$PATH"
+    export PATH
     echo "==> Toolchain: $(rustc --version)"
 
     cd /src
     mkdir -p dist
 
-    # On the way out, success or not: root-owned build outputs in the bind mount
-    # leave the host unable to delete the temp context it created.
+
+
     trap 'chown -R "$HOST_UID:$HOST_GID" /src/dist /src/target 2>/dev/null || true' EXIT
 
     echo "==> Building .deb"
@@ -66,9 +79,9 @@ if [ "${1:-}" = "--in-container" ]; then
     exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Host stage: stage an isolated build context and run this script in the image.
-# ---------------------------------------------------------------------------
+
+
+
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v rsync  >/dev/null || { echo "rsync is required"  >&2; exit 1; }
 
@@ -79,6 +92,7 @@ CTX="$(mktemp -d)"
 trap 'rm -rf "$CTX"' EXIT
 rsync -a \
     --exclude='target/' --exclude='dist/' --exclude='.git/' --exclude='.history/' \
+    --exclude='.commandcode/' --exclude='dev/' \
     "$REPO_ROOT"/ "$CTX"/
 mkdir -p "$CTX/dist"
 
@@ -90,6 +104,7 @@ docker run --rm \
 
 mkdir -p "$REPO_ROOT/dist"
 cp --remove-destination "$CTX"/dist/*.deb "$CTX"/dist/*.AppImage "$REPO_ROOT/dist/"
+chmod 755 "$REPO_ROOT/dist/"*.AppImage
 "$REPO_ROOT/packaging/generate-checksums.sh" "$REPO_ROOT/dist" >/dev/null
 
 echo "==> Done. Artifacts in $REPO_ROOT/dist:"

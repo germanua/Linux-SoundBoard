@@ -1,11 +1,12 @@
 use super::*;
+use pulse::callbacks::ListResult;
 use pulse::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
 use pulse::def::BufferAttr;
 use pulse::mainloop::threaded::Mainloop;
 use pulse::proplist::Proplist;
 use pulse::sample::{Format, Spec};
 use pulse::stream::{FlagSet as StreamFlagSet, PeekResult, SeekMode, State as StreamState, Stream};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -32,10 +33,7 @@ impl PulseAudioBackend {
             EngineError::Setup("Failed to allocate PulseAudio proplist".to_string())
         })?;
         proplist
-            .set_str(
-                pulse::proplist::properties::APPLICATION_NAME,
-                "Linux Soundboard",
-            )
+            .set_str(pulse::proplist::properties::APPLICATION_NAME, APP_TITLE)
             .map_err(|e| {
                 EngineError::Setup(format!("Failed to set PulseAudio application name: {e:?}"))
             })?;
@@ -44,7 +42,7 @@ impl PulseAudioBackend {
             EngineError::Setup("Failed to create PulseAudio mainloop".to_string())
         })?));
         let context = Rc::new(RefCell::new(
-            Context::new_with_proplist(mainloop.borrow().deref(), "Linux Soundboard", &proplist)
+            Context::new_with_proplist(mainloop.borrow().deref(), APP_TITLE, &proplist)
                 .ok_or_else(|| {
                     EngineError::Setup("Failed to create PulseAudio context".to_string())
                 })?,
@@ -56,7 +54,7 @@ impl PulseAudioBackend {
             &mainloop,
             &context,
             &spec,
-            "linuxsoundboard.local_playback",
+            LOCAL_PLAYBACK_NODE_NAME,
             None,
             runtime.local_output_target_samples(),
             queues.clone(),
@@ -66,12 +64,11 @@ impl PulseAudioBackend {
         .map_err(|err| format!("PulseAudio local output unavailable: {err}"))
         .ok();
 
-        // Feed the null sink backing linuxsoundboard.virtual_mic.
         let virtual_stream = create_playback_stream(
             &mainloop,
             &context,
             &spec,
-            "linuxsoundboard.virtual_mic_feeder",
+            VIRTUAL_MIC_FEEDER_NODE_NAME,
             Some(VIRTUAL_SOURCE_NAME),
             runtime.virtual_output_target_samples(),
             queues.clone(),
@@ -120,16 +117,69 @@ impl PulseAudioBackend {
             return Ok(());
         }
 
-        let target = runtime
+        let explicit_target = runtime
             .mic_source
             .as_deref()
             .filter(|source| *source != VIRTUAL_SOURCE_NAME);
+        let mut inspected_auto_target = None;
+        let mut pin_auto_target = false;
+
+        if explicit_target.is_none() {
+            match pulse_server_defaults(&self.mainloop, &self.context) {
+                Ok(defaults) if defaults.is_pipewire => {
+                    let Some(default_source) = defaults.default_source_name else {
+                        warn!(
+                            "PipeWire Pulse server reported no default microphone; auto-capture will wait"
+                        );
+                        return Ok(());
+                    };
+                    match pulse_source_is_bluetooth_loopback(
+                        &self.mainloop,
+                        &self.context,
+                        &default_source,
+                    ) {
+                        Ok(true) => {
+                            warn!(
+                                "PulseAudio auto-capture skipped the default Bluetooth headset \
+                                 autoswitch source. Select that microphone explicitly if switching \
+                                 the headset to its duplex profile is intentional."
+                            );
+                            return Ok(());
+                        }
+                        Ok(false) => {
+                            inspected_auto_target = Some(default_source);
+                            pin_auto_target = true;
+                        }
+                        Err(err) => {
+                            warn!(
+                                "PulseAudio auto-capture could not verify the PipeWire default \
+                                 microphone: {err}. Waiting instead of connecting to an unverified \
+                                 default source; choose a microphone explicitly to bypass auto-detect."
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    warn!(
+                        "PulseAudio auto-capture could not inspect the audio server: {err}. \
+                         Waiting instead of connecting to an unverified default source; choose a \
+                         microphone explicitly to bypass auto-detect."
+                    );
+                    return Ok(());
+                }
+            }
+        }
+
+        let target = explicit_target.or(inspected_auto_target.as_deref());
         let spec = pulse_spec()?;
         let stream = create_capture_stream(
             &self.mainloop,
             &self.context,
             &spec,
             target,
+            pin_auto_target,
             runtime.virtual_output_target_samples(),
             self.queues.clone(),
         )?;
@@ -189,6 +239,124 @@ impl Drop for PulseAudioBackend {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PulseServerDefaults {
+    default_source_name: Option<String>,
+    is_pipewire: bool,
+}
+
+fn pulse_server_name_is_pipewire(server_name: Option<&str>) -> bool {
+    server_name.is_some_and(|name| name.to_ascii_lowercase().contains("pipewire"))
+}
+
+fn pulse_server_defaults(
+    mainloop: &Rc<RefCell<Mainloop>>,
+    context: &Rc<RefCell<Context>>,
+) -> Result<PulseServerDefaults, EngineError> {
+    let result = Rc::new(RefCell::new(None::<PulseServerDefaults>));
+    let completed = Rc::new(Cell::new(false));
+    let introspector = context.borrow().introspect();
+
+    mainloop.borrow_mut().lock();
+    let ml_ref = Rc::clone(mainloop);
+    let result_ref = Rc::clone(&result);
+    let completed_ref = Rc::clone(&completed);
+    let operation = introspector.get_server_info(move |info| {
+        *result_ref.borrow_mut() = Some(PulseServerDefaults {
+            default_source_name: info.default_source_name.as_ref().map(ToString::to_string),
+            is_pipewire: pulse_server_name_is_pipewire(info.server_name.as_deref()),
+        });
+        completed_ref.set(true);
+
+        unsafe { (*ml_ref.as_ptr()).signal(false) };
+    });
+
+    while !completed.get() && operation.get_state() == pulse::operation::State::Running {
+        mainloop.borrow_mut().wait();
+    }
+    let state = operation.get_state();
+    mainloop.borrow_mut().unlock();
+
+    if state == pulse::operation::State::Cancelled {
+        return Err(EngineError::Routing(
+            "PulseAudio server-info query was cancelled".to_string(),
+        ));
+    }
+    if !completed.get() {
+        return Err(EngineError::Routing(
+            "PulseAudio server-info query completed without a response".to_string(),
+        ));
+    }
+
+    let defaults = result.borrow().clone();
+    defaults.ok_or_else(|| {
+        EngineError::Routing("PulseAudio server-info query returned no data".to_string())
+    })
+}
+
+fn pulse_source_is_bluetooth_loopback(
+    mainloop: &Rc<RefCell<Mainloop>>,
+    context: &Rc<RefCell<Context>>,
+    source_name: &str,
+) -> Result<bool, EngineError> {
+    let result = Rc::new(Cell::new(None::<bool>));
+    let completed = Rc::new(Cell::new(false));
+    let query_failed = Rc::new(Cell::new(false));
+    let introspector = context.borrow().introspect();
+
+    mainloop.borrow_mut().lock();
+    let ml_ref = Rc::clone(mainloop);
+    let result_ref = Rc::clone(&result);
+    let completed_ref = Rc::clone(&completed);
+    let query_failed_ref = Rc::clone(&query_failed);
+    let operation = introspector.get_source_info_by_name(source_name, move |item| match item {
+        ListResult::Item(info) => {
+            result_ref.set(Some(pulse_proplist_marks_bluetooth_loopback(
+                &info.proplist,
+            )));
+        }
+        ListResult::End => {
+            completed_ref.set(true);
+
+            unsafe { (*ml_ref.as_ptr()).signal(false) };
+        }
+        ListResult::Error => {
+            query_failed_ref.set(true);
+            completed_ref.set(true);
+
+            unsafe { (*ml_ref.as_ptr()).signal(false) };
+        }
+    });
+
+    while !completed.get() && operation.get_state() == pulse::operation::State::Running {
+        mainloop.borrow_mut().wait();
+    }
+    let state = operation.get_state();
+    mainloop.borrow_mut().unlock();
+
+    if state == pulse::operation::State::Cancelled || query_failed.get() {
+        return Err(EngineError::Routing(format!(
+            "PulseAudio source inspection failed for {source_name}"
+        )));
+    }
+    if !completed.get() {
+        return Err(EngineError::Routing(format!(
+            "PulseAudio source inspection completed without a response for {source_name}"
+        )));
+    }
+
+    result.get().ok_or_else(|| {
+        EngineError::Routing(format!(
+            "PulseAudio default source disappeared before it could be inspected: {source_name}"
+        ))
+    })
+}
+
+fn pulse_proplist_marks_bluetooth_loopback(proplist: &Proplist) -> bool {
+    let value = proplist.get_str(BLUEZ5_LOOPBACK_PROPERTY);
+    bluetooth_loopback_property_is_true(value.as_deref())
+}
+
 fn pulse_spec() -> Result<Spec, EngineError> {
     let spec = Spec {
         format: Format::F32le,
@@ -209,7 +377,6 @@ fn connect_context(
         context
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
-                // SAFETY: ml_ref keeps the mainloop alive for this callback.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -320,20 +487,15 @@ fn create_capture_stream(
     context: &Rc<RefCell<Context>>,
     spec: &Spec,
     target_source: Option<&str>,
+    dont_move: bool,
     target_samples: usize,
     queues: RtSharedQueues,
 ) -> Result<PulseStream, EngineError> {
     mainloop.borrow_mut().lock();
     let stream = Rc::new(RefCell::new(
-        Stream::new(
-            &mut context.borrow_mut(),
-            "linuxsoundboard.mic_capture",
-            spec,
-            None,
-        )
-        .ok_or_else(|| {
-            EngineError::Setup("Failed to create PulseAudio capture stream".to_string())
-        })?,
+        Stream::new(&mut context.borrow_mut(), MIC_CAPTURE_NODE_NAME, spec, None).ok_or_else(
+            || EngineError::Setup("Failed to create PulseAudio capture stream".to_string()),
+        )?,
     ));
 
     {
@@ -346,7 +508,10 @@ fn create_capture_stream(
     }
 
     let attr = capture_buffer_attr(target_samples);
-    let flags = StreamFlagSet::ADJUST_LATENCY | StreamFlagSet::AUTO_TIMING_UPDATE;
+    let mut flags = StreamFlagSet::ADJUST_LATENCY | StreamFlagSet::AUTO_TIMING_UPDATE;
+    if dont_move {
+        flags |= StreamFlagSet::DONT_MOVE;
+    }
     if let Err(err) = stream
         .borrow_mut()
         .connect_record(target_source, Some(&attr), flags)
@@ -374,7 +539,6 @@ fn wait_for_stream_ready(
         stream
             .borrow_mut()
             .set_state_callback(Some(Box::new(move || {
-                // SAFETY: as in connect_context, with the mainloop lock held.
                 unsafe { (*ml_ref.as_ptr()).signal(false) };
             })));
     }
@@ -455,7 +619,6 @@ fn write_playback_bytes(
             OutputTarget::Virtual => queues.virtual_out.pop_into(&mut samples),
         }
     } else {
-        // Output silence instead of blocking the PulseAudio thread.
         match target {
             OutputTarget::Local => stream_runtime.record_local_underrun(),
             OutputTarget::Virtual => stream_runtime.record_virtual_underrun(),
@@ -515,5 +678,36 @@ fn read_capture_bytes(stream: &PulseStream, queues: &RtSharedQueues) {
     if let Some(mut queues) = queues.try_lock() {
         queues.mic_in.push_slice(&samples);
     }
-    // else: drop frame, mic_in resyncs on next read callback.
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pulse_server_name_detection_only_flags_pipewire_compatibility_servers() {
+        assert!(pulse_server_name_is_pipewire(Some(
+            "PulseAudio (on PipeWire 1.6.8)"
+        )));
+        assert!(pulse_server_name_is_pipewire(Some("pipewire-pulse")));
+        assert!(!pulse_server_name_is_pipewire(Some("pulseaudio")));
+        assert!(!pulse_server_name_is_pipewire(None));
+    }
+
+    #[test]
+    fn pulse_proplist_detects_wireplumber_bluetooth_loopback_marker() {
+        let mut marked = Proplist::new().expect("proplist");
+        marked
+            .set_str(BLUEZ5_LOOPBACK_PROPERTY, "true")
+            .expect("set loopback property");
+        assert!(pulse_proplist_marks_bluetooth_loopback(&marked));
+
+        let mut false_value = Proplist::new().expect("proplist");
+        false_value
+            .set_str(BLUEZ5_LOOPBACK_PROPERTY, "false")
+            .expect("set loopback property");
+        assert!(!pulse_proplist_marks_bluetooth_loopback(&false_value));
+
+        let absent = Proplist::new().expect("proplist");
+        assert!(!pulse_proplist_marks_bluetooth_loopback(&absent));
+    }
 }

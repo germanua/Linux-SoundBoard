@@ -27,8 +27,8 @@ cargo about generate \
     --output-file "$OUTPUT" \
     "$REPO_ROOT/about.hbs"
 
-# Upstream license files occasionally contain trailing spaces. Normalizing
-# horizontal whitespace keeps the committed generated artifact diff-clean.
+
+
 sed -i 's/[[:blank:]]\+$//' "$OUTPUT"
 
 echo "Generated $OUTPUT"

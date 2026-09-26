@@ -8,17 +8,8 @@
   <a href="https://github.com/germanua/Linux-SoundBoard/releases/latest">
     <img src="https://img.shields.io/github/v/release/germanua/Linux-SoundBoard?style=for-the-badge&logo=github" alt="Latest Release">
   </a>
-  <a href="https://aur.archlinux.org/packages/linux-soundboard">
-    <img src="https://img.shields.io/aur/version/linux-soundboard?style=for-the-badge&logo=archlinux&color=1793d1" alt="AUR">
-  </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-3c8d40?style=for-the-badge" alt="License">
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://ko-fi.com/sherpi">
-    <img src="https://img.shields.io/badge/Support%20the%20project-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Support Linux Soundboard on Ko-fi">
   </a>
 </p>
 
@@ -39,7 +30,7 @@
 <p align="center"><b>Install with one command:</b></p>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
 <p align="center">Opens a menu: install, install a previous version, repair, uninstall, check status, or generate a bug report.<br>
@@ -82,55 +73,42 @@ can remain available after the window closes.
 
 ## Install
 
-The command at the top of this page detects the distribution and uses the
-matching install path.
+**Latest public release: 2.4.4.** The development branch is preparing the next public release around a single AppImage distribution path. Native packages from 2.4.4 and earlier remain historical artifacts; the next public release is planned to ship AppImage only unless that policy changes before release.
 
-| Distribution | Default install method |
-| --- | --- |
-| Arch / CachyOS / EndeavourOS | Stable `linux-soundboard` AUR package through `yay` or `paru` |
-| Debian / Ubuntu | Native `.deb` package |
-| Fedora | Native `.rpm` package |
-| Other distributions | Release tarball with the per-user installer |
+The AppImage being prepared for the next public release is **x86_64** and requires **glibc 2.39 or newer**. That covers Ubuntu 24.04/26.04, Debian 13, Fedora 40+, current Arch/CachyOS/EndeavourOS, and openSUSE Leap 16/Tumbleweed. Ubuntu 22.04, Debian 12, and openSUSE Leap 15.6 are below the prepared AppImage ABI baseline and are rejected before installation instead of failing later in the dynamic loader.
 
-> **Privileges:** Native packages and the Wayland hotkey helper may require your
-> package manager and password. AppImage and tarball installs stay under
-> `~/.local`.
-
-> **Download verification:** `install.sh` verifies `SHA256SUMS.txt.minisig`
-> against the pinned [`release.pub`](release.pub) key before it trusts the
-> asset's SHA-256. If Minisign is not installed, the script uses a temporary,
-> hash-pinned copy; it does not install anything. Missing files, invalid
-> signatures, and checksum mismatches stop the install.
-
-### AppImage
+The one-line bootstrap downloads the release-published installer, verifies it through the signed checksum manifest, then runs that authenticated installer to download and install the AppImage under your user account:
 
 ```bash
-chmod +x linux-soundboard-x86_64.AppImage
-./linux-soundboard-x86_64.AppImage
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
-On first launch, choose **Install for persistent virtual mic**, **Run
-temporarily**, or **Exit**. A persistent install keeps the AppImage under your
-user account and starts the audio engine as a systemd user service.
+If an older native Linux Soundboard package is installed, the installer detects it because `/usr/bin/linux-soundboard` would shadow the AppImage installation and offers to remove that legacy package first.
+
+> **Privileges:** The AppImage itself installs under `~/.local` without root. On Wayland, the one-line installer also provisions Linux Soundboard's authenticated root-owned hotkey helper and may ask for `sudo`; the app never elevates a helper from the AppImage mount or `$HOME`. Removing a legacy native package also requires the package manager.
+
+> **Download verification:** `bootstrap-install.sh` verifies the release-published `install.sh` through the signed `SHA256SUMS.txt`, then `install.sh` verifies the AppImage through the same release signature. Missing files, invalid signatures, and checksum mismatches stop the install.
+
+### Run the AppImage directly
+
+```bash
+chmod +x linux-soundboard-VERSION-x86_64.AppImage
+./linux-soundboard-VERSION-x86_64.AppImage
+```
+
+On first launch, choose **Install for persistent virtual mic**, **Run temporarily**, or **Exit**. A persistent install keeps the AppImage under your user account and starts the audio engine as a systemd user service. A directly downloaded AppImage does not self-install a privileged Wayland helper; run the one-line installer or `install.sh repair` to provision that helper from a signed release.
 
 ### Inspect before running
 
-Download a package or AppImage from the
-[Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest),
-then verify the downloaded file without installing it:
+Download the AppImage from the [Releases page](https://github.com/germanua/Linux-SoundBoard/releases/latest), then verify it without installing:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh | bash -s -- verify ./DOWNLOADED_FILE
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- verify ./linux-soundboard-VERSION-x86_64.AppImage
 ```
 
-For an older release, add its tag, for example `--version v2.4.3`. The verifier
-does not need root and does not install Linux Soundboard or Minisign. You can
-also download
-[`install.sh`](https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/install.sh)
-and inspect it before running the same command locally.
+For an older release, add its tag, for example `--version v2.4.4`. Historical releases may still contain native packages or tarballs, but those formats are no longer produced for new releases.
 
-See [docs/INSTALL.md](docs/INSTALL.md) for version selection, repair, status,
-uninstall, AppImage, and source-install commands.
+See [docs/INSTALL.md](docs/INSTALL.md) for version selection, repair, status, uninstall, AppImage, and source-build commands.
 
 ---
 
@@ -174,6 +152,8 @@ service and virtual microphone can stay running.
 
 ### Playback
 
+- **Concurrent playback:** Optionally keep several sounds live and mix them together
+- **Per-playback controls:** When two or more sounds are active, Now Playing gives each playback its own seek, pause/resume, and stop controls
 - **Normalization:** Per-sound LUFS gain across every supported format
 - **Play modes:** Play once, loop, or continue to the next sound
 - **Transport:** Play, pause, stop, previous, next, and seek
@@ -207,6 +187,7 @@ service and virtual microphone can stay running.
 - **System tray:** `StatusNotifierItem`
 - **Media controls:** Optional MPRIS integration
 - **Background audio:** systemd user service
+- **Authenticated AppImage updates:** Signed release metadata, verified downloads, staged installation, and rollback recovery
 
 ### Audio formats
 
@@ -231,7 +212,7 @@ setting, and menu.
 
 | Session | Backend | Setup |
 | --- | --- | --- |
-| Wayland | `swhkd` | Installed through the app or installer |
+| Wayland | managed `swhkd` | Root-owned helper required |
 | X11 | Native XInput2 | None |
 | XWayland | Native XInput2 | None when the X11 backend is used |
 
@@ -242,8 +223,7 @@ without `swhkd`; only Wayland global hotkeys are unavailable.
 
 ## Known limitations
 
-- **Wayland hotkeys:** The installer builds a pinned `swhkd` revision with
-  rfkill handling disabled. Installation uses PolicyKit.
+- **Wayland hotkeys:** Linux Soundboard builds a pinned `swhkd` revision with rfkill disabled through a fixed root-owned helper. Upstream swhkd still has a multi-session keyboard-capture limitation, so this integration is intended for single-seat systems.
 - **GNOME tray:** GNOME needs an AppIndicator-compatible extension for the tray
   icon.
 - **AppImage updates:** Automatic replacement applies only to the AppImage kept
@@ -276,7 +256,7 @@ Removing a sound from the library does not delete the original audio file.
 <summary><strong>Arch Linux</strong></summary>
 
 ```bash
-sudo pacman -S cargo rust pkgconf clang gtk4 libadwaita libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber
+sudo pacman -Syu --needed cargo rust pkgconf clang gtk4 libadwaita libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber
 ```
 
 </details>
@@ -351,15 +331,6 @@ Bug reports and focused pull requests are welcome. Read
 
 For audio routing, installation, packaging, or hotkey changes, include the test
 environment and validation steps.
-
----
-
-## Support
-
-Linux Soundboard is free for noncommercial use under its license.
-
-[Ko-fi](https://ko-fi.com/sherpi) ·
-[Donations and sponsorship terms](DONATIONS.md)
 
 ---
 

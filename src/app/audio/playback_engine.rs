@@ -1,8 +1,5 @@
-//! Playback transport seam for commands and tests.
-
 use super::player::{AudioPlayer, EngineError, PlaybackPosition};
 
-/// Playback transport operations invoked by `commands::playback`.
 pub trait PlaybackEngine: Send + Sync {
     fn play(
         &self,
@@ -13,10 +10,12 @@ pub trait PlaybackEngine: Send + Sync {
         sound_true_peak_dbtp: Option<f32>,
     ) -> Result<String, EngineError>;
     fn stop_sound(&self, sound_id: &str) -> Result<(), EngineError>;
+    fn stop_playback(&self, play_id: &str) -> Result<(), EngineError>;
     fn stop_all(&self);
     fn seek_playback(&self, play_id: &str, position_ms: u64);
     fn pause(&self, sound_id: &str);
     fn resume(&self, sound_id: &str);
+    fn set_playback_paused(&self, play_id: &str, paused: bool) -> Result<(), EngineError>;
     fn get_playing(&self) -> Vec<String>;
     fn get_playback_positions(&self) -> Vec<PlaybackPosition>;
 }
@@ -44,6 +43,10 @@ impl PlaybackEngine for AudioPlayer {
         AudioPlayer::stop_sound(self, sound_id)
     }
 
+    fn stop_playback(&self, play_id: &str) -> Result<(), EngineError> {
+        AudioPlayer::stop_playback(self, play_id)
+    }
+
     fn stop_all(&self) {
         AudioPlayer::stop_all(self)
     }
@@ -58,6 +61,10 @@ impl PlaybackEngine for AudioPlayer {
 
     fn resume(&self, sound_id: &str) {
         AudioPlayer::resume(self, sound_id)
+    }
+
+    fn set_playback_paused(&self, play_id: &str, paused: bool) -> Result<(), EngineError> {
+        AudioPlayer::set_playback_paused(self, play_id, paused)
     }
 
     fn get_playing(&self) -> Vec<String> {

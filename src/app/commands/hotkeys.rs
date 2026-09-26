@@ -7,10 +7,20 @@ use uuid::Uuid;
 
 use crate::config::{ControlHotkeyAction, TAB_BINDING_PREFIX};
 use crate::hotkeys::{HotkeyManager, HotkeyProjectionCoordinator};
-use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore};
+use crate::library_store::{HotkeyBindingOwner, HotkeyBindingRecord, LibraryStore, MAX_BATCH_ROWS};
 
 use super::shared::dispatch_async_result;
 use super::CommandError;
+
+const MULTI_SOUND_HOTKEY_REQUIRED: &str =
+    "Turn on \"Multiple Sounds Per Hotkey\" to give several sounds the same shortcut.";
+
+fn normalize_target_ids(ids: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter()
+        .filter(|id| !id.is_empty() && seen.insert(id.clone()))
+        .collect()
+}
 
 fn ensure_store_hotkey_available(
     library: &LibraryStore,
@@ -139,6 +149,93 @@ where
     )
 }
 
+pub fn set_hotkey_many(
+    ids: Vec<String>,
+    hotkey: Option<String>,
+    multi_sound_hotkeys: bool,
+    tab_scope: Option<String>,
+    library: LibraryStore,
+    projection: HotkeyProjectionCoordinator,
+) -> Result<(), CommandError> {
+    let ids = normalize_target_ids(ids);
+    if ids.is_empty() {
+        return Err(CommandError::Invalid("No sounds selected".to_string()));
+    }
+    if ids.len() > MAX_BATCH_ROWS {
+        return Err(CommandError::Invalid(format!(
+            "At most {MAX_BATCH_ROWS} sounds can share one shortcut"
+        )));
+    }
+
+    let canonical_new = match hotkey {
+        Some(hk) => Some(
+            crate::hotkeys::canonicalize_hotkey_string(&hk)
+                .map_err(|e| CommandError::Hotkey(e.to_string()))?,
+        ),
+        None => None,
+    };
+
+    if canonical_new.is_some() && ids.len() > 1 && !multi_sound_hotkeys {
+        return Err(CommandError::Hotkey(
+            MULTI_SOUND_HOTKEY_REQUIRED.to_string(),
+        ));
+    }
+
+    if let Some(canonical) = canonical_new.as_deref() {
+        let conflict = library
+            .hotkey_conflict_excluding_sounds(
+                canonical,
+                &ids,
+                multi_sound_hotkeys,
+                tab_scope.as_deref(),
+            )
+            .recv()
+            .map_err(|error| CommandError::Library(error.to_string()))?;
+        if let Some(conflict) = conflict {
+            return Err(CommandError::Hotkey(
+                crate::hotkeys::hotkey_conflict(&conflict).to_string(),
+            ));
+        }
+    }
+
+    library
+        .set_sound_hotkeys(ids, canonical_new, tab_scope)
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))?;
+
+    projection
+        .reconcile_blocking()
+        .map_err(CommandError::HotkeyProjection)
+}
+
+pub fn set_hotkey_many_async<F>(
+    ids: Vec<String>,
+    hotkey: Option<String>,
+    multi_sound_hotkeys: bool,
+    tab_scope: Option<String>,
+    library: LibraryStore,
+    projection: HotkeyProjectionCoordinator,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<(), CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "set_hotkey_many",
+        move || {
+            set_hotkey_many(
+                ids,
+                hotkey,
+                multi_sound_hotkeys,
+                tab_scope,
+                library,
+                projection,
+            )
+        },
+        on_complete,
+    )
+}
+
 pub fn set_control_hotkey(
     action: String,
     hotkey: Option<String>,
@@ -249,7 +346,63 @@ where
     )
 }
 
-/// Answer only the active tab's sound hotkeys while it is showing.
+pub fn hotkey_holder_many(
+    target_ids: Vec<String>,
+    hotkey: String,
+    tab_scope: Option<String>,
+    library: LibraryStore,
+) -> Result<Option<String>, CommandError> {
+    let canonical = crate::hotkeys::canonicalize_hotkey_string(&hotkey)
+        .map_err(|e| CommandError::Hotkey(e.to_string()))?;
+    let target_ids = normalize_target_ids(target_ids);
+    library
+        .hotkey_conflict_excluding_sounds(&canonical, &target_ids, false, tab_scope.as_deref())
+        .recv()
+        .map_err(|error| CommandError::Library(error.to_string()))
+}
+
+pub fn hotkey_holder_many_async<F>(
+    target_ids: Vec<String>,
+    hotkey: String,
+    tab_scope: Option<String>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Option<String>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "hotkey_holder_many",
+        move || hotkey_holder_many(target_ids, hotkey, tab_scope, library),
+        on_complete,
+    )
+}
+
+pub fn hotkey_bindings_for_sounds_async<F>(
+    sound_ids: Vec<String>,
+    library: LibraryStore,
+    on_complete: F,
+) -> Result<(), CommandError>
+where
+    F: FnOnce(Result<Vec<HotkeyBindingRecord>, CommandError>) + 'static,
+{
+    dispatch_async_result(
+        "hotkey_bindings_for_sounds",
+        move || {
+            let mut bindings = Vec::new();
+            for sound_id in &sound_ids {
+                let found = library
+                    .hotkey_bindings_for_sound(sound_id)
+                    .recv()
+                    .map_err(|error| CommandError::Library(error.to_string()))?;
+                bindings.extend(found);
+            }
+            Ok(bindings)
+        },
+        on_complete,
+    )
+}
+
 pub fn set_tab_hotkeys(
     enabled: bool,
     config: Arc<Mutex<crate::config::Config>>,
@@ -259,7 +412,6 @@ pub fn set_tab_hotkeys(
     })
 }
 
-/// Allow several sounds to answer to one hotkey.
 pub fn set_multi_sound_hotkeys(
     enabled: bool,
     config: Arc<Mutex<crate::config::Config>>,
@@ -269,7 +421,6 @@ pub fn set_multi_sound_hotkeys(
     })
 }
 
-/// Which member a press plays when several sounds share a hotkey.
 pub fn set_group_mode(
     mode: String,
     config: Arc<Mutex<crate::config::Config>>,
@@ -281,7 +432,6 @@ pub fn set_group_mode(
     })
 }
 
-/// Advance the shared-hotkey mode, and report where it landed.
 pub fn cycle_group_mode(
     config: Arc<Mutex<crate::config::Config>>,
 ) -> Result<crate::config::GroupMode, CommandError> {
@@ -292,12 +442,10 @@ pub fn cycle_group_mode(
     })
 }
 
-/// The binding id a tab's hotkey is stored and projected under.
 pub fn tab_binding_id(scope_key: &str) -> String {
     format!("{TAB_BINDING_PREFIX}{scope_key}")
 }
 
-/// The tab a press activates, if the binding is a tab hotkey.
 pub fn tab_from_binding_id(binding_id: &str) -> Option<&str> {
     binding_id.strip_prefix(TAB_BINDING_PREFIX)
 }
