@@ -6,7 +6,7 @@ The exact generated notices for Rust packages in the locked Linux release depend
 
 ```bash
 cargo install cargo-about --version 0.8.4 --locked
-packaging/generate-third-party-notices.sh
+cargo about generate --config about.toml --manifest-path Cargo.toml --workspace --locked --fail --output-file THIRD_PARTY_NOTICES.html about.hbs
 ```
 
 Binary release artifacts must include `LICENSE`, `NOTICE.md`, this overview, and `THIRD_PARTY_NOTICES.html`.

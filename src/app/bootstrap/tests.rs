@@ -226,14 +226,6 @@ mod tests {
         assert!(service.contains("--audio-engine"));
     }
 
-    #[test]
-    fn packaged_engine_target_owns_the_protected_service() {
-        let target = include_str!("../../../packaging/linux/linux-soundboard-engine.target");
-        if crate::app_meta::BUILD_PROFILE == "stable" {
-            assert!(target.contains("Wants=linux-soundboard-engine.service"));
-        }
-        assert!(target.contains("WantedBy=default.target"));
-    }
 
     #[test]
     fn installation_kind_uses_only_system_and_stable_user_paths() {

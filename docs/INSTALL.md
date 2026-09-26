@@ -121,10 +121,10 @@ Answering `n` leaves your current setup untouched. A non-interactive uninstall
 (`--yes`, or no terminal) never changes your default device on its own; pass
 `--restore-default-source` to opt in or `--keep-current-default-source` to be explicit.
 
-You can inspect this at any time without uninstalling:
+You can inspect the current installation state at any time without uninstalling:
 
 ```bash
-./packaging/linux/install-user.sh snapshot-diff
+./install.sh status
 ```
 
 ---
@@ -311,21 +311,12 @@ sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
 
 ```bash
 git clone https://github.com/germanua/Linux-SoundBoard.git
-cd Linux-SoundBoard/src
+cd Linux-SoundBoard
 cargo build --release
-
-# Install using the user installer, pointing it at the freshly built binary
-cd ..
-./packaging/linux/install-user.sh install ./target/release/linux-soundboard
+./target/release/linux-soundboard
 ```
 
-The installer detects the binary next to the script automatically when run from the repository root.
-
-After every rebuild, run the repair command with the exact new binary before testing the installed service:
-
-```bash
-./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
-```
+Source builds are intended for direct development testing. Use the signed AppImage installer for a persistent user installation and managed audio-engine service.
 
 Running `./target/release/linux-soundboard` directly is supported for development. If the installed engine is older or otherwise incompatible, the UI stops that service and uses its own in-process engine so that only one process owns the virtual microphone.
 

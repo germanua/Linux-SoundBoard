@@ -16,7 +16,7 @@
 *.html text eol=lf
 *.txt text eol=lf
 
-# Generated from Cargo.lock by packaging/generate-third-party-notices.sh
+# Generated from Cargo.lock with cargo-about
 THIRD_PARTY_NOTICES.html text eol=lf linguist-generated=true
 
 # Denote binary files

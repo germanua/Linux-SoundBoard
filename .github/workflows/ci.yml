@@ -106,95 +106,42 @@ jobs:
             exit 1
           fi
 
-  metadata-validators:
-    name: Package metadata validation
+  public-surface:
+    name: Public source boundary
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Install validators
+      - name: Install ShellCheck
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            desktop-file-utils \
-            appstream \
-            minisign \
-            shellcheck
+          sudo apt-get install -y --no-install-recommends shellcheck
 
-      - name: Validate desktop files
-        run: |
-          desktop-file-validate packaging/flatpak/com.linuxsoundboard.app.desktop
-          desktop-file-validate packaging/debian/linux-soundboard.desktop
-          desktop-file-validate packaging/rpm/linux-soundboard.desktop
-
-      - name: Validate AppStream metainfo
-        run: appstreamcli validate --explain --no-net packaging/flatpak/com.linuxsoundboard.app.metainfo.xml
-
-      - name: ShellCheck installer scripts
+      - name: Check public installer scripts
         run: |
           shellcheck bootstrap-install.sh
           shellcheck -e SC1091 install.sh
-          shellcheck packaging/common.sh
-          shellcheck -e SC1090,SC2034,SC2317 packaging/profile.sh
-          shellcheck packaging/validate-metadata.sh
-          shellcheck -e SC2016 packaging/smoke-check.sh
-          shellcheck -e SC1091,SC2016,SC2034,SC2317,SC2329 packaging/build-release.sh
-          shellcheck -s bash -e SC1091,SC2016,SC2034,SC2154,SC2317,SC2329 packaging/release/*.sh
-          shellcheck -e SC1090,SC1091,SC2034 packaging/linux/app-meta.sh
-          shellcheck -e SC1090,SC1091 packaging/linux/install-user.sh
-          shellcheck -e SC1091 packaging/linux/install-swhkd-helper.sh
-          shellcheck packaging/linux/build-swhkd-locked.sh
-          shellcheck -e SC1091,SC2016 packaging/linux/package-appimage.sh
-          shellcheck -e SC1091 packaging/linux/package-tarball.sh
-          shellcheck -e SC1091 packaging/docker/build-appimage.sh
-          shellcheck packaging/docker/build-deb-appimage.sh
-          shellcheck packaging/linux/appimage-preflight-check.sh
-          shellcheck -e SC1091 packaging/debian/package-deb.sh
-          shellcheck -e SC1091 packaging/rpm/package-rpm.sh
-          shellcheck packaging/generate-checksums.sh
-          python3 -m py_compile packaging/generate-update-metadata.py
-          shellcheck packaging/generate-third-party-notices.sh
-          shellcheck -e SC1090,SC1091,SC2016,SC2034,SC2317,SC2329 packaging/tests/swhkd-privilege-boundary-test.sh
-          shellcheck -e SC1090,SC1091,SC2016 packaging/tests/appimage-tool-anchors-test.sh
-          shellcheck -e SC2016 packaging/tests/install-security-policy-test.sh
-          shellcheck packaging/tests/install-user-lifecycle-test.sh
-          shellcheck -e SC1090,SC1091,SC2034 packaging/tests/install-wrapper-lifecycle-test.sh
-          shellcheck packaging/tests/bootstrap-security-test.sh
-          shellcheck packaging/tests/update-metadata-test.sh
-          shellcheck packaging/tests/source-file-size-test.sh
-          shellcheck -e SC1090 packaging/tests/appimage-host-compatibility-test.sh
 
-      - name: Validate systemd service file
+      - name: Reject private or packaging trees
         run: |
+          forbidden='^(packaging/|dev/|dist-dev/|\.commandcode/|\.github/workflows/private-dev\.yml$)'
+          if git ls-files | grep -E "$forbidden"; then
+            echo "ERROR: private build/release tooling is tracked in the public tree"
+            exit 1
+          fi
 
-
-          sudo install -Dm755 /bin/true /usr/local/bin/linux-soundboard
-          systemd-analyze verify packaging/linux/linux-soundboard-engine.service packaging/linux/linux-soundboard-engine.target
-
-      - name: Check desktop Icon= matches installed icon name
+      - name: Reject oversized maintained source files
         run: |
-          for desktop in packaging/flatpak/com.linuxsoundboard.app.desktop packaging/debian/linux-soundboard.desktop packaging/rpm/linux-soundboard.desktop; do
-            icon=$(grep "^Icon=" "$desktop" | cut -d= -f2)
-            if [ "$icon" != "com.linuxsoundboard.app" ]; then
-              echo "ERROR: $desktop uses Icon=$icon, expected Icon=com.linuxsoundboard.app"
-              exit 1
+          failed=0
+          while IFS= read -r file; do
+            lines=$(wc -l < "$file")
+            if [ "$lines" -gt 2000 ]; then
+              echo "ERROR: $file has $lines lines"
+              failed=1
             fi
-          done
-          echo "All desktop Icon= values correct"
-
-      - name: Cross-format metadata consistency
-        run: bash packaging/validate-metadata.sh
-
-      - name: Packaging smoke check
-        run: bash packaging/smoke-check.sh
-
-      - name: Packaging regression tests
-        run: |
-          for test in packaging/tests/*.sh; do
-            echo "==> $test"
-            bash "$test"
-          done
+          done < <(git ls-files '*.rs' '*.sh' '*.py' '*.css' '*.yml' '*.yaml' '*.toml')
+          exit "$failed"
 
   deps:
     name: Unused dependencies
@@ -266,8 +213,6 @@ jobs:
       - name: Audit the application lockfile
         run: cargo audit
 
-      - name: Audit the pinned swhkd lockfile
-        run: cargo audit --file packaging/linux/swhkd-Cargo.lock.pinned
 
       - name: Install cargo-deny
         run: |
@@ -277,15 +222,6 @@ jobs:
       - name: Enforce dependency policy
         run: cargo +1.88.0 deny check
 
-      - name: Verify the embedded swhkd build digests
-        run: |
-          for file in packaging/linux/build-swhkd-locked.sh packaging/linux/swhkd-Cargo.lock.pinned; do
-            digest="$(sha256sum "$file" | awk '{print $1}')"
-            if ! grep -qF "$digest" packaging/linux/install-swhkd-helper.sh; then
-              echo "ERROR: install-swhkd-helper.sh does not embed the digest of $file"
-              exit 1
-            fi
-          done
 
   license-notices:
     name: Third-party license notices
@@ -317,5 +253,6 @@ jobs:
 
       - name: Verify generated notices
         run: |
-          packaging/generate-third-party-notices.sh
+          cargo about generate --config about.toml --manifest-path Cargo.toml --workspace --locked --fail --output-file THIRD_PARTY_NOTICES.html about.hbs
+          sed -i 's/[[:blank:]]\+$//' THIRD_PARTY_NOTICES.html
           git diff --exit-code -- THIRD_PARTY_NOTICES.html

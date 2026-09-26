@@ -370,7 +370,6 @@ local_user_installer() {
     fi
 
     for candidate in \
-        "$script_dir/packaging/linux/install-user.sh" \
         "$script_dir/install-user.sh" \
         "$INSTALL_ROOT/install-user.sh"; do
         if [[ -f "$candidate" ]]; then

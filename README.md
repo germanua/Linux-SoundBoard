@@ -287,7 +287,7 @@ sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
 git clone https://github.com/germanua/Linux-SoundBoard.git
 cd Linux-SoundBoard
 cargo build --release
-./packaging/linux/install-user.sh install ./target/release/linux-soundboard
+./target/release/linux-soundboard
 ```
 
 See [docs/INSTALL.md](docs/INSTALL.md) for the full source-build notes.

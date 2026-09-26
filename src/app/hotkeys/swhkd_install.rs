@@ -6,7 +6,6 @@ use log::{info, warn};
 
 pub const SWHKD_UPSTREAM_INSTALL_URL: &str =
     "https://github.com/waycrate/swhkd/blob/main/INSTALL.md";
-const SWHKD_UPSTREAM_COMMIT: &str = "cbbfc4a981aa263155e3216a42549c9a3ae645fe";
 pub const INSTALLED_SWHKD_HELPER_PATH: &str =
     "/usr/libexec/linux-soundboard/install-swhkd-helper.sh";
 pub const MANAGED_SWHKD_BINARY: &str = "/usr/local/libexec/linux-soundboard/swhkd";
@@ -165,54 +164,12 @@ pub fn manual_swhkd_install_commands() -> String {
     manual_install_commands_for(detect_distro_family())
 }
 
-fn manual_install_commands_for(distro: DistroFamily) -> String {
-    let polkit_install = match distro {
-        DistroFamily::Arch => "sudo pacman -Syu --needed polkit",
-        DistroFamily::Debian => "sudo apt-get update && sudo apt-get install -y policykit-1",
-        DistroFamily::Fedora => "sudo dnf install -y polkit",
-        DistroFamily::OpenSuse => "sudo zypper --non-interactive install polkit",
-        DistroFamily::Other => {
-            return format!(
-            "# Unsupported distro family for built-in command recipe.\n# Follow manual guide:\n{}",
-            SWHKD_UPSTREAM_INSTALL_URL
-        )
-        }
-    };
-
-    let helper_distro = distro_id(distro);
-    let build_deps_install = match distro {
-        DistroFamily::Arch => "sudo pacman -Syu --needed git make rust cargo pkgconf systemd base-devel",
-        DistroFamily::Debian => {
-            "sudo apt-get update && sudo apt-get install -y git make build-essential pkg-config libudev-dev cargo rustc"
-        }
-        DistroFamily::Fedora => {
-            "sudo dnf install -y git make gcc cargo rust pkgconf-pkg-config systemd-devel"
-        }
-        DistroFamily::OpenSuse => {
-            "sudo zypper --non-interactive install git make gcc cargo rust pkg-config systemd-devel"
-        }
-        DistroFamily::Other => {
-            return format!(
-                "# Unsupported distro family for built-in command recipe.\n# Follow manual guide:\n{}",
-                SWHKD_UPSTREAM_INSTALL_URL
-            )
-        }
-    };
-
+fn manual_install_commands_for(_distro: DistroFamily) -> String {
     format!(
-        "# swhkd captures every keyboard on this machine; it is meant for single-seat systems.\n\
-# The root-side helper builds it at the pinned upstream commit {SWHKD_UPSTREAM_COMMIT}.\n\n\
-# 1) Install pkexec (polkit)\n{}\n\n\
-# 2) Install build dependencies\n{}\n\n\
-# 3) Install swhkd with the root-side helper (run from a repository checkout)\n\
-sudo install -d -m755 /usr/libexec/linux-soundboard\n\
-sudo install -Dm755 packaging/linux/install-swhkd-helper.sh packaging/linux/build-swhkd-locked.sh /usr/libexec/linux-soundboard/\n\
-sudo install -Dm644 packaging/linux/swhkd-Cargo.lock.pinned /usr/libexec/linux-soundboard/\n\
-sudo /usr/libexec/linux-soundboard/install-swhkd-helper.sh --distro {helper_distro}\n\n\
-# 4) Load the uinput module swhkd needs, now and at every boot\n\
-sudo modprobe uinput\n\
-echo uinput | sudo tee /etc/modules-load.d/uinput.conf\n",
-        polkit_install, build_deps_install
+        "Repair the authenticated stable installation and its managed Wayland hotkey helper with:\n\
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- fix\n\n\
+Upstream swhkd installation reference:\n{}",
+        SWHKD_UPSTREAM_INSTALL_URL
     )
 }
 
@@ -551,7 +508,7 @@ mod tests {
         distro_id, ensure_swhkd_binary_is_safe, first_trusted_helper, helper_is_privilege_safe,
         helper_is_privilege_safe_with_owner, manual_install_commands_for,
         should_offer_swhkd_install, DistroFamily, SwhkdInstallState, INSTALLED_SWHKD_HELPER_PATH,
-        MANAGED_SWHKD_BINARY, MANAGED_SWHKS_BINARY,
+        MANAGED_SWHKD_BINARY, MANAGED_SWHKS_BINARY, SWHKD_UPSTREAM_INSTALL_URL,
     };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -651,22 +608,12 @@ mod tests {
     }
 
     #[test]
-    fn manual_install_commands_use_only_the_managed_path() {
-        let debian = manual_install_commands_for(DistroFamily::Debian);
-        assert!(debian.contains("policykit-1"));
-        assert!(debian.contains("cbbfc4a981aa263155e3216a42549c9a3ae645fe"));
-        assert!(!debian.contains("git clone"));
-        assert!(debian.contains("build-swhkd-locked.sh"));
-        assert!(!debian.contains("make NO_RFKILL_SW_SUPPORT"));
-        assert!(debian.contains("single-seat"));
-        assert!(debian
-            .contains("/usr/libexec/linux-soundboard/install-swhkd-helper.sh --distro debian"));
-        assert!(!debian.contains("target/release"));
-        assert!(!debian.contains("chmod u+s"));
-        assert!(!debian.contains("/usr/bin/swhkd"));
-
-        let arch = manual_install_commands_for(DistroFamily::Arch);
-        assert!(arch.contains("pacman -Syu --needed polkit"));
+    fn manual_install_commands_use_the_authenticated_stable_repair_path() {
+        let commands = manual_install_commands_for(DistroFamily::Debian);
+        assert!(commands.contains("bootstrap-install.sh | bash -s -- fix"));
+        assert!(commands.contains(SWHKD_UPSTREAM_INSTALL_URL));
+        assert!(!commands.contains("build-swhkd-locked.sh"));
+        assert!(!commands.contains("chmod u+s"));
     }
 
     #[test]

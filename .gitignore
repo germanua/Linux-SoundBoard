@@ -3,16 +3,9 @@
 /src/target/
 /dist/
 /debian/
+/packaging/
 
-# Packaging build directories
-/rpmbuild/
-/flatpak-build/
-/flatpak-repo/
-/.flatpak-builder/
-/packaging/aur/linux-soundboard-git/pkg/
-/packaging/aur/linux-soundboard-git/src/
-/packaging/aur/linux-soundboard-git/linux-soundboard/
-/packaging/aur/linux-soundboard-git/*.pkg.tar.*
+# Private release/build tooling
 
 # Generated package artifacts
 *.AppImage

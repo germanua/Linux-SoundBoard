@@ -282,7 +282,7 @@ fn check_engine() {
             );
             if !compatible {
                 println!(
-                    "  repair           : ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard"
+                    "  repair           : curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- fix"
                 );
             }
         }

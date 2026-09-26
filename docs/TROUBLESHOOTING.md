@@ -238,7 +238,7 @@ Both go through the same runtime `Linux_Soundboard_Mic`, so a partial failure us
 
 3. If `compatibility` is `INCOMPATIBLE`, repair the installed binary and service:
    ```bash
-   ./packaging/linux/install-user.sh repair ./target/release/linux-soundboard
+   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- fix
    ```
 
 During a v2.0→v2.1 package upgrade, `/usr/bin/linux-soundboard` can be replaced while the already-running engine still executes the old mapped binary. Version 2.1.1 stops that stale engine, reloads and restarts the user service once, and connects only after protocol, schema, and app version all match. If the restarted process is still stale, it is stopped before one transient local fallback starts. Do not run a second `--audio-engine` process manually.
