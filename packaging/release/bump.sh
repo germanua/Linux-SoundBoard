@@ -216,14 +216,37 @@ bump_appimage_doc() {
     [[ "$current_count" -eq 0 ]] || bump_doc_filenames "$rel_path" "$current" "$replacement" "$current_count"
 }
 
+bump_latest_public_version() {
+    local rel_path="$1"
+    local file="$REPO_ROOT/$rel_path"
+    local marker="**Latest public release: "
+    local found tmp
+
+    found="$(grep -cF "$marker" "$file" || true)"
+    [[ "$found" -eq 1 ]] || fail "$rel_path: expected exactly one latest-public-release marker, found $found"
+    track_bumped "$rel_path"
+    tmp="$(bump_tmp "$file")"
+    awk -v version="$NEW_VERSION" '''{
+        if (index($0, "**Latest public release: ") > 0) {
+            sub(/\*\*Latest public release: [0-9]+\.[0-9]+\.[0-9]+\.\*\*/, "**Latest public release: " version ".**")
+        }
+        print
+    }''' "$file" >"$tmp"
+    replace_file "$file" "$tmp"
+    grep -Fq "**Latest public release: $NEW_VERSION.**" "$file" \
+        || fail "$rel_path: failed to update latest public release to $NEW_VERSION"
+}
+
 bump_docs() {
     local old_deb="${APP_BINARY}_${OLD_VERSION}-${OLD_PKGREL}_amd64.deb"
     local new_deb="${APP_BINARY}_${NEW_VERSION}-${PKGREL}_amd64.deb"
     local old_rpm="$APP_BINARY-$OLD_VERSION-$OLD_PKGREL.x86_64.rpm"
     local new_rpm="$APP_BINARY-$NEW_VERSION-$PKGREL.x86_64.rpm"
 
+    bump_latest_public_version README.md
     bump_appimage_doc README.md 3
 
+    bump_latest_public_version docs/INSTALL.md
     bump_appimage_doc docs/INSTALL.md 3
 
     bump_doc_filenames docs/INSTALL.md \

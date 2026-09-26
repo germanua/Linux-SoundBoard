@@ -2,7 +2,7 @@
 
 ## Release format
 
-**Latest public release: 2.4.4.** The next public release is being prepared around a single AppImage distribution path. No new Arch/AUR, Debian `.deb`, RPM, or binary-tarball artifact is planned for that release unless the policy changes before publication. Historical releases remain unchanged.
+**Latest public release: 2.4.4.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Arch/AUR, Debian `.deb`, RPM, and binary-tarball artifacts from 2.4.4 and earlier remain historical releases.
 
 The AppImage contains the application plus the per-user installer used to configure the persistent audio engine, desktop entry, icons, and virtual-microphone integration.
 

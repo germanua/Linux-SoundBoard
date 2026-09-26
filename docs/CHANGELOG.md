@@ -17,7 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Changed
 
-- **Next-release distribution:** The development line after public 2.4.4 is being prepared as an x86_64 AppImage-only release. Legacy AUR/DEB/RPM/tarball files remain for history and migration support but are not planned public artifacts for the next release. The current AppImage baseline requires glibc 2.39 or newer.
+- **AppImage-only distribution:** This release moves the supported public distribution path to x86_64 AppImage. Legacy AUR/DEB/RPM/tarball files remain for history and migration support but are not release artifacts for this version. The AppImage baseline requires glibc 2.39 or newer.
 - **Now Playing layout:** Per-playback controls live with the sound library rather than inside the global transport bar, preserving the Tabs/Folders sidebar and using the library width more efficiently.
 - **Shared-hotkey selection:** Shared hotkeys skip sounds that already have a live voice instead of immediately selecting an already-playing member again.
 - **Private application state:** Configuration, SQLite data, installer state, snapshots, runtime logs, command captures, and updater staging use owner-only paths and permissions.

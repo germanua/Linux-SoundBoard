@@ -73,7 +73,7 @@ can remain available after the window closes.
 
 ## Install
 
-**Latest public release: 2.4.4.** The development branch is preparing the next public release around a single AppImage distribution path. Native packages from 2.4.4 and earlier remain historical artifacts; the next public release is planned to ship AppImage only unless that policy changes before release.
+**Latest public release: 2.4.4.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Native packages from 2.4.4 and earlier remain historical artifacts.
 
 The AppImage being prepared for the next public release is **x86_64** and requires **glibc 2.39 or newer**. That covers Ubuntu 24.04/26.04, Debian 13, Fedora 40+, current Arch/CachyOS/EndeavourOS, and openSUSE Leap 16/Tumbleweed. Ubuntu 22.04, Debian 12, and openSUSE Leap 15.6 are below the prepared AppImage ABI baseline and are rejected before installation instead of failing later in the dynamic loader.
 
