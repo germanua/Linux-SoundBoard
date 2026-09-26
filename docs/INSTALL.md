@@ -1,363 +1,255 @@
-# Installation Guide
+# Installation
 
-## Release format
+[Documentation](README.md) · [Getting started](GETTING_STARTED.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
-**Latest public release: 2.4.7.** The project is transitioning new releases to a single x86_64 AppImage distribution path. Arch/AUR, Debian `.deb`, RPM, and binary-tarball artifacts from 2.4.4 and earlier remain historical releases.
+This guide describes the AppImage workflow in this source revision. The
+[official Releases page](https://github.com/germanua/Linux-SoundBoard/releases)
+is authoritative for published versions and files. Native packages and tarballs
+from 2.4.4 and earlier are historical distributions. Features in a development
+revision are not a promise that the public release already contains them.
 
-The AppImage contains the application plus the per-user installer used to configure the persistent audio engine, desktop entry, icons, and virtual-microphone integration.
+**On this page:** [Requirements](#requirements) · [Install](#install-with-the-verified-bootstrap) ·
+[Verify](#verify-a-download) · [Update](#update-or-repair) · [Remove](#uninstall) ·
+[Hotkeys](#wayland-and-global-hotkeys) · [Source build](#build-from-source)
 
-### AppImage compatibility
+## Requirements
 
-The AppImage being prepared for the next public release is built for **x86_64** and requires **glibc 2.39 or newer**. Tested compatible distro baselines include Ubuntu 24.04/26.04, Debian 13, Fedora 40+, current Arch-family distributions, and openSUSE Leap 16/Tumbleweed. Ubuntu 22.04, Debian 12, and openSUSE Leap 15.6 have older glibc versions and are not compatible with the prepared AppImage.
+| Requirement | Current AppImage build |
+| --- | --- |
+| Architecture | x86_64 |
+| C library | glibc 2.39 or newer; checked by the installer and AppImage preflight |
+| Desktop | A graphical Wayland or X11 session |
+| Audio | PipeWire, its PulseAudio compatibility service, and WirePlumber |
+| Persistent engine | A working systemd user session |
+| AppImage mounting | Host FUSE support; see [FUSE troubleshooting](TROUBLESHOOTING.md#appimage-fails-with-a-fuse-error) |
 
-The prepared authenticated installer and AppImage runtime preflight both check this ABI requirement before the application is launched.
+Ubuntu 24.04, Debian 13, and newer distributions can meet the glibc baseline;
+meeting it alone is not a complete compatibility test. Older hosts such as Ubuntu
+22.04 or Debian 12 do not meet that baseline. Check your host with `ldd --version`.
+Do not replace a distribution's glibc manually to make an AppImage run.
 
-## Release download verification
-
-`bootstrap-install.sh` first verifies the release-published `install.sh` through `SHA256SUMS.txt.minisig` and the pinned [`release.pub`](../release.pub) key. The authenticated `install.sh` then verifies the AppImage through the same signed manifest. If Minisign is not installed, both scripts use the pinned verifier bootstrap. Missing assets, invalid signatures, missing manifest entries, and checksum mismatches stop the install.
-
-To verify a downloaded AppImage before running it:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh \
-  | bash -s -- verify ./linux-soundboard-2.4.7-x86_64.AppImage
-```
-
-For an older release, name its tag with `--version vX.Y.Z`.
-
-## Quick install — one command
+## Install with the verified bootstrap
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
 ```
 
-For current releases, **Automatic** means AppImage. The installer:
+The bootstrap authenticates the release-published installer using the pinned
+release key and signed checksum manifest. That installer verifies the AppImage,
+checks the host, and installs it under your account. Missing signing assets,
+invalid signatures, or checksum mismatches stop installation.
 
-1. reads the latest GitHub release,
-2. verifies the signed release installer and executes only that authenticated copy,
-3. verifies the signed checksum manifest and downloads the x86_64 AppImage after verifying the host ABI,
-4. checks for an older native package that would shadow the user installation,
-5. extracts the bundled installer and installs the AppImage under `~/.local/opt/linux-soundboard/`, and
-6. configures the user audio engine and, on Wayland, the hotkey helper.
+This command downloads and executes the bootstrap itself from the official
+repository over HTTPS. The signature checks authenticate the subsequent release
+assets; they are not a signature check of that initial shell script.
 
-The AppImage itself stays under your user account. On Wayland, the one-command installer copies the already authenticated release into a root-owned temporary location, verifies that copy against the signed release checksum, and provisions the fixed helper under `/usr/libexec/linux-soundboard`; this step may ask for `sudo`. Removing a legacy native package also requires the system package manager.
+The AppImage is installed in `~/.local/opt/linux-soundboard/`. On Wayland, setup
+of the fixed root-owned hotkey helper may request `sudo`. Removing a legacy
+system package also requires the package manager's administrator permission.
 
-### Existing AUR / DEB / RPM installations
+These are public-profile commands. Use the dedicated development installer for
+a private development profile; its paths, services, and signing channel differ.
 
-Native packages from 2.4.4 and earlier may still be present under `/usr/bin`. That binary takes precedence over the user-installed AppImage and can cause the GUI and persistent engine to run different versions. `install.sh` detects this situation and offers to remove the old package before installing the prepared AppImage.
+### Existing AUR, DEB, or RPM installation
 
-The repository retains legacy AUR/DEB/RPM packaging files for maintenance and migration support, but they are **not planned artifacts for the next public release** unless that policy changes before publication.
+An old `/usr/bin/linux-soundboard` can shadow the per-user installation and leave
+the GUI and engine on different versions. The installer detects a conflicting
+native package and offers removal before installing the AppImage. Read that
+prompt before accepting. Historical packages remain available where published;
+this guide does not present them as current release formats.
 
-### AppImage from the Releases page
+## Verify a download
 
-```bash
-chmod +x linux-soundboard-2.4.7-x86_64.AppImage
-./linux-soundboard-2.4.7-x86_64.AppImage
-```
-
-On first direct launch:
-
-- **Install for persistent virtual mic** copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard`, registers the desktop entry and user service, and connects the GUI to the matching service engine.
-- **Run temporarily** keeps everything scoped to that launch and restores eligible routing state during shutdown.
-- **Exit** changes nothing.
-
-Once installed, opening a newer downloaded AppImage updates the installed copy and restarts the matching user engine. The version marker prevents an older downloaded AppImage from silently downgrading a newer installation.
-
-### Command-line operations
+Replace `VERSION` with the version in the downloaded filename:
 
 ```bash
-./install.sh install                    # current release; AppImage
-./install.sh install --method appimage  # explicit AppImage path
-./install.sh install --version vX.Y.Z   # install a published AppImage release
-./install.sh versions                   # list published releases
-./install.sh verify ./DOWNLOADED_FILE   # verify a release download
-./install.sh fix                        # guided repair
-./install.sh report --output report.txt # bug report file
-./install.sh status
-./install.sh uninstall --yes
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh   | bash -s -- verify ./linux-soundboard-VERSION-x86_64.AppImage
 ```
 
-`--method tarball` and `--method native` remain accepted only for compatibility with historical releases/workflows. They are not current release formats.
+For a specific older release, append `--version vX.Y.Z`. Verification requires
+that the selected release provides the manifest and signing assets expected by
+the installer. An older release without them cannot be authenticated by this
+workflow; a plain checksum alone does not establish its publisher.
 
-## Two scripts, different jobs
+The bootstrap obtains the current release's authenticated installer first,
+including when you ask that installer to work with another version.
 
-| Script            | Who runs it                                                               | What it does                                                                        |
-| ----------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `bootstrap-install.sh` | You, via the one-liner above | Verifies the release-published installer before executing it |
-| `install.sh` | Called by the bootstrap or run from a verified release asset | The menu: install, install an older release, uninstall, guided repair, bug report, status. Handles the package manager and swhkd |
-| `install-user.sh` | Called by `install.sh`, or by you after a manual download or source build | Configures per-user install state: engine service, desktop entry, icons, legacy audio cleanup, and the audio snapshots |
+## Launch a downloaded AppImage
 
-`install-user.sh` is the low-level tool. `install.sh` is the smart wrapper that calls it when needed and handles the rest (package manager, swhkd, PipeWire services).
-
-For a full uninstall through the same smart wrapper:
+After verification:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- uninstall --yes
+chmod +x linux-soundboard-VERSION-x86_64.AppImage
+./linux-soundboard-VERSION-x86_64.AppImage
 ```
 
-This removes managed per-user files first, then removes the native `linux-soundboard` package when one is installed. Add `--keep-package` to remove only the per-user setup.
+| Choice | Result |
+| --- | --- |
+| Install for persistent virtual mic | Copies the AppImage into the user installation and configures its desktop entry and matching engine service. |
+| Run temporarily | Runs an in-process engine for this launch; eligible routing state is restored when it shuts down. |
+| Exit | Leaves installation and audio state unchanged. |
 
-### What uninstall does to your audio setup
+A direct download does not provision the privileged Wayland helper by itself.
+Use the verified bootstrap or guided repair if the helper is missing.
 
-Before it changes anything, an install records a snapshot of your audio state:
-the default microphone and speakers, the engine service state, and a checksum of
-every PipeWire, WirePlumber, and PulseAudio config file it can see. Snapshots live
-in `~/.local/state/linux-soundboard/install-user/snapshots/`. The newest ten are
-kept, plus the very first one — that is the only record of your setup before the
-app was ever installed, and it is what uninstalling compares against.
-
-Uninstalling prints what changed since that snapshot and asks **once** whether to
-put it back:
-
-```
-Changes since install (2026-07-28T20:15:40+03:00):
-  default_source_name: linuxsoundboard.virtual_mic -> alsa_input.pci-0000_12_00.6.analog-stereo
-  engine_unit:         active/enabled -> inactive/disabled
-
-Restore the audio setup recorded before Linux Soundboard was installed? [y/N]
-```
-
-Answering `n` leaves your current setup untouched. A non-interactive uninstall
-(`--yes`, or no terminal) never changes your default device on its own; pass
-`--restore-default-source` to opt in or `--keep-current-default-source` to be explicit.
-
-You can inspect the current installation state at any time without uninstalling:
+For an installed AppImage, launch from the application menu or use:
 
 ```bash
-./install.sh status
+"$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
----
+The installer does not guarantee a `linux-soundboard` command on `PATH`.
 
-## Historical tarball install (2.4.4 and older)
+## Update or repair
 
-For source builds or when you want to manage the download yourself, verify the
-release file with the command above before extracting it.
+Opening a newer downloaded AppImage updates an existing user installation and
+restarts the matching engine. The installed version marker prevents silent
+downgrades from an older downloaded AppImage.
 
-### Step-by-step install
+For guided repair:
 
 ```bash
-# 1. Download the latest release tarball from the Releases page
-wget https://github.com/germanua/Linux-SoundBoard/releases/latest/download/linux-soundboard-2.4.4-linux-x86_64.tar.gz
-
-# 2. Extract it
-tar -xzf linux-soundboard-2.4.4-linux-x86_64.tar.gz
-cd linux-soundboard-2.4.4-linux-x86_64
-
-# 3. Run the installer — an interactive menu guides you through the install
-./install-user.sh
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh   | bash -s -- fix
 ```
 
-Or install non-interactively, skipping the menu:
-
-```bash
-./install-user.sh install
-```
-
-### What the installer configures
-
-| Item                | Path                                                          | Effect                                              |
-| ------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
-| Binary              | `~/.local/opt/linux-soundboard/linux-soundboard`              | The main executable                                 |
-| Desktop entry       | `~/.local/share/applications/com.linuxsoundboard.app.desktop` | App appears in launcher                             |
-| Icons               | `~/.local/share/icons/hicolor/*/apps/{com.linuxsoundboard.app,linux-soundboard}.png` | Icon set for all sizes (both names installed) |
-| Engine service      | `~/.config/systemd/user/linux-soundboard-engine.service`      | Starts the audio engine at login                    |
-| Legacy cleanup      | Old PipeWire/PulseAudio/WirePlumber soundboard routing files  | Disables obsolete persistent virtual mic setup      |
-| Microphone routing  | App setting in `~/.config/linux-soundboard/config.json`       | Routes recording apps while leaving system defaults alone by default |
-| Settings            | `~/.config/linux-soundboard/config.json`                      | Application settings only                           |
-| Sound library       | `~/.config/linux-soundboard/library.sqlite3`                  | Scanned folders, sounds, tabs, and hotkey bindings   |
-
-The engine creates `Linux_Soundboard_Mic` at runtime while it is running. It uses low PipeWire priority, unmutes the virtual mic on registration, and claims the system default mic so recording apps use it automatically. Switch to **Manual** routing if you prefer to manage the default mic yourself.
+Repair can change the user service, hotkey helper, and audio-service state.
+Finish active calls or recordings before running it. For inspection only, use
+`status` instead of `fix`.
 
 ### Installer commands
 
-```bash
-# Full-system wrapper commands
-./install.sh repair
-./install.sh status
-./install.sh uninstall --yes
-./install.sh uninstall --yes --keep-package
+The commands below assume `install.sh` is an already authenticated release asset.
+You can also pass their arguments through the bootstrap as above.
 
-# Interactive menu (runs automatically when called with no arguments in a terminal)
-./install-user.sh
+| Command | Purpose |
+| --- | --- |
+| `./install.sh install` | Install the current AppImage release. |
+| `./install.sh install --version vX.Y.Z` | Select a published version. |
+| `./install.sh versions` | List published versions. |
+| `./install.sh verify FILE --version vX.Y.Z` | Check a downloaded release file. |
+| `./install.sh status` | Inspect installation state. |
+| `./install.sh fix` | Run guided repair. |
+| `./install.sh report --output report.txt` | Collect a local bug report. |
+| `./install.sh uninstall --yes --keep-data` | Remove managed installation files and preserve library/configuration data. |
 
-# Install, pointing to a specific binary
-./install-user.sh install /path/to/linux-soundboard
+`bootstrap-install.sh` authenticates the release installer; `install.sh` manages
+the workflow; the bundled `install-user.sh` manages per-user installation files.
+Public source snapshots need not include private release-packaging tooling.
 
-# Re-apply system configuration without touching library data
-./install-user.sh repair
+## Installed files and audio behavior
 
-# Show what is currently installed and service status
-./install-user.sh status
+These paths assume default XDG locations and the ordinary public profile.
 
-# Uninstall with interactive prompt about mic default restoration
-./install-user.sh remove
+| Item | Location |
+| --- | --- |
+| Application | `~/.local/opt/linux-soundboard/linux-soundboard` |
+| Desktop entry | `~/.local/share/applications/com.linuxsoundboard.app.desktop` |
+| Application icons | `~/.local/share/icons/hicolor/` |
+| User engine unit | `~/.config/systemd/user/linux-soundboard-engine.service` |
+| Settings | `~/.config/linux-soundboard/config.json` |
+| Library, folders, tabs, hotkeys | `~/.config/linux-soundboard/library.sqlite3` |
+| Installation snapshots | `~/.local/state/linux-soundboard/install-user/snapshots/` |
 
-# Uninstall without any prompts, keep library/config data
-./install-user.sh remove --yes --keep-data
+The engine creates **Linux_Soundboard_Mic** while running. **Default** microphone
+routing in the ordinary profile claims the system default input; **Manual**
+leaves that choice to you. Pick the virtual microphone explicitly in the target
+app when needed. See [Getting started](GETTING_STARTED.md).
 
-# Uninstall and restore the microphone that was default before install
-./install-user.sh remove --yes --restore-default-source
+## Uninstall
 
-# Uninstall without restoring the previous default microphone
-./install-user.sh remove --yes --keep-current-default-source
-```
-
----
-
-## Legacy native packages
-
-Arch/AUR, Debian `.deb`, and RPM packages were public release formats through 2.4.4. They are retained in the repository for history and migration support, but the next public release is planned as AppImage-only.
-
-If one is installed, remove it before using the prepared AppImage so `/usr/bin/linux-soundboard` does not shadow `~/.local/opt/linux-soundboard/linux-soundboard`. The top-level `install.sh` can detect and offer to remove these packages automatically.
-
-For development from source, distro-specific build dependencies are still documented in the source-build section below; dropping native release packages does not drop support for those distributions.
-
-## AppImage
-
-The AppImage can install itself or run temporarily:
+To remove managed files while preserving your settings and library:
 
 ```bash
-chmod +x linux-soundboard-x86_64.AppImage
-./linux-soundboard-x86_64.AppImage
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh   | bash -s -- uninstall --yes --keep-data
 ```
 
-Before touching the audio graph, direct launch offers three choices:
+The wrapper also removes a native `linux-soundboard` package if one is installed.
+Add `--keep-package` if you intend to remove only the per-user setup.
 
-- **Install for persistent virtual mic** copies the AppImage to `~/.local/opt/linux-soundboard/linux-soundboard`, registers the desktop entry and user service through the bundled `install-user.sh`, then connects the GUI to the matching service engine.
-- **Run temporarily** creates no service. The in-process engine restores the previously recorded eligible microphone, or the best eligible hardware/enhancement source, before removing the temporary virtual mic on close.
-- **Exit** changes no configuration, service, or audio-graph state.
+Installation records audio-state snapshots before making changes. Interactive
+removal compares with the original snapshot and asks whether to restore the
+previous default microphone. Non-interactive removal does not opt into changing
+your default device: add `--restore-default-source` to request restoration, or
+`--keep-current-default-source` to explicitly retain the current choice.
 
-The prompt returns on every direct launch until the AppImage is installed. Once a user installation exists, opening a newer downloaded AppImage updates that installed copy automatically, restarts the user engine, and launches the GUI without another choice or any terminal commands. The installed version marker prevents an older downloaded AppImage from silently downgrading a newer installation.
-
-If AppImage reports a FUSE error:
-
-```bash
-# Ubuntu / Debian
-sudo apt install libfuse2
-# Fedora
-sudo dnf install fuse-libs
-# Arch
-sudo pacman -Syu --needed fuse2
-# openSUSE
-sudo zypper install fuse
-```
-
----
+Snapshots are diagnostic records, not a complete backup or rollback of every
+PipeWire or WirePlumber configuration change. Keep your own audio-file and
+profile backups. Do not delete profile data to repair an installation.
 
 ## Wayland and global hotkeys
 
-On Wayland, Linux Soundboard uses `swhkd` for global hotkeys.
-Upstream `swhkd` captures all keyboards visible to the daemon, so Linux Soundboard treats this integration as single-seat only.
+Wayland uses a pinned, managed build of `swhkd`. It captures keyboards directly
+and is treated as single-seat integration. The app checks the daemon before
+launching it and rejects builds with unsafe or uninspectable rfkill support.
 
-**In-app install:** When the app detects that `swhkd` is missing or inactive, a banner appears with an **Install** button. The button only runs the fixed root-owned helper at `/usr/libexec/linux-soundboard/install-swhkd-helper.sh`; it never elevates a helper from an AppImage mount, `$HOME`, or `$PATH`. The one-command installer provisions this helper from the signed AppImage automatically on Wayland. A directly downloaded AppImage does not self-provision it; run the one-command installer or `install.sh repair` first.
+The in-app **Install** button only invokes the fixed root-owned helper at
+`/usr/libexec/linux-soundboard/install-swhkd-helper.sh`. It does not elevate a
+helper from an AppImage mount, your home directory, or `PATH`. The bootstrap
+installation provisions that helper from the authenticated release.
 
-Linux Soundboard checks the installed daemon before starting it. If the binary
-contains swhkd's rfkill support, or cannot be inspected, it is not launched; the
-same banner offers to rebuild and reinstall it safely. This also handles unsafe
-`/usr/bin/swhkd` binaries left behind when Linux Soundboard itself is updated.
+The helper needs PolicyKit (`pkexec`) and network access to the pinned source.
+If `/dev/uinput` cannot be opened, the setup flow offers a specific repair rather
+than requiring unconditional kernel changes. Follow
+[uinput troubleshooting](TROUBLESHOOTING.md#swhkd-fails-with-failed-to-create-uinput-device)
+if that error appears. Do not fix an arbitrary `swhkd` binary with `chmod u+s`.
 
-swhkd grabs your keyboards directly and re-emits the keys it does not claim
-through a virtual keyboard, which the kernel's `uinput` module provides. Almost
-every system already has it — the kernel autoloads the module when `/dev/uinput`
-is opened — and those are left alone. Only where opening the node fails does the
-app offer **Load uinput** alongside **Install without it**, so nothing is loaded
-without you agreeing to it. See
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md#swhkd-fails-with-failed-to-create-uinput-device)
-for the manual commands.
-
-Requirements for the in-app install:
-
-- The root-owned Linux Soundboard helper installed under `/usr/libexec/linux-soundboard`
-- `pkexec` available (provided by `pkexec` on newer Debian/Ubuntu releases, `policykit-1` on older Debian/Ubuntu releases, or `polkit` on Fedora/Arch)
-- Network access to fetch the pinned `swhkd` source commit from GitHub
-
-**Manual install:** from a trusted Linux Soundboard source checkout, install `install-swhkd-helper.sh`, `build-swhkd-locked.sh`, and `swhkd-Cargo.lock.pinned` under `/usr/libexec/linux-soundboard`, then run the helper as root. The helper builds the pinned commit with the pinned lockfile and `no_rfkill` feature; do not promote a PATH-resolved `/usr/bin/swhkd` with `chmod u+s`.
-
-On **X11 and XWayland**, the app uses a native XInput2 backend. No `swhkd` needed.
-
----
+X11 uses the native XInput2 backend. Running through XWayland is an X11 fallback;
+its shortcut behavior still depends on the surrounding desktop session.
 
 ## Build from source
 
-### Install build dependencies
+The current [license](../LICENSE) permits private builds of unmodified source
+for personal noncommercial use, and builds of proposed contributions through
+[CONTRIBUTING.md](../CONTRIBUTING.md). It does not grant redistribution rights.
+Use the terms shipped with the source revision you build.
 
-**Arch:**
+The manifest requires Rust 1.85 or newer, GTK 4.10 or newer, and libadwaita 1.5
+or newer. Your distribution's packaged compiler and libraries must meet the
+locked dependency graph's requirements.
+
+### Build dependencies
+
+**Arch family:**
 
 ```bash
-sudo pacman -Syu --needed cargo rust pkgconf gtk4 libadwaita \
-  libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber clang
+sudo pacman -Syu --needed base-devel rust pkgconf gtk4 libadwaita   libpulse opus libx11 libxi pipewire pipewire-pulse wireplumber clang
 ```
 
 **Debian / Ubuntu:**
 
 ```bash
-sudo apt install build-essential cargo rustc pkg-config \
-  libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev \
-  libpipewire-0.3-dev libx11-dev libxi-dev libclang-dev \
-  pipewire pipewire-pulse wireplumber pulseaudio-utils
+sudo apt install build-essential cargo rustc pkg-config   libgtk-4-dev libadwaita-1-dev libpulse-dev libopus-dev   libpipewire-0.3-dev libx11-dev libxi-dev libclang-dev   pipewire pipewire-pulse wireplumber pulseaudio-utils
 ```
 
 **Fedora:**
 
 ```bash
-sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config \
-  gtk4-devel libadwaita-devel pulseaudio-libs-devel opus-devel \
-  libX11-devel libXi-devel pipewire-devel pipewire pipewire-utils \
-  pipewire-pulseaudio wireplumber pulseaudio-utils
+sudo dnf install cargo rust gcc gcc-c++ clang-devel pkgconf-pkg-config   gtk4-devel libadwaita-devel pulseaudio-libs-devel opus-devel   libX11-devel libXi-devel pipewire-devel pipewire pipewire-utils   pipewire-pulseaudio wireplumber pulseaudio-utils
 ```
 
-### Build and install
+These commands install build prerequisites and may change system packages.
+They are not needed just to run a compatible AppImage.
+
+### Compile and run
 
 ```bash
 git clone https://github.com/germanua/Linux-SoundBoard.git
 cd Linux-SoundBoard
-cargo build --release
+cargo build --release --locked
 ./target/release/linux-soundboard
 ```
 
-Source builds are intended for direct development testing. Use the signed AppImage installer for a persistent user installation and managed audio-engine service.
+For a managed persistent installation, use the signed AppImage. A development
+binary can detect and stop an incompatible installed engine before using its own
+in-process engine, so direct testing can affect your current soundboard session.
 
-Running `./target/release/linux-soundboard` directly is supported for development. If the installed engine is older or otherwise incompatible, the UI stops that service and uses its own in-process engine so that only one process owns the virtual microphone.
+## Historical releases and Flatpak
 
----
+Obtain old tarballs, AUR references, DEB, or RPM files from their specific
+[release tag](https://github.com/germanua/Linux-SoundBoard/releases), then follow
+the instructions and license accompanying that release. Do not combine a
+`releases/latest` download URL with a hardcoded old filename.
 
-## After install: first launch checklist
-
-1. Launch Linux Soundboard from your application menu or run `linux-soundboard` in a terminal.
-2. Confirm PipeWire sees the virtual microphone:
-   ```bash
-   wpctl status -n | grep Soundboard
-   ```
-3. In Discord, OBS, Zoom, or your target application, select **Linux_Soundboard_Mic** as the input device when the app exposes a microphone picker.
-4. Leave **Microphone Routing** set to **Default** (recommended). The soundboard claims the system default mic so apps use it automatically. Switch to **Manual** only if you manage the default mic yourself via pavucontrol or similar.
-5. Add a sound folder or drag audio files into the library.
-6. On Wayland, click **Install** in the hotkey warning banner if global hotkeys are not working.
-
----
-
-## Troubleshooting
-
-If anything goes wrong after install, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
-Common quick fixes:
-
-```bash
-# Re-run system configuration without reinstalling
-./install-user.sh repair
-
-# Manually restart audio services
-systemctl --user restart pipewire wireplumber
-
-# Manually restart the engine service
-systemctl --user restart linux-soundboard-engine.service
-
-# Check engine service logs
-journalctl --user -u linux-soundboard-engine.service -n 50
-```
-
----
-
-## Flatpak
-
-The repository contains Flatpak packaging files, but no Flathub submission is published yet. Flatpak sandboxes also restrict PipeWire and systemd access so `install-user.sh` does not apply inside a Flatpak sandbox.
+Flatpak packaging experiments do not establish that a Flathub release exists or
+that its sandbox supports the same installer and systemd integration. Use the
+published release channels linked by the official project.

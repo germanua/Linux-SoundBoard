@@ -1,31 +1,45 @@
 # Notices
 
-Linux Soundboard
+**Linux Soundboard**
 
 Copyright (c) 2026 germanua. All rights reserved.
 
-## Project license
+## Project materials
 
-Linux Soundboard's original source code, documentation, scripts, screenshots, branding, and original artwork are licensed under the Linux Soundboard Source-Available License 1.0 unless a file states otherwise.
+Original project materials are supplied under the
+**Linux Soundboard Source-Available License 1.1**, except where a file-specific
+notice or independent third-party license applies.
 
-SPDX-style project reference: `LicenseRef-Linux-Soundboard-Source-Available-1.0`
+- Controlling terms: [LICENSE](LICENSE)
+- Custom identifier: `LicenseRef-Linux-Soundboard-Source-Available-1.1`
+- Explanation: [Legal overview](docs/LEGAL.md)
+- Project identity: [Brand and artwork policy](docs/BRANDING.md)
 
-License text: `LICENSE`
+The license permits personal noncommercial use of official unmodified releases,
+private builds of unmodified source, source inspection, contributions through the
+official process, and limited editorial uses. It restricts code reuse,
+redistribution, derivatives, rebranding, and commercial exploitation without
+written permission, subject to its express exceptions.
 
-The license permits personal noncommercial use of official unmodified releases and inspection of publicly available source code. It does not grant permission to reuse Linux Soundboard code, redistribute source or binaries, publish modified or rebranded versions, create distributed derivative applications, or commercially exploit the project without prior written permission.
+It applies to copies actually supplied with it. Earlier copies retain their own
+terms; changing a branch does not relicense previously distributed artifacts.
 
-## Version scope
+## Third-party materials
 
-The Linux Soundboard Source-Available License 1.0 applies to version 2.4.7 and later public releases that include it. Earlier releases remain governed by the license distributed with those releases.
+Libraries, tools, codecs, bindings, bundled native libraries, and upstream-derived
+artwork retain their own licenses and required notices. The project license does
+not restrict rights granted independently for them.
 
-## Third-party components
+- [Third-party overview and asset notices](THIRDPARTY_LICENSES.md)
+- [Generated Rust dependency notices](THIRD_PARTY_NOTICES.html)
 
-Third-party libraries, tools, codecs, wrappers, bindings, bundled native libraries, and third-party-derived UI assets keep their own licenses. They are not relicensed under the Linux Soundboard project license.
+Native libraries bundled in an AppImage also require their applicable license
+notices and corresponding-source arrangements. Rust notices do not cover the
+entire native runtime. AppStream metadata retains its separate CC0 declaration.
 
-The human-readable dependency and asset overview is documented in `THIRDPARTY_LICENSES.md`. Exact generated Rust dependency notices are in `THIRD_PARTY_NOTICES.html`. AppImage releases also retain applicable package copyright/license files for bundled native libraries.
+## Project identity
 
-Nothing in the Linux Soundboard license removes rights granted directly by applicable third-party licenses, including LGPL, MPL, MIT, BSD, ISC, and Apache terms.
-
-## Branding
-
-The names `Linux Soundboard`, `Linux_Soundboard_Mic`, project logos, screenshots, and distinctive project branding are not licensed for use in a way that suggests an unofficial product is official, endorsed, or affiliated with the project owner.
+No registered trademark status is asserted. Limited truthful reference is
+permitted; impersonation and use of protected project branding as another
+product's identity are not authorized. No ownership of third-party icons or the
+Linux name is claimed.

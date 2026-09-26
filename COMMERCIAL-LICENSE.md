@@ -1,38 +1,52 @@
-# Commercial Licensing
+# Commercial licensing
 
-Linux Soundboard is source-available under the **Linux Soundboard Source-Available License 1.0**.
+[Project](README.md) · [Legal overview](docs/LEGAL.md) · [Brand policy](docs/BRANDING.md)
 
-The public project license does not grant commercial-use, redistribution, resale, derivative-publication, sublicensing, or commercial-bundling rights.
+The [public project license](LICENSE) permits personal noncommercial use and
+specified evaluation, contribution, and editorial activities. Other commercial
+use and redistribution require a separate written agreement from germanua.
+This page is a policy summary, not a commercial license or an offer of fixed terms.
 
-## Written permission is required
+## When an agreement is required
 
-A separate written commercial license from the project owner is required before you:
+| Proposed use | Permission to request |
+| --- | --- |
+| Business operations, paid events, client work, or monetized productions using the app | Commercial use. |
+| Resale, app-store distribution, bundles, package feeds, or device preinstallation | Redistribution and, where relevant, commercial use. |
+| A renamed or modified application, port, embedded component, or white-label product | Modification, derivative-work, and distribution rights. |
+| Hosted access, an API, subscription, or managed service using the project | Service and commercial-use rights. |
+| Use of the name, app icon, or protected artwork as a product identity | Separate branding rights. |
 
-- sell or commercially redistribute Linux Soundboard or a modified version;
-- distribute Linux Soundboard through a paid store, bundle, subscription, or package;
-- include Linux Soundboard source code in a commercial product;
-- use Linux Soundboard as part of a paid service, SaaS offering, hosted service, or commercial support package;
-- publish a commercial derivative, rebranded version, or product based on Linux Soundboard code;
-- sublicense Linux Soundboard code or grant redistribution rights to another party.
+Free redistribution still requires permission under the current project license.
+Independent reviews and tutorials, including monetized coverage, have the narrow
+permission in section 4 of [LICENSE](LICENSE). Lawful descriptive references and
+independent third-party rights remain unaffected.
 
-A commercial license may define additional permissions, limits, fees, support terms, distribution channels, or branding rules.
+## What to include in a request
 
-## Official commercial releases
+Contact the maintainer through the
+[official repository](https://github.com/germanua/Linux-SoundBoard) or the contact
+channel published by the [germanua account](https://github.com/germanua).
 
-The project owner may distribute official commercial builds through Steam or other stores under separate store, EULA, or commercial terms.
+1. Identify the person or organization requesting permission.
+2. Describe the app version, components, and intended use.
+3. List modifications, distribution channels, deployment scope, and branding.
+4. Explain whether the offering is paid, advertising-supported, bundled, or hosted.
+5. State any support, update, or service commitments you need.
 
-An official paid release does not grant third parties the right to repackage, resell, redistribute, or create commercial derivatives of the source-available project.
+An agreement may define permitted uses, fees, duration, channels, notices,
+branding, support, updates, and termination. No permission is implied by silence,
+a donation, technical access, or a purchase that does not grant those rights.
+Do not put confidential business information in a public issue.
 
-## Third-party components
+## Official paid releases
 
-A commercial license from the Linux Soundboard project owner can grant rights only in material the project owner is entitled to license. Third-party libraries, codecs, bindings, native shared libraries, tools, and third-party-derived assets remain governed by their own upstream licenses.
+The maintainer may offer official paid releases under separate terms. Buying one
+does not automatically grant source reuse, resale, redistribution, or branding
+rights. The applicable purchase or license agreement defines those permissions.
 
-See `THIRDPARTY_LICENSES.md` and `THIRD_PARTY_NOTICES.html`.
+## Third-party boundaries
 
-## Contact
-
-For commercial licensing, contact the project owner through the official GitHub repository:
-
-https://github.com/germanua/Linux-SoundBoard
-
-This document describes commercial licensing policy. It is not itself a commercial license, reseller agreement, trademark license, or grant of commercial rights.
+The maintainer can grant only rights they own or are authorized to license.
+A commercial agreement does not replace upstream licenses for libraries, codecs,
+tools, or icons. See [THIRDPARTY_LICENSES.md](THIRDPARTY_LICENSES.md).

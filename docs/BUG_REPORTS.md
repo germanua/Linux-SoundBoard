@@ -1,124 +1,126 @@
-# Bug Reports
+# Bug reports
 
-Linux Soundboard uses GitHub Issues for bug reports and regressions.
+[Documentation](README.md) · [Troubleshooting](TROUBLESHOOTING.md) · [Open an issue](https://github.com/germanua/Linux-SoundBoard/issues)
 
-- Issues: https://github.com/germanua/Linux-SoundBoard/issues
+Report reproducible failures, regressions, and incorrect documentation through
+GitHub Issues. Include the version and build channel so the maintainer can match
+your report to the right source revision.
 
 ## Generate a report
 
-The installer collects everything below for you:
+Run the report command explicitly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh   | bash -s -- report
 ```
 
-Choose **Make a bug report**, or run it directly:
+For an already authenticated release installer:
 
 ```bash
-./install.sh report
+./install.sh report --output report.txt
 ```
 
-It writes `~/linux-soundboard-bug-report-<date>.txt` containing:
+Do not omit `report`: a piped installer with no arguments can start installation.
+These commands target the ordinary public profile. Use the corresponding
+development workflow when reporting a private development build.
 
-- **System report** — distro, kernel, session type, audio devices, audio services, swhkd
-- **App report** — `--diagnose`, installed version, engine service state and log, library integrity, and what changed in your audio setup since install
-- **Bug report blank** — questions for you to answer in your own words
+The default report location is `~/linux-soundboard-bug-report-<date>.txt`. It
+contains system and audio-service information, application diagnostics, engine
+logs, library checks, and questions for you to complete.
 
-Your home path and username are replaced before the file is written; sound-device
-names are kept, because routing bugs cannot be diagnosed without them. Read the
-file before sharing it.
+The report attempts to replace your home path and username, but device names and
+other identifying details can remain. **Read and redact it before sharing.** The
+report is a local file; attach it to the issue yourself. Do not attach your full
+`config.json`, `library.sqlite3`, private audio, credentials, or unrelated logs.
 
-If the problem is something you can reproduce on demand, the report offers to run
-the app with debug logging while you do it, and appends the log. That starts the
-app and its audio engine, so it changes your default microphone while it runs.
+An optional reproduction capture starts the app with debug logging. That can
+start its engine and change microphone routing according to your settings.
+Finish active calls or recordings before choosing it.
 
-**Screenshots cannot go in the text file.** Take them, then drag the image files
-into the GitHub issue description alongside the pasted report.
+## Describe the problem
 
-## Before Opening an Issue
+Use this structure in the issue:
 
-1. Confirm the problem still happens on the latest published release or current branch build.
-2. Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for known install, renderer, audio, and hotkey problems.
-3. Reproduce the issue with the smallest reliable set of steps.
+```text
+Version / build channel:
+Distribution and version:
+Desktop and session (Wayland, X11, or XWayland):
+Installation method:
 
-## Include This Information
+Steps to reproduce:
+1.
+2.
+3.
 
-The generated report already contains all of it. Collect it by hand only if the
-installer cannot run on your system.
+Expected result:
+Actual result:
+Frequency:
+Last version known to work, if known:
 
-- Distribution and version
-- Session type: `Wayland`, `X11`, or `XWayland`
-- Install method: `AppImage` or source build (note any legacy AUR/`.deb`/`.rpm` package still installed)
-- Exact steps to reproduce
-- Expected behavior
-- Actual behavior
-- Relevant logs or terminal output
+Relevant error output / reviewed report:
+Screenshots, if useful:
+```
 
-Useful system diagnostics:
+Confirm the problem on a relevant released version or identify the exact
+revision you tested. Do not switch profiles or replace a working installation
+just to report a bug. Search existing issues and
+[troubleshooting](TROUBLESHOOTING.md) for the same symptom.
+
+## Manual diagnostics
+
+For an ordinary per-user AppImage installation:
 
 ```bash
 cat /etc/os-release
-echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
-echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
-echo "DISPLAY=$DISPLAY"
-systemctl --user status pipewire wireplumber
+printf 'Session: %s\n' "$XDG_SESSION_TYPE"
+systemctl --user status pipewire wireplumber --no-pager
 wpctl status -n
-linux-soundboard --diagnose
+"$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
+journalctl --user -u linux-soundboard-engine.service -n 100 --no-pager
 ```
 
-If the issue is installation-related, include the AppImage filename (or identify the legacy package/source build) and the exact command used to install it.
+If using a source build, substitute its executable path. For another profile,
+use that profile's executable, service, and directories.
 
-If sounds, folders, tabs, or hotkey bindings are missing or wrong, include the
-state of the library database:
+If the library is involved and `sqlite3` is available, use a read-only check so a
+misspelled or missing path cannot create an empty database:
 
 ```bash
-ls -l ~/.config/linux-soundboard/
-sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA integrity_check;'
-sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA user_version;'
+sqlite3 -readonly "$HOME/.config/linux-soundboard/library.sqlite3" 'PRAGMA integrity_check;'
+sqlite3 -readonly "$HOME/.config/linux-soundboard/library.sqlite3" 'PRAGMA user_version;'
 ```
 
-Do not attach `library.sqlite3` or `config.json` themselves. They contain the
-full paths of your audio files, and the output above is enough to start.
+`integrity_check` returning `ok` checks SQLite structural integrity. It does not
+prove that the app's schema, permissions, paths, or library contents are correct.
 
-If the issue is UI-related inside a VM, mention whether it reproduces with:
+## UI and renderer issues
+
+If useful for reproducing the problem, compare a normal launch with:
 
 ```bash
-GSK_RENDERER=cairo linux-soundboard
+GSK_RENDERER=cairo "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
-and:
+For an X11 fallback where the desktop provides it:
 
 ```bash
-LSB_FORCE_X11=1 linux-soundboard
+LSB_FORCE_X11=1 "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
-## Log Collection
+Quit the previous GUI instance first. Say which launch changed the result. These
+commands launch the app; they are not passive diagnostic queries.
 
-For runtime diagnostics:
+## Debug logs
+
+For GUI runtime output:
 
 ```bash
-RUST_LOG=debug linux-soundboard
+RUST_LOG=debug "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
-For memory diagnostics:
+The installed engine is a separate process; its service log may also be needed.
+For memory diagnostics, the app supports `LSB_MEMORY_REPORT=1` and
+`LSB_MEMORY_REPORT_PATH`. Share only files that were actually created and review
+them for personal information first.
 
-```bash
-RUST_LOG=info LSB_MEMORY_REPORT=1 LSB_MEMORY_REPORT_PATH=/tmp/lsb_memory_report.json linux-soundboard
-```
-
-Then attach:
-
-- `/tmp/lsb_memory_report.txt`
-- `/tmp/lsb_memory_report.json`
-
-if those files were generated.
-
-## Scope
-
-GitHub Issues are the supported feedback channel for this project. Use them for:
-
-- reproducible bugs
-- packaging regressions
-- distro-specific runtime failures
-- crash reports
-- incorrect or outdated documentation
+Attach screenshots separately; a text report cannot contain the image itself.

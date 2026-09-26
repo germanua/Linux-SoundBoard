@@ -1,29 +1,46 @@
 # Troubleshooting
 
+[Documentation](README.md) · [Installation](INSTALL.md) · [Bug reports](BUG_REPORTS.md)
+
 This guide covers the issues most likely to block installation, startup, audio routing, and hotkeys.
+
+## Find your symptom
+
+| Problem | Section |
+| --- | --- |
+| AppImage mounting or historical package dependencies | [Installation](#installation-problems) |
+| Startup, renderer, tray, or media keys | [Startup and UI](#startup-and-ui-problems) |
+| Virtual mic, passthrough, routing, engine, or library | [Audio and engine](#audio-problems) |
+| Wayland helper or X11 shortcuts | [Hotkeys](#hotkey-problems) |
+| Missing compiler or development libraries | [Source builds](#build-problems) |
 
 ## Start With These Checks
 
-The installer can run these for you and repair what it finds:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash
-```
-
-Choose **Fix setup problems** (or run `./install.sh fix`). It repairs the user
-install, the engine service, swhkd on Wayland, and the PipeWire services, printing
-which step failed. If a step fails it offers to write a bug report.
-
-To check by hand:
+Inspect before repairing:
 
 ```bash
 cat /etc/os-release
-echo "XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
-echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
-echo "DISPLAY=$DISPLAY"
-systemctl --user status pipewire wireplumber
+printf 'Session: %s\n' "$XDG_SESSION_TYPE"
+systemctl --user status pipewire wireplumber --no-pager
 wpctl status -n
+"$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
 ```
+
+Commands below use the ordinary per-user AppImage path. Substitute your actual
+executable if using a source build or a historical native package. For an
+isolated development profile, use its matching executable, services, and paths.
+Paths assume default XDG locations.
+
+For guided repair, explicitly pass `fix`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh \
+  | bash -s -- fix
+```
+
+Repair can change the user installation, engine, Wayland helper, and audio-service
+state. Finish active calls or recordings first. To collect a report without
+choosing repair, use [Bug reports](BUG_REPORTS.md).
 
 ## Installation Problems
 
@@ -36,7 +53,7 @@ Install the host FUSE package and retry:
 - Arch Linux: `sudo pacman -Syu --needed fuse2`
 - openSUSE: `sudo zypper install libfuse2 fuse`
 
-### `.deb` install reports dependency problems
+### Historical `.deb` install reports dependency problems
 
 Use APT to resolve dependencies instead of `dpkg -i` alone:
 
@@ -50,7 +67,7 @@ If host audio packages are missing:
 sudo apt install pipewire pipewire-pulse wireplumber pulseaudio-utils
 ```
 
-### `.rpm` install reports missing dependencies
+### Historical `.rpm` install reports missing dependencies
 
 Install with DNF:
 
@@ -79,13 +96,13 @@ echo "$DISPLAY"
 If GTK startup is unstable in the current session, force the X11 path:
 
 ```bash
-LSB_FORCE_X11=1 linux-soundboard
+LSB_FORCE_X11=1 "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
 You can also test the toolkit backend directly:
 
 ```bash
-GDK_BACKEND=x11 linux-soundboard
+GDK_BACKEND=x11 "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
 ### VMware guest: UI stops reacting to clicks or memory spikes at startup
@@ -95,13 +112,13 @@ This is typically a GTK renderer problem inside the VM rather than a broken pack
 Test the safer renderer path:
 
 ```bash
-GSK_RENDERER=cairo linux-soundboard
+GSK_RENDERER=cairo "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
 If you also want the X11 backend:
 
 ```bash
-LSB_FORCE_X11=1 GSK_RENDERER=cairo linux-soundboard
+LSB_FORCE_X11=1 GSK_RENDERER=cairo "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
 Newer builds automatically prefer `GSK_RENDERER=cairo` when a VMware guest is detected and no renderer override is already set.
@@ -209,7 +226,7 @@ If the device is missing:
    ```
 2. Restart the engine:
    ```bash
-   systemctl --user restart linux-soundboard-engine.service
+   systemctl --user restart linux-soundboard-engine.target
    ```
 3. Run `wpctl status -n | grep -i linuxsoundboard` and confirm `linuxsoundboard.virtual_mic` appears under Sources.
 4. If an old persistent config still exists, disable it and restart audio services:
@@ -233,12 +250,13 @@ Both go through the same runtime `Linux_Soundboard_Mic`, so a partial failure us
 
 2. Inspect the expected and running app versions, protocol, schema, binary paths, PID, and service state:
    ```bash
-   linux-soundboard --diagnose
+   "$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
    ```
 
 3. If `compatibility` is `INCOMPATIBLE`, repair the installed binary and service:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh | bash -s -- fix
+   curl -fsSL https://raw.githubusercontent.com/germanua/Linux-SoundBoard/main/bootstrap-install.sh \
+     | bash -s -- fix
    ```
 
 During a v2.0→v2.1 package upgrade, `/usr/bin/linux-soundboard` can be replaced while the already-running engine still executes the old mapped binary. Version 2.1.1 stops that stale engine, reloads and restarts the user service once, and connects only after protocol, schema, and app version all match. If the restarted process is still stale, it is stopped before one transient local fallback starts. Do not run a second `--audio-engine` process manually.
@@ -246,7 +264,7 @@ During a v2.0→v2.1 package upgrade, `/usr/bin/linux-soundboard` can be replace
 Useful stale-engine checks:
 
 ```bash
-linux-soundboard --diagnose
+"$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
 systemctl --user show linux-soundboard-engine.service -p MainPID -p ExecStart -p FragmentPath
 readlink -f /proc/$(systemctl --user show linux-soundboard-engine.service -p MainPID --value)/exe
 ```
@@ -264,15 +282,15 @@ not start another `--audio-engine` process.
 
 1. Close Linux Soundboard, then inspect the installed binary and service:
    ```bash
-   linux-soundboard --diagnose
+   "$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
    systemctl --user status linux-soundboard-engine.service --no-pager
    journalctl --user -u linux-soundboard-engine.service -n 100 --no-pager
    ```
 2. Reload the installed unit and retry it:
    ```bash
    systemctl --user daemon-reload
-   systemctl --user restart linux-soundboard-engine.service
-   linux-soundboard --diagnose
+   systemctl --user restart linux-soundboard-engine.target
+   "$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
    ```
 3. If diagnostics still report `INCOMPATIBLE`, reinstall the same
    `linux-soundboard` package through your package manager, or rerun the newer
@@ -322,14 +340,18 @@ The first valid schema-6 load by v2.1.1 creates an exact private backup at `~/.c
 Close the GUI and stop every newer engine before recovery:
 
 ```bash
-systemctl --user stop linux-soundboard-engine.service
-pgrep -af linux-soundboard   # this must print no remaining GUI or engine process
+systemctl --user stop linux-soundboard-engine.target
+pgrep -af '[l]inux-soundboard'   # confirm no GUI or engine remains
+cp -p ~/.config/linux-soundboard/config.json \
+  "$HOME/.config/linux-soundboard/config.json.before-recovery-$(date +%Y%m%d-%H%M%S)"
 cp -p ~/.config/linux-soundboard/config.json.pre-v6-backup \
   ~/.config/linux-soundboard/config.json
 chmod 600 ~/.config/linux-soundboard/config.json
 ```
 
-Then start the service or GUI again. Do not copy the backup while a newer process is running, because it may save migrated state over the restored file.
+This is a historical schema-6 recovery procedure, not a general rollback for
+current SQLite-based profiles. Start only a version compatible with the restored
+configuration. Start the engine through its target or launch the GUI again. Do not copy the backup while a newer process is running, because it may save migrated state over the restored file.
 
 ### The sound library moved out of config.json in v2.2.0
 
@@ -362,25 +384,24 @@ it again. Nothing is deleted.
 Inspect the state before deciding:
 
 ```bash
-systemctl --user stop linux-soundboard-engine.service
-pgrep -af linux-soundboard   # this must print no remaining GUI or engine process
+systemctl --user stop linux-soundboard-engine.target
+pgrep -af '[l]inux-soundboard'   # confirm no GUI or engine remains
 ls -l ~/.config/linux-soundboard/
-sqlite3 ~/.config/linux-soundboard/library.sqlite3 'PRAGMA integrity_check;'
+sqlite3 -readonly "$HOME/.config/linux-soundboard/library.sqlite3" 'PRAGMA integrity_check;'
 ```
 
-`integrity_check` printing `ok` means the file is intact and the failure is
-elsewhere; check `journalctl --user -u linux-soundboard-engine.service` and the
-GUI output. If the database is corrupt and no backup is offered, move it aside
-and start over:
+`integrity_check` printing `ok` confirms SQLite structural integrity, not the
+application schema, data contents, or file permissions; check `journalctl --user -u linux-soundboard-engine.service` and the
+GUI output. Before attempting recovery, preserve the entire profile directory,
+including `config.json`, `library.sqlite3`, and any SQLite `-wal` / `-shm`
+companions, with the GUI and engine stopped. Restore a known-good backup only
+after checking which app version and schema created it.
 
-```bash
-mv ~/.config/linux-soundboard/library.sqlite3{,.corrupt}
-```
-
-The next launch starts with an empty library. The scanned folders are stored in
-that database as well, so add them again under `Settings` → `General` →
-`Sound Folders`; tabs, hotkey bindings, and folder customizations do not come
-back. No audio file on disk is affected.
+Rebuilding an empty library loses its tabs, bindings, and folder customizations.
+Do not delete or rename just the database while leaving companion files behind.
+If there is no verified backup, collect the read-only diagnostics and report the
+failure before choosing a reset. The original audio files are separate from the
+library database.
 
 ### AppImage temporary versus installed behavior
 
@@ -421,7 +442,7 @@ In **Default** routing mode, the soundboard claims the system default mic. Scree
 If screen sharing breaks, run the diagnostic to inspect the PipeWire graph:
 
 ```bash
-linux-soundboard --diagnose
+"$HOME/.local/opt/linux-soundboard/linux-soundboard" --diagnose
 ```
 
 Check whether the screen-share stream is connected to the soundboard's virtual mic or to a sink monitor. If the soundboard is interfering, switch to **Manual** routing mode as a workaround and configure the target app to use `Linux_Soundboard_Mic` directly.
@@ -445,61 +466,23 @@ In **Default** mode, the soundboard is the system default mic — all apps that 
 1. Switch to **Manual** routing mode and configure only the apps you want to use `Linux_Soundboard_Mic` via pavucontrol or your app's input device picker
 2. Stay in **Default** mode and change the unwanted app's input device to your physical microphone in pavucontrol
 
-### Capturing routing audit data (debug aid for screen-share-with-sound regressions)
+### Capturing routing audit data
 
-If Discord/Vesktop screen-share with sound works in **Manual** mode but breaks in **Default** mode, capture a comparison bundle so the routing-decision history can be reviewed. The audit log records every PipeWire metadata write Soundboard makes and every default-source command it issues, with timestamps. It only writes when `LSB_ROUTE_AUDIT=1` is set.
+If a routing problem needs deeper investigation, start with the generated
+[bug report](BUG_REPORTS.md). The opt-in `LSB_ROUTE_AUDIT=1` flag records routing
+decisions in the process where it is set. Setting it on a GUI that reconnects to
+an already-running service does not enable auditing in that service.
 
-The recipe assumes you have a path to the Soundboard binary (e.g. `~/AppImage/linux-soundboard.AppImage` or the cargo build at `target/release/linux-soundboard`). Replace `LINUX_SOUNDBOARD` below with that path.
+For a controlled reproduction, quit the GUI and stop its matching engine target
+before launching the diagnostic build. This interrupts soundboard audio. Do not
+kill unrelated call or recording applications with broad `pkill` commands.
+The app logs the actual route-audit file path at startup; use that path rather
+than assuming the log is directly under `/tmp` or `$XDG_RUNTIME_DIR`.
 
-```bash
-# 1. Stop the systemd-managed engine, the UI, Discord, and Vesktop. The audit
-#    log only attaches to a fresh process started with the env var set.
-systemctl --user stop linux-soundboard-engine.service 2>/dev/null
-pkill -f linux-soundboard 2>/dev/null
-pkill -f Discord 2>/dev/null
-pkill -f vesktop 2>/dev/null
-
-mkdir -p /tmp/lsb-bug
-LINUX_SOUNDBOARD=target/release/linux-soundboard
-
-# 2. Capture baseline state — no Soundboard, no share.
-$LINUX_SOUNDBOARD --diagnose-graph-snapshot /tmp/lsb-bug/00-baseline.jsonl
-
-# 3. Start Vesktop, join a voice channel, start "Share Sound" (verify it
-#    works in this state). Capture the working state.
-$LINUX_SOUNDBOARD --diagnose-graph-snapshot /tmp/lsb-bug/01-share-working.jsonl
-pw-link -l > /tmp/lsb-bug/01-share-working.links
-
-# 4. Stop screen-share (don't close Vesktop). Start Soundboard with audit
-#    logging enabled. Set Microphone Routing to "Default".
-LSB_ROUTE_AUDIT=1 $LINUX_SOUNDBOARD &
-sleep 5
-
-# 5. Capture state — Soundboard is up, no share yet.
-$LINUX_SOUNDBOARD --diagnose-graph-snapshot /tmp/lsb-bug/02-soundboard-up.jsonl
-pw-link -l > /tmp/lsb-bug/02-soundboard-up.links
-
-# 6. THE TRIGGER — start "Share Sound" in Vesktop now. Wait 5 s. Capture
-#    broken state.
-sleep 5
-$LINUX_SOUNDBOARD --diagnose-graph-snapshot /tmp/lsb-bug/03-share-broken.jsonl
-pw-link -l > /tmp/lsb-bug/03-share-broken.links
-
-# 7. Bundle the audit log (lives in $XDG_RUNTIME_DIR by default; falls back
-#    to /tmp) and the four snapshots.
-AUDIT_LOG="${XDG_RUNTIME_DIR:-/tmp}/linux-soundboard-route-audit.log"
-cp "$AUDIT_LOG" /tmp/lsb-bug/audit.log
-tar czf /tmp/lsb-bug.tar.gz -C /tmp lsb-bug
-echo "bundle ready: /tmp/lsb-bug.tar.gz"
-```
-
-Useful diff commands afterwards:
-
-```bash
-diff -u /tmp/lsb-bug/02-soundboard-up.links /tmp/lsb-bug/03-share-broken.links
-jq -c '.' /tmp/lsb-bug/audit.log     # validates each line is valid JSON
-jq -c 'select(.kind | startswith("default_source"))' /tmp/lsb-bug/audit.log
-```
+When requested by the maintainer, capture `--diagnose-graph-snapshot PATH` before
+and after reproducing the problem. Store each capture under a new filename in
+a directory you control. Review device names, application names, paths, and media
+metadata before sharing any snapshot or audit log.
 
 ## Hotkey Problems
 
@@ -530,7 +513,7 @@ If one-click install fails:
 - Ensure network access is available (the installer fetches a pinned upstream `swhkd` commit).
 - Retry from the app and review the detailed failure output shown in the dialog.
 
-Installation path on supported native packages:
+Managed helper locations:
 
 - Use Linux Soundboard's pinned managed installer on Arch, Debian/Ubuntu, Fedora, and openSUSE.
 - The privileged helper is fixed at `/usr/libexec/linux-soundboard/install-swhkd-helper.sh` and installs the daemon under `/usr/local/libexec/linux-soundboard`.
@@ -555,17 +538,18 @@ distro kernels (`CONFIG_INPUT_EVDEV=y`) and needs nothing.
 
 ```bash
 ls /usr/lib/modules/$(uname -r)   # missing means the kernel was upgraded since boot: reboot first
-ls /sys/module/uinput             # missing means the module is not loaded
-sudo modprobe uinput              # load it now
-echo uinput | sudo tee /etc/modules-load.d/uinput.conf   # and at every boot
+ls /sys/module/uinput             # inspect module state; built-in kernels may differ
+sudo modprobe uinput              # load it for this boot
 ```
 
-A kernel upgrade removes the running kernel's module tree, so nothing can be
-loaded until the new kernel is booted and `modprobe` fails outright. Reboot
-before trying anything else.
+If the running kernel's module tree was removed by an upgrade, reboot into the
+installed kernel before trying to load its modules. A missing `/sys/module/uinput`
+is not by itself proof of failure when the functionality is built into the
+kernel; the relevant symptom is inability to open `/dev/uinput`. Use the managed
+setup flow if a persistent change is needed.
 
 Restart Linux Soundboard afterwards; the hotkey backend is chosen at startup.
-When the fixed root-owned helper is installed, the in-app **Install** button can run both steps after asking. Neither path touches a system that already provides uinput.
+When the fixed root-owned helper is installed, the in-app **Install** flow can offer the required module setup after asking. Neither path touches a system that already provides uinput.
 
 ### X11 hotkeys do not work
 
@@ -578,7 +562,7 @@ echo "$XDG_SESSION_TYPE"
 If you are inside Wayland but want the X11 path, launch with:
 
 ```bash
-LSB_FORCE_X11=1 linux-soundboard
+LSB_FORCE_X11=1 "$HOME/.local/opt/linux-soundboard/linux-soundboard"
 ```
 
 ## Build Problems
@@ -603,6 +587,8 @@ Use the dependency blocks in [INSTALL.md](INSTALL.md) under the source-build sec
 - Arch Linux: `sudo pacman -Syu --needed base-devel`
 
 ## When Reporting a Bug
+
+Follow [Bug reports](BUG_REPORTS.md) for the report command and a copyable issue template.
 
 Attach:
 

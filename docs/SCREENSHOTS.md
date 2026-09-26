@@ -1,6 +1,11 @@
-# Screenshot Gallery
+# Screenshot gallery
 
-The images in `assets/screenshots/` are the canonical visuals used by the docs.
+[Documentation](README.md) · [Feature reference](FEATURE_REFERENCE.md)
+
+These reference screenshots show the main window and settings in light and dark
+themes. They are the existing project gallery; newer development controls may
+not appear in them. The [feature reference](FEATURE_REFERENCE.md) describes the
+current source revision.
 
 ## Main Window
 
@@ -21,7 +26,7 @@ The images in `assets/screenshots/` are the canonical visuals used by the docs.
 | --- | --- |
 | ![Hotkeys page dark mode](../assets/screenshots/Settings_hotkeys_dark.png) | ![Hotkeys page light mode](../assets/screenshots/Settings_hotkeys_light.png) |
 
-## File Index
+## Image sources
 
 - `Main_dark.png`
 - `Main_light.png`
@@ -33,3 +38,5 @@ The images in `assets/screenshots/` are the canonical visuals used by the docs.
 - `Settings_light2.png`
 
 For a quick visual tour, see the screenshots embedded in [README.md](../README.md).
+
+Screenshot and app-icon reference uses are explained in the [brand policy](BRANDING.md).

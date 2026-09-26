@@ -1,10 +1,24 @@
-# Feature Reference
+# Feature reference
+
+[Documentation](README.md) · [Getting started](GETTING_STARTED.md) · [Troubleshooting](TROUBLESHOOTING.md)
 
 > This guide documents all current user-facing features in **Linux Soundboard** — what each function does, how to trigger it, and any important side effects.
 >
 > **Scope:** Covers visible app features in the current UI. Behaviors inherited from GTK rather than app-specific code are marked _GTK convention_.
 
 ---
+
+## Contents
+
+| Controls and library | Settings and integration |
+| --- | --- |
+| [Main window](#main-window) | [Settings](#settings) |
+| [Transport and Now Playing](#transport-bar) | [Concurrent playback](#concurrent-playback) |
+| [Sound actions](#sound-actions) | [Global control hotkeys](#global-control-hotkeys) |
+| [Tabs sidebar](#tabs-sidebar) | [Hotkey behaviour](#hotkey-behaviour) |
+| [Library import and sync](#library-import-and-sync) | [System tray](#system-tray) |
+| [Supported formats](#supported-audio-formats) | [Status banners](#status-banners-and-feedback) |
+| [External audio routing](#external-audio-routing) | [Microphone routing](#general--microphone-routing) |
 
 ## Quick Access
 
@@ -68,7 +82,7 @@ Appears automatically when you activate a sound whose file no longer exists.
 
 The transport bar runs across the top of the main window.
 
-When two or more playbacks are active, a compact **Now Playing** panel appears above the sound list, aligned with the library area to the right of the Tabs/Folders sidebar. Playback cards wrap responsively into one, two, or three equal-width columns. Each playback has its own timeline, elapsed and total time, pause/resume button, and stop button. Click, drag, or use the arrow keys on a focused timeline to seek that playback. Repeated plays of the same sound have separate cards. The panel can be collapsed, and its list scrolls after roughly two visible rows so large concurrent mixes do not push the library out of view.
+When two or more playbacks are active, a compact **Now Playing** panel appears above the sound list, aligned with the library area to the right of the Tabs/Folders sidebar. Playback cards wrap responsively into one, two, or three equal-width columns. Each playback has its own timeline, elapsed and total time, pause/resume button, and stop button. Timelines use the same available width regardless of sound duration; progress represents the fraction played. Click, drag, or use the arrow keys on a focused timeline to seek that playback. Repeated plays of the same sound have separate cards. The panel can be collapsed, and its list scrolls after roughly two visible rows so large concurrent mixes do not push the library out of view.
 
 ---
 
