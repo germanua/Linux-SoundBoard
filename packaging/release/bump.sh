@@ -226,12 +226,12 @@ bump_latest_public_version() {
     [[ "$found" -eq 1 ]] || fail "$rel_path: expected exactly one latest-public-release marker, found $found"
     track_bumped "$rel_path"
     tmp="$(bump_tmp "$file")"
-    awk -v version="$NEW_VERSION" '''{
+    awk -v version="$NEW_VERSION" '{
         if (index($0, "**Latest public release: ") > 0) {
             sub(/\*\*Latest public release: [0-9]+\.[0-9]+\.[0-9]+\.\*\*/, "**Latest public release: " version ".**")
         }
         print
-    }''' "$file" >"$tmp"
+    }' "$file" >"$tmp"
     replace_file "$file" "$tmp"
     grep -Fq "**Latest public release: $NEW_VERSION.**" "$file" \
         || fail "$rel_path: failed to update latest public release to $NEW_VERSION"
