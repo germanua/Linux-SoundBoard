@@ -7,6 +7,7 @@ use crate::tray::{MenuItem, TrayAction};
 
 type StringHandler = RefCell<Option<Box<dyn FnMut(String)>>>;
 type GroupModeHandler = RefCell<Option<Box<dyn FnMut(GroupMode)>>>;
+type BoolHandler = RefCell<Option<Box<dyn FnMut(bool)>>>;
 type SnapshotHandler = RefCell<Option<Box<dyn FnMut(PlayerSnapshot)>>>;
 type TrayActionHandler = RefCell<Option<Box<dyn FnMut(TrayAction)>>>;
 type TrayMenuHandler = RefCell<Option<Box<dyn FnMut(Vec<MenuItem>)>>>;
@@ -23,6 +24,7 @@ thread_local! {
         RefCell::new(None);
     static SNAPSHOT_HANDLER: SnapshotHandler = RefCell::new(None);
     static GROUP_MODE_HANDLER: GroupModeHandler = RefCell::new(None);
+    static CONCURRENT_PLAYBACK_HANDLER: BoolHandler = RefCell::new(None);
 
     static TRAY_ACTION_HANDLER: TrayActionHandler = RefCell::new(None);
     static TRAY_MENU_HANDLER: TrayMenuHandler = RefCell::new(None);
@@ -91,6 +93,20 @@ pub fn post_group_mode_changed(mode: GroupMode) {
         GROUP_MODE_HANDLER.with(|handler| {
             if let Some(handler) = handler.borrow_mut().as_mut() {
                 handler(mode);
+            }
+        });
+    });
+}
+
+pub fn set_concurrent_playback_handler(f: impl FnMut(bool) + 'static) {
+    CONCURRENT_PLAYBACK_HANDLER.with(|handler| *handler.borrow_mut() = Some(Box::new(f)));
+}
+
+pub fn post_concurrent_playback_changed(enabled: bool) {
+    glib::MainContext::default().invoke(move || {
+        CONCURRENT_PLAYBACK_HANDLER.with(|handler| {
+            if let Some(handler) = handler.borrow_mut().as_mut() {
+                handler(enabled);
             }
         });
     });

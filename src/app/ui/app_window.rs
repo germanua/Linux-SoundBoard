@@ -594,6 +594,20 @@ fn handle_control_hotkey(
             transport.toggle_mic_mute();
             transport.refresh_controls_from_state();
         }
+        crate::config::ControlHotkeyAction::ToggleConcurrentPlayback => {
+            let enabled = {
+                let config = state.config.lock();
+                !config.settings.allow_multiple_playbacks
+            };
+            match commands::set_allow_multiple_playbacks(
+                enabled,
+                Arc::clone(&state.config),
+                Arc::clone(&state.player),
+            ) {
+                Ok(()) => crate::ui_event_bridge::post_concurrent_playback_changed(enabled),
+                Err(error) => log::warn!("Could not toggle concurrent playback: {error}"),
+            }
+        }
         crate::config::ControlHotkeyAction::CycleGroupMode => {
             match commands::cycle_group_mode(Arc::clone(&state.config)) {
                 Ok(mode) => {

@@ -389,6 +389,7 @@ pub enum ControlHotkeyAction {
     NextSound,
     MuteHeadphones,
     MuteRealMic,
+    ToggleConcurrentPlayback,
     CyclePlayMode,
     CycleGroupMode,
 }
@@ -448,6 +449,13 @@ pub const CONTROL_HOTKEY_ACTIONS: &[ControlHotkeyActionMeta] = &[
         binding_id: "control:mute_real_mic",
         title: "Mute Real Mic",
         subtitle: "Toggle real microphone passthrough",
+    },
+    ControlHotkeyActionMeta {
+        action: ControlHotkeyAction::ToggleConcurrentPlayback,
+        id: "toggle_concurrent_playback",
+        binding_id: "control:toggle_concurrent_playback",
+        title: "Concurrent Playback",
+        subtitle: "Toggle concurrent playback on or off",
     },
     ControlHotkeyActionMeta {
         action: ControlHotkeyAction::CyclePlayMode,
@@ -522,6 +530,8 @@ pub struct ControlHotkeys {
     pub mute_headphones: Option<String>,
     #[serde(default)]
     pub mute_real_mic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle_concurrent_playback: Option<String>,
     #[serde(default)]
     pub cycle_play_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -537,6 +547,9 @@ impl ControlHotkeys {
             ControlHotkeyAction::NextSound => self.next_sound.clone(),
             ControlHotkeyAction::MuteHeadphones => self.mute_headphones.clone(),
             ControlHotkeyAction::MuteRealMic => self.mute_real_mic.clone(),
+            ControlHotkeyAction::ToggleConcurrentPlayback => {
+                self.toggle_concurrent_playback.clone()
+            }
             ControlHotkeyAction::CyclePlayMode => self.cycle_play_mode.clone(),
             ControlHotkeyAction::CycleGroupMode => self.cycle_group_mode.clone(),
         }
@@ -550,6 +563,9 @@ impl ControlHotkeys {
             ControlHotkeyAction::NextSound => self.next_sound = hotkey,
             ControlHotkeyAction::MuteHeadphones => self.mute_headphones = hotkey,
             ControlHotkeyAction::MuteRealMic => self.mute_real_mic = hotkey,
+            ControlHotkeyAction::ToggleConcurrentPlayback => {
+                self.toggle_concurrent_playback = hotkey
+            }
             ControlHotkeyAction::CyclePlayMode => self.cycle_play_mode = hotkey,
             ControlHotkeyAction::CycleGroupMode => self.cycle_group_mode = hotkey,
         }

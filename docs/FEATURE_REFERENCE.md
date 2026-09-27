@@ -724,6 +724,7 @@ Open via `Settings` → `Control Hotkeys`.
 | **Next Sound**      | Plays the next sound in the current visible navigation list     |
 | **Mute Headphones** | Toggles local headphone/speaker output                          |
 | **Mute Real Mic**   | Toggles real microphone passthrough into the virtual microphone |
+| **Concurrent Playback** | Toggles concurrent playback on or off; the Playback switch updates immediately |
 | **Cycle Play Mode** | Cycles `Default` → `Loop` → `Continue` → `Default`              |
 
 > **Note:** `Cycle Shared Hotkey Mode` is a global hotkey too, but its row

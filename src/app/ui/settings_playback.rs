@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -174,14 +175,34 @@ pub(super) fn build_playback_groups(
             .subtitle("Allow multiple sounds to play at once")
             .active(allow_multiple_playbacks)
             .build();
+        let applying_concurrent = Rc::new(Cell::new(false));
         {
             let state2 = Arc::clone(&state);
+            let applying = Rc::clone(&applying_concurrent);
             concurrent_row.connect_active_notify(move |row| {
+                if applying.get() {
+                    return;
+                }
                 let _ = commands::set_allow_multiple_playbacks(
                     row.is_active(),
                     Arc::clone(&state2.config),
                     Arc::clone(&state2.player),
                 );
+            });
+        }
+        {
+            let row_weak = concurrent_row.downgrade();
+            let applying = Rc::clone(&applying_concurrent);
+            crate::ui_event_bridge::set_concurrent_playback_handler(move |enabled| {
+                let Some(row) = row_weak.upgrade() else {
+                    return;
+                };
+                if row.is_active() == enabled {
+                    return;
+                }
+                applying.set(true);
+                row.set_active(enabled);
+                applying.set(false);
             });
         }
         playback_group.add(&concurrent_row);
@@ -589,6 +610,14 @@ mod tests {
         assert!(
             production.contains(".active(allow_multiple_playbacks)"),
             "the row must start from the persisted value"
+        );
+        assert!(
+            production.contains("set_concurrent_playback_handler"),
+            "the row must listen for hotkey-driven state changes"
+        );
+        assert!(
+            production.contains("row.set_active(enabled)"),
+            "a hotkey-driven state change must update the visible switch"
         );
         assert!(
             production.contains("playback_group.add(&concurrent_row);"),

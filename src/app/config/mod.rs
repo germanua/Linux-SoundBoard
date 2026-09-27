@@ -212,5 +212,13 @@ mod tests {
             assert_eq!(meta.action.id(), meta.id);
             assert_eq!(meta.action.binding_id(), meta.binding_id);
         }
+        assert_eq!(
+            ControlHotkeyAction::from_id("toggle_concurrent_playback"),
+            Some(ControlHotkeyAction::ToggleConcurrentPlayback)
+        );
+        assert_eq!(
+            ControlHotkeyAction::ToggleConcurrentPlayback.binding_id(),
+            "control:toggle_concurrent_playback"
+        );
     }
 }
