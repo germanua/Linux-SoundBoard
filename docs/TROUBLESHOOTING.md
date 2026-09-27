@@ -27,9 +27,8 @@ wpctl status -n
 ```
 
 Commands below use the ordinary per-user AppImage path. Substitute your actual
-executable if using a source build or a historical native package. For an
-isolated development profile, use its matching executable, services, and paths.
-Paths assume default XDG locations.
+executable if using a source build or a historical native package. Paths assume
+default XDG locations.
 
 For guided repair, explicitly pass `fix`:
 

@@ -75,14 +75,7 @@ fn asset_download_url(release: &GitHubRelease, name: &str) -> Result<String, Upd
 }
 
 fn release_allowed(release: &GitHubRelease) -> bool {
-    if release.draft {
-        return false;
-    }
-    match crate::app_meta::UPDATE_CHANNEL {
-        "stable" => !release.prerelease,
-        "dev" => release.prerelease,
-        _ => false,
-    }
+    !release.draft && !release.prerelease
 }
 
 fn release_for_tag<T: Transport>(transport: &T, tag: &str) -> Result<GitHubRelease, UpdateError> {
@@ -374,17 +367,9 @@ mod tests {
     }
 
     #[test]
-    fn release_filter_matches_build_channel() {
-        let stable = release("v2.4.7", false, false);
-        let dev = release("v2.4.7-dev.1", false, true);
-        assert_eq!(
-            release_allowed(&stable),
-            crate::app_meta::UPDATE_CHANNEL == "stable"
-        );
-        assert_eq!(
-            release_allowed(&dev),
-            crate::app_meta::UPDATE_CHANNEL == "dev"
-        );
+    fn release_filter_accepts_only_published_stable_releases() {
+        assert!(release_allowed(&release("v2.4.7", false, false)));
+        assert!(!release_allowed(&release("v2.4.7-rc.1", false, true)));
         assert!(!release_allowed(&release("v2.4.7", true, false)));
     }
 
@@ -422,12 +407,8 @@ mod tests {
 
     #[test]
     fn unsigned_higher_release_cannot_override_current_state() {
-        let tag = if crate::app_meta::UPDATE_CHANNEL == "dev" {
-            "v999.0.0-dev.1"
-        } else {
-            "v999.0.0"
-        };
-        let prerelease = crate::app_meta::UPDATE_CHANNEL == "dev";
+        let tag = "v999.0.0";
+        let prerelease = false;
         let body = serde_json::to_vec(&serde_json::json!([{
             "tag_name": tag,
             "draft": false,

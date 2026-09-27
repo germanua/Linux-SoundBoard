@@ -30,10 +30,8 @@ docs and license accompanying your version when investigating older behavior.
 
 ## Installation and profile conventions
 
-Public installation commands target the official public repository and ordinary
-Linux Soundboard profile. Private development builds use separate profile paths,
-service names, and update channels. Do not use public installer commands to
-repair a private development profile.
+Installation commands in this documentation target the official public repository
+and the standard Linux Soundboard application profile.
 
 Paths shown as `~/.config` or `~/.local/state` assume the default XDG locations.
 If you override XDG directories, use your configured paths. A per-user AppImage

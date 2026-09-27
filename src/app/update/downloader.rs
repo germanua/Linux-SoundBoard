@@ -4,11 +4,6 @@ use std::sync::{
 };
 use std::time::Duration;
 
-#[cfg(lsb_dev_profile)]
-use std::process::Command;
-#[cfg(lsb_dev_profile)]
-use std::sync::OnceLock;
-
 use super::UpdateError;
 
 pub const API_BODY_LIMIT: u64 = 2 * 1024 * 1024;
@@ -62,40 +57,6 @@ fn is_release_asset_api(url: &str) -> bool {
     is_github_api(url) && url.contains("/releases/assets/")
 }
 
-#[cfg(lsb_dev_profile)]
-fn github_token() -> Result<&'static str, UpdateError> {
-    static TOKEN: OnceLock<Result<String, String>> = OnceLock::new();
-    match TOKEN.get_or_init(|| {
-        if let Ok(value) = std::env::var("GH_TOKEN") {
-            let value = value.trim().to_string();
-            if !value.is_empty() {
-                return Ok(value);
-            }
-        }
-        let output = Command::new("gh")
-            .args(["auth", "token"])
-            .output()
-            .map_err(|error| format!("could not run gh auth token: {error}"))?;
-        if !output.status.success() {
-            return Err(
-                "DEV updater requires an authenticated GitHub CLI session (run: gh auth login)"
-                    .to_string(),
-            );
-        }
-        let token = String::from_utf8(output.stdout)
-            .map_err(|_| "gh auth token returned non-UTF-8 data".to_string())?
-            .trim()
-            .to_string();
-        if token.is_empty() {
-            return Err("gh auth token returned an empty token".to_string());
-        }
-        Ok(token)
-    }) {
-        Ok(token) => Ok(token.as_str()),
-        Err(error) => Err(UpdateError::Network(error.clone())),
-    }
-}
-
 impl Transport for HttpTransport {
     fn get(&self, url: &str, etag: Option<&str>, limit: u64) -> Result<HttpResponse, UpdateError> {
         if !url.starts_with("https://") {
@@ -110,10 +71,6 @@ impl Transport for HttpTransport {
         let mut request = agent.get(url).header("Accept", accept);
         if is_github_api(url) {
             request = request.header("X-GitHub-Api-Version", "2022-11-28");
-        }
-        #[cfg(lsb_dev_profile)]
-        if is_github_api(url) {
-            request = request.header("Authorization", format!("Bearer {}", github_token()?));
         }
         if let Some(value) = etag {
             request = request.header("If-None-Match", value);
@@ -235,10 +192,6 @@ where
     let mut request = agent.get(url).header("Accept", "application/octet-stream");
     if is_github_api(url) {
         request = request.header("X-GitHub-Api-Version", "2022-11-28");
-    }
-    #[cfg(lsb_dev_profile)]
-    if is_github_api(url) {
-        request = request.header("Authorization", format!("Bearer {}", github_token()?));
     }
     let mut response = request
         .call()

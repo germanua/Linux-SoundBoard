@@ -21,8 +21,6 @@ For an already authenticated release installer:
 ```
 
 Do not omit `report`: a piped installer with no arguments can start installation.
-These commands target the ordinary public profile. Use the corresponding
-development workflow when reporting a private development build.
 
 The default report location is `~/linux-soundboard-bug-report-<date>.txt`. It
 contains system and audio-service information, application diagnostics, engine

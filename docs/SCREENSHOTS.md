@@ -3,9 +3,8 @@
 [Documentation](README.md) · [Feature reference](FEATURE_REFERENCE.md)
 
 These reference screenshots show the main window and settings in light and dark
-themes. They are the existing project gallery; newer development controls may
-not appear in them. The [feature reference](FEATURE_REFERENCE.md) describes the
-current source revision.
+themes. The [feature reference](FEATURE_REFERENCE.md) describes the current
+release behavior.
 
 ## Main Window
 

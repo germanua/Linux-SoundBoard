@@ -44,8 +44,7 @@ picker. Local playback and the virtual-microphone feed have separate controls:
 **Default** microphone routing in the ordinary profile claims the system's
 default input. Apps using the default input may therefore receive the soundboard.
 Use **Manual** if you want to manage the system default yourself, then select the
-virtual microphone explicitly in the intended app. Isolated development profiles
-may disable default-input claiming.
+virtual microphone explicitly in the intended app.
 
 If you can hear the clip but the other app cannot, check its selected input and
 follow [audio troubleshooting](TROUBLESHOOTING.md#audio-problems).

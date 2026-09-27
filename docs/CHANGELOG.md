@@ -8,13 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ## [Unreleased]
 
-### Changed
-
-- **Project licensing:** Adopt Source-Available License 1.1 for copies supplied with it, with explicit code/asset reuse, redistribution, derivative, commercial-service, and identity protections; preserve prior-release, hosting-service, statutory, and third-party rights. Add private unmodified source-build and editorial permissions, a brand policy, and clearer contributor terms.
-- **Documentation:** Add a documentation hub and first-run guide, reorganize installation and legal guidance, and correct report, executable-path, engine-control, and recovery instructions.
-- **Third-party notices:** Preserve the full Feather, Lucide, swhkd, and Minisign license notices; correct the Apache license transcription and clarify MPL and native-library source obligations.
-
-## [2.4.7] - 2026-09-26
+## [2.4.7] - 2026-09-27
 
 ### Added
 
@@ -28,6 +22,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Changed
 
+- **Project licensing:** Adopt Source-Available License 1.1 for copies supplied with it, with explicit code/asset reuse, redistribution, derivative, commercial-service, and identity protections; preserve prior-release, hosting-service, statutory, and third-party rights. Add private unmodified source-build and editorial permissions, a brand policy, and clearer contributor terms.
+- **Documentation:** Add a documentation hub and first-run guide, reorganize installation and legal guidance, and correct report, executable-path, engine-control, and recovery instructions.
 - **AppImage-only distribution:** This release moves the supported public distribution path to x86_64 AppImage. Legacy AUR/DEB/RPM/tarball files remain for history and migration support but are not release artifacts for this version. The AppImage baseline requires glibc 2.39 or newer.
 - **Now Playing layout:** Per-playback controls live with the sound library rather than inside the global transport bar, preserving the Tabs/Folders sidebar and using the library width more efficiently.
 - **Shared-hotkey selection:** Shared hotkeys skip sounds that already have a live voice instead of immediately selecting an already-playing member again.
@@ -61,6 +57,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Maintenance
 
+- **Third-party notices:** Preserve the full Feather, Lucide, swhkd, and Minisign license notices; correct the Apache license transcription and clarify MPL and native-library source obligations.
 - **Smaller source modules:** Oversized application, test, and release-pipeline files were split into smaller logical units without changing behavior, and CI now rejects maintained code/script files above 2,000 lines.
 
 ## [2.4.4] - 2026-08-30

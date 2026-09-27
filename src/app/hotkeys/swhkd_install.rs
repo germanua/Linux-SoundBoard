@@ -157,8 +157,8 @@ pub(super) fn ensure_swhkd_binary_is_safe(path: &Path) -> Result<(), String> {
 
 pub fn manual_swhkd_install_commands() -> String {
     if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
-        return "# The isolated DEV build never installs or replaces the machine-global swhkd helper.
-# Use the stable installer to manage swhkd, or reuse an already-safe system installation for an explicit DEV hotkey test."
+        return "# This build does not install or replace the machine-global swhkd helper.
+# Use the official Linux Soundboard installer to manage swhkd, or reuse an already-safe system installation."
             .to_string();
     }
     manual_install_commands_for(detect_distro_family())
@@ -179,9 +179,9 @@ pub fn install_swhkd_native_detailed(
     if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
         return Err(SwhkdInstallError {
             kind: SwhkdInstallErrorKind::MissingHelper,
-            summary: "The isolated DEV build does not modify the machine-global swhkd installation."
+            summary: "This build does not modify the machine-global swhkd installation."
                 .to_string(),
-            details: "Use the stable Linux Soundboard installer to manage swhkd. DEV may reuse an existing safe installation only when global-hotkey testing is explicitly enabled."
+            details: "Use the official Linux Soundboard installer to manage swhkd, or reuse an existing safe installation."
                 .to_string(),
             state: SwhkdInstallState::Failed,
         });
@@ -477,7 +477,7 @@ pub(super) fn missing_swhkd_message(binary_name: &str) -> String {
     if !crate::app_meta::ALLOW_PRIVILEGED_HELPER {
         return format!(
             "{intro}
-The isolated DEV build does not install or replace machine-global swhkd. Use the stable installer to manage it."
+This build does not install or replace machine-global swhkd. Use the official Linux Soundboard installer to manage it."
         );
     }
 

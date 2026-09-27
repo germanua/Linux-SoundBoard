@@ -4,9 +4,6 @@ use std::collections::BTreeMap;
 
 use super::UpdateError;
 
-#[cfg(lsb_dev_profile)]
-const RELEASE_KEYRING: &str = include_str!("../../../dev/release-keyring.txt");
-#[cfg(not(lsb_dev_profile))]
 const RELEASE_KEYRING: &str = include_str!("../../../release-keyring.txt");
 const MAX_TRUSTED_RELEASE_KEYS: usize = 4;
 
@@ -142,7 +139,7 @@ pub fn verify_file(
     Ok(())
 }
 
-#[cfg(all(test, not(lsb_dev_profile)))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

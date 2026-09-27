@@ -1,34 +1,13 @@
 use log::{info, warn};
 use std::sync::mpsc::SyncSender;
 
-use crate::app_meta::{BACKEND_ENV_VAR, BUILD_PROFILE, WAYLAND_BACKEND, X11_BACKEND};
+use crate::app_meta::{BACKEND_ENV_VAR, WAYLAND_BACKEND, X11_BACKEND};
 
 use super::backend_runtime::HotkeyBackend;
 use super::error::{unsupported_key_for_backend, HotkeyError};
 use super::parse_hotkey_spec;
 use super::swhkd_backend::SwhkdBackend;
 use super::x11_backend::X11Backend;
-
-fn shared_wayland_hotkeys_allowed() -> bool {
-    if BUILD_PROFILE != "dev" {
-        return true;
-    }
-    std::env::var("LSB_DEV_ALLOW_GLOBAL_HOTKEYS")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-fn dev_hotkey_isolation_error() -> HotkeyError {
-    HotkeyError::BackendUnavailable(
-        "DEV isolation keeps the shared swhkd/swhks Wayland daemon disabled by default. Stop the stable hotkey frontend first and launch the DEV app with LSB_DEV_ALLOW_GLOBAL_HOTKEYS=1 only for an explicit hotkey test."
-            .to_string(),
-    )
-}
 
 pub struct HotkeyManager {
     backend: Option<Box<dyn HotkeyBackend>>,
@@ -243,16 +222,12 @@ impl HotkeyManager {
 
         let mut errors = Vec::new();
 
-        if shared_wayland_hotkeys_allowed() {
-            match SwhkdBackend::new() {
-                Ok(backend) => return Ok(Box::new(backend) as Box<dyn HotkeyBackend>),
-                Err(err) => {
-                    warn!("swhkd backend unavailable: {}", err);
-                    errors.push(format!("swhkd: {err}"));
-                }
+        match SwhkdBackend::new() {
+            Ok(backend) => return Ok(Box::new(backend) as Box<dyn HotkeyBackend>),
+            Err(err) => {
+                warn!("swhkd backend unavailable: {}", err);
+                errors.push(format!("swhkd: {err}"));
             }
-        } else {
-            errors.push(format!("swhkd: {}", dev_hotkey_isolation_error()));
         }
 
         match X11Backend::new() {
@@ -358,9 +333,6 @@ fn session_backend_preference() -> BackendPreference {
 }
 
 fn select_wayland_backend() -> Result<Box<dyn HotkeyBackend>, HotkeyError> {
-    if !shared_wayland_hotkeys_allowed() {
-        return Err(dev_hotkey_isolation_error());
-    }
     let mut errors = Vec::new();
 
     match SwhkdBackend::new() {

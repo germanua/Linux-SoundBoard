@@ -5,8 +5,7 @@
 This guide describes the AppImage workflow in this source revision. The
 [official Releases page](https://github.com/germanua/Linux-SoundBoard/releases)
 is authoritative for published versions and files. Native packages and tarballs
-from 2.4.4 and earlier are historical distributions. Features in a development
-revision are not a promise that the public release already contains them.
+from 2.4.4 and earlier are historical distributions.
 
 **On this page:** [Requirements](#requirements) · [Install](#install-with-the-verified-bootstrap) ·
 [Verify](#verify-a-download) · [Update](#update-or-repair) · [Remove](#uninstall) ·
@@ -46,9 +45,6 @@ assets; they are not a signature check of that initial shell script.
 The AppImage is installed in `~/.local/opt/linux-soundboard/`. On Wayland, setup
 of the fixed root-owned hotkey helper may request `sudo`. Removing a legacy
 system package also requires the package manager's administrator permission.
-
-These are public-profile commands. Use the dedicated development installer for
-a private development profile; its paths, services, and signing channel differ.
 
 ### Existing AUR, DEB, or RPM installation
 
@@ -239,9 +235,9 @@ cargo build --release --locked
 ./target/release/linux-soundboard
 ```
 
-For a managed persistent installation, use the signed AppImage. A development
-binary can detect and stop an incompatible installed engine before using its own
-in-process engine, so direct testing can affect your current soundboard session.
+For a managed persistent installation, use the signed AppImage. Running a source
+build while another Linux Soundboard installation is active can affect the current
+soundboard session because both use the same public application profile.
 
 ## Historical releases and Flatpak
 

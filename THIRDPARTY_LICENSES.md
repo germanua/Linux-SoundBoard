@@ -17,11 +17,8 @@ The package links in the generated notices identify the exact published source v
 
 ## Separate file-specific terms
 
-The historical AUR development recipe has a separate 0BSD license in
-`packaging/aur/linux-soundboard-git/LICENSE` where that packaging directory is
-included. Those packaging terms do not license the application source or app
-artwork. The AppStream metadata declares CC0 for that metadata, independently
-of the project's application license.
+The AppStream metadata declares CC0 for that metadata, independently of the
+project's application license.
 
 ## MPL-2.0 Components
 
