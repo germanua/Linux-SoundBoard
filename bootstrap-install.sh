@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO="germanua/Linux-SoundBoard"
+TESTING_TAG="v2.4.7-testing.2"
 PUBLIC_KEY="RWTEtl8HnYs8Fg7BOmAXxuC9PUxqlamX5+C0w4FgUUxXGB6DipbZl8tY"
 MINISIGN_URL="https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
 MINISIGN_SHA256="9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"
@@ -39,9 +40,28 @@ asset_url() {
         | head -n 1
 }
 
-release_json="$(fetch_stdout "https://api.github.com/repos/$REPO/releases/latest")"
-tag="$(printf '%s' "$release_json" | grep -oE '"tag_name":[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)"/\1/')"
+tag="$TESTING_TAG"
+install_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)
+            [[ -n "${2:-}" ]] || { printf '%s\n' '--version requires a release tag' >&2; exit 1; }
+            tag="$2"
+            shift 2
+            ;;
+        --version=*)
+            tag="${1#--version=}"
+            shift
+            ;;
+        *)
+            install_args+=("$1")
+            shift
+            ;;
+    esac
+done
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z.-]+)?$ ]] || { printf 'invalid release tag\n' >&2; exit 1; }
+printf 'Installing Linux Soundboard testing release %s...\n' "$tag"
+release_json="$(fetch_stdout "https://api.github.com/repos/$REPO/releases/tags/$tag")"
 
 sums_url="$(asset_url "$release_json" 'SHA256SUMS\.txt')"
 sig_url="$(asset_url "$release_json" 'SHA256SUMS\.txt\.minisig')"
@@ -78,4 +98,4 @@ expected="$(awk '$2 == "install.sh" || $2 == "*install.sh" { print $1; exit }' "
 actual="$(sha256_file "$WORK_DIR/install.sh")" || { printf 'SHA-256 tool is required\n' >&2; exit 1; }
 [[ "${actual,,}" == "${expected,,}" ]] || { printf 'install.sh checksum mismatch\n' >&2; exit 1; }
 chmod 700 "$WORK_DIR/install.sh"
-exec bash "$WORK_DIR/install.sh" "$@"
+exec bash "$WORK_DIR/install.sh" install --version "$tag" "${install_args[@]}"
