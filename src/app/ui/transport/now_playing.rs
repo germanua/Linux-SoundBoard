@@ -228,23 +228,13 @@ impl NowPlayingPanel {
             .build();
 
         let pause_btn = icons::button(
-            if position.paused {
-                icons::PLAY
-            } else {
-                icons::PAUSE
-            },
-            if position.paused {
-                "Resume this playback"
-            } else {
-                "Pause this playback"
-            },
+            pause_button_icon(position.paused),
+            pause_button_tooltip(position.paused),
         );
         pause_btn.add_css_class("now-playing-row-btn");
-        pause_btn.update_property(&[gtk4::accessible::Property::Label(if position.paused {
-            "Resume playback"
-        } else {
-            "Pause playback"
-        })]);
+        pause_btn.update_property(&[gtk4::accessible::Property::Label(
+            pause_button_accessible_label(position.paused),
+        )]);
         pause_btn.set_size_request(24, 24);
         pause_btn.set_valign(Align::Center);
         pause_btn.set_halign(Align::Center);
@@ -305,7 +295,8 @@ impl NowPlayingPanel {
             let weak = Rc::downgrade(self);
             let play_id = Rc::clone(&current_play_id);
             let paused = Rc::clone(&paused);
-            pause_btn.connect_clicked(move |_| {
+            let row_root = row_box.clone();
+            pause_btn.connect_clicked(move |button| {
                 let Some(panel) = weak.upgrade() else {
                     return;
                 };
@@ -318,6 +309,7 @@ impl NowPlayingPanel {
                     log::warn!("Now Playing pause failed: {error}");
                 } else {
                     paused.set(next_paused);
+                    apply_pause_button_state(button, &row_root, next_paused);
                 }
             });
         }
@@ -371,30 +363,7 @@ impl NowPlayingPanel {
             adjustment.set_page_increment((30_000.0 / duration_ms as f64).min(1.0));
         }
         if pause_changed {
-            icons::apply_button_icon(
-                &row.pause_btn,
-                if position.paused {
-                    icons::PLAY
-                } else {
-                    icons::PAUSE
-                },
-            );
-            row.pause_btn.set_tooltip_text(Some(if position.paused {
-                "Resume this playback"
-            } else {
-                "Pause this playback"
-            }));
-            row.pause_btn
-                .update_property(&[gtk4::accessible::Property::Label(if position.paused {
-                    "Resume playback"
-                } else {
-                    "Pause playback"
-                })]);
-            if position.paused {
-                row.root.add_css_class("paused");
-            } else {
-                row.root.remove_css_class("paused");
-            }
+            apply_pause_button_state(&row.pause_btn, &row.root, position.paused);
         }
 
         let fraction = playback_progress(position.position_ms, position.duration_ms);
@@ -497,6 +466,43 @@ impl NowPlayingPanel {
     }
 }
 
+fn pause_button_icon(paused: bool) -> icons::IconPair {
+    if paused {
+        icons::PLAY
+    } else {
+        icons::PAUSE
+    }
+}
+
+fn pause_button_tooltip(paused: bool) -> &'static str {
+    if paused {
+        "Resume this playback"
+    } else {
+        "Pause this playback"
+    }
+}
+
+fn pause_button_accessible_label(paused: bool) -> &'static str {
+    if paused {
+        "Resume playback"
+    } else {
+        "Pause playback"
+    }
+}
+
+fn apply_pause_button_state(button: &Button, root: &GtkBox, paused: bool) {
+    icons::apply_button_icon(button, pause_button_icon(paused));
+    button.set_tooltip_text(Some(pause_button_tooltip(paused)));
+    button.update_property(&[gtk4::accessible::Property::Label(
+        pause_button_accessible_label(paused),
+    )]);
+    if paused {
+        root.add_css_class("paused");
+    } else {
+        root.remove_css_class("paused");
+    }
+}
+
 fn playback_progress(position_ms: u64, duration_ms: Option<u64>) -> f64 {
     duration_ms
         .filter(|duration| *duration > 0)
@@ -534,6 +540,16 @@ mod tests {
             finished,
             duration_ms: Some(1_000),
         }
+    }
+
+    #[test]
+    fn pause_button_icon_tracks_playback_state() {
+        assert_eq!(pause_button_icon(false), icons::PAUSE);
+        assert_eq!(pause_button_icon(true), icons::PLAY);
+        assert_eq!(pause_button_tooltip(false), "Pause this playback");
+        assert_eq!(pause_button_tooltip(true), "Resume this playback");
+        assert_eq!(pause_button_accessible_label(false), "Pause playback");
+        assert_eq!(pause_button_accessible_label(true), "Resume playback");
     }
 
     #[test]

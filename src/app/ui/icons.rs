@@ -6,7 +6,7 @@ use gtk4::{Button, Image, ToggleButton};
 
 use super::theme::ensure_app_resources;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IconPair {
     name: &'static str,
     fallbacks: &'static [&'static str],
