@@ -1,5 +1,7 @@
 use super::*;
 
+pub(super) const TRANSITION_FADE_SAMPLES: u64 = 480;
+
 pub(super) struct ActivePlayback {
     pub(super) play_id: String,
     pub(super) sound_id: String,
@@ -14,6 +16,10 @@ pub(super) struct ActivePlayback {
     >,
     pub(super) position_ms: u64,
     pub(super) fallback_samples_written: u64,
+    pub(super) fade_in_remaining: u64,
+    pub(super) pause_fade_out_remaining: u64,
+    pub(super) pending_seek_ms: Option<u64>,
+    pub(super) seek_fade_out_remaining: u64,
     pub(super) paused: bool,
     pub(super) finished: bool,
     pub(super) source_exhausted: bool,
@@ -76,6 +82,10 @@ impl ActivePlayback {
             source,
             position_ms: 0,
             fallback_samples_written: 0,
+            fade_in_remaining: TRANSITION_FADE_SAMPLES,
+            pause_fade_out_remaining: 0,
+            pending_seek_ms: None,
+            seek_fade_out_remaining: 0,
             paused: false,
             finished: false,
             source_exhausted: false,
@@ -131,8 +141,37 @@ impl ActivePlayback {
         self.position_ms = clamped;
         self.source_exhausted = false;
         self.finished = false;
+        self.fade_in_remaining = TRANSITION_FADE_SAMPLES;
         self.reset_limiters(config);
         Ok(())
+    }
+
+    pub(super) fn request_seek(&mut self, position_ms: u64, config: &RuntimeConfig) {
+        if self.paused && self.pause_fade_out_remaining == 0 {
+            let _ = self.seek(position_ms, config);
+            return;
+        }
+        let clamped = clamp_seek_position_ms(position_ms, self.duration_ms);
+        self.position_ms = clamped;
+        self.pending_seek_ms = Some(clamped);
+        self.seek_fade_out_remaining = TRANSITION_FADE_SAMPLES;
+        self.fade_in_remaining = 0;
+    }
+
+    pub(super) fn set_paused(&mut self, paused: bool) {
+        if paused == self.paused {
+            return;
+        }
+        self.paused = paused;
+        self.pending_seek_ms = None;
+        self.seek_fade_out_remaining = 0;
+        if paused {
+            self.pause_fade_out_remaining = TRANSITION_FADE_SAMPLES;
+            self.fade_in_remaining = 0;
+        } else {
+            self.pause_fade_out_remaining = 0;
+            self.fade_in_remaining = TRANSITION_FADE_SAMPLES;
+        }
     }
 
     pub(super) fn render_into(
@@ -145,7 +184,7 @@ impl ActivePlayback {
         local.fill(0.0);
         virtual_out.fill(0.0);
         let wanted_samples = local.len();
-        if self.finished || self.paused {
+        if self.finished || (self.paused && self.pause_fade_out_remaining == 0) {
             return;
         }
 
@@ -187,14 +226,24 @@ impl ActivePlayback {
             let local_scaled = normalized * self.base_volume * config.local_volume * local_gain;
             let virtual_scaled = normalized * self.base_volume * config.mic_volume * virtual_gain;
 
-            const FADE_IN_SAMPLES: u64 = 480;
-            let fade_scale = if self.fallback_samples_written <= FADE_IN_SAMPLES {
-                self.fallback_samples_written as f32 / FADE_IN_SAMPLES as f32
-            } else {
-                1.0
-            };
-            let local_faded = local_scaled * fade_scale;
-            let virtual_faded = virtual_scaled * fade_scale;
+            let mut transition_scale = 1.0;
+            if self.fade_in_remaining > 0 {
+                transition_scale *= (TRANSITION_FADE_SAMPLES - self.fade_in_remaining) as f32
+                    / (TRANSITION_FADE_SAMPLES - 1) as f32;
+                self.fade_in_remaining = self.fade_in_remaining.saturating_sub(1);
+            }
+            if self.paused && self.pause_fade_out_remaining > 0 {
+                transition_scale *= (self.pause_fade_out_remaining - 1) as f32
+                    / (TRANSITION_FADE_SAMPLES - 1) as f32;
+                self.pause_fade_out_remaining = self.pause_fade_out_remaining.saturating_sub(1);
+            }
+            if self.pending_seek_ms.is_some() && self.seek_fade_out_remaining > 0 {
+                transition_scale *= (self.seek_fade_out_remaining - 1) as f32
+                    / (TRANSITION_FADE_SAMPLES - 1) as f32;
+                self.seek_fade_out_remaining = self.seek_fade_out_remaining.saturating_sub(1);
+            }
+            let local_faded = local_scaled * transition_scale;
+            let virtual_faded = virtual_scaled * transition_scale;
 
             local[index] = if let Some(limiter) = self.local_limiter.as_mut() {
                 limiter.process(local_faded)
@@ -211,6 +260,15 @@ impl ActivePlayback {
             virtual_out[index] = virtual_lufs_processed * virtual_boost_gain;
 
             index += 1;
+
+            if self.seek_fade_out_remaining == 0 {
+                if let Some(position_ms) = self.pending_seek_ms.take() {
+                    let _ = self.seek(position_ms, config);
+                }
+            }
+            if self.paused && self.pause_fade_out_remaining == 0 {
+                break;
+            }
         }
 
         self.position_ms = (self.fallback_samples_written * 1000)

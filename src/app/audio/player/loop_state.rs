@@ -179,7 +179,7 @@ impl LoopState {
     pub(super) fn set_sound_paused(&mut self, sound_id: &str, paused: bool) {
         for playback in &mut self.active_playbacks {
             if playback.sound_id == sound_id {
-                playback.paused = paused;
+                playback.set_paused(paused);
             }
         }
     }
@@ -190,7 +190,7 @@ impl LoopState {
             .iter_mut()
             .find(|playback| playback.play_id == play_id)
         {
-            playback.paused = paused;
+            playback.set_paused(paused);
         }
     }
 
@@ -203,7 +203,7 @@ impl LoopState {
         else {
             return false;
         };
-        let _ = playback.seek(position_ms, &runtime);
+        playback.request_seek(position_ms, &runtime);
         true
     }
 

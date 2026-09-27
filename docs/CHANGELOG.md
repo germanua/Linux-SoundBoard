@@ -39,6 +39,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ### Fixed
 
+- **Harsh audio during pause, resume, seek, and track changes:** Playback transitions now use short per-voice fades instead of hard sample discontinuities. Seeking fades the current signal to zero before repositioning and fades the new position back in, while track replacement keeps the next queued samples instead of jumping to the far end of the buffered queue before fading. This also keeps Dynamic Auto-Gain limiter resets behind a fade through silence rather than exposing them as an audible glitch.
 - **Bluetooth microphone auto-detect:** WirePlumber Bluetooth headset autoswitch loopback sources (`bluez5.loopback=true`) are no longer treated as ordinary hardware microphones, including through the PulseAudio compatibility backend, preventing unexpected A2DP-to-headset profile switching during automatic mic selection. If that proxy is the only available microphone, Auto-detect waits; explicitly choosing the headset microphone remains supported.
 - **Ogg Opus stream endings:** Complete CRC-valid audio remains playable when an otherwise usable stream lacks the conventional end-of-stream marker or ends with an incomplete terminal page; corrupt or unusable streams remain errors.
 - **Hotkey capture safety:** Saving with no newly captured chord no longer behaves like Clear, and clearing a binding uses the live scope selection.

@@ -717,6 +717,95 @@ fn pause_and_resume_cover_every_voice_of_one_sound() {
 }
 
 #[test]
+fn pause_and_resume_are_smoothed_to_silence() {
+    let audio_path =
+        crate::test_support::audio_fixtures::create_test_audio_file_with_duration("wav", 1000);
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = false;
+    let mut state = LoopState::new(runtime.clone(), test_player_snapshot_store());
+    let mut voice = make_voice(
+        &mut state,
+        &runtime,
+        "play-0",
+        "sound-a",
+        &audio_path.to_string_lossy(),
+    );
+    let mut local = vec![0.0f32; 1024];
+    let mut virtual_out = vec![0.0f32; 1024];
+
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+    voice.set_paused(true);
+    local.fill(0.0);
+    virtual_out.fill(0.0);
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+
+    assert!(voice.paused);
+    assert_eq!(voice.pause_fade_out_remaining, 0);
+    assert!(local[..TRANSITION_FADE_SAMPLES as usize]
+        .iter()
+        .any(|sample| sample.abs() > 1e-4));
+    assert!(local[TRANSITION_FADE_SAMPLES as usize..]
+        .iter()
+        .all(|sample| sample.abs() < 1e-7));
+    assert!(local[TRANSITION_FADE_SAMPLES as usize - 1].abs() < 1e-7);
+
+    let paused_position = voice.position_ms;
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+    assert_eq!(voice.position_ms, paused_position);
+    assert!(local.iter().all(|sample| sample.abs() < 1e-7));
+
+    voice.set_paused(false);
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+    assert!(!voice.paused);
+    assert!(local[0].abs() < 1e-7);
+    assert!(local[TRANSITION_FADE_SAMPLES as usize..]
+        .iter()
+        .any(|sample| sample.abs() > 1e-4));
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
+fn seek_crossfades_through_zero_before_the_new_position() {
+    let audio_path =
+        crate::test_support::audio_fixtures::create_test_audio_file_with_duration("wav", 1000);
+    let mut runtime = test_runtime_config();
+    runtime.auto_gain.enabled = true;
+    runtime.auto_gain.mode = AutoGainMode::DynamicLookAhead;
+    let mut state = LoopState::new(runtime.clone(), test_player_snapshot_store());
+    let mut voice = make_voice(
+        &mut state,
+        &runtime,
+        "play-0",
+        "sound-a",
+        &audio_path.to_string_lossy(),
+    );
+    let mut local = vec![0.0f32; 2048];
+    let mut virtual_out = vec![0.0f32; 2048];
+
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+    voice.request_seek(500, &runtime);
+    local.fill(0.0);
+    virtual_out.fill(0.0);
+    voice.render_into(&mut local, &mut virtual_out, &runtime);
+
+    let boundary = TRANSITION_FADE_SAMPLES as usize;
+    assert!(voice.pending_seek_ms.is_none());
+    assert_eq!(voice.seek_fade_out_remaining, 0);
+    assert!(local[boundary - 1].abs() < 1e-7);
+    assert!(local[boundary].abs() < 1e-7);
+    assert!(local[..boundary - 1]
+        .iter()
+        .any(|sample| sample.abs() > 1e-4));
+    assert!(local[boundary + TRANSITION_FADE_SAMPLES as usize..]
+        .iter()
+        .any(|sample| sample.abs() > 1e-4));
+    assert!(voice.position_ms >= 500);
+
+    cleanup_test_audio_path(&audio_path);
+}
+
+#[test]
 fn the_voice_cap_retires_the_oldest_voice() {
     let audio_path = create_test_audio_file("wav");
     let runtime = test_runtime_config();

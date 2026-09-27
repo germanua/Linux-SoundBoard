@@ -64,6 +64,8 @@ use mixing::{clear_all_queues, fade_output_queues, mix_tick};
 #[cfg(test)]
 use mixing::{enqueue_passthrough_chunk, fill_output_queues};
 use playback::ActivePlayback;
+#[cfg(test)]
+use playback::TRANSITION_FADE_SAMPLES;
 use pulse_backend::PulseAudioBackend;
 use pw_backend::{
     create_backend, remote_ok, remote_play, BackendState, ManagedStreamState, StreamHandle,

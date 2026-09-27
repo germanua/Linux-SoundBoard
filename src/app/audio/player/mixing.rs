@@ -285,7 +285,7 @@ pub(super) fn apply_fade_out(queue: &mut SampleQueue) {
 
     let len = queue.samples.len();
     if len > FADE_OUT_SAMPLES {
-        queue.samples.drain(..len - FADE_OUT_SAMPLES);
+        queue.samples.truncate(FADE_OUT_SAMPLES);
     }
 
     let total = queue.samples.len();
@@ -327,15 +327,19 @@ mod tests {
     }
 
     #[test]
-    fn fade_out_long_queue_trims_to_fade_window() {
-        let input = vec![1.0f32; 1000];
+    fn fade_out_long_queue_keeps_the_next_samples_and_discards_the_future_tail() {
+        let input: Vec<f32> = (0..1000).map(|value| value as f32 / 1000.0).collect();
         let mut q = make_queue(&input);
         apply_fade_out(&mut q);
         assert_eq!(q.samples.len(), FADE_OUT_SAMPLES);
         let first = *q.samples.front().unwrap();
         let last = *q.samples.back().unwrap();
-        assert!((first - 1.0).abs() < 1e-6, "first={}", first);
-        assert!(last.abs() < 1e-6, "last={}", last);
+        assert!(first.abs() < 1e-6, "first={first}");
+        assert!(last.abs() < 1e-6, "last={last}");
+        assert!(
+            q.samples.iter().copied().fold(0.0f32, f32::max) < 0.2,
+            "fade must use the front of the queued audio rather than jumping to its tail"
+        );
     }
 
     #[test]
