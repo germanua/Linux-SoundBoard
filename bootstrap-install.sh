@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="germanua/Linux-SoundBoard"
-TESTING_TAG="v2.4.7-testing.2"
+TESTING_TAG="v2.4.7-testing.3"
 PUBLIC_KEY="RWTEtl8HnYs8Fg7BOmAXxuC9PUxqlamX5+C0w4FgUUxXGB6DipbZl8tY"
 MINISIGN_URL="https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
 MINISIGN_SHA256="9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73"

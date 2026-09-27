@@ -90,8 +90,9 @@ require_cmd() {
 }
 normalize_release_version() {
     local version="${1#v}"
-    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Invalid release version: $1"
-    printf '%s\n' "$version"
+    [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)([-+][0-9A-Za-z.-]+)?$ ]] \
+        || fail "Invalid release version: $1"
+    printf '%s\n' "${BASH_REMATCH[1]}"
 }
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
