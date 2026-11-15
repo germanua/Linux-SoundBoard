@@ -98,7 +98,6 @@ pub(super) struct PipeWireBackendState {
     pub(super) _local_stream: Option<StreamHandle>,
     pub(super) virtual_stream: Option<StreamHandle>,
     pub(super) capture_stream: Option<StreamHandle>,
-    pub(super) _virtual_mic_module: Option<virtual_mic_module::NullSinkModule>,
 }
 
 pub(super) enum BackendState {
@@ -236,7 +235,6 @@ fn create_pipewire_backend(
                         if source.is_our_virtual_mic
                             && state.virtual_mic_state_reset_ids.insert(source.id)
                         {
-                            state.virtual_mic_missing_since = None;
                             spawn_virtual_mic_state_reset(source.id);
                         }
                         let source_id = source.id;
@@ -340,19 +338,10 @@ fn create_pipewire_backend(
     )
     .ok();
 
-    let virtual_mic_module = match virtual_mic_module::NullSinkModule::load_or_attach() {
-        Ok(module) => Some(module),
-        Err(err) => {
-            warn!(
-                "Failed to load null-sink module for virtual mic: {err}. \
-                 Apps may not see Linux Soundboard Mic as the system default; \
-                 install pulseaudio-utils (pactl) and retry."
-            );
-            None
-        }
-    };
+    // A null sink from an older version would own our virtual-mic node name.
+    virtual_mic_module::remove_stale_null_sinks();
 
-    debug!("Creating virtual mic feeder stream");
+    debug!("Creating virtual mic stream");
     let virtual_stream = create_runtime_virtual_source_stream(
         core.clone(),
         queues.clone(),
@@ -369,6 +358,5 @@ fn create_pipewire_backend(
         _local_stream: local_stream,
         virtual_stream,
         capture_stream: None,
-        _virtual_mic_module: virtual_mic_module,
     })
 }

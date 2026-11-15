@@ -26,7 +26,8 @@ pub(super) fn source_from_global(
     let serial = props
         .get("object.serial")
         .and_then(|value| value.parse::<u64>().ok());
-    let is_virtual = media_class == "Audio/Source/Virtual";
+    // Our own mic is an `Audio/Source` stream, but it is still a virtual source.
+    let is_virtual = media_class == "Audio/Source/Virtual" || node_name == VIRTUAL_SOURCE_NAME;
     let is_hardware_backed = props.get("device.id").is_some()
         || matches!(
             props.get(*pw::keys::DEVICE_API),

@@ -53,15 +53,18 @@ pub(super) fn create_runtime_virtual_source_stream(
     stream_runtime: Arc<StreamRuntimeShared>,
     latency_hint: &str,
 ) -> Result<StreamHandle, EngineError> {
+    // The stream is itself the virtual microphone: an `Audio/Source` node that apps
+    // capture from. It must not be a `Stream/Output/Audio` feeding a null sink, because
+    // Discord then never creates `discord_capture` and screen-share audio goes silent.
     let stream = pw::stream::StreamRc::new(
         core,
-        crate::app_meta::VIRTUAL_MIC_FEEDER_NODE_NAME,
+        crate::app_meta::VIRTUAL_SOURCE_NAME,
         properties! {
+            *pw::keys::MEDIA_CLASS => "Audio/Source",
             *pw::keys::MEDIA_TYPE => "Audio",
-            *pw::keys::MEDIA_CATEGORY => "Playback",
-            *pw::keys::MEDIA_ROLE => "Communication",
-            *pw::keys::NODE_NAME => crate::app_meta::VIRTUAL_MIC_FEEDER_NODE_NAME,
-            *pw::keys::NODE_DESCRIPTION => "Linux Soundboard Mic Feeder",
+            *pw::keys::NODE_NAME => crate::app_meta::VIRTUAL_SOURCE_NAME,
+            *pw::keys::NODE_DESCRIPTION => crate::app_meta::VIRTUAL_MIC_DESCRIPTION,
+            "node.virtual" => "true",
             "node.dont-reconnect" => "true",
             "node.always-process" => "true",
             // Keep consumers from becoming competing drivers.

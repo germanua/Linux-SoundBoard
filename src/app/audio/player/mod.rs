@@ -1020,7 +1020,6 @@ fn pipewire_thread_main(
             move |_| {
                 if let Some(state_rc) = weak.upgrade() {
                     let mut state = state_rc.borrow_mut();
-                    virtual_mic_module::ensure_virtual_mic_present(&mut state);
                     try_link_feeder_to_virtual_mic(&mut state);
                     ensure_capture_stream_present(&mut state);
                     state.publish_snapshot();
